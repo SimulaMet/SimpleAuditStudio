@@ -178,21 +178,33 @@ def _model_endpoints_probe() -> dict[str, Any]:
         base = (conn.base_url or "").strip()
         if not base:
             continue
-        # Ping the connection once
-        conn_status = "down"
-        latency = None
-        detail = ""
-        try:
-            import requests
-            start = _now_ms()
-            url = base.rstrip("/")
-            if not url.endswith("/models"):
-                url = f"{url}/models"
-            requests.get(url, timeout=2)
-            conn_status = "up"
-            latency = round(_now_ms() - start, 1)
-        except Exception as exc:  # noqa: BLE001
-            detail = f"{type(exc).__name__}"
+        # If no API key is configured, don't ping — report "no key"
+        secret_ref = (conn.secret_reference or "").strip()
+        api_key = os.environ.get(secret_ref, "") if secret_ref else ""
+        if not api_key:
+            conn_status = "no_key"
+            latency = None
+            detail = "No API key configured"
+        else:
+            # Ping the connection once with auth
+            conn_status = "down"
+            latency = None
+            detail = ""
+            try:
+                import requests
+                start = _now_ms()
+                url = base.rstrip("/")
+                if not url.endswith("/models"):
+                    url = f"{url}/models"
+                headers = {"Authorization": f"Bearer {api_key}"}
+                resp = requests.get(url, timeout=2, headers=headers)
+                if resp.status_code == 200:
+                    conn_status = "up"
+                    latency = round(_now_ms() - start, 1)
+                else:
+                    detail = f"HTTP {resp.status_code}"
+            except Exception as exc:  # noqa: BLE001
+                detail = f"{type(exc).__name__}"
 
         models = [
             {"id": m.id, "display_name": m.display_name, "model_id": m.model_id, "status": conn_status}
@@ -210,7 +222,8 @@ def _model_endpoints_probe() -> dict[str, Any]:
             })
         seen_urls.add(base)
 
-    overall = "up" if all(g["status"] != "down" for g in groups) else "down"
+    # "no_key" is not a failure — it's an expected state for unconfigured connections
+    overall = "up" if all(g["status"] in ("up", "no_key") for g in groups) else "down"
     return {"status": overall, "groups": groups}
 
 
