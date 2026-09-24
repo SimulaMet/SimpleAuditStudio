@@ -181,7 +181,7 @@ services:
     # idempotent seed (scenario packs + default model connections) + static
     # collection, then serve with gunicorn. The seed is safe on every start:
     # it skips anything already present. Set SEED_ON_BOOT=false to opt out.
-    command: 'sh -c "python manage.py migrate --noinput && python manage.py bootstrap_platform --username ${BOOTSTRAP_ADMIN_USERNAME:-admin} --email ${BOOTSTRAP_ADMIN_EMAIL:-admin@example.local} --password ${BOOTSTRAP_ADMIN_PASSWORD:?Set BOOTSTRAP_ADMIN_PASSWORD in .env} --project-name ${BOOTSTRAP_PROJECT_NAME:-Default} && if [ "${SEED_ON_BOOT:-true}" != "false" ]; then python manage.py seed_platform || echo ''WARNING: seed_platform failed - continuing without seed data''; fi && python manage.py collectstatic --noinput && gunicorn config.wsgi:application --bind 0.0.0.0:8000 --workers 2"'
+    command: 'sh -c "python manage.py migrate --noinput && python manage.py bootstrap_platform --username ${BOOTSTRAP_ADMIN_USERNAME:-admin} --email ${BOOTSTRAP_ADMIN_EMAIL:-admin@example.local} --password ${BOOTSTRAP_ADMIN_PASSWORD:?Set BOOTSTRAP_ADMIN_PASSWORD in .env} --project-name ${BOOTSTRAP_PROJECT_NAME:-Default} && if [ "${SEED_ON_BOOT:-true}" != "false" ]; then python manage.py seed_platform || echo ''WARNING: seed_platform failed - continuing without seed data''; if [ "${SEED_DEMO_AUDITS:-true}" != "false" ] && [ -n "$${SIMULACHAT_API_KEY:-}" ]; then python manage.py seed_demo_audits || echo ''WARNING: seed_demo_audits failed - continuing''; fi; fi && python manage.py collectstatic --noinput && gunicorn config.wsgi:application --bind 0.0.0.0:8000 --workers 2"'
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:8000/healthz"]
       interval: 30s

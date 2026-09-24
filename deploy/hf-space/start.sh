@@ -113,9 +113,9 @@ if [ "${SEED_ON_BOOT:-true}" != "false" ]; then
     python manage.py seed_platform || echo "[WARN] seed_platform failed — continuing without seed data"
 
     # Seed demo audit runs (idempotent — skips if already present)
-    if [ "${SEED_DEMO_AUDITS:-true}" != "false" ]; then
+    if [ "${SEED_DEMO_AUDITS:-true}" != "false" ] && [ -n "${SIMULACHAT_API_KEY:-}" ]; then
         echo "[init] Seeding demo audit runs..."
-        python deploy/seed_demo_audits.py || echo "[WARN] Demo audit seed failed — continuing"
+        python manage.py seed_demo_audits || echo "[WARN] Demo audit seed failed — continuing"
     fi
 fi
 

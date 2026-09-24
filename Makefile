@@ -8,7 +8,7 @@ PY := $(VENV)/bin/python
 DJANGO := $(PY) manage.py
 
 .PHONY: help venv local-setup local-web local-worker docker-up docker-down \
-        docker-logs docker-build test test-smoke migrate worker e2e seed
+        docker-logs docker-build test test-smoke migrate worker e2e seed seed-demo
 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
@@ -53,6 +53,9 @@ migrate: ## Apply database migrations
 
 seed: ## Seed scenario packs + default model connections (idempotent)
 	$(DJANGO) seed_platform
+
+seed-demo: ## Seed demo audit runs with real model execution (needs SIMULACHAT_API_KEY)
+	$(DJANGO) seed_demo_audits
 
 worker: ## Alias for local-worker
 	$(MAKE) local-worker
