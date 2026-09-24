@@ -12,11 +12,14 @@
     {# ── Primary: WorkOS email code (shown only when configured) ── #}
     {% if workos_enabled %}
     <style>
-      @keyframes soft-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.75; } }
-      .soft-pulse { animation: soft-pulse 2s ease-in-out infinite; }
+      @keyframes glow-pulse {
+        0%, 100% { box-shadow: 0 0 0 0 rgba(108, 140, 255, 0.4); }
+        50% { box-shadow: 0 0 20px 4px rgba(108, 140, 255, 0.6); }
+      }
+      .glow-pulse { animation: glow-pulse 2s ease-in-out infinite; }
     </style>
     <a href="{% url 'workos_login' %}"
-       class="soft-pulse flex flex-col items-center justify-center gap-1 w-full px-6 py-4 rounded-xl bg-accent text-white hover:bg-accent-hover transition-colors shadow-lg shadow-accent/20">
+       class="glow-pulse flex flex-col items-center justify-center gap-1 w-full px-6 py-4 rounded-xl bg-accent text-white hover:bg-accent-hover transition-colors">
       <span class="flex items-center justify-center gap-3 text-base font-semibold">
         <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>
         Continue with email code
