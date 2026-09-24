@@ -164,11 +164,15 @@ def _scenario_execute_impl(workflow_input: ScenarioInput, ctx: Context) -> dict:
                 f"injected failure for {version_item_id} (execution {executions}/{fail_times})"
             )
 
-    # Idempotency: if this scenario already has a durable result, skip
-    # re-execution. This makes workflow re-submission safe (e.g., after a
-    # worker restart killed in-flight tasks) without wasting API calls.
-    from audits.events import get_result as _get_existing_result
-    if _get_existing_result(run_id, version_item_id) is not None:
+    # Idempotency: if this scenario already has a successful durable result,
+    # skip re-execution. Failed results are NOT skipped — they should be
+    # retried on re-submission. This makes workflow re-submission safe (e.g.,
+    # after a worker restart killed in-flight tasks) without wasting API calls.
+    from audits.events import ScenarioResult as _SR
+    _existing = _SR.objects.filter(
+        run_id=int(run_id), version_item_id=str(version_item_id), status="completed"
+    ).first()
+    if _existing is not None:
         append_event(run_id, version_item_id, "scenario_skipped_existing", {})
         return {"status": "skipped_existing"}
 
@@ -293,18 +297,22 @@ def _scenario_execute_impl(workflow_input: ScenarioInput, ctx: Context) -> dict:
         # A load/config failure is a hard error for this scenario: record it and
         # let Hatchet retry per policy. Do not swallow — the run must reflect it.
         append_event(run_id, version_item_id, "scenario_failed", {"error": str(exc)})
+        from audits.events import ScenarioResult as _SR2
+        _is_retry = _SR2.objects.filter(run_id=int(run_id), version_item_id=str(version_item_id)).exists()
         with transaction.atomic():
             upsert_scenario_result(run_id, version_item_id, status="failed", attempts=attempt, result={"error": str(exc)})
-            _bump_run_counters(run_id, version_item_id, succeeded=False)
+            _bump_run_counters(run_id, version_item_id, succeeded=False, is_retry=_is_retry)
         raise
 
     severity = result_payload.get("severity", "")
     failed = severity.upper() == "ERROR"
+    from audits.events import ScenarioResult as _SR3
+    _is_retry = _SR3.objects.filter(run_id=int(run_id), version_item_id=str(version_item_id)).exists()
     with transaction.atomic():
         upsert_scenario_result(
             run_id, version_item_id, status="failed" if failed else "completed", attempts=attempt, result=result_payload
         )
-        _bump_run_counters(run_id, version_item_id, succeeded=not failed)
+        _bump_run_counters(run_id, version_item_id, succeeded=not failed, is_retry=_is_retry)
 
     append_event(
         run_id,
@@ -321,11 +329,11 @@ def _iter_attempted_events(run_id: str, version_item_id: str):
     return [e for e in list_events(run_id) if e["version_item_id"] == version_item_id and e["kind"] == "scenario_attempted"]
 
 
-def _bump_run_counters(run_id: str, version_item_id: str, *, succeeded: bool) -> None:
+def _bump_run_counters(run_id: str, version_item_id: str, *, succeeded: bool, is_retry: bool = False) -> None:
     """Idempotently bump run counters for a given version item.
 
-    Only increments if no prior ScenarioResult exists for this version_item,
-    preventing double-counting when Hatchet retries re-execute the task.
+    On first execution (is_retry=False), increments completed + success/fail.
+    On retry (is_retry=True), adjusts counters only if the outcome changed.
     """
     from audits.models import AuditRun
     from audits.events import ScenarioResult
@@ -335,22 +343,18 @@ def _bump_run_counters(run_id: str, version_item_id: str, *, succeeded: bool) ->
     except (AuditRun.DoesNotExist, ValueError):
         return
 
-    # If a result row already exists for this version_item, the counter was
-    # already bumped on the first execution. Update severity in place instead.
-    existing = ScenarioResult.objects.filter(
-        run_id=int(run_id), version_item_id=version_item_id
-    ).first()
-    if existing:
-        # Re-execution (retry): adjust pass/fail if outcome changed
-        was_success = existing.status == "completed"
+    if is_retry:
+        # Re-execution: check prior status to adjust counters if outcome changed
+        existing = ScenarioResult.objects.filter(
+            run_id=int(run_id), version_item_id=version_item_id
+        ).exclude(status="completed").first()
+        was_success = existing is None or existing.status == "completed"
         if was_success != succeeded:
             if succeeded:
-                run.successful_scenarios = max(0, run.successful_scenarios - (1 if not was_success else 0))
-                run.failed_scenarios = max(0, run.failed_scenarios - (1 if was_success else 0))
+                run.failed_scenarios = max(0, run.failed_scenarios - (1 if not was_success else 0))
                 run.successful_scenarios += 1
             else:
                 run.successful_scenarios = max(0, run.successful_scenarios - (1 if was_success else 0))
-                run.failed_scenarios = max(0, run.failed_scenarios - (1 if not was_success else 0))
                 run.failed_scenarios += 1
             run.save(update_fields=["completed_scenarios", "successful_scenarios", "failed_scenarios"])
         return
@@ -539,13 +543,62 @@ def build_worker() -> Worker:
     )
 
 
+def _recover_stuck_runs() -> None:
+    """Re-submit audit runs that were left in-flight when the worker died.
+
+    Called once at worker startup, before the task loop begins. Finds runs in a
+    non-terminal state (queued/running) whose scenario tasks are no longer
+    active in Hatchet (because the previous worker process was killed) and
+    re-enqueues them. This is safe because scenario tasks are idempotent:
+    already-completed scenarios skip instantly via the durable result check.
+
+    Only recovers runs that have been stuck for more than a short grace period
+    to avoid racing with a concurrent healthy worker.
+    """
+    from audits.models import AuditRun
+    from scenarios.models import ScenarioSetVersionItem
+    from django.utils import timezone as dj_timezone
+
+    grace = dj_timezone.now() - __import__("datetime").timedelta(seconds=30)
+    stuck = AuditRun.objects.filter(
+        status__in=["queued", "running"],
+        updated_at__lt=grace,
+        archived=False,
+    )
+
+    recovered = 0
+    for run in stuck:
+        try:
+            items = list(
+                ScenarioSetVersionItem.objects.filter(version=run.scenario_set_version)
+            )
+            vids = [str(it.pk) for it in items]
+            if not vids:
+                continue
+            submit_run_workflow(
+                str(run.pk),
+                vids,
+                simpleaudit_version=run.simpleaudit_version,
+                git_commit=run.git_commit,
+            )
+            recovered += 1
+            logger.info("Crash recovery: re-submitted run %s (%d scenarios)", run.pk, len(vids))
+        except Exception as exc:
+            logger.warning("Crash recovery: failed to re-submit run %s: %s", run.pk, exc)
+
+    if recovered:
+        logger.info("Crash recovery: re-submitted %d stuck run(s)", recovered)
+
+
 def start_worker(max_startup_retries: int = 30, startup_retry_delay: float = 2.0) -> None:
     """Blocking entrypoint used by ``manage.py run_worker``.
 
     Retries client construction for a bounded period so the worker tolerates the
     Hatchet server (or its auth-disabled token file) coming up slightly after this
     process starts, instead of crash-looping on the very first attempt. Once the
-    client builds successfully, ``worker.start()`` blocks for the process lifetime.
+    client builds successfully, crash-recovery re-submits any runs left in-flight
+    by a previous worker death, then ``worker.start()`` blocks for the process
+    lifetime.
     """
     import time
 
@@ -566,6 +619,12 @@ def start_worker(max_startup_retries: int = 30, startup_retry_delay: float = 2.0
         raise RuntimeError(
             f"Worker could not connect to Hatchet after {max_startup_retries} attempts"
         ) from last_error
+
+    # Re-submit runs orphaned by a previous worker crash/restart.
+    try:
+        _recover_stuck_runs()
+    except Exception as exc:
+        logger.warning("Crash recovery skipped: %s", exc)
 
     print(f"Starting SimpleAudit worker (pool={settings.WORKER_POOL})...", flush=True)
     worker.start()
