@@ -50,6 +50,22 @@ Browser → Django/Gunicorn (:7860)
 - **Cold start**: The first request after idle may take 30–60 seconds while all
   services initialize.
 
+## Deploy to Hugging Face Spaces
+
+1. Create a new Space on [huggingface.co/spaces/new](https://huggingface.co/spaces/new)
+2. Set **SDK** to `Docker`, **Hardware** to at least `cpu-basic` (or GPU for local inference)
+3. Push this repo's `deploy/hf-space/` contents as the Space root:
+   - `README.md` (this file — contains the YAML frontmatter HF requires)
+   - `Dockerfile`
+   - `docker-compose.yml` (not used by HF, kept for reference)
+4. Set these **Space Secrets** (Settings → Repository secrets):
+   - `POSTGRES_PASSWORD` — any strong string
+   - `DJANGO_SECRET_KEY` — any long random string
+   - `HATCHET_ADMIN_TOKEN` — any random token
+5. Click **Save and build**. First build takes ~3–5 min.
+
+The Space will be live at `https://<your-username>.hf.space/<space-name>/`.
+
 ## Self-Hosting
 
 For a persistent, production deployment, use Docker Compose:
