@@ -133,25 +133,92 @@ def logout_view(request):
 
 # ─── WorkOS AuthKit ──────────────────────────────────────────────────────────
 
-class WorkOSLoginView(View):
-    """Redirect to WorkOS AuthKit hosted UI. User picks their method there
-    (Magic Auth code, email+password, etc.) and WorkOS redirects back with a code."""
+class WorkOSLoginView(TemplateView):
+    """Step 1: user enters their email. We send a Magic Auth code via WorkOS.
 
-    def get(self, request):
+    This uses the WorkOS User Management API directly (create_magic_auth)
+    rather than the hosted AuthKit UI, which has staging-environment
+    limitations (invalid-connection-selector). The API path works reliably
+    in both staging and production.
+    """
+
+    template_name = "auth/workos_login.html"
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        ctx["error"] = self.request.GET.get("error", "")
+        return ctx
+
+    def post(self, request):
         from django.conf import settings
 
         if not settings.WORKOS_ENABLED:
             messages.error(request, "WorkOS sign-in is not configured.")
             return redirect("login")
-        state = hashlib.sha256(os.urandom(32)).hexdigest()
-        request.session["workos_state"] = state
-        redirect_uri = f"{settings.APP_BASE_URL}/auth/workos/callback/"
-        url = workos_auth.build_authorization_url(redirect_uri, state)
-        return redirect(url)
+        email = request.POST.get("email", "").strip().lower()
+        if not email or "@" not in email:
+            return self.render_to_response(self.get_context_data(error="Please enter a valid email address."))
+        try:
+            workos_auth.send_magic_auth_code(
+                email,
+                ip_address=request.META.get("REMOTE_ADDR"),
+                user_agent=request.META.get("HTTP_USER_AGENT", ""),
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("WorkOS magic auth send failed")
+            return self.render_to_response(self.get_context_data(error=f"Could not send code: {exc}"))
+        request.session["workos_email"] = email
+        return redirect("workos_verify")
+
+
+class WorkOSVerifyView(TemplateView):
+    """Step 2: user enters the 6-digit code. We authenticate and log them in."""
+
+    template_name = "auth/workos_verify.html"
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        ctx["email"] = self.request.session.get("workos_email", "")
+        ctx["error"] = self.request.GET.get("error", "")
+        return ctx
+
+    def post(self, request):
+        from django.conf import settings
+
+        if not settings.WORKOS_ENABLED:
+            messages.error(request, "WorkOS sign-in is not configured.")
+            return redirect("login")
+        email = request.session.get("workos_email", "")
+        code = request.POST.get("code", "").strip()
+        if not email or not code:
+            return self.render_to_response(self.get_context_data(error="Missing email or code."))
+        try:
+            user, created = workos_auth.authenticate_magic_auth(
+                code,
+                email,
+                ip_address=request.META.get("REMOTE_ADDR"),
+                user_agent=request.META.get("HTTP_USER_AGENT", ""),
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("WorkOS magic auth verification failed")
+            return self.render_to_response(self.get_context_data(error=f"Verification failed: {exc}"))
+
+        request.session.pop("workos_email", None)
+        login(request, user)
+        if created:
+            _grant_default_project(user)
+            messages.success(request, "Welcome! Your account was created via WorkOS sign-in.")
+        else:
+            messages.success(request, "Signed in with WorkOS.")
+        return redirect("dashboard")
 
 
 class WorkOSCallbackView(View):
-    """Handle the WorkOS redirect: verify state, exchange code, log in."""
+    """Handle the WorkOS hosted AuthKit redirect (OAuth code flow).
+
+    Kept for when the hosted UI is available (production environments).
+    The primary flow uses the two-step Magic Auth above.
+    """
 
     def get(self, request):
         from django.conf import settings
