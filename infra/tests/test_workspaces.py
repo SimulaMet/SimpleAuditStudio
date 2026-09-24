@@ -23,16 +23,52 @@ class WorkspaceListCreateTest(TestCase):
         resp = self.client.get("/api/projects/")
         self.assertIn(resp.status_code, (401, 403))
 
-    def test_user_without_memberships_sees_empty_and_cannot_create(self):
+    def test_user_without_memberships_sees_empty_and_can_create(self):
         user = UserFactory()
         self.client.force_authenticate(user)
         resp = self.client.get("/api/projects/")
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.json(), [])
 
+        # Any authenticated user can create their own workspace.
         resp = self.client.post("/api/projects/create/", {"name": "New Team"}, format="json")
-        self.assertEqual(resp.status_code, 403)
-        self.assertEqual(resp.json()["error"]["code"], "workspace_create_forbidden")
+        self.assertEqual(resp.status_code, 201)
+        body = resp.json()
+        self.assertEqual(body["name"], "New Team")
+        self.assertTrue(body["is_admin"])
+        self.assertTrue(ProjectMembership.objects.filter(project_id=body["id"], user=user, role="admin").exists())
+
+    def test_default_project_visible_to_all_users(self):
+        """The 'Default' workspace (slug='default') is always listed for every
+        authenticated user, even without an explicit membership."""
+        from accounts.models import Project as P
+
+        # Create the Default project and another private one.
+        P.objects.create(name="Default", slug="default")
+        private = P.objects.create(name="Private", slug="private")
+
+        # User has membership only in 'private'.
+        user = UserFactory()
+        MembershipFactory(user=user, project=private, role="viewer")
+        self.client.force_authenticate(user)
+
+        resp = self.client.get("/api/projects/")
+        self.assertEqual(resp.status_code, 200)
+        slugs = [item["slug"] for item in resp.json()]
+        self.assertIn("default", slugs)
+        self.assertIn("private", slugs)
+
+    def test_default_project_accessible_without_membership(self):
+        """A user with zero memberships can still access the Default project detail."""
+        from accounts.models import Project as P
+
+        default = P.objects.create(name="Default", slug="default")
+        user = UserFactory()
+        self.client.force_authenticate(user)
+
+        resp = self.client.get(f"/api/projects/{default.id}/")
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()["slug"], "default")
 
     def test_admin_member_can_create_workspace(self):
         user = UserFactory()

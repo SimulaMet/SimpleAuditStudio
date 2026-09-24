@@ -32,12 +32,17 @@ def workspaces(request):
     if user is None or not user.is_authenticated:
         return {"workspaces": []}
 
+    from django.db.models import Q
+
     from accounts.models import Project, ProjectMembership
+    from accounts.services import DEFAULT_PROJECT_SLUG
 
     if user.is_superuser:
         projects = Project.objects.all()
     else:
-        projects = Project.objects.filter(memberships__user=user).distinct()
+        projects = Project.objects.filter(
+            Q(memberships__user=user) | Q(slug=DEFAULT_PROJECT_SLUG)
+        ).distinct()
 
     roles = {}
     if not user.is_superuser:
