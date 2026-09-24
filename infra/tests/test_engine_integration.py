@@ -436,3 +436,82 @@ class MissingKeyAsFailureTest(TestCase):
         run.refresh_from_db()
         self.assertEqual(run.failed_scenarios, 1)
         self.assertEqual(run.successful_scenarios, 0)
+
+
+class CrashRecoveryTest(TestCase):
+    """Worker startup re-submits runs orphaned by a previous crash."""
+
+    def setUp(self):
+        from accounts.models import Project, User
+        self.user = User.objects.create_user("recov", "r@r.r", "x")
+        self.project = Project.objects.create(name="recov", slug="recov")
+
+    def test_recovers_stuck_queued_run(self):
+        from datetime import timedelta
+        from django.utils import timezone
+        from infra.worker import _recover_stuck_runs
+        from infra.tests.test_engine_integration import _build_run
+        from unittest.mock import patch
+
+        run, item = _build_run(self.user, self.project)
+        # Make it look stuck: old updated_at, status queued
+        AuditRun.objects.filter(pk=run.pk).update(
+            status="queued",
+            updated_at=timezone.now() - timedelta(seconds=60),
+        )
+        run.refresh_from_db()
+
+        with patch("infra.worker.submit_run_workflow") as mock_submit:
+            _recover_stuck_runs()
+            mock_submit.assert_called_once()
+            args = mock_submit.call_args[0]
+            self.assertEqual(args[0], str(run.pk))
+            self.assertEqual(len(args[1]), 1)  # one scenario
+
+    def test_does_not_recover_archived_run(self):
+        from datetime import timedelta
+        from django.utils import timezone
+        from infra.worker import _recover_stuck_runs
+        from infra.tests.test_engine_integration import _build_run
+        from unittest.mock import patch
+
+        run, item = _build_run(self.user, self.project)
+        AuditRun.objects.filter(pk=run.pk).update(
+            status="queued",
+            archived=True,
+            updated_at=timezone.now() - timedelta(seconds=60),
+        )
+
+        with patch("infra.worker.submit_run_workflow") as mock_submit:
+            _recover_stuck_runs()
+            mock_submit.assert_not_called()
+
+    def test_does_not_recover_recently_updated_run(self):
+        from infra.worker import _recover_stuck_runs
+        from infra.tests.test_engine_integration import _build_run
+        from unittest.mock import patch
+
+        run, item = _build_run(self.user, self.project)
+        # updated_at is just now (within grace period) — should NOT recover
+        AuditRun.objects.filter(pk=run.pk).update(status="queued")
+
+        with patch("infra.worker.submit_run_workflow") as mock_submit:
+            _recover_stuck_runs()
+            mock_submit.assert_not_called()
+
+    def test_does_not_recover_completed_run(self):
+        from datetime import timedelta
+        from django.utils import timezone
+        from infra.worker import _recover_stuck_runs
+        from infra.tests.test_engine_integration import _build_run
+        from unittest.mock import patch
+
+        run, item = _build_run(self.user, self.project)
+        AuditRun.objects.filter(pk=run.pk).update(
+            status="completed",
+            updated_at=timezone.now() - timedelta(seconds=60),
+        )
+
+        with patch("infra.worker.submit_run_workflow") as mock_submit:
+            _recover_stuck_runs()
+            mock_submit.assert_not_called()
