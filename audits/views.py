@@ -3,6 +3,7 @@ import logging
 import time
 
 from django.http import StreamingHttpResponse
+from django.utils import timezone
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
@@ -166,7 +167,9 @@ def cancel_audit_run(request, project_id, run_id):
         )
 
     run.status = AuditRun.Status.CANCELLED
-    run.save(update_fields=["status"])
+    if run.finished_at is None:
+        run.finished_at = timezone.now()
+    run.save(update_fields=["status", "finished_at"])
     logger.info("Audit run %s cancellation requested by user %s", run.id, request.user.username)
     return Response(AuditRunSerializer(run).data)
 

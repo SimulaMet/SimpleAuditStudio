@@ -140,12 +140,16 @@ class DashboardView(ProjectMixin, ListView):
         qs = AuditRun.objects.filter(project=self.request.project).select_related(
             "scenario_set_version__scenario_set"
         )
-        # Status filter via ?status=active|completed|failed|cancelled
+        # Status filter via ?status=active|completed|failed|cancelled|archived
         status = self.request.GET.get("status", "")
-        if status == "active":
-            qs = qs.exclude(status__in=["completed", "failed", "cancelled"])
-        elif status in ("completed", "failed", "cancelled"):
-            qs = qs.filter(status=status)
+        if status == "archived":
+            qs = qs.filter(archived=True)
+        else:
+            qs = qs.filter(archived=False)
+            if status == "active":
+                qs = qs.exclude(status__in=["completed", "failed", "cancelled"])
+            elif status in ("completed", "failed", "cancelled"):
+                qs = qs.filter(status=status)
         # Search via ?q=
         q = (self.request.GET.get("q") or "").strip()
         if q:
@@ -160,11 +164,13 @@ class DashboardView(ProjectMixin, ListView):
     def get_context_data(self, **kw):
         ctx = super().get_context_data(**kw)
         base = AuditRun.objects.filter(project=self.request.project)
+        visible = base.filter(archived=False)
         ctx["stats"] = {
-            "total": base.count(),
-            "active": base.exclude(status__in=["completed", "failed", "cancelled"]).count(),
-            "completed": base.filter(status="completed").count(),
-            "failed": base.filter(status="failed").count(),
+            "total": visible.count(),
+            "active": visible.exclude(status__in=["completed", "failed", "cancelled"]).count(),
+            "completed": visible.filter(status="completed").count(),
+            "failed": visible.filter(status="failed").count(),
+            "archived": base.filter(archived=True).count(),
         }
         ctx["current_status"] = self.request.GET.get("status", "")
         ctx["search_query"] = (self.request.GET.get("q") or "").strip()
@@ -265,7 +271,7 @@ class QueueView(ProjectMixin, TemplateView):
 
     def get_context_data(self, **kw):
         runs = (
-            AuditRun.objects.filter(project=self.request.project)
+            AuditRun.objects.filter(project=self.request.project, archived=False)
             .select_related("scenario_set_version__scenario_set")
             .order_by("-created_at")[:100]
         )
@@ -982,6 +988,14 @@ class AuditDetailView(ProjectMixin, DetailView):
         ctx["results"] = results
         ctx["set_id"] = set_id
         ctx["stages"] = ["queued", "preparing", "target_execution", "auditing", "judging", "aggregation", "completed"]
+        if run.started_at and run.finished_at:
+            total = int((run.finished_at - run.started_at).total_seconds())
+            if total < 60:
+                ctx["duration"] = f"{total} sec"
+            elif total < 3600:
+                ctx["duration"] = f"{total // 60} min"
+            else:
+                ctx["duration"] = f"{total // 3600} hr {total % 3600 // 60} min"
         return ctx
 
 
@@ -990,8 +1004,22 @@ class AuditCancelView(ProjectMixin, View):
         run = AuditRun.objects.filter(pk=run_id, project=request.project).first()
         if run and run.status not in (AuditRun.Status.COMPLETED, AuditRun.Status.FAILED, AuditRun.Status.CANCELLED):
             run.status = AuditRun.Status.CANCELLED
-            run.save(update_fields=["status"])
+            if run.finished_at is None:
+                run.finished_at = timezone.now()
+            run.save(update_fields=["status", "finished_at"])
         return redirect(f"/audits/{run_id}/")
+
+
+class AuditArchiveView(ProjectMixin, View):
+    """Toggle the soft-archive flag on a run. Project-scoped: runs outside
+    the active project are invisible (404)."""
+
+    def post(self, request, run_id):
+        run = AuditRun.objects.filter(pk=run_id, project=request.project).first()
+        if run:
+            run.archived = not run.archived
+            run.save(update_fields=["archived"])
+        return redirect(request.META.get("HTTP_REFERER") or f"/audits/{run_id}/")
 
 
 # ─── Scenario Result Detail ──────────────────────────────────────────────────
@@ -1130,10 +1158,14 @@ class DashboardExportView(ProjectMixin, View):
             "scenario_set_version__scenario_set"
         ).order_by("-created_at")
         status = request.GET.get("status", "")
-        if status == "active":
-            qs = qs.exclude(status__in=["completed", "failed", "cancelled"])
-        elif status in ("completed", "failed", "cancelled"):
-            qs = qs.filter(status=status)
+        if status == "archived":
+            qs = qs.filter(archived=True)
+        else:
+            qs = qs.filter(archived=False)
+            if status == "active":
+                qs = qs.exclude(status__in=["completed", "failed", "cancelled"])
+            elif status in ("completed", "failed", "cancelled"):
+                qs = qs.filter(status=status)
 
         buf = io.StringIO()
         writer = csv.writer(buf)

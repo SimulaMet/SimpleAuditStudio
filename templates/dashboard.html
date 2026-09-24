@@ -4,7 +4,7 @@
 <h1 class="text-lg font-semibold text-gray-100 mb-6">Dashboard</h1>
 
 <!-- Stats -->
-<div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
+<div class="grid grid-cols-2 md:grid-cols-5 gap-3 mb-6">
   <a href="/dashboard/" class="bg-surface-raised rounded-xl border border-gray-800 p-4 text-center cursor-pointer hover:border-accent/40 hover:bg-surface-overlay transition-colors {% if not current_status %}border-accent/30{% endif %}">
     <span class="text-2xl font-bold text-accent">{{ stats.total }}</span>
     <p class="text-xs text-gray-500 mt-1 uppercase tracking-wide">Total</p>
@@ -20,6 +20,10 @@
   <a href="/dashboard/?status=failed" class="bg-surface-raised rounded-xl border border-gray-800 p-4 text-center cursor-pointer hover:border-red-500/40 hover:bg-surface-overlay transition-colors {% if current_status == 'failed' %}border-red-500/30{% endif %}">
     <span class="text-2xl font-bold text-red-400">{{ stats.failed }}</span>
     <p class="text-xs text-gray-500 mt-1 uppercase tracking-wide">Failed</p>
+  </a>
+  <a href="/dashboard/?status=archived" class="bg-surface-raised rounded-xl border border-gray-800 p-4 text-center cursor-pointer hover:border-gray-500/40 hover:bg-surface-overlay transition-colors {% if current_status == 'archived' %}border-gray-500/30{% endif %}">
+    <span class="text-2xl font-bold text-gray-400">{{ stats.archived }}</span>
+    <p class="text-xs text-gray-500 mt-1 uppercase tracking-wide">Archived</p>
   </a>
 </div>
 
@@ -39,6 +43,7 @@
           <a href="/dashboard/?status=active{% if search_query %}&q={{ search_query|urlencode }}{% endif %}" class="px-2 py-1 rounded {% if current_status == 'active' %}bg-amber-900/40 text-amber-300{% else %}text-gray-500 hover:text-gray-300{% endif %}">Active</a>
           <a href="/dashboard/?status=completed{% if search_query %}&q={{ search_query|urlencode }}{% endif %}" class="px-2 py-1 rounded {% if current_status == 'completed' %}bg-emerald-900/40 text-emerald-300{% else %}text-gray-500 hover:text-gray-300{% endif %}">Done</a>
           <a href="/dashboard/?status=failed{% if search_query %}&q={{ search_query|urlencode }}{% endif %}" class="px-2 py-1 rounded {% if current_status == 'failed' %}bg-red-900/40 text-red-300{% else %}text-gray-500 hover:text-gray-300{% endif %}">Failed</a>
+          <a href="/dashboard/?status=archived{% if search_query %}&q={{ search_query|urlencode }}{% endif %}" class="px-2 py-1 rounded {% if current_status == 'archived' %}bg-gray-700/60 text-gray-200{% else %}text-gray-500 hover:text-gray-300{% endif %}">Archived</a>
         </div>
         <button type="submit" class="px-2 py-1 rounded-lg bg-surface-overlay text-gray-500 text-xs hover:text-gray-300 transition-colors" title="Search">⌕</button>
         <a href="{% url 'dashboard_export' %}{% if current_status %}?status={{ current_status }}{% endif %}{% if search_query %}{% if not current_status %}?{% else %}&{% endif %}q={{ search_query|urlencode }}{% endif %}" class="px-2.5 py-1.5 rounded-lg bg-surface-overlay text-gray-400 text-xs font-medium hover:text-gray-200 transition-colors">Export CSV</a>
@@ -61,6 +66,7 @@
             <a href="/dashboard/?sort=created_at{% if current_status %}&status={{ current_status }}{% endif %}{% if search_query %}&q={{ search_query|urlencode }}{% endif %}" class="hover:text-gray-300">Created ↓</a>
             {% endif %}
           </th>
+          <th class="text-right px-3 py-2 text-xs font-medium text-gray-500 uppercase">Actions</th>
         </tr>
       </thead>
       <tbody>
@@ -75,6 +81,14 @@
             {% else %}<span class="inline-flex px-2 py-0.5 rounded-full text-xs font-semibold bg-amber-900/50 text-amber-300">{{ run.get_status_display }}</span>{% endif %}
           </td>
           <td class="px-3 py-2.5 text-gray-500 text-xs">{{ run.created_at|date:"M j, H:i" }}</td>
+          <td class="px-3 py-2.5 text-right whitespace-nowrap" onclick="event.stopPropagation()">
+            <a href="/audits/new/?clone_from={{ run.id }}" class="text-xs text-gray-400 hover:text-accent transition-colors" title="Clone this audit">Clone</a>
+            <span class="text-gray-700 mx-1.5">·</span>
+            <form method="post" action="/audits/{{ run.id }}/archive/" class="inline">
+              {% csrf_token %}
+              <button type="submit" class="text-xs text-gray-400 hover:text-gray-200 transition-colors" title="{% if run.archived %}Unarchive this audit{% else %}Archive this audit{% endif %}">{% if run.archived %}Unarchive{% else %}Archive{% endif %}</button>
+            </form>
+          </td>
         </tr>
         {% endfor %}
       </tbody>

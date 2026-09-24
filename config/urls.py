@@ -11,6 +11,7 @@ from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView
 
 from infra.ui import (
     AuditCancelView,
+    AuditArchiveView,
     AuditDetailView,
     AuditExportView,
     CompareView,
@@ -134,6 +135,7 @@ urlpatterns = [
     path("compare/", CompareView.as_view(), name="compare"),
     path("audits/<int:run_id>/", AuditDetailView.as_view(), name="audit_detail"),
     path("audits/<int:run_id>/cancel/", AuditCancelView.as_view(), name="audit_cancel"),
+    path("audits/<int:run_id>/archive/", AuditArchiveView.as_view(), name="audit_archive"),
     path("audits/<int:run_id>/results/<int:result_id>/", ScenarioResultDetailView.as_view(), name="scenario_result_detail"),
     path("audits/<int:run_id>/export/", AuditExportView.as_view(), name="audit_export"),
     path("dashboard/export.csv", DashboardExportView.as_view(), name="dashboard_export"),

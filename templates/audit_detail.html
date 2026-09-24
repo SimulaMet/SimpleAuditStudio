@@ -9,6 +9,11 @@
   <h1 class="text-lg font-semibold text-gray-100">Audit #{{ run.id }}</h1>
   <div class="flex items-center gap-2">
     <a href="{% url 'new_audit' %}?clone_from={{ run.id }}" class="px-3 py-1.5 rounded-lg bg-surface-overlay text-gray-300 text-xs font-medium hover:text-accent">Clone Audit</a>
+    <form method="post" action="{% url 'audit_archive' run.id %}" class="inline">
+      {% csrf_token %}
+      <button class="px-3 py-1.5 rounded-lg bg-surface-overlay text-gray-400 text-xs font-medium hover:text-gray-200">{% if run.archived %}Unarchive{% else %}Archive{% endif %}</button>
+    </form>
+    {% if run.archived %}<span class="inline-flex px-2 py-0.5 rounded-full text-xs font-semibold bg-gray-800 text-gray-400">archived</span>{% endif %}
     {% if run.status == "queued" or run.status == "preparing" or run.status == "target_execution" or run.status == "auditing" or run.status == "judging" or run.status == "aggregation" %}
     <form method="post" action="{% url 'audit_cancel' run.id %}">
       {% csrf_token %}
@@ -140,6 +145,7 @@
       </div>
       <div class="flex justify-between"><span class="text-gray-500">Started</span><span>{{ run.started_at|date:"M j, H:i"|default:"—" }}</span></div>
       <div class="flex justify-between"><span class="text-gray-500">Finished</span><span>{{ run.finished_at|date:"M j, H:i"|default:"—" }}</span></div>
+      {% if duration %}<div class="flex justify-between"><span class="text-gray-500">Duration</span><span>{{ duration }}</span></div>{% endif %}
       <div class="flex justify-between"><span class="text-gray-500">Scenarios</span><span>{{ run.total_scenarios }} total, {{ run.completed_scenarios }} done</span></div>
     </div>
   </div>
@@ -155,8 +161,7 @@
       <div class="flex justify-between gap-2"><span class="text-gray-500 shrink-0">Max Turns</span><span class="text-gray-300">{{ run.generation_parameters_snapshot.max_turns|default:"5 (default)" }}</span></div>
       <div class="flex justify-between gap-2"><span class="text-gray-500 shrink-0">Repetitions</span><span class="text-gray-300">{% if run.generation_parameters_snapshot.n_repetitions %}{{ run.generation_parameters_snapshot.n_repetitions }}×{% else %}1 (single){% endif %}</span></div>
       <div class="flex justify-between gap-2"><span class="text-gray-500 shrink-0">Language</span><span class="text-gray-300">{{ run.generation_parameters_snapshot.language|default:"English" }}</span></div>
-      <div class="flex justify-between gap-2"><span class="text-gray-500 shrink-0">Engine</span><span class="text-gray-300">{{ run.simpleaudit_version|default:"—" }}</span></div>
-      <div class="flex justify-between gap-2"><span class="text-gray-500 shrink-0">Git Commit</span><span class="text-gray-400 font-mono">{{ run.git_commit|truncatechars:8|default:"—" }}</span></div>
+      <div class="flex justify-between gap-2"><span class="text-gray-500 shrink-0">SimpleAudit Engine</span><span class="text-gray-300">{{ run.simpleaudit_version|default:"—" }}{% if run.git_commit %} <span class="text-gray-400 font-mono">({{ run.git_commit|truncatechars:8 }})</span>{% endif %}</span></div>
     </div>
   </div>
 </div>

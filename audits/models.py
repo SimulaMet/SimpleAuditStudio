@@ -48,6 +48,9 @@ class AuditRun(models.Model):
     summary_metrics = models.JSONField(default=dict, blank=True)
     error_code = models.CharField(max_length=120, blank=True)
     error_message = models.TextField(blank=True)
+    # Soft-hide from the dashboard/queue. Never deletes data; the frozen
+    # manifest and results stay fully accessible via the detail page.
+    archived = models.BooleanField(default=False, db_index=True)
     created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 

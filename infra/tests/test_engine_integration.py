@@ -254,6 +254,33 @@ class WorkerLifecycleTest(TestCase):
         self.assertIn("scenario_completed", kinds)
         self.assertIn("run_completed", kinds)
 
+    def test_first_scenario_execution_sets_started_at(self):
+        from infra import worker
+
+        run, item = _build_run(self.user, self.project)
+        self.assertIsNone(run.started_at)
+        with mock.patch("infra.engine.run_scenario", return_value=self._fake_payload()):
+            worker._scenario_execute_impl(
+                worker.ScenarioInput(run_id=str(run.id), version_item_id=str(item.id)), ctx=None
+            )
+        run.refresh_from_db()
+        self.assertIsNotNone(run.started_at)
+
+    def test_started_at_not_overwritten_on_later_executions(self):
+        from infra import worker
+        from django.utils import timezone
+
+        run, item = _build_run(self.user, self.project)
+        original = timezone.now() - timezone.timedelta(minutes=5)
+        run.started_at = original
+        run.save(update_fields=["started_at"])
+        with mock.patch("infra.engine.run_scenario", return_value=self._fake_payload()):
+            worker._scenario_execute_impl(
+                worker.ScenarioInput(run_id=str(run.id), version_item_id=str(item.id)), ctx=None
+            )
+        run.refresh_from_db()
+        self.assertEqual(run.started_at, original)
+
     def test_finalize_provenance_mismatch_fails_run(self):
         from infra import worker
 

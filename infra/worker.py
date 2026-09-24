@@ -179,6 +179,14 @@ def _scenario_execute_impl(workflow_input: ScenarioInput, ctx: Context) -> dict:
     item = run.scenario_set_version.items.get(pk=int(version_item_id))
     revision = item.revision
 
+    # Stamp started_at on the first scenario that actually executes. A
+    # conditional update keeps this idempotent and race-safe when several
+    # scenario tasks start concurrently (only the first wins).
+    if run.started_at is None:
+        AuditRun.objects.filter(pk=run.pk, started_at__isnull=True).update(
+            started_at=timezone.now()
+        )
+
     from infra.engine import EngineError, run_scenario as engine_run_scenario, run_scenario_repeated
 
     gen_params = run.generation_parameters_snapshot or {}
