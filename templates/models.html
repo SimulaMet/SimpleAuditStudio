@@ -15,7 +15,7 @@
   <div class="flex items-center justify-between flex-wrap gap-3 mb-3">
     <h2 class="text-sm font-semibold text-gray-300">Endpoints{% if search_query %} <span class="text-gray-500 font-normal">— matching "{{ search_query }}"</span>{% endif %}</h2>
     <form method="get" class="flex gap-2">
-      <input type="text" name="q" value="{{ search_query }}" placeholder="Search by name or model ID…"
+      <input type="text" name="q" value="{{ search_query }}" placeholder="Search by name or model ID…" aria-label="Search endpoints"
              class="px-3 py-1.5 rounded-lg bg-surface-overlay border border-gray-700 text-xs w-56 focus:outline-none focus:ring-2 focus:ring-accent/50">
       <button type="submit" class="px-3 py-1.5 rounded-lg bg-surface-overlay border border-gray-700 text-xs text-gray-400 hover:text-accent transition-colors">Search</button>
       {% if search_query %}<a href="{% url 'models' %}" class="px-2 py-1.5 text-xs text-gray-600 hover:text-accent">✕</a>{% endif %}
@@ -115,23 +115,41 @@
     {% csrf_token %}
     <input type="hidden" name="action" value="add_endpoint">
     <div class="grid grid-cols-1 md:grid-cols-3 gap-3 mb-3">
-      <input type="text" name="display_name" placeholder="Display name" required
-             class="px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-accent/50">
-      <input type="url" name="base_url" placeholder="https://api.example.com/v1" required
-             class="px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-accent/50">
-      <input type="text" name="model_id" placeholder="model-id (optional)"
-             class="px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-accent/50">
+      <div>
+        <label class="block text-xs text-gray-500 mb-1">Display Name</label>
+        <input type="text" name="display_name" placeholder="Qwen 3.8 27B" required
+               class="w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-accent/50">
+      </div>
+      <div>
+        <label class="block text-xs text-gray-500 mb-1">Base URL</label>
+        <input type="url" name="base_url" placeholder="https://api.example.com/v1" required
+               class="w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-accent/50">
+      </div>
+      <div>
+        <label class="block text-xs text-gray-500 mb-1">Model ID</label>
+        <input type="text" name="model_id" placeholder="qwen-3.8-27b (optional)"
+               class="w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-accent/50">
+      </div>
     </div>
     <div class="flex flex-wrap gap-3 items-end">
-      <select name="provider" class="px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-accent/50" style="width:120px">
-        <option value="openai">openai</option>
-        <option value="anthropic">anthropic</option>
-        <option value="google">google</option>
-      </select>
-      <input type="text" name="secret_reference" placeholder="API key env var (e.g. MY_API_KEY)"
-             class="flex-1 min-w-[200px] px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-accent/50">
-      <input type="password" name="api_key_direct" placeholder="…or paste key directly" autocomplete="off"
-             class="flex-1 min-w-[200px] px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-accent/50">
+      <div>
+        <label class="block text-xs text-gray-500 mb-1">Provider</label>
+        <select name="provider" class="px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-accent/50" style="width:120px">
+          <option value="openai">openai</option>
+          <option value="anthropic">anthropic</option>
+          <option value="google">google</option>
+        </select>
+      </div>
+      <div class="flex-1 min-w-[200px]">
+        <label class="block text-xs text-gray-500 mb-1">API Key (env var)</label>
+        <input type="text" name="secret_reference" placeholder="SIMULACHAT_API_KEY"
+               class="w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-accent/50">
+      </div>
+      <div class="flex-1 min-w-[200px]">
+        <label class="block text-xs text-gray-500 mb-1">API Key (direct)</label>
+        <input type="password" name="api_key_direct" placeholder="sk-..." autocomplete="off"
+               class="w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-accent/50">
+      </div>
       <button class="px-4 py-2 rounded-lg bg-accent text-white text-sm font-medium hover:bg-accent-hover whitespace-nowrap">+ Add</button>
     </div>
   </form>
@@ -211,22 +229,42 @@
   {% endif %}
 
   <!-- Add profile form -->
-  <form method="post" class="grid grid-cols-1 md:grid-cols-5 gap-3 pt-3 border-t border-gray-800">
+  <form method="post" class="pt-3 border-t border-gray-800">
     {% csrf_token %}
     <input type="hidden" name="action" value="add_profile">
-    <input type="text" name="profile_name" placeholder="Profile name" required
-           class="px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-accent/50">
-    <input type="number" name="max_turns" value="5" min="1" max="50" placeholder="Turns (5)"
-           class="px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-accent/50">
-    <input type="number" step="0.1" name="temp_target" value="0.7" placeholder="Temp T (0.7)"
-           class="px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-accent/50">
-    <input type="number" step="0.1" name="temp_auditor" value="0.2" placeholder="Temp A (0.2)"
-           class="px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-accent/50">
-    <input type="number" step="0.1" name="temp_judge" value="0.0" placeholder="Temp J (0.0)"
-           class="px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-accent/50">
-    <input type="number" name="max_tokens" value="2048" min="1" placeholder="Max tokens (2048)"
-           class="px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-accent/50">
-    <button class="px-3 py-2 rounded-lg bg-accent text-white text-sm font-medium hover:bg-accent-hover">+ Add</button>
+    <div class="grid grid-cols-2 md:grid-cols-6 gap-3 mb-3">
+      <div>
+        <label class="block text-xs text-gray-500 mb-1">Name</label>
+        <input type="text" name="profile_name" placeholder="Default" required
+               class="w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-accent/50">
+      </div>
+      <div>
+        <label class="block text-xs text-gray-500 mb-1">Max Turns</label>
+        <input type="number" name="max_turns" value="5" min="1" max="50"
+               class="w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-accent/50">
+      </div>
+      <div>
+        <label class="block text-xs text-gray-500 mb-1">Temp Target</label>
+        <input type="number" step="0.1" name="temp_target" value="0.7"
+               class="w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-accent/50">
+      </div>
+      <div>
+        <label class="block text-xs text-gray-500 mb-1">Temp Auditor</label>
+        <input type="number" step="0.1" name="temp_auditor" value="0.2"
+               class="w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-accent/50">
+      </div>
+      <div>
+        <label class="block text-xs text-gray-500 mb-1">Temp Judge</label>
+        <input type="number" step="0.1" name="temp_judge" value="0.0"
+               class="w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-accent/50">
+      </div>
+      <div>
+        <label class="block text-xs text-gray-500 mb-1">Max Tokens</label>
+        <input type="number" name="max_tokens" value="2048" min="1"
+               class="w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-accent/50">
+      </div>
+    </div>
+    <button class="px-4 py-2 rounded-lg bg-accent text-white text-sm font-medium hover:bg-accent-hover">+ Add Profile</button>
   </form>
 </div>
 {% endblock %}
