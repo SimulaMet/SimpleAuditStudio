@@ -67,6 +67,7 @@
   {% if profiles %}
   <div class="bg-surface-raised rounded-xl border border-gray-800 p-4">
     <h3 class="text-sm font-semibold text-gray-300 mb-3">Audit Profile (optional)</h3>
+    <label class="block text-xs font-medium text-gray-500 mb-1 uppercase tracking-wide">Profile</label>
     <select name="profile" class="w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-accent/50">
       <option value="">None</option>
       {% for p in profiles %}<option value="{{ p.id }}">{{ p.name }} ({{ p.max_turns }} turns)</option>{% endfor %}

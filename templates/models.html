@@ -60,7 +60,7 @@
             {% csrf_token %}
             <input type="hidden" name="action" value="edit_model">
             <input type="hidden" name="rm_id" value="{{ m.id }}">
-            <input type="text" name="model_display_name" value="{{ m.display_name }}" placeholder="Display name"
+            <input type="text" name="model_display_name" value="{{ m.display_name }}" placeholder="Display name" aria-label="Edit display name"
                    class="flex-1 px-2 py-1 rounded bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-1 focus:ring-accent/50">
             <button class="px-2 py-1 rounded bg-accent/20 text-accent text-xs hover:bg-accent/30">Save</button>
             <button type="button" onclick="document.getElementById('edit-model-{{ m.id }}').classList.add('hidden')"
@@ -218,11 +218,11 @@
           <div>
             <label class="block text-xs text-gray-500 mb-1">Temp (T/A/J)</label>
             <div class="flex gap-1">
-              <input type="number" step="0.1" name="temp_target" value="{{ p.temperature_target }}" title="Target"
+              <input type="number" step="0.1" name="temp_target" value="{{ p.temperature_target }}" title="Target" aria-label="Temperature target"
                      class="w-full px-2 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-accent/50">
-              <input type="number" step="0.1" name="temp_auditor" value="{{ p.temperature_auditor }}" title="Auditor"
+              <input type="number" step="0.1" name="temp_auditor" value="{{ p.temperature_auditor }}" title="Auditor" aria-label="Temperature auditor"
                      class="w-full px-2 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-accent/50">
-              <input type="number" step="0.1" name="temp_judge" value="{{ p.temperature_judge }}" title="Judge"
+              <input type="number" step="0.1" name="temp_judge" value="{{ p.temperature_judge }}" title="Judge" aria-label="Temperature judge"
                      class="w-full px-2 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-accent/50">
             </div>
           </div>

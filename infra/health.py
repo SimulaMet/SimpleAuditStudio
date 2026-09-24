@@ -127,13 +127,12 @@ def _minio_probe() -> dict[str, Any]:
     from django.conf import settings
 
     endpoint = getattr(settings, "MINIO_ENDPOINT", "")
-    if not endpoint:
+    access_key = getattr(settings, "MINIO_ACCESS_KEY", "")
+    secret_key = getattr(settings, "MINIO_SECRET_KEY", "")
+    if not endpoint or not access_key:
         return {"status": "unknown", "detail": "MinIO not configured (storage profile off)"}
     import boto3
     from botocore.config import Config
-
-    access_key = getattr(settings, "MINIO_ACCESS_KEY", "")
-    secret_key = getattr(settings, "MINIO_SECRET_KEY", "")
     bucket = getattr(settings, "MINIO_BUCKET", "")
     # Short connect/read timeout and NO retries: a health probe must fail fast,
     # not hang for ~10s on boto3's default retry stack when MinIO is absent.
