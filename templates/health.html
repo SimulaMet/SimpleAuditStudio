@@ -6,6 +6,14 @@
   <div class="flex items-center gap-3">
     <span id="overall-badge" class="px-2.5 py-1 rounded-full text-xs font-medium bg-gray-800 text-gray-400">…</span>
     <span id="last-updated" class="text-xs text-gray-600"></span>
+    <select id="refresh-interval" class="bg-surface-overlay border border-gray-700 rounded-lg px-2 py-1 text-xs text-gray-400 focus:outline-none focus:ring-1 focus:ring-accent/50">
+      <option value="10">10s</option>
+      <option value="30" selected>30s</option>
+      <option value="60">60s</option>
+      <option value="custom">Custom…</option>
+    </select>
+    <input id="refresh-custom" type="number" min="10" max="3600" placeholder="sec"
+           class="hidden w-16 bg-surface-overlay border border-gray-700 rounded-lg px-2 py-1 text-xs text-gray-400 focus:outline-none focus:ring-1 focus:ring-accent/50">
   </div>
 </div>
 
@@ -95,7 +103,31 @@
 
 <script>
 (function () {
-  const REFRESH_MS = 5000;
+  let timer = null;
+  const sel = document.getElementById("refresh-interval");
+  const customInput = document.getElementById("refresh-custom");
+
+  function getIntervalMs() {
+    const v = sel.value;
+    if (v === "custom") {
+      const n = parseInt(customInput.value, 10);
+      return (isNaN(n) || n < 10 ? 10 : n) * 1000;
+    }
+    return parseInt(v, 10) * 1000;
+  }
+
+  function scheduleRefresh() {
+    if (timer) clearInterval(timer);
+    timer = setInterval(refresh, getIntervalMs());
+  }
+
+  sel.addEventListener("change", () => {
+    customInput.classList.toggle("hidden", sel.value !== "custom");
+    if (sel.value === "custom") customInput.focus();
+    scheduleRefresh();
+  });
+  customInput.addEventListener("change", scheduleRefresh);
+
   const DOT_COLORS = { up: "bg-emerald-500", degraded: "bg-amber-500", down: "bg-red-500", unknown: "bg-gray-600" };
   const OVERALL_STYLES = {
     ok: "bg-emerald-900/40 text-emerald-300",
@@ -218,7 +250,7 @@
   }
 
   refresh();
-  setInterval(refresh, REFRESH_MS);
+  scheduleRefresh();
 })();
 </script>
 {% endblock %}
