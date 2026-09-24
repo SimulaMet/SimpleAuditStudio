@@ -75,6 +75,11 @@ def _csrf_trusted_origins() -> list[str]:
 
 CSRF_TRUSTED_ORIGINS = _csrf_trusted_origins()
 
+# Allow same-origin framing (e.g. Hugging Face Spaces embeds the app in an
+# iframe on the same origin). Cross-origin framing stays blocked, preserving
+# clickjacking protection.
+X_FRAME_OPTIONS = "SAMEORIGIN"
+
 INSTALLED_APPS = [
     "django.contrib.admin",
     "django.contrib.auth",
