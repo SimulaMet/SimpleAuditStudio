@@ -133,37 +133,6 @@ def logout_view(request):
 
 # ─── WorkOS AuthKit ──────────────────────────────────────────────────────────
 
-class WorkOSOAuthView(View):
-    """Redirect to WorkOS for social login (Google, Microsoft, GitHub, etc.).
-
-    The user is sent to WorkOS's hosted OAuth flow for the specified provider.
-    After authenticating with the provider, WorkOS redirects back to
-    /auth/workos/callback/ with a code that we exchange for a local user.
-    """
-
-    SUPPORTED_PROVIDERS = {
-        "GoogleOAuth", "MicrosoftOAuth", "GitHubOAuth", "AppleOAuth",
-    }
-
-    def get(self, request):
-        from django.conf import settings
-
-        if not settings.WORKOS_ENABLED:
-            messages.error(request, "WorkOS sign-in is not configured.")
-            return redirect("login")
-        provider = request.GET.get("provider", "")
-        if provider not in self.SUPPORTED_PROVIDERS:
-            messages.error(request, f"Unsupported provider: {provider}")
-            return redirect("login")
-        state = hashlib.sha256(os.urandom(32)).hexdigest()
-        request.session["workos_state"] = state
-        redirect_uri = f"{settings.APP_BASE_URL}/auth/workos/callback/"
-        url = workos_auth.build_authorization_url(redirect_uri, state)
-        # Append provider hint so WorkOS routes to the correct IdP
-        url = f"{url}&connection={provider}" if "?" in url else f"{url}?connection={provider}"
-        return redirect(url)
-
-
 class WorkOSLoginView(TemplateView):
     """Step 1: user enters their email. We send a Magic Auth code via WorkOS.
 
