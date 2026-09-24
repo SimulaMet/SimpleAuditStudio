@@ -36,6 +36,7 @@
     {# ── Secondary: username/password (always available) ── #}
     <form method="post" class="bg-surface-raised rounded-2xl border border-gray-800 p-8 space-y-5 shadow-xl">
       {% csrf_token %}
+      <input type="hidden" name="next" value="{{ request.GET.next|default:'' }}">
       <h2 class="text-base font-semibold text-gray-200">Sign in with password</h2>
       {% if form.non_field_errors %}
         <div class="text-sm text-red-400 bg-red-900/30 rounded-lg px-3 py-2">{{ form.non_field_errors.0 }}</div>

@@ -97,6 +97,9 @@ class LoginView(TemplateView):
         form = AuthenticationForm(request, data=request.POST)
         if form.is_valid():
             login(request, form.get_user())
+            next_url = request.GET.get("next") or request.POST.get("next") or ""
+            if next_url and next_url.startswith("/") and not next_url.startswith("//"):
+                return redirect(next_url)
             return redirect("dashboard")
         return self.render_to_response(self.get_context_data(form=form))
 
