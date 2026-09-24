@@ -25,6 +25,47 @@ SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY", "change-me")
 DEBUG = env_bool("DJANGO_DEBUG", False)
 ALLOWED_HOSTS = env_list("DJANGO_ALLOWED_HOSTS", "localhost,127.0.0.1")
 
+
+def _csrf_trusted_origins() -> list[str]:
+    """Build CSRF_TRUSTED_ORIGINS from explicit env + derived from ALLOWED_HOSTS.
+
+    Django's CSRF protection requires the request Origin to match a trusted
+    origin (scheme + host, no trailing slash). ALLOWED_HOSTS alone does NOT
+    satisfy this — without CSRF_TRUSTED_ORIGINS, every POST from the browser
+    (login, register, forms) is rejected with 403 "Origin checking failed".
+
+    We accept an explicit DJANGO_CSRF_TRUSTED_ORIGINS (comma-separated full
+    URLs) and additionally derive https://<host> for each ALLOWED_HOSTS entry
+    that looks like a real domain (so self-hosted / HF Space deploys work
+    turnkey). Wildcard subdomains (e.g. .hf.space) are expanded to the scheme
+    form Django expects (https://*.hf.space).
+    """
+    explicit = env_list("DJANGO_CSRF_TRUSTED_ORIGINS")
+    derived: list[str] = []
+    for host in ALLOWED_HOSTS:
+        if not host:
+            continue
+        if host.startswith("."):
+            # Wildcard subdomain -> https://*.example.com (Django's expected form)
+            derived.append(f"https://*{host}")
+        elif ":" in host:
+            # Host with an explicit port (e.g. localhost:8000) — use http for
+            # loopback, https otherwise. Strip nothing; Django accepts the port.
+            scheme = "http" if host.split(":")[0] in {"localhost", "127.0.0.1", "0.0.0.0"} else "https"
+            derived.append(f"{scheme}://{host}")
+        elif host in {"localhost", "127.0.0.1", "0.0.0.0"}:
+            derived.append(f"http://{host}")
+        else:
+            derived.append(f"https://{host}")
+    combined = list(explicit)
+    for origin in derived:
+        if origin not in combined:
+            combined.append(origin)
+    return combined
+
+
+CSRF_TRUSTED_ORIGINS = _csrf_trusted_origins()
+
 INSTALLED_APPS = [
     "django.contrib.admin",
     "django.contrib.auth",
