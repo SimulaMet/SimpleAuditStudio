@@ -1,8 +1,12 @@
-"""Idempotent first-run seed: import SimpleAudit scenario packs + default model connections.
+"""Idempotent first-run seed: scenario packs + model connections + demo audit runs.
 
-Run automatically by the web container after bootstrap_platform (docker-compose)
-and by the HF Space start.sh, or manually:
+Run automatically by the minimal-config CLI and docker-compose entrypoint, or manually:
     python manage.py seed_platform [--project 1] [--packs safety rag health system_prompt]
+
+Seeds in order:
+  1. Scenario packs (from simpleaudit package)
+  2. Default model connections
+  3. Demo audit runs (from pre-recorded fixture, no API key needed)
 
 Safe to run multiple times — skips anything already present.
 """
@@ -37,6 +41,10 @@ class Command(BaseCommand):
             "--skip-packs", action="store_true",
             help="Skip importing scenario packs",
         )
+        parser.add_argument(
+            "--skip-demo-audits", action="store_true",
+            help="Skip seeding demo audit runs from fixture",
+        )
 
     def handle(self, *args, **options):
         from accounts.models import Project
@@ -65,7 +73,18 @@ class Command(BaseCommand):
             for message in seed_default_model_connections(project, user):
                 self.stdout.write(f"  {message}")
 
+        if not options["skip_demo_audits"]:
+            self._seed_demo_audits(project, user)
+
         self.stdout.write(self.style.SUCCESS("Seed complete."))
+
+    def _seed_demo_audits(self, project, user) -> None:
+        """Seed demo audit runs from pre-recorded fixture (idempotent)."""
+        from django.core.management import call_command
+        try:
+            call_command("seed_demo_audits", project=project.id, verbosity=0)
+        except CommandError as e:
+            self.stderr.write(self.style.WARNING(f"Demo audit seed skipped: {e}"))
 
     def _seed_scenario_packs(self, project, user, packs: list[str]):
         try:
