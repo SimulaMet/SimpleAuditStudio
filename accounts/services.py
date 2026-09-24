@@ -44,7 +44,14 @@ def bootstrap_admin_and_default_project(
         user.save(update_fields=["is_superuser"])
 
     slug = slugify(project_name) or "default"
-    project, _ = Project.objects.get_or_create(slug=slug, defaults={"name": project_name})
+    default_description = "Public common workspaces visible to all users, used for demo"
+    project, created = Project.objects.get_or_create(
+        slug=slug,
+        defaults={"name": project_name, "description": default_description},
+    )
+    if not created and not project.description:
+        project.description = default_description
+        project.save(update_fields=["description"])
     ProjectMembership.objects.get_or_create(
         project=project,
         user=user,
