@@ -4,8 +4,10 @@
 <div class="w-full max-w-md">
     <div class="text-center mb-8">
       {% load static %}
-      <img src="{% static 'logo.png' %}" alt="SimpleAudit" class="w-20 h-20 mx-auto mb-4">
-      <h1 class="text-3xl font-bold text-gray-100">SimpleAudit Studio</h1>
+      <a href="/" class="block group">
+        <img src="{% static 'logo.png' %}" alt="SimpleAudit" class="w-20 h-20 mx-auto mb-4">
+        <h1 class="text-3xl font-bold text-gray-100 group-hover:text-white transition-colors">SimpleAudit Studio</h1>
+      </a>
       <p class="text-sm text-gray-500 mt-2">Reproducible AI Model Auditing</p>
     </div>
     <form method="post" action="{% url 'workos_login' %}" class="bg-surface-raised rounded-2xl border border-gray-800 p-8 space-y-5 shadow-xl">

@@ -4,7 +4,7 @@ These tests verify that the one-liner `uvx simpleaudit-studio` boot sequence
 works correctly: settings, migrations, seeding, embedded Hatchet, mock server,
 and the web UI banner.
 
-Run with:  SIMPLEAUDIT_LOCAL_SQLITE=1 python manage.py test infra.tests.test_demo_mode
+Run with:  SIMPLEAUDIT_LOCAL_SQLITE=1 python manage.py test infra.tests.test_minimal_config
 """
 
 from __future__ import annotations
