@@ -26,11 +26,18 @@ def _client():
     return WorkOSClient(api_key=settings.WORKOS_API_KEY)
 
 
-def build_authorization_url(redirect_uri: str, state: str, login_hint: str | None = None) -> str:
+def build_authorization_url(
+    redirect_uri: str,
+    state: str,
+    login_hint: str | None = None,
+    provider: str | None = None,
+) -> str:
     """Build the URL that starts the WorkOS AuthKit flow.
 
     ``login_hint`` pre-fills the user's email and routes to Magic Auth
     (email code) instead of auto-redirecting to an SSO/OAuth connection.
+    ``provider`` pre-selects a social login provider (e.g. ``GoogleOAuth``,
+    ``MicrosoftOAuth``) so the user goes straight to that IdP.
     """
     kwargs: dict = {
         "client_id": settings.WORKOS_CLIENT_ID,
@@ -39,6 +46,8 @@ def build_authorization_url(redirect_uri: str, state: str, login_hint: str | Non
     }
     if login_hint:
         kwargs["login_hint"] = login_hint
+    if provider:
+        kwargs["provider"] = provider
     return _client().user_management.get_authorization_url(**kwargs)
 
 
