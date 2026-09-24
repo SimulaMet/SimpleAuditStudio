@@ -1,12 +1,25 @@
 {% extends "base.html" %}
-{% block title %}Audit #{{ run.id }} — SimpleAudit{% endblock %}
+{% block title %}{{ run.name }} (Audit #{{ run.id }}) — SimpleAudit{% endblock %}
 {% block content %}
 <div class="mb-4">
   <a href="{% url 'dashboard' %}" class="text-xs text-gray-500 hover:text-accent">← Back</a>
 </div>
 
 <div class="flex items-center justify-between mb-6">
-  <h1 class="text-lg font-semibold text-gray-100">Audit #{{ run.id }}</h1>
+  <div class="flex items-center gap-2 min-w-0">
+    <h1 id="audit-title" class="text-lg font-semibold text-gray-100 truncate">{{ run.name }} <span class="text-gray-500 font-normal text-sm">(Audit #{{ run.id }})</span></h1>
+    <button type="button" onclick="toggleRename()" title="Rename this audit" aria-label="Rename this audit" class="shrink-0 inline-flex items-center justify-center w-7 h-7 rounded-md text-gray-500 hover:text-accent hover:bg-surface-overlay transition-colors">
+      <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/></svg>
+    </button>
+  </div>
+  <form id="rename-form" method="post" action="{% url 'audit_rename' run.id %}" class="hidden flex items-center gap-2 mb-6">
+    {% csrf_token %}
+    <input type="text" name="name" value="{{ run.name }}" maxlength="250" required
+           class="px-3 py-1.5 rounded-lg bg-surface-overlay border border-gray-700 text-sm text-gray-200 focus:outline-none focus:ring-2 focus:ring-accent/50 w-64"
+           onkeydown="if(event.key==='Enter')this.form.submit();if(event.key==='Escape')toggleRename()">
+    <button type="submit" class="px-3 py-1.5 rounded-lg bg-accent text-white text-xs font-medium hover:bg-accent-hover">Save</button>
+    <button type="button" onclick="toggleRename()" class="px-3 py-1.5 rounded-lg bg-surface-overlay text-gray-400 text-xs font-medium hover:text-gray-200">Cancel</button>
+  </form>
   <div class="flex items-center gap-2">
     <a href="{% url 'new_audit' %}?clone_from={{ run.id }}" title="Clone this audit" aria-label="Clone this audit" class="inline-flex items-center justify-center w-8 h-8 rounded-lg bg-surface-overlay text-gray-400 hover:text-accent transition-colors">
       <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
@@ -119,6 +132,9 @@
   </div>
 </div>
 <script>
+function toggleRename() {
+  document.getElementById('rename-form').classList.toggle('hidden');
+}
 (function() {
   const project_id = {{ request.project.id }};
   const run_id = {{ run.id }};
