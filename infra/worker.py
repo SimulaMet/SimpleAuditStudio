@@ -164,6 +164,14 @@ def _scenario_execute_impl(workflow_input: ScenarioInput, ctx: Context) -> dict:
                 f"injected failure for {version_item_id} (execution {executions}/{fail_times})"
             )
 
+    # Idempotency: if this scenario already has a durable result, skip
+    # re-execution. This makes workflow re-submission safe (e.g., after a
+    # worker restart killed in-flight tasks) without wasting API calls.
+    from audits.events import get_result as _get_existing_result
+    if _get_existing_result(run_id, version_item_id) is not None:
+        append_event(run_id, version_item_id, "scenario_skipped_existing", {})
+        return {"status": "skipped_existing"}
+
     append_event(run_id, version_item_id, "scenario_attempted", {"attempt": attempt})
     append_event(run_id, "_run", "run_stage", {"stage": "target_execution"})
 
@@ -287,7 +295,7 @@ def _scenario_execute_impl(workflow_input: ScenarioInput, ctx: Context) -> dict:
         append_event(run_id, version_item_id, "scenario_failed", {"error": str(exc)})
         with transaction.atomic():
             upsert_scenario_result(run_id, version_item_id, status="failed", attempts=attempt, result={"error": str(exc)})
-            _bump_run_counters(run_id, succeeded=False)
+            _bump_run_counters(run_id, version_item_id, succeeded=False)
         raise
 
     severity = result_payload.get("severity", "")
@@ -296,7 +304,7 @@ def _scenario_execute_impl(workflow_input: ScenarioInput, ctx: Context) -> dict:
         upsert_scenario_result(
             run_id, version_item_id, status="failed" if failed else "completed", attempts=attempt, result=result_payload
         )
-        _bump_run_counters(run_id, succeeded=not failed)
+        _bump_run_counters(run_id, version_item_id, succeeded=not failed)
 
     append_event(
         run_id,
@@ -313,13 +321,40 @@ def _iter_attempted_events(run_id: str, version_item_id: str):
     return [e for e in list_events(run_id) if e["version_item_id"] == version_item_id and e["kind"] == "scenario_attempted"]
 
 
-def _bump_run_counters(run_id: str, *, succeeded: bool) -> None:
+def _bump_run_counters(run_id: str, version_item_id: str, *, succeeded: bool) -> None:
+    """Idempotently bump run counters for a given version item.
+
+    Only increments if no prior ScenarioResult exists for this version_item,
+    preventing double-counting when Hatchet retries re-execute the task.
+    """
     from audits.models import AuditRun
+    from audits.events import ScenarioResult
 
     try:
         run = AuditRun.objects.get(pk=int(run_id))
     except (AuditRun.DoesNotExist, ValueError):
         return
+
+    # If a result row already exists for this version_item, the counter was
+    # already bumped on the first execution. Update severity in place instead.
+    existing = ScenarioResult.objects.filter(
+        run_id=int(run_id), version_item_id=version_item_id
+    ).first()
+    if existing:
+        # Re-execution (retry): adjust pass/fail if outcome changed
+        was_success = existing.status == "completed"
+        if was_success != succeeded:
+            if succeeded:
+                run.successful_scenarios = max(0, run.successful_scenarios - (1 if not was_success else 0))
+                run.failed_scenarios = max(0, run.failed_scenarios - (1 if was_success else 0))
+                run.successful_scenarios += 1
+            else:
+                run.successful_scenarios = max(0, run.successful_scenarios - (1 if was_success else 0))
+                run.failed_scenarios = max(0, run.failed_scenarios - (1 if not was_success else 0))
+                run.failed_scenarios += 1
+            run.save(update_fields=["completed_scenarios", "successful_scenarios", "failed_scenarios"])
+        return
+
     run.completed_scenarios += 1
     if succeeded:
         run.successful_scenarios += 1
@@ -346,14 +381,6 @@ def _run_finalize_impl(workflow_input: FinalizeInput, ctx: Context) -> dict:
     run_id = workflow_input.run_id
     expected_version = workflow_input.simpleaudit_version
     expected_commit = workflow_input.git_commit
-
-    logger.info(
-        "FINALIZE_DIAG run=%s expected_version=%r expected_commit=%r "
-        "worker_version=%r worker_commit=%r type(ev)=%s",
-        run_id, expected_version, expected_commit,
-        WORKER_SIMPLEAUDIT_VERSION, WORKER_GIT_COMMIT,
-        type(expected_version).__name__,
-    )
 
     # Version is authoritative provenance: a mismatch means the worker's engine
     # differs from what the run was frozen against, so the run must fail.
