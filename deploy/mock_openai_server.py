@@ -20,6 +20,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import threading
 import time
 import uuid
 
@@ -127,6 +128,29 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(data)))
         self.end_headers()
         self.wfile.write(data)
+
+
+def start_mock_server(port: int = 0) -> tuple[ThreadingHTTPServer, int]:
+    """Start the mock OpenAI server in a daemon thread.
+
+    Args:
+        port: Port to bind (0 = OS-assigned random free port).
+
+    Returns:
+        Tuple of (server_instance, actual_port).
+    """
+    server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+    actual_port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    print(f"[mock-openai] listening on 127.0.0.1:{actual_port}", flush=True)
+    return server, actual_port
+
+
+def stop_mock_server(server: ThreadingHTTPServer) -> None:
+    """Shut down a mock server started by start_mock_server()."""
+    server.shutdown()
+    server.server_close()
 
 
 def main():

@@ -137,11 +137,23 @@ WSGI_APPLICATION = "config.wsgi.application"
 
 AUTH_USER_MODEL = "accounts.User"
 
-# Canonical runtime is PostgreSQL (ADR 002). The SQLite branch below is an
-# explicit, opt-in LOCAL-ONLY convenience for running the test suite on a
-# machine without Postgres/Docker. It is never the default and must not be used
-# in any deployment.
-if env_bool("SIMPLEAUDIT_LOCAL_SQLITE", False):
+# Local demo mode: one-liner run via `uvx simpleaudit-studio`.
+# Uses SQLite + embedded Hatchet + mock model server. Never for production.
+# Distinct from DEMO_MODE (HF Spaces) — this is purely local dev convenience.
+MINIMAL_CONFIG = os.environ.get("SIMPLEAUDIT_MINIMAL", "").strip() == "1"
+
+# Canonical runtime is PostgreSQL (ADR 002). The SQLite branches below are
+# explicit, opt-in LOCAL-ONLY conveniences. They are never the default and
+# must not be used in any deployment.
+if MINIMAL_CONFIG:
+    DATABASES = {
+        "default": {
+            "ENGINE": "django.db.backends.sqlite3",
+            "NAME": BASE_DIR / "demo.sqlite3",
+            "OPTIONS": {"timeout": 30},
+        }
+    }
+elif env_bool("SIMPLEAUDIT_LOCAL_SQLITE", False):
     DATABASES = {
         "default": {
             "ENGINE": "django.db.backends.sqlite3",
@@ -253,13 +265,21 @@ MINIO_ENDPOINT = os.environ.get("MINIO_ENDPOINT", "")
 MINIO_ACCESS_KEY = os.environ.get("MINIO_ACCESS_KEY", "")
 MINIO_SECRET_KEY = os.environ.get("MINIO_SECRET_KEY", "")
 MINIO_BUCKET = os.environ.get("MINIO_BUCKET", "simpleaudit-artifacts")
-HATCHET_SERVER_URL = os.environ.get("HATCHET_SERVER_URL", "http://hatchet-server:8888")
-HATCHET_GRPC_URL = os.environ.get("HATCHET_GRPC_URL", "hatchet-server:7077")
-HATCHET_API_KEY = os.environ.get("HATCHET_API_KEY", "")
-# gRPC transport security for the worker/client. The compose deployment runs a
-# plaintext gRPC endpoint (SERVER_GRPC_INSECURE=t), so the default is "none".
-# Set to "tls" or "mtls" (with HATCHET_CLIENT_TLS_* env vars) for TLS deployments.
-HATCHET_TLS_STRATEGY = os.environ.get("HATCHET_TLS_STRATEGY", "none")
+if MINIMAL_CONFIG:
+    # In local demo mode the embedded Hatchet client provides its own connection
+    # details at runtime; these placeholders are never used for real connections.
+    HATCHET_SERVER_URL = "http://127.0.0.1:28243"
+    HATCHET_GRPC_URL = "127.0.0.1:7070"
+    HATCHET_API_KEY = ""
+    HATCHET_TLS_STRATEGY = "none"
+else:
+    HATCHET_SERVER_URL = os.environ.get("HATCHET_SERVER_URL", "http://hatchet-server:8888")
+    HATCHET_GRPC_URL = os.environ.get("HATCHET_GRPC_URL", "hatchet-server:7077")
+    HATCHET_API_KEY = os.environ.get("HATCHET_API_KEY", "")
+    # gRPC transport security for the worker/client. The compose deployment runs a
+    # plaintext gRPC endpoint (SERVER_GRPC_INSECURE=t), so the default is "none".
+    # Set to "tls" or "mtls" (with HATCHET_CLIENT_TLS_* env vars) for TLS deployments.
+    HATCHET_TLS_STRATEGY = os.environ.get("HATCHET_TLS_STRATEGY", "none")
 WORKER_POOL = os.environ.get("WORKER_POOL", "cpu")
 # NOTE: SimpleAudit engine provenance (version + optional commit) is NOT a
 # setting here. It is resolved from the installed package metadata at runtime by

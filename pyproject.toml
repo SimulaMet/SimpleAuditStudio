@@ -1,0 +1,46 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "simpleaudit-studio"
+version = "0.1.0"
+description = "Production AI model audit platform — one-liner demo mode via uvx"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+dependencies = [
+    "Django==5.2.4",
+    "djangorestframework==3.16.0",
+    "django-cors-headers==4.7.0",
+    "drf-spectacular==0.28.0",
+    "python-dotenv==1.1.1",
+    "boto3==1.40.4",
+    "requests==2.32.5",
+    "hatchet-sdk==1.41.0",
+    "pydantic>=2.7,<3",
+    "sentry-sdk[django]>=2.0",
+    "workos==10.4.0",
+    "simpleaudit @ git+https://github.com/kelkalot/simpleaudit.git@6c14a0bf69641a7429ef35f61b8f76e42b683d10",
+]
+
+[project.optional-dependencies]
+postgres = ["psycopg[binary]==3.2.13"]
+dev = ["factory_boy==3.3.2", "pytest", "pytest-django"]
+
+[project.scripts]
+simpleaudit-studio = "simpleaudit_studio.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = [
+    "simpleaudit_studio",
+    "config",
+    "accounts",
+    "audits",
+    "infra",
+    "scenarios",
+    "model_registry",
+    "deploy",
+    "templates",
+    "static",
+]

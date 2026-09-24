@@ -73,12 +73,24 @@ _CLIENT: "Hatchet | None" = None
 def get_client() -> Hatchet:
     """Return the single shared Hatchet client for this process.
 
-    Connects to the external Hatchet server (not embedded). Both submission and
-    the worker must use the same server so tasks reach the engine the worker
-    listens on.
+    In demo mode, returns the embedded Hatchet client (started by the CLI).
+    Otherwise connects to the external Hatchet server.
     """
     global _CLIENT
     if _CLIENT is None:
+        # Demo mode: reuse the embedded client started by the CLI entry point.
+        from infra.minimal_config import get_embedded_client, is_minimal_config
+
+        if is_minimal_config():
+            embedded = get_embedded_client()
+            if embedded is not None:
+                _CLIENT = embedded
+                return _CLIENT
+            raise RuntimeError(
+                "Demo mode active but embedded Hatchet client not started. "
+                "Use 'simpleaudit-studio' CLI to launch the full stack."
+            )
+
         # hatchet-sdk ClientConfig field names (verified against the installed
         # SDK): `server_url` is the HTTP API base, `host_port` is the gRPC
         # endpoint as "host:port", and `token` is the worker API token. Passing
