@@ -1,8 +1,7 @@
 {% extends "base.html" %}
 {% block title %}Register — SimpleAudit Studio{% endblock %}
 {% block auth_content %}
-<div class="min-h-screen flex items-center justify-center p-4">
-  <div class="w-full max-w-sm">
+<div class="w-full max-w-sm">
     <div class="text-center mb-8">
       {% load static %}
       <img src="{% static 'logo.png' %}" alt="SimpleAudit" class="w-16 h-16 rounded-xl mx-auto mb-3">
@@ -39,6 +38,5 @@
     <p class="text-center text-xs text-gray-600 mt-4">
       Have an account? <a href="{% url 'login' %}" class="text-accent hover:underline">Sign in</a>
     </p>
-  </div>
 </div>
 {% endblock %}
