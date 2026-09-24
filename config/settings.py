@@ -57,8 +57,17 @@ def _csrf_trusted_origins() -> list[str]:
             derived.append(f"http://{host}")
         else:
             derived.append(f"https://{host}")
+    # Hardcoded fallbacks for known deployment targets. These guarantee CSRF
+    # works on HF Spaces even if the platform injects/overrides DJANGO_ALLOWED_HOSTS
+    # before our derivation runs. Local dev origins are always included.
+    fallbacks = [
+        "http://localhost",
+        "http://127.0.0.1",
+        "https://*.hf.space",
+        "https://*.huggingface.co",
+    ]
     combined = list(explicit)
-    for origin in derived:
+    for origin in derived + fallbacks:
         if origin not in combined:
             combined.append(origin)
     return combined
