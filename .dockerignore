@@ -9,3 +9,4 @@ media/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+# sync 1790239341
