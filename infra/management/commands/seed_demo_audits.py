@@ -1,49 +1,40 @@
-"""Seed realistic demo audit runs using a configured model endpoint.
+"""Seed demo audit runs from pre-recorded results (no API key needed).
 
-Runs small audits (a subset of scenarios from existing packs) to populate
-the dashboard with real execution data. Uses the SimulaChat endpoint by
-default; override via environment variables.
+Loads real audit execution results captured in ``infra/fixtures/demo_audit_results.json``
+and creates AuditRun + ScenarioResult rows so the dashboard is populated with
+realistic data on first boot.
+
+The fixture references model names that match the defaults created by
+``seed_platform`` (GPT-4o, GPT-4o Mini). The seed looks up existing
+ModelEndpoint rows by display_name — it does NOT create new models.
 
 Usage:
-    python manage.py seed_demo_audits [--packs safety rag health] [--scenarios-per-pack 3]
+    python manage.py seed_demo_audits [--project 1] [--force]
 
-Environment:
-    SIMULACHAT_BASE_URL   (default: https://simulachat.sushant.pp.ua/api/v1)
-    SIMULACHAT_API_KEY    (required for actual execution)
-    DEMO_TARGET_MODEL     (default: Qwen3.8-27B)
-    DEMO_AUDITOR_MODEL    (default: glm-5-2-fp8)
-    DEMO_JUDGE_MODEL      (default: glm-5-2-fp8)
-
-Idempotent: skips if demo runs already exist for the project.
-Set SEED_DEMO_AUDITS=false in the environment to disable on boot.
+Idempotent: skips if demo runs already exist. Use --force to re-seed.
 """
 from __future__ import annotations
 
+import json
 import logging
-import os
 from datetime import timedelta
+from pathlib import Path
 
 from django.core.management.base import BaseCommand, CommandError
 from django.utils import timezone
 
 logger = logging.getLogger("simpleaudit.seed_demo")
 
+FIXTURE_PATH = Path(__file__).resolve().parent.parent.parent / "fixtures" / "demo_audit_results.json"
+
 
 class Command(BaseCommand):
-    help = "Seed demo audit runs with real model execution (idempotent)."
+    help = "Seed demo audit runs from pre-recorded fixture (no API key needed)."
 
     def add_arguments(self, parser):
         parser.add_argument(
             "--project", type=int, default=1,
             help="Project ID to seed (default: 1)",
-        )
-        parser.add_argument(
-            "--packs", nargs="+", default=["safety", "rag", "health"],
-            help="Scenario packs to run (default: safety rag health)",
-        )
-        parser.add_argument(
-            "--scenarios-per-pack", type=int, default=3,
-            help="Number of scenarios per pack (default: 3)",
         )
         parser.add_argument(
             "--force", action="store_true",
@@ -65,21 +56,32 @@ class Command(BaseCommand):
         if not user:
             raise CommandError("No user found. Run bootstrap_platform first.")
 
-        api_key = os.environ.get("SIMULACHAT_API_KEY", "").strip()
-        if not api_key:
-            self.stderr.write(
-                self.style.WARNING(
-                    "SIMULACHAT_API_KEY not set — cannot execute demo audits. "
-                    "Set the env var and re-run."
-                )
+        # Load fixture
+        if not FIXTURE_PATH.exists():
+            raise CommandError(
+                f"Fixture not found: {FIXTURE_PATH}. "
+                "Generate it by running audits and saving results."
             )
-            return
+        with open(FIXTURE_PATH) as f:
+            fixture_data = json.load(f)
 
-        base_url = os.environ.get("SIMULACHAT_BASE_URL", "https://simulachat.sushant.pp.ua/api/v1")
-        target_model = os.environ.get("DEMO_TARGET_MODEL", "Qwen3.8-27B")
-        auditor_model = os.environ.get("DEMO_AUDITOR_MODEL", "glm-5-2-fp8")
-        judge_model = os.environ.get("DEMO_JUDGE_MODEL", "glm-5-2-fp8")
-        n_scenarios = options["scenarios_per_pack"]
+        meta = fixture_data.pop("_meta", {})
+        target_name = meta.get("target_model", "GPT-4o")
+        auditor_name = meta.get("auditor_model", "GPT-4o Mini")
+        judge_name = meta.get("judge_model", "GPT-4o Mini")
+
+        # Look up EXISTING model endpoints by display_name (created by seed_platform)
+        from model_registry.models import ModelEndpoint
+        target_ep = ModelEndpoint.objects.filter(project=project, display_name=target_name).first()
+        auditor_ep = ModelEndpoint.objects.filter(project=project, display_name=auditor_name).first()
+        judge_ep = ModelEndpoint.objects.filter(project=project, display_name=judge_name).first()
+
+        missing = [n for n, ep in [(target_name, target_ep), (auditor_name, auditor_ep), (judge_name, judge_ep)] if not ep]
+        if missing:
+            raise CommandError(
+                f"Model endpoint(s) not found: {', '.join(missing)}. "
+                "Run 'manage.py seed_platform' first to create default models."
+            )
 
         # Idempotency check
         from audits.models import AuditRun
@@ -97,110 +99,37 @@ class Command(BaseCommand):
 
         self.stdout.write(
             f"Seeding demo audits for '{project.name}' as {user.username}\n"
-            f"  Target:  {target_model}\n"
-            f"  Auditor: {auditor_model}\n"
-            f"  Judge:   {judge_model}\n"
-            f"  Scenarios/pack: {n_scenarios}\n"
-            f"  Packs: {', '.join(options['packs'])}"
+            f"  Target:  {target_name}\n"
+            f"  Auditor: {auditor_name}\n"
+            f"  Judge:   {judge_name}\n"
+            f"  Packs: {', '.join(fixture_data.keys())}\n"
+            f"  Source: pre-recorded fixture (no API calls)"
         )
 
-        endpoints = self._ensure_connection(project, user, base_url, api_key, target_model, auditor_model)
-
         created = 0
-        for pack in options["packs"]:
-            self.stdout.write(f"\n--- Running demo audit: {pack} ---")
-            try:
-                ok = self._run_demo_audit(project, user, pack, endpoints, n_scenarios)
-                if ok:
-                    created += 1
-            except Exception as exc:
-                logger.exception("Demo audit for '%s' failed: %s", pack, exc)
-                self.stderr.write(self.style.ERROR(f"  FAILED: {exc}"))
+        for pack_name, scenarios in fixture_data.items():
+            ok = self._create_run_from_fixture(project, user, pack_name, scenarios, target_ep, auditor_ep, judge_ep)
+            if ok:
+                created += 1
 
         self.stdout.write(self.style.SUCCESS(f"\nDone. Created {created} demo audit run(s)."))
 
-    def _ensure_connection(self, project, user, base_url, api_key, target_model, auditor_model):
-        """Create ModelEndpoints for the demo models if missing."""
-        from model_registry.models import ModelConnection, ModelEndpoint, RegisteredModel
-
-        conn, _ = ModelConnection.objects.get_or_create(
-            project=project,
-            name="SimulaChat",
-            defaults={
-                "provider": "openai",
-                "base_url": base_url,
-                "api_key_direct": api_key,
-                "enabled": True,
-                "created_by": user,
-            },
-        )
-
-        endpoints = {}
-        for display_name, model_id in [
-            (target_model, target_model),
-            (auditor_model, auditor_model),
-        ]:
-            ep, created = ModelEndpoint.objects.get_or_create(
-                project=project,
-                display_name=display_name,
-                defaults={
-                    "provider": "openai",
-                    "base_url": base_url,
-                    "model_id": model_id,
-                    "enabled": True,
-                    "default_parameters": {"temperature": 0.7, "max_tokens": 4096},
-                    "api_key_direct": api_key,
-                    "created_by": user,
-                },
-            )
-            endpoints[model_id] = ep
-            if created:
-                self.stdout.write(f"  + {display_name} ({model_id})")
-
-            RegisteredModel.objects.get_or_create(
-                connection=conn,
-                project=project,
-                model_id=model_id,
-                defaults={
-                    "display_name": display_name,
-                    "enabled": True,
-                    "default_parameters": {"temperature": 0.7, "max_tokens": 4096},
-                },
-            )
-
-        return endpoints
-
-    def _get_version(self, project, pack_name: str):
+    def _create_run_from_fixture(self, project, user, pack_name: str, scenarios: list[dict],
+                                  target_ep, auditor_ep, judge_ep) -> bool:
+        """Create an AuditRun + ScenarioResults from fixture data."""
+        from audits.events import append_event, upsert_scenario_result
+        from audits.models import AuditRun
+        from infra.simpleaudit_package import resolve_engine_provenance
         from scenarios.models import ScenarioSet
 
         set_obj = ScenarioSet.objects.filter(project=project, name=f"SimpleAudit: {pack_name}").first()
         if not set_obj:
-            return None
+            self.stderr.write(f"  No scenario set '{pack_name}' found — skipping.")
+            return False
         version = set_obj.versions.order_by("-version").first()
-        if not version or not version.items.exists():
-            return None
-        return version
-
-    def _run_demo_audit(self, project, user, pack_name: str, endpoints: dict, n_scenarios: int) -> bool:
-        from audits.events import append_event, upsert_scenario_result, get_result
-        from audits.models import AuditRun
-        from infra.engine import EngineError, run_scenario
-        from infra.simpleaudit_package import resolve_engine_provenance
-
-        version = self._get_version(project, pack_name)
         if not version:
-            self.stderr.write(f"  No scenario set version for '{pack_name}' — skipping.")
+            self.stderr.write(f"  No published version for '{pack_name}' — skipping.")
             return False
-
-        items = list(version.items.select_related("scenario", "revision").order_by("position"))[:n_scenarios]
-        if not items:
-            self.stderr.write(f"  Pack '{pack_name}' has no scenarios — skipping.")
-            return False
-
-        provenance = resolve_engine_provenance()
-        target_ep = endpoints[list(endpoints.keys())[0]]
-        auditor_ep = endpoints[list(endpoints.keys())[-1]]
-        judge_ep = auditor_ep  # same model for auditor and judge
 
         def _snap(ep):
             return {
@@ -213,15 +142,18 @@ class Command(BaseCommand):
                 "capabilities": ep.capabilities,
                 "default_parameters": ep.default_parameters,
                 "secret_reference": ep.secret_reference,
-                "api_key_direct": ep.api_key_direct,
+                "api_key_direct": "",
                 "enabled": ep.enabled,
             }
 
+        provenance = resolve_engine_provenance()
         now = timezone.now()
+        n_scenarios = len(scenarios)
+
         run = AuditRun.objects.create(
             project=project,
             name=f"Demo: {pack_name} safety check",
-            status=AuditRun.Status.PREPARING,
+            status=AuditRun.Status.COMPLETED,
             scenario_set_version=version,
             target_endpoint=target_ep,
             auditor_endpoint=auditor_ep,
@@ -232,49 +164,35 @@ class Command(BaseCommand):
             generation_parameters_snapshot={"max_turns": 3, "language": "English"},
             simpleaudit_version=provenance.version or "unknown",
             git_commit=provenance.commit or "",
-            runtime_metadata={"created_by_username": user.username, "demo_seed": True},
-            queued_at=now - timedelta(minutes=5),
-            started_at=now,
-            total_scenarios=len(items),
+            runtime_metadata={
+                "created_by_username": user.username,
+                "demo_seed": True,
+                "source": "pre_recorded_fixture",
+            },
+            queued_at=now - timedelta(hours=2, minutes=30),
+            started_at=now - timedelta(hours=2, minutes=28),
+            finished_at=now - timedelta(hours=2),
+            total_scenarios=n_scenarios,
             created_by=user,
         )
 
-        append_event(run.id, "_run", "run_queued", {"scenarios": len(items)})
-        append_event(run.id, "_run", "run_stage", {"stage": "preparing"})
-
-        completed = successful = failed = 0
+        items = list(version.items.select_related("scenario", "revision").order_by("position"))
         severities = []
+        successful = 0
+        failed = 0
 
-        for item in items:
+        for i, sc_data in enumerate(scenarios):
+            if i >= len(items):
+                break
+            item = items[i]
             vid = str(item.id)
-            revision = item.revision
-            scenario = item.scenario
-
-            append_event(run.id, vid, "scenario_attempted", {"attempt": 1})
-            append_event(run.id, "_run", "run_stage", {"stage": "target_execution"})
-
-            try:
-                result = run_scenario(
-                    name=scenario.key,
-                    description=revision.description,
-                    expected_behavior=revision.expected_behavior or None,
-                    test_prompt=revision.test_prompt or None,
-                    target=run.target_config_snapshot,
-                    auditor=run.auditor_config_snapshot,
-                    judge=run.judge_config_snapshot,
-                    generation={"max_turns": 3, "language": "English"},
-                )
-                severity = result.get("severity", "")
-                is_error = severity.upper() == "ERROR"
-                status = "failed" if is_error else "completed"
-            except EngineError as exc:
-                result = {"error": str(exc)}
-                severity = ""
-                status = "failed"
-                is_error = True
+            result = sc_data["result"]
+            severity = result.get("severity", "")
+            is_error = severity.upper() == "ERROR"
+            status = "failed" if is_error else "completed"
 
             upsert_scenario_result(run.id, vid, status=status, attempts=1, result=result)
-            completed += 1
+
             if is_error:
                 failed += 1
             else:
@@ -282,24 +200,21 @@ class Command(BaseCommand):
                 if severity:
                     severities.append(severity)
 
+            append_event(run.id, vid, "scenario_attempted", {"attempt": 1})
             append_event(
                 run.id, vid,
                 "scenario_completed" if not is_error else "scenario_failed",
                 {"attempt": 1, "severity": severity},
             )
-            self.stdout.write(f"  [{completed}/{len(items)}] {scenario.title} → {status} ({severity})")
 
-        # Finalize
-        run.completed_scenarios = completed
+        run.completed_scenarios = successful + failed
         run.successful_scenarios = successful
         run.failed_scenarios = failed
-        run.status = AuditRun.Status.COMPLETED
-        run.finished_at = timezone.now()
         run.summary_metrics = {
-            "total": completed,
+            "total": successful + failed,
             "passed": successful,
             "failed": failed,
-            "pass_rate": round(successful / max(completed, 1), 3),
+            "pass_rate": round(successful / max(successful + failed, 1), 3),
             "severity_distribution": _count_severities(severities),
         }
         run.save(update_fields=[
@@ -307,8 +222,11 @@ class Command(BaseCommand):
             "successful_scenarios", "failed_scenarios", "summary_metrics",
         ])
 
+        append_event(run.id, "_run", "run_queued", {"scenarios": n_scenarios})
         append_event(run.id, "_run", "run_stage", {"stage": "aggregation"})
-        append_event(run.id, "_run", "run_completed", {"scenarios": completed})
+        append_event(run.id, "_run", "run_completed", {"scenarios": successful + failed})
+
+        self.stdout.write(f"  ✓ {pack_name}: {successful}/{successful + failed} passed")
         return True
 
 

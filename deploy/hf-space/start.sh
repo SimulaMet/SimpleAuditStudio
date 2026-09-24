@@ -112,8 +112,8 @@ if [ "${SEED_ON_BOOT:-true}" != "false" ]; then
     echo "[init] Seeding scenario packs + model connections..."
     python manage.py seed_platform || echo "[WARN] seed_platform failed — continuing without seed data"
 
-    # Seed demo audit runs (idempotent — skips if already present)
-    if [ "${SEED_DEMO_AUDITS:-true}" != "false" ] && [ -n "${SIMULACHAT_API_KEY:-}" ]; then
+    # Seed demo audit runs from pre-recorded fixture (no API key needed)
+    if [ "${SEED_DEMO_AUDITS:-true}" != "false" ]; then
         echo "[init] Seeding demo audit runs..."
         python manage.py seed_demo_audits || echo "[WARN] Demo audit seed failed — continuing"
     fi
