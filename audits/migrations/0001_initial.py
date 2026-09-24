@@ -95,16 +95,6 @@ class Migration(migrations.Migration):
                 ("error_message", models.TextField(blank=True)),
                 ("created_at", models.DateTimeField(auto_now_add=True)),
                 (
-                    "audit_profile",
-                    models.ForeignKey(
-                        blank=True,
-                        null=True,
-                        on_delete=django.db.models.deletion.SET_NULL,
-                        related_name="audit_runs",
-                        to="model_registry.auditprofile",
-                    ),
-                ),
-                (
                     "auditor_endpoint",
                     models.ForeignKey(
                         on_delete=django.db.models.deletion.RESTRICT,

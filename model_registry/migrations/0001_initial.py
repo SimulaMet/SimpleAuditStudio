@@ -16,31 +16,6 @@ class Migration(migrations.Migration):
 
     operations = [
         migrations.CreateModel(
-            name='AuditProfile',
-            fields=[
-                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
-                ('name', models.CharField(max_length=250)),
-                ('max_turns', models.PositiveIntegerField(default=4)),
-                ('temperature_target', models.FloatField(default=0.7)),
-                ('temperature_auditor', models.FloatField(default=0.2)),
-                ('temperature_judge', models.FloatField(default=0.0)),
-                ('top_p', models.FloatField(default=1.0)),
-                ('max_tokens', models.PositiveIntegerField(default=2048)),
-                ('retry_policy', models.JSONField(blank=True, default=dict)),
-                ('timeout_seconds', models.PositiveIntegerField(default=300)),
-                ('concurrency', models.PositiveIntegerField(default=1)),
-                ('language', models.CharField(default='en', max_length=30)),
-                ('created_at', models.DateTimeField(auto_now_add=True)),
-                ('created_by', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, to=settings.AUTH_USER_MODEL)),
-                ('project', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='audit_profiles', to='accounts.project')),
-            ],
-            options={
-                'db_table': 'core_audit_profile',
-                'ordering': ['project__name', 'name'],
-                'constraints': [models.UniqueConstraint(fields=('project', 'name'), name='unique_audit_profile_name_per_project')],
-            },
-        ),
-        migrations.CreateModel(
             name='ModelEndpoint',
             fields=[
                 ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),

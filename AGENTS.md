@@ -141,7 +141,6 @@ ScenarioSetVersion
 ScenarioSetVersionItem
 Model
 ModelConfiguration
-AuditProfile
 AuditRun
 AuditRunScenario
 AuditMetric

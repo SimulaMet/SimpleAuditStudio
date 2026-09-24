@@ -41,7 +41,7 @@ def _generation_parameters(
     gen_config_override: dict | None = None,
 ) -> dict:
     params = {}
-    # Overrides take precedence over profile values.
+    # Explicit form overrides are captured in the frozen manifest.
     if max_turns_override is not None:
         params["max_turns"] = max_turns_override
     if language_override:

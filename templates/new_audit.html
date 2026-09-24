@@ -17,7 +17,7 @@
       <a href="{% url 'scenarios' %}" target="_blank" class="text-xs text-accent hover:text-accent-hover hover:underline">＋ New</a>
     </div>
     <label class="block text-xs font-medium text-gray-500 mb-1 uppercase tracking-wide">Select set</label>
-    <select name="scenario_set" required class="w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-accent/50">
+    <select id="scenario-set-picker" name="scenario_set" required class="w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-accent/50">
       {% for s in sets %}
       <option value="{{ s.id }}" {% if clone and clone.scenario_set_id == s.id %}selected{% endif %}>{{ s.name }} (v{{ s.versions.count }})</option>
       {% empty %}
@@ -134,6 +134,15 @@
 </form>
 
 <script>
+const clonedScenarioSet = document.getElementById('scenario-set-picker');
+const clonedVersion = document.querySelector('[name="scenario_set_version"]');
+if (clonedScenarioSet && clonedVersion) {
+  const originalSetId = "{{ clone.scenario_set_id|default:'' }}";
+  clonedScenarioSet.addEventListener('change', () => {
+    if (clonedScenarioSet.value !== originalSetId) clonedVersion.remove();
+  });
+}
+
 // Auto-refresh pickers when user returns to this tab (e.g. after creating in new tab)
 let __focusTimer = null;
 window.addEventListener('focus', function() {

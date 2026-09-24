@@ -195,7 +195,6 @@ Hatchet/workflow state is execution state, not the authoritative SimpleAudit dat
 - `ScenarioSet`
 - `ScenarioSetVersion`
 - `ModelEndpoint`
-- `AuditProfile`
 - `AuditRun`
 - `AuditRunScenario`
 - `AuditEvent`
