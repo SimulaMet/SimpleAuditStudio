@@ -113,8 +113,8 @@ Workers must execute exclusively from the frozen snapshots stored on `AuditRun`:
 - `generation_parameters_snapshot`
 - pinned `ScenarioSetVersion` and its items
 
-Reading live `ModelEndpoint`, `AuditProfile`, or mutable scenario data during
-execution is a defect. The only runtime resolution allowed is secret reference
+Reading live `ModelEndpoint` or mutable scenario data during execution is a
+defect. The only runtime resolution allowed is secret reference
 to credential material inside the worker environment.
 
 ### 4.3 Worker pools

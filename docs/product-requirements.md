@@ -82,7 +82,7 @@ Acceptance criteria:
 1. User opens **New Audit**.
 2. User selects a scenario set and a specific published version.
 3. User selects target, auditor, and judge models from display names.
-4. User optionally chooses an audit profile such as “standard” or “high effort.”
+4. User enters the audit hyperparameters directly.
 5. System validates that all selected resources exist and are enabled.
 6. System creates an `AuditRun` with status `queued`.
 7. System freezes:

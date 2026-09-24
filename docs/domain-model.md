@@ -192,35 +192,6 @@ LOCAL_INFERENCE_NO_SECRET
 
 Production may later add a `Secret` table with encrypted values or external vault IDs, but audit manifests must store only the reference.
 
-## 5. Audit profiles
-
-### 5.1 `AuditProfile`
-
-Reusable execution settings.
-
-Fields:
-
-- `id`
-- `project_id`
-- `name`
-- `max_turns`
-- `temperature_target`
-- `temperature_auditor`
-- `temperature_judge`
-- `top_p`
-- `max_tokens`
-- `retry_policy`
-- `timeout_seconds`
-- `concurrency`
-- `language`
-- `created_by`
-- `created_at`
-
-Rules:
-
-- profiles are versioned or immutable snapshots if used by runs
-- run manifest captures resolved values, not only profile ID
-
 ## 6. Audit run
 
 ### 6.1 `AuditRun`
@@ -237,7 +208,6 @@ Fields:
 - `target_endpoint_id`
 - `auditor_endpoint_id`
 - `judge_endpoint_id`
-- `audit_profile_id`
 - `target_config_snapshot` — JSON without secrets
 - `auditor_config_snapshot` — JSON without secrets
 - `judge_config_snapshot` — JSON without secrets

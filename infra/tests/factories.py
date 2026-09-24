@@ -11,7 +11,7 @@ from accounts.models import User, Project, ProjectMembership
 from scenarios.models import (
     Scenario, ScenarioRevision, ScenarioSet, ScenarioSetVersion, ScenarioSetVersionItem,
 )
-from model_registry.models import ModelEndpoint, AuditProfile
+from model_registry.models import ModelEndpoint
 from audits.models import AuditRun
 from audits.events import ScenarioResult
 
@@ -99,11 +99,6 @@ class ModelEndpointFactory(DjangoModelFactory):
     model_id = "test-model"
 
 
-class AuditProfileFactory(DjangoModelFactory):
-    class Meta:
-        model = AuditProfile
-    project = factory.SubFactory(ProjectFactory)
-    name = factory.Sequence(lambda n: f"Profile {n}")
 
 
 class AuditRunFactory(DjangoModelFactory):

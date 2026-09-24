@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from .models import AuditProfile, ModelConnection, ModelEndpoint, RegisteredModel
+from .models import ModelConnection, ModelEndpoint, RegisteredModel
 
 
 @admin.register(ModelConnection)
@@ -23,9 +23,3 @@ class ModelEndpointAdmin(admin.ModelAdmin):
     list_filter = ("provider", "enabled", "project")
     search_fields = ("display_name", "model_id")
 
-
-@admin.register(AuditProfile)
-class AuditProfileAdmin(admin.ModelAdmin):
-    list_display = ("name", "project", "created_at")
-    list_filter = ("project",)
-    search_fields = ("name",)

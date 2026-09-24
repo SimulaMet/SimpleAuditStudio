@@ -29,7 +29,6 @@ class AuditRun(models.Model):
     target_endpoint = models.ForeignKey("model_registry.ModelEndpoint", on_delete=models.RESTRICT, related_name="target_audit_runs")
     auditor_endpoint = models.ForeignKey("model_registry.ModelEndpoint", on_delete=models.RESTRICT, related_name="auditor_audit_runs")
     judge_endpoint = models.ForeignKey("model_registry.ModelEndpoint", on_delete=models.RESTRICT, related_name="judge_audit_runs")
-    audit_profile = models.ForeignKey("model_registry.AuditProfile", on_delete=models.SET_NULL, null=True, blank=True, related_name="audit_runs")
     target_config_snapshot = models.JSONField()
     auditor_config_snapshot = models.JSONField()
     judge_config_snapshot = models.JSONField()

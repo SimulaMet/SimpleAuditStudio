@@ -17,8 +17,8 @@ from audits.events import ScenarioResult
 from audits.models import AuditRun
 from audits.services import create_audit_run, submit_audit_run
 from audits.comparison import compare_runs
-from model_registry.models import AuditProfile, ModelEndpoint
-from scenarios.models import Scenario, ScenarioRevision, ScenarioSet, ScenarioSetVersionItem
+from model_registry.models import ModelEndpoint
+from scenarios.models import Scenario, ScenarioRevision, ScenarioSet, ScenarioSetVersion, ScenarioSetVersionItem
 from scenarios.services import publish_scenario_set_version
 
 
@@ -179,10 +179,31 @@ class NewAuditView(ProjectMixin, TemplateView):
 
     def get_context_data(self, **kw):
         p = self.request.project
+        clone = None
+        clone_id = self.request.GET.get("clone_from")
+        if clone_id and clone_id.isdigit():
+            source = (
+                AuditRun.objects.filter(id=int(clone_id), project=p)
+                .select_related("scenario_set_version", "target_endpoint", "auditor_endpoint", "judge_endpoint")
+                .first()
+            )
+            if source:
+                params = source.generation_parameters_snapshot or {}
+                clone = {
+                    "scenario_set_id": source.scenario_set_version.scenario_set_id,
+                    "scenario_set_version_id": source.scenario_set_version_id,
+                    "target_endpoint_id": source.target_endpoint_id,
+                    "auditor_endpoint_id": source.auditor_endpoint_id,
+                    "judge_endpoint_id": source.judge_endpoint_id,
+                    "max_turns": params.get("max_turns", ""),
+                    "language": params.get("language", ""),
+                    "n_repetitions": params.get("n_repetitions", ""),
+                    "generation_json": json.dumps(params, indent=2, sort_keys=True),
+                }
         kw.update(
             sets=ScenarioSet.objects.filter(project=p),
             endpoints=ModelEndpoint.objects.filter(project=p).order_by("display_name"),
-            profiles=AuditProfile.objects.filter(project=p).order_by("name"),
+            clone=clone,
             error=None,
         )
         return super().get_context_data(**kw)
@@ -190,10 +211,14 @@ class NewAuditView(ProjectMixin, TemplateView):
     def post(self, request, *args, **kwargs):
         p = request.project
         try:
-            sset = ScenarioSet.objects.get(pk=request.POST["scenario_set"], project=p)
-            version = sset.versions.order_by("-version").first()
-            if not version:
-                raise ValueError("No published version for this set.")
+            clone_version_id = (request.POST.get("scenario_set_version") or "").strip()
+            if clone_version_id:
+                version = ScenarioSetVersion.objects.get(id=clone_version_id, scenario_set__project=p)
+            else:
+                sset = ScenarioSet.objects.get(pk=request.POST["scenario_set"], project=p)
+                version = sset.versions.order_by("-version").first()
+                if not version:
+                    raise ValueError("No published version for this set.")
 
             # Parse optional hyperparameter overrides
             max_turns_raw = (request.POST.get("max_turns") or "").strip()
@@ -222,7 +247,6 @@ class NewAuditView(ProjectMixin, TemplateView):
                 target_endpoint=ModelEndpoint.objects.get(pk=request.POST["target_endpoint"], project=p),
                 auditor_endpoint=ModelEndpoint.objects.get(pk=request.POST["auditor_endpoint"], project=p),
                 judge_endpoint=ModelEndpoint.objects.get(pk=request.POST["judge_endpoint"], project=p),
-                audit_profile=AuditProfile.objects.filter(pk=request.POST.get("profile"), project=p).first() or None,
                 max_turns_override=max_turns_override,
                 language_override=language_override,
                 n_repetitions_override=n_repetitions_override,
@@ -651,7 +675,6 @@ class ModelsView(ProjectMixin, TemplateView):
         kw.update(
             connections=connections,
             endpoints=endpoints.order_by("display_name"),
-            profiles=AuditProfile.objects.filter(project=p).order_by("name"),
             highlight_id=highlight_id,
             search_query=q,
             error=None,
@@ -756,35 +779,6 @@ class ModelsView(ProjectMixin, TemplateView):
                     ep.api_key_direct = new_key
                 ep.enabled = request.POST.get("enabled") == "1"
                 ep.save()
-        elif action == "edit_profile":
-            prof = AuditProfile.objects.filter(pk=request.POST.get("profile_id"), project=p).first()
-            if not prof:
-                error = "Profile not found."
-            else:
-                prof.name = request.POST.get("profile_name", prof.name).strip()
-                prof.max_turns = int(request.POST.get("max_turns", prof.max_turns))
-                prof.temperature_target = float(request.POST.get("temp_target", prof.temperature_target))
-                prof.temperature_auditor = float(request.POST.get("temp_auditor", prof.temperature_auditor))
-                prof.temperature_judge = float(request.POST.get("temp_judge", prof.temperature_judge))
-                mt_raw = (request.POST.get("max_tokens") or "").strip()
-                if mt_raw:
-                    prof.max_tokens = int(mt_raw)
-                lang = request.POST.get("language", "").strip()
-                prof.language = lang or None
-                prof.save()
-        elif action == "add_profile":
-            if not request.POST.get("profile_name", "").strip():
-                error = "Profile name is required."
-            else:
-                AuditProfile.objects.create(
-                    project=p, name=request.POST["profile_name"].strip(),
-                    max_turns=int(request.POST.get("max_turns", 5)),
-                    temperature_target=float(request.POST.get("temp_target", 0.7)),
-                    temperature_auditor=float(request.POST.get("temp_auditor", 0.2)),
-                    temperature_judge=float(request.POST.get("temp_judge", 0.0)),
-                    max_tokens=int(request.POST.get("max_tokens", 2048)),
-                    created_by=request.user,
-                )
         return self.render_to_response(self.get_context_data(error=error))
 
 
@@ -798,19 +792,6 @@ class ConnectionDeleteView(ProjectMixin, View):
     def post(self, request, conn_id):
         from model_registry.models import ModelConnection
         ModelConnection.objects.filter(pk=conn_id, project=request.project).delete()
-        return redirect("/models/")
-
-
-class ProfileDeleteView(ProjectMixin, View):
-    def post(self, request, profile_id):
-        prof = AuditProfile.objects.filter(pk=profile_id, project=request.project).first()
-        if prof:
-            if prof.audit_runs.exists():
-                messages.error(request, f"Cannot delete '{prof.name}': it is referenced by audit runs.")
-            else:
-                name = prof.name
-                prof.delete()
-                messages.success(request, f"Audit profile '{name}' deleted.")
         return redirect("/models/")
 
 

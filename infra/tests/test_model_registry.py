@@ -30,18 +30,6 @@ class ModelRegistryTests(TestCase):
         assert payload["secret_reference"] == "SIMULACHAT_API_KEY"
         assert "api_key" not in payload
 
-    def test_create_audit_profile_returns_resolved_values(self):
-        response = self.client.post(
-            f"/api/projects/{self.project.id}/audit-profiles/create/",
-            {"name": "Safety baseline", "max_turns": 6, "temperature_judge": 0.0},
-            format="json",
-        )
-        assert response.status_code == 201, response.content
-        payload = response.json()
-        assert payload["name"] == "Safety baseline"
-        assert payload["max_turns"] == 6
-        assert payload["temperature_judge"] == 0.0
-
     def test_non_member_cannot_create_model_endpoint(self):
         outsider = User.objects.create_user(username="bob", password="pass12345")
         client = APIClient()

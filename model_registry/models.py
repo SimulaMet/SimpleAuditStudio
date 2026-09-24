@@ -4,8 +4,6 @@ Entities:
 - ModelConnection: a provider endpoint (base_url + key + provider). First-class citizen.
 - RegisteredModel: a specific model under a connection (model_id + display_name).
 - ModelEndpoint: legacy flat model (deprecated, kept for backward compat with audits).
-- AuditProfile: generation parameters bundle.
-
 Credentials remain external secret references or direct (encrypted at rest in prod).
 """
 from django.conf import settings
@@ -98,29 +96,3 @@ class ModelEndpoint(models.Model):
     def __str__(self) -> str:
         return self.display_name
 
-
-class AuditProfile(models.Model):
-    project = models.ForeignKey("accounts.Project", on_delete=models.CASCADE, related_name="audit_profiles")
-    name = models.CharField(max_length=250)
-    max_turns = models.PositiveIntegerField(default=4)
-    temperature_target = models.FloatField(default=0.7)
-    temperature_auditor = models.FloatField(default=0.2)
-    temperature_judge = models.FloatField(default=0.0)
-    top_p = models.FloatField(default=1.0)
-    max_tokens = models.PositiveIntegerField(default=2048)
-    retry_policy = models.JSONField(default=dict, blank=True)
-    timeout_seconds = models.PositiveIntegerField(default=300)
-    concurrency = models.PositiveIntegerField(default=1)
-    language = models.CharField(max_length=30, default="en")
-    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True)
-    created_at = models.DateTimeField(auto_now_add=True)
-
-    class Meta:
-        db_table = "core_audit_profile"
-        constraints = [
-            models.UniqueConstraint(fields=["project", "name"], name="unique_audit_profile_name_per_project"),
-        ]
-        ordering = ["project__name", "name"]
-
-    def __str__(self) -> str:
-        return self.name

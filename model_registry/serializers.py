@@ -3,7 +3,7 @@ import re
 from django.core.exceptions import ValidationError
 from rest_framework import serializers
 
-from model_registry.models import AuditProfile, ModelEndpoint
+from model_registry.models import ModelEndpoint
 
 # Hostname that is either a dotted domain, an IP literal, or a single-label
 # Docker Compose / k8s service name (e.g. "mock-model", "postgres"). DRF's
@@ -93,37 +93,3 @@ class ModelEndpointCreateSerializer(serializers.Serializer):
     default_parameters = serializers.DictField(required=False, default=dict)
     secret_reference = serializers.CharField(required=False, allow_blank=True, default="")
 
-
-class AuditProfileSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = AuditProfile
-        fields = (
-            "id",
-            "name",
-            "max_turns",
-            "temperature_target",
-            "temperature_auditor",
-            "temperature_judge",
-            "top_p",
-            "max_tokens",
-            "retry_policy",
-            "timeout_seconds",
-            "concurrency",
-            "language",
-            "created_at",
-        )
-        read_only_fields = fields
-
-
-class AuditProfileCreateSerializer(serializers.Serializer):
-    name = serializers.CharField(max_length=250)
-    max_turns = serializers.IntegerField(min_value=1, default=4)
-    temperature_target = serializers.FloatField(default=0.7)
-    temperature_auditor = serializers.FloatField(default=0.2)
-    temperature_judge = serializers.FloatField(default=0.0)
-    top_p = serializers.FloatField(default=1.0)
-    max_tokens = serializers.IntegerField(min_value=1, default=2048)
-    retry_policy = serializers.DictField(required=False, default=dict)
-    timeout_seconds = serializers.IntegerField(min_value=1, default=300)
-    concurrency = serializers.IntegerField(min_value=1, default=1)
-    language = serializers.CharField(max_length=30, required=False, default="en")

@@ -14,7 +14,7 @@ from audits.serializers import AuditRunCreateSerializer, AuditRunSerializer
 from audits.services import create_audit_run, submit_audit_run
 from infra.exceptions import StableAPIError
 from infra.middleware import set_correlation_context
-from model_registry.models import AuditProfile, ModelEndpoint
+from model_registry.models import ModelEndpoint
 from accounts.models import Project
 from scenarios.models import ScenarioSetVersion
 from accounts.services import ensure_project_access
@@ -119,10 +119,7 @@ def create_audit_run_view(request, project_id):
         target_endpoint = ModelEndpoint.objects.get(id=data["target_endpoint_id"], project=project)
         auditor_endpoint = ModelEndpoint.objects.get(id=data["auditor_endpoint_id"], project=project)
         judge_endpoint = ModelEndpoint.objects.get(id=data["judge_endpoint_id"], project=project)
-        audit_profile = None
-        if data.get("audit_profile_id"):
-            audit_profile = AuditProfile.objects.get(id=data["audit_profile_id"], project=project)
-    except (ScenarioSetVersion.DoesNotExist, ModelEndpoint.DoesNotExist, AuditProfile.DoesNotExist) as exc:
+    except (ScenarioSetVersion.DoesNotExist, ModelEndpoint.DoesNotExist) as exc:
         raise StableAPIError(detail="Audit input not found in project.", code="audit_input_not_found", http_status=404) from exc
 
     run = create_audit_run(
@@ -133,7 +130,6 @@ def create_audit_run_view(request, project_id):
         target_endpoint=target_endpoint,
         auditor_endpoint=auditor_endpoint,
         judge_endpoint=judge_endpoint,
-        audit_profile=audit_profile,
     )
 
     # Enqueue durable work. This is best-effort: if the job system is unavailable

@@ -1,8 +1,8 @@
-"""Services for model registry and audit profiles."""
+"""Services for the model registry."""
 from django.db import IntegrityError, transaction
 
 from infra.exceptions import StableAPIError
-from model_registry.models import AuditProfile, ModelEndpoint
+from model_registry.models import ModelEndpoint
 from accounts.models import Project
 from scenarios.services import require_project_role
 
@@ -37,22 +37,3 @@ def create_model_endpoint(*, project: Project, user, display_name: str, provider
         # leaking a raw 500 to the client.
         raise StableAPIError(detail="A model endpoint with this display name already exists in the project.", code="duplicate_display_name", http_status=409) from exc
 
-
-@transaction.atomic
-def create_audit_profile(*, project: Project, user, name: str, max_turns: int = 4, temperature_target: float = 0.7, temperature_auditor: float = 0.2, temperature_judge: float = 0.0, top_p: float = 1.0, max_tokens: int = 2048, retry_policy: dict | None = None, timeout_seconds: int = 300, concurrency: int = 1, language: str = "en") -> AuditProfile:
-    require_project_role(user, project)
-    return AuditProfile.objects.create(
-        project=project,
-        name=name.strip(),
-        max_turns=max_turns,
-        temperature_target=temperature_target,
-        temperature_auditor=temperature_auditor,
-        temperature_judge=temperature_judge,
-        top_p=top_p,
-        max_tokens=max_tokens,
-        retry_policy=retry_policy or {},
-        timeout_seconds=timeout_seconds,
-        concurrency=concurrency,
-        language=language.strip() or "en",
-        created_by=user,
-    )

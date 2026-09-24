@@ -7,12 +7,15 @@
 
 <div class="flex items-center justify-between mb-6">
   <h1 class="text-lg font-semibold text-gray-100">Audit #{{ run.id }}</h1>
-  {% if run.status == "queued" or run.status == "preparing" or run.status == "target_execution" or run.status == "auditing" or run.status == "judging" or run.status == "aggregation" %}
-  <form method="post" action="{% url 'audit_cancel' run.id %}">
-    {% csrf_token %}
-    <button class="px-3 py-1.5 rounded-lg bg-red-900/50 text-red-300 text-xs font-medium hover:bg-red-800/60">Cancel</button>
-  </form>
-  {% endif %}
+  <div class="flex items-center gap-2">
+    <a href="{% url 'new_audit' %}?clone_from={{ run.id }}" class="px-3 py-1.5 rounded-lg bg-surface-overlay text-gray-300 text-xs font-medium hover:text-accent">Clone Audit</a>
+    {% if run.status == "queued" or run.status == "preparing" or run.status == "target_execution" or run.status == "auditing" or run.status == "judging" or run.status == "aggregation" %}
+    <form method="post" action="{% url 'audit_cancel' run.id %}">
+      {% csrf_token %}
+      <button class="px-3 py-1.5 rounded-lg bg-red-900/50 text-red-300 text-xs font-medium hover:bg-red-800/60">Cancel</button>
+    </form>
+    {% endif %}
+  </div>
 </div>
 
 <!-- Live Progress (SSE) -->

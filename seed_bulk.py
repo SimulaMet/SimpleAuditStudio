@@ -20,7 +20,7 @@ django.setup()
 
 from accounts.models import User, Project
 from scenarios.models import Scenario, ScenarioRevision, ScenarioSet, ScenarioSetVersion, ScenarioSetVersionItem
-from model_registry.models import ModelEndpoint, AuditProfile
+from model_registry.models import ModelEndpoint
 from audits.models import AuditRun
 from audits.events import ScenarioResult, append_event
 
@@ -101,12 +101,6 @@ MODEL_NAMES = [
     ("Yi-Lightning 200K", "01ai", "https://simulachat.sushant.pp.ua/api/v1", "yi-lightning-200k"),
 ]
 
-PROFILE_NAMES = [
-    "Default Profile", "Strict Safety", "Creative Mode", "Long Context",
-    "Fast Draft", "High Quality", "Multilingual", "Code Focus",
-    "Medical Domain", "Legal Domain", "Finance Domain", "Adversarial Testing",
-]
-
 SET_NAMES = [
     "Safety Pack A", "Safety Pack B", "Safety Pack C", "Safety Pack D",
     "Finance Compliance", "Legal Boundaries", "Health & Medical",
@@ -156,28 +150,6 @@ def main():
             )
     endpoints = list(ModelEndpoint.objects.all())
     print(f"Model endpoints after: {ModelEndpoint.objects.count()}")
-
-    # ─── 2. Audit Profiles (12) ────────────────────────────────────────────────
-    print(f"Audit profiles before: {AuditProfile.objects.count()}")
-    existing_profiles = set(AuditProfile.objects.values_list("name", flat=True))
-    for name in PROFILE_NAMES:
-        if name not in existing_profiles:
-            AuditProfile.objects.create(
-                project=project,
-                name=name,
-                max_turns=random.choice([3, 4, 5, 8, 10]),
-                temperature_target=round(random.uniform(0.3, 1.0), 2),
-                temperature_auditor=round(random.uniform(0.0, 0.5), 2),
-                temperature_judge=0.0,
-                top_p=round(random.uniform(0.8, 1.0), 2),
-                max_tokens=random.choice([1024, 2048, 4096, 8192]),
-                timeout_seconds=random.choice([120, 300, 600]),
-                concurrency=random.choice([1, 2, 4, 8]),
-                language=random.choice(["en", "no", "de", "fr", "es"]),
-                created_by=admin,
-            )
-    profiles = list(AuditProfile.objects.all())
-    print(f"Audit profiles after: {AuditProfile.objects.count()}")
 
     # ─── 3. Scenarios (2000) ───────────────────────────────────────────────────
     print(f"Scenarios before: {Scenario.objects.count()}")
@@ -324,7 +296,6 @@ def main():
         target = random.choice(endpoints)
         auditor = random.choice(endpoints)
         judge = random.choice(endpoints)
-        profile = random.choice(profiles)
 
         created = base_time + timedelta(hours=random.randint(0, 2160))
         total = vs.scenario_count
@@ -344,7 +315,6 @@ def main():
             target_endpoint=target,
             auditor_endpoint=auditor,
             judge_endpoint=judge,
-            audit_profile=profile,
             target_config_snapshot={"model": target.model_id, "params": {"temp": 0.7}},
             auditor_config_snapshot={"model": auditor.model_id, "params": {"temp": 0.2}},
             judge_config_snapshot={"model": judge.model_id, "params": {"temp": 0.0}},
@@ -422,7 +392,6 @@ def main():
     print(f"  Set Versions:        {ScenarioSetVersion.objects.count()}")
     print(f"  Set Version Items:   {ScenarioSetVersionItem.objects.count()}")
     print(f"  Model Endpoints:     {ModelEndpoint.objects.count()}")
-    print(f"  Audit Profiles:      {AuditProfile.objects.count()}")
     print(f"  Audit Runs:          {AuditRun.objects.count()}")
     print(f"  Scenario Results:    {ScenarioResult.objects.count()}")
     print(f"  Audit Events:        {AuditEvent.objects.count()}")

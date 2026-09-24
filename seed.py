@@ -6,7 +6,6 @@ Run inside the web container:
 This is idempotent — safe to run multiple times. It will:
   1. Import built-in SimpleAudit scenario packs (safety, health, RAG, system prompt, bullshitbench)
   2. Create an OpenAI connection with current models (if not present)
-  3. Create a default audit profile (if not present)
 """
 import os
 import sys
@@ -23,7 +22,7 @@ from scenarios.models import (
     Scenario, ScenarioRevision, ScenarioSet,
     ScenarioSetVersion, ScenarioSetVersionItem,
 )
-from model_registry.models import ModelConnection, RegisteredModel, ModelEndpoint, AuditProfile
+from model_registry.models import ModelConnection, RegisteredModel, ModelEndpoint
 
 # ─── Import SimpleAudit scenario packs ──────────────────────────────────────────
 # The simpleaudit package is installed in the container.
@@ -227,25 +226,6 @@ def main():
         if m_created or ep_created:
             print(f"    + {display_name} ({model_id})")
 
-    # ── 3. Default Audit Profile ─────────────────────────────────────────────
-    print(f"\n⚙️  Audit Profiles:")
-
-    default_profile, prof_created = AuditProfile.objects.get_or_create(
-        project=project, name="Default",
-        defaults={
-            "max_turns": 5,
-            "temperature_target": 0.7,
-            "temperature_auditor": 0.2,
-            "temperature_judge": 0.0,
-            "max_tokens": 4096,
-            "created_by": user,
-        }
-    )
-    if prof_created:
-        print("  ✓ Created 'Default' profile (5 turns, temp 0.7/0.2/0.0)")
-    else:
-        print("  ⏭ 'Default' profile already exists")
-
     # ── Summary ──────────────────────────────────────────────────────────────
     print(f"\n{'='*60}")
     print(f"SEED COMPLETE")
@@ -258,7 +238,6 @@ def main():
     print(f"  Total Scenarios: {total_scenarios}")
     print(f"  Connections:     {ModelConnection.objects.filter(project=project).count()}")
     print(f"  Models:          {RegisteredModel.objects.filter(project=project).count()}")
-    print(f"  Profiles:        {AuditProfile.objects.filter(project=project).count()}")
     print(f"{'='*60}\n")
 
 

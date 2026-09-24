@@ -30,6 +30,9 @@
           <span class="text-xs text-gray-600">{{ conn.models.count }} model(s)</span>
         </div>
         <div class="flex items-center gap-2">
+          <button onclick="pingConnection({{ conn.id }}, '{{ conn.base_url }}', [{% for m in conn.models.all %}'{{ m.model_id }}'{% if not forloop.last %},{% endif %}{% endfor %}])"
+                  class="text-xs text-gray-500 hover:text-emerald-400 transition-colors" title="Ping this server and check all models">check</button>
+          <span id="conn-status-{{ conn.id }}" class="hidden text-[10px] px-1.5 py-0.5 rounded"></span>
           <button onclick="document.getElementById('edit-conn-{{ conn.id }}').classList.toggle('hidden')"
                   class="text-xs text-gray-500 hover:text-accent transition-colors">Edit</button>
           <form method="post" action="{% url 'connection_delete' conn.id %}" onsubmit="return confirm('Delete connection "{{ conn.name }}" and all its models?')">
@@ -50,15 +53,13 @@
               <span id="model-label-{{ m.id }}">{{ m.display_name|default:m.model_id }}{% if m.display_name %} <span class="text-gray-600">({{ m.model_id }})</span>{% endif %}</span>
             </span>
             <div class="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-              <button onclick="pingModel({{ m.id }})"
-                      class="text-gray-600 hover:text-emerald-400 px-1" title="Check health">●</button>
               <button onclick="editModel({{ m.id }}, '{{ m.display_name }}', '{{ m.model_id }}')"
-                      class="text-gray-600 hover:text-accent px-1">✎</button>
+                      class="text-gray-600 hover:text-accent px-1" title="Edit name / ID">✎</button>
               <form method="post" onsubmit="return confirm('Remove {{ m.display_name|default:m.model_id }}?')">
                 {% csrf_token %}
                 <input type="hidden" name="action" value="delete_model">
                 <input type="hidden" name="rm_id" value="{{ m.id }}">
-                <button class="text-gray-600 hover:text-red-400 px-1">✕</button>
+                <button class="text-gray-600 hover:text-red-400 px-1" title="Delete model">✕</button>
               </form>
             </div>
           </div>
@@ -188,109 +189,6 @@
   </form>
 </div>
 
-<!-- ═══ AUDIT PROFILES ════════════════════════════════════════════════════ -->
-<div class="bg-surface-raised rounded-xl border border-gray-800 p-4">
-  <h2 class="text-sm font-semibold text-gray-300 mb-3">Audit Profiles</h2>
-  {% if profiles %}
-  <div class="space-y-2 mb-4">
-    {% for p in profiles %}
-    <div class="rounded-lg border border-gray-800/60 p-3">
-      <div class="flex items-center justify-between flex-wrap gap-2">
-        <div class="flex items-center gap-3 flex-wrap">
-          <span class="font-medium text-gray-200 text-sm">{{ p.name }}</span>
-          <span class="text-xs text-gray-500">{{ p.max_turns }} turns · temp {{ p.temperature_target }}/{{ p.temperature_auditor }}/{{ p.temperature_judge }} · max {{ p.max_tokens }} tok</span>
-        </div>
-        <div class="flex items-center gap-2">
-          <button onclick="document.getElementById('edit-profile-{{ p.id }}').classList.toggle('hidden')"
-                  class="text-xs text-gray-500 hover:text-accent transition-colors">Edit</button>
-          <form method="post" action="{% url 'profile_delete' p.id %}" onsubmit="return confirm('Delete profile "{{ p.name }}"?')">
-            {% csrf_token %}
-            <button class="text-xs text-gray-600 hover:text-red-400">✕</button>
-          </form>
-        </div>
-      </div>
-      <div id="edit-profile-{{ p.id }}" class="hidden mt-3 pt-3 border-t border-gray-800/60">
-        <form method="post" class="grid grid-cols-2 md:grid-cols-4 gap-3">
-          {% csrf_token %}
-          <input type="hidden" name="action" value="edit_profile">
-          <input type="hidden" name="profile_id" value="{{ p.id }}">
-          <div>
-            <label class="block text-xs text-gray-500 mb-1">Name</label>
-            <input type="text" name="profile_name" value="{{ p.name }}" required
-                   class="w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-accent/50">
-          </div>
-          <div>
-            <label class="block text-xs text-gray-500 mb-1">Max Turns</label>
-            <input type="number" name="max_turns" value="{{ p.max_turns }}" min="1" max="50"
-                   class="w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-accent/50">
-          </div>
-          <div>
-            <label class="block text-xs text-gray-500 mb-1">Temp (T/A/J)</label>
-            <div class="flex gap-1">
-              <input type="number" step="0.1" name="temp_target" value="{{ p.temperature_target }}" title="Target" aria-label="Temperature target"
-                     class="w-full px-2 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-accent/50">
-              <input type="number" step="0.1" name="temp_auditor" value="{{ p.temperature_auditor }}" title="Auditor" aria-label="Temperature auditor"
-                     class="w-full px-2 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-accent/50">
-              <input type="number" step="0.1" name="temp_judge" value="{{ p.temperature_judge }}" title="Judge" aria-label="Temperature judge"
-                     class="w-full px-2 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-accent/50">
-            </div>
-          </div>
-          <div>
-            <label class="block text-xs text-gray-500 mb-1">Max Tokens</label>
-            <input type="number" name="max_tokens" value="{{ p.max_tokens }}" min="1"
-                   class="w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-accent/50">
-          </div>
-          <div class="col-span-2 md:col-span-4 flex justify-end">
-            <button class="px-4 py-2 rounded-lg bg-accent text-white text-sm font-medium hover:bg-accent-hover">Save</button>
-          </div>
-        </form>
-      </div>
-    </div>
-    {% endfor %}
-  </div>
-  {% else %}
-  <p class="text-sm text-gray-500 mb-4">No audit profiles defined.</p>
-  {% endif %}
-
-  <form method="post" class="pt-3 border-t border-gray-800">
-    {% csrf_token %}
-    <input type="hidden" name="action" value="add_profile">
-    <div class="grid grid-cols-2 md:grid-cols-6 gap-3 mb-3">
-      <div>
-        <label class="block text-xs text-gray-500 mb-1">Name</label>
-        <input type="text" name="profile_name" placeholder="Default" required
-               class="w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-accent/50">
-      </div>
-      <div>
-        <label class="block text-xs text-gray-500 mb-1">Max Turns</label>
-        <input type="number" name="max_turns" value="5" min="1" max="50"
-               class="w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-accent/50">
-      </div>
-      <div>
-        <label class="block text-xs text-gray-500 mb-1">Temp Target</label>
-        <input type="number" step="0.1" name="temp_target" value="0.7"
-               class="w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-accent/50">
-      </div>
-      <div>
-        <label class="block text-xs text-gray-500 mb-1">Temp Auditor</label>
-        <input type="number" step="0.1" name="temp_auditor" value="0.2"
-               class="w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-accent/50">
-      </div>
-      <div>
-        <label class="block text-xs text-gray-500 mb-1">Temp Judge</label>
-        <input type="number" step="0.1" name="temp_judge" value="0.0"
-               class="w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-accent/50">
-      </div>
-      <div>
-        <label class="block text-xs text-gray-500 mb-1">Max Tokens</label>
-        <input type="number" name="max_tokens" value="2048" min="1"
-               class="w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-accent/50">
-      </div>
-    </div>
-    <button class="px-4 py-2 rounded-lg bg-accent text-white text-sm font-medium hover:bg-accent-hover">+ Add Profile</button>
-  </form>
-</div>
-
 <script>
 async function discoverForConn(connId, baseUrl, apiKey, provider) {
   const btn = event.currentTarget;
@@ -335,19 +233,42 @@ function cancelEdit(id) {
   document.getElementById('edit-model-' + id).classList.add('hidden');
   document.getElementById('model-label-' + id).classList.remove('hidden');
 }
-async function pingModel(id) {
-  const dot = document.getElementById('model-dot-' + id);
-  dot.classList.remove('hidden');
-  dot.className = 'w-2 h-2 rounded-full bg-amber-500 animate-pulse';
+async function pingConnection(connId, baseUrl, modelIds) {
+  const badge = document.getElementById('conn-status-' + connId);
+  badge.classList.remove('hidden');
+  badge.textContent = 'checking…';
+  badge.className = 'text-[10px] px-1.5 py-0.5 rounded bg-surface-overlay text-gray-400';
+  // Show pulsing dots on all models
+  modelIds.forEach(() => {});
+  document.querySelectorAll('[id^="model-dot-"]').forEach(d => {
+    d.classList.remove('hidden');
+    d.className = 'w-2 h-2 rounded-full bg-amber-500 animate-pulse';
+  });
   try {
-    const resp = await fetch('/api/models/ping/' + id + '/', { headers: { Accept: 'application/json' } });
+    const resp = await fetch('/api/models/ping-connection/' + connId + '/', { headers: { Accept: 'application/json' } });
     const data = await resp.json();
-    if (data.status === 'up') { dot.className = 'w-2 h-2 rounded-full bg-emerald-500'; dot.title = 'Online'; }
-    else if (data.status === 'not_found') { dot.className = 'w-2 h-2 rounded-full bg-amber-500'; dot.title = 'Not found on server'; }
-    else { dot.className = 'w-2 h-2 rounded-full bg-red-500'; dot.title = data.detail || 'Error'; }
+    if (data.status === 'up') {
+      badge.textContent = 'online · ' + data.found + '/' + data.total + ' models';
+      badge.className = 'text-[10px] px-1.5 py-0.5 rounded bg-emerald-900/30 text-emerald-400';
+      // Mark each model dot
+      (data.models || []).forEach(mk => {
+        const dot = document.getElementById('model-dot-' + mk.id);
+        if (dot) {
+          dot.className = 'w-2 h-2 rounded-full ' + (mk.found ? 'bg-emerald-500' : 'bg-red-500');
+          dot.title = mk.found ? 'Available' : 'Not found on server';
+        }
+      });
+    } else {
+      badge.textContent = data.detail || 'error';
+      badge.className = 'text-[10px] px-1.5 py-0.5 rounded bg-red-900/30 text-red-400';
+      document.querySelectorAll('[id^="model-dot-"]').forEach(d => {
+        d.className = 'w-2 h-2 rounded-full bg-red-500';
+        d.title = 'Server unreachable';
+      });
+    }
   } catch (e) {
-    dot.className = 'w-2 h-2 rounded-full bg-red-500';
-    dot.title = 'Unreachable';
+    badge.textContent = 'unreachable';
+    badge.className = 'text-[10px] px-1.5 py-0.5 rounded bg-red-900/30 text-red-400';
   }
 }
 </script>

@@ -45,4 +45,3 @@ class AuditRunCreateSerializer(serializers.Serializer):
     target_endpoint_id = serializers.IntegerField()
     auditor_endpoint_id = serializers.IntegerField()
     judge_endpoint_id = serializers.IntegerField()
-    audit_profile_id = serializers.IntegerField(required=False, allow_null=True)

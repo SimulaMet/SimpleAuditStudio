@@ -9,7 +9,7 @@ from audits.events import append_event
 from audits.models import AuditRun
 from infra.exceptions import StableAPIError
 from infra.simpleaudit_package import resolve_engine_provenance
-from model_registry.models import AuditProfile, ModelEndpoint
+from model_registry.models import ModelEndpoint
 from accounts.models import Project
 from scenarios.models import ScenarioSetVersion
 from scenarios.services import require_project_role
@@ -34,28 +34,13 @@ def _endpoint_snapshot(endpoint: ModelEndpoint) -> dict:
 
 
 def _generation_parameters(
-    profile: AuditProfile | None,
     *,
     max_turns_override: int | None = None,
     language_override: str | None = None,
     n_repetitions_override: int | None = None,
     gen_config_override: dict | None = None,
 ) -> dict:
-    if not profile:
-        params = {}
-    else:
-        params = {
-            "max_turns": profile.max_turns,
-            "temperature_target": profile.temperature_target,
-            "temperature_auditor": profile.temperature_auditor,
-            "temperature_judge": profile.temperature_judge,
-            "top_p": profile.top_p,
-            "max_tokens": profile.max_tokens,
-            "retry_policy": profile.retry_policy,
-            "timeout_seconds": profile.timeout_seconds,
-            "concurrency": profile.concurrency,
-            "language": profile.language,
-        }
+    params = {}
     # Overrides take precedence over profile values.
     if max_turns_override is not None:
         params["max_turns"] = max_turns_override
@@ -79,7 +64,6 @@ def create_audit_run(
     target_endpoint: ModelEndpoint,
     auditor_endpoint: ModelEndpoint,
     judge_endpoint: ModelEndpoint,
-    audit_profile: AuditProfile | None = None,
     max_turns_override: int | None = None,
     language_override: str | None = None,
     n_repetitions_override: int | None = None,
@@ -96,9 +80,6 @@ def create_audit_run(
     for endpoint in (target_endpoint, auditor_endpoint, judge_endpoint):
         if endpoint.project_id != project.id or not endpoint.enabled:
             raise StableAPIError(detail="Model endpoint is unavailable in this project.", code="endpoint_unavailable")
-    if audit_profile and audit_profile.project_id != project.id:
-        raise StableAPIError(detail="Audit profile belongs to another project.", code="cross_project_input")
-
     # Provenance is authoritative: it comes from the installed SimpleAudit
     # package metadata (version) and its PEP 610 direct_url commit (optional).
     # Callers cannot supply their own — that would let a manifest claim an engine
@@ -122,12 +103,10 @@ def create_audit_run(
         target_endpoint=target_endpoint,
         auditor_endpoint=auditor_endpoint,
         judge_endpoint=judge_endpoint,
-        audit_profile=audit_profile,
         target_config_snapshot=_endpoint_snapshot(target_endpoint),
         auditor_config_snapshot=_endpoint_snapshot(auditor_endpoint),
         judge_config_snapshot=_endpoint_snapshot(judge_endpoint),
         generation_parameters_snapshot=_generation_parameters(
-            audit_profile,
             max_turns_override=max_turns_override,
             language_override=language_override,
             n_repetitions_override=n_repetitions_override,
