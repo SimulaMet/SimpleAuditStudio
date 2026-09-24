@@ -133,46 +133,9 @@ def logout_view(request):
 
 # ─── WorkOS AuthKit ──────────────────────────────────────────────────────────
 
-class WorkOSLoginView(TemplateView):
-    """Step 1: user enters their email. We send a Magic Auth code via WorkOS."""
-
-    template_name = "auth/workos_login.html"
-
-    def get(self, request):
-        from django.conf import settings
-
-        if not settings.WORKOS_ENABLED:
-            messages.error(request, "WorkOS sign-in is not configured.")
-            return redirect("login")
-        return super().get(request)
-
-    def post(self, request):
-        from django.conf import settings
-
-        if not settings.WORKOS_ENABLED:
-            messages.error(request, "WorkOS sign-in is not configured.")
-            return redirect("login")
-        email = request.POST.get("email", "").strip().lower()
-        if not email or "@" not in email:
-            return self.render_to_response(self.get_context_data(error="Please enter a valid email address."))
-        try:
-            workos_auth.send_magic_auth_code(
-                email,
-                ip_address=request.META.get("REMOTE_ADDR"),
-                user_agent=request.META.get("HTTP_USER_AGENT", ""),
-            )
-        except Exception as exc:  # noqa: BLE001
-            logger.exception("WorkOS magic auth send failed")
-            return self.render_to_response(self.get_context_data(error=f"Could not send code: {exc}"))
-        # Store email in session for step 2 verification.
-        request.session["workos_email"] = email
-        return redirect("workos_verify")
-
-
-class WorkOSVerifyView(TemplateView):
-    """Step 2: user enters the 6-digit code. We authenticate and log them in."""
-
-    template_name = "auth/workos_verify.html"
+class WorkOSLoginView(View):
+    """Redirect to WorkOS AuthKit hosted UI. User picks their method there
+    (Magic Auth code, email+password, etc.) and WorkOS redirects back with a code."""
 
     def get(self, request):
         from django.conf import settings
@@ -180,40 +143,53 @@ class WorkOSVerifyView(TemplateView):
         if not settings.WORKOS_ENABLED:
             messages.error(request, "WorkOS sign-in is not configured.")
             return redirect("login")
-        email = request.session.get("workos_email")
-        if not email:
-            messages.info(request, "Please enter your email first.")
-            return redirect("workos_login")
-        return self.render_to_response(self.get_context_data(email=email))
+        state = hashlib.sha256(os.urandom(32)).hexdigest()
+        request.session["workos_state"] = state
+        redirect_uri = f"{settings.APP_BASE_URL}/auth/workos/callback/"
+        url = workos_auth.build_authorization_url(redirect_uri, state)
+        return redirect(url)
 
-    def post(self, request):
+
+class WorkOSCallbackView(View):
+    """Handle the WorkOS redirect: verify state, exchange code, log in."""
+
+    def get(self, request):
         from django.conf import settings
 
         if not settings.WORKOS_ENABLED:
-            messages.error(request, "WorkOS sign-in is not configured.")
             return redirect("login")
-        email = request.session.get("workos_email", "")
-        code = request.POST.get("code", "").strip()
-        if not email or not code:
-            return self.render_to_response(self.get_context_data(email=email, error="Please enter the 6-digit code."))
+        error = request.GET.get("error")
+        if error:
+            messages.error(request, f"WorkOS sign-in failed: {request.GET.get('error_description', error)}")
+            return redirect("login")
+
+        expected_state = request.session.pop("workos_state", None)
+        if not expected_state or request.GET.get("state") != expected_state:
+            messages.error(request, "WorkOS sign-in failed: state mismatch. Please try again.")
+            return redirect("login")
+
+        code = request.GET.get("code", "")
+        if not code:
+            messages.error(request, "WorkOS sign-in failed: missing authorization code.")
+            return redirect("login")
+
         try:
-            user, created = workos_auth.authenticate_magic_auth(
+            user, created = workos_auth.exchange_code_for_user(
                 code,
-                email,
                 ip_address=request.META.get("REMOTE_ADDR"),
                 user_agent=request.META.get("HTTP_USER_AGENT", ""),
             )
         except Exception as exc:  # noqa: BLE001
-            logger.exception("WorkOS magic auth verification failed")
-            return self.render_to_response(self.get_context_data(email=email, error=f"Invalid code: {exc}"))
+            logger.exception("WorkOS code exchange failed")
+            messages.error(request, f"WorkOS sign-in failed: {exc}")
+            return redirect("login")
 
-        request.session.pop("workos_email", None)
         login(request, user)
         if created:
             _grant_default_project(user)
             messages.success(request, "Welcome! Your account was created via WorkOS sign-in.")
         else:
-            messages.success(request, "Signed in successfully.")
+            messages.success(request, "Signed in with WorkOS.")
         return redirect("dashboard")
 
 
