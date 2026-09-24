@@ -55,10 +55,8 @@ class LoginView(TemplateView):
         return self.render_to_response(self.get_context_data(form=form))
 
 
-class RegisterView(CreateView):
-    model = None
+class RegisterView(TemplateView):
     template_name = "auth/register.html"
-    fields = []
 
     def get(self, request, *args, **kwargs):
         if request.user.is_authenticated:
@@ -79,7 +77,7 @@ class RegisterView(CreateView):
             user = User.objects.create_user(username=username, password=password, email=email)
             login(request, user)
             return redirect("dashboard")
-        return self.render_to_response({"error": error})
+        return self.render_to_response(self.get_context_data(error=error))
 
 
 def logout_view(request):
