@@ -28,6 +28,41 @@ class ProjectMixin(LoginRequiredMixin):
     """Scope all queries to request.project (set by ProjectMiddleware)."""
 
 
+class AdminRequiredMixin(LoginRequiredMixin):
+    """Restrict a view to superusers or users holding an ADMIN membership."""
+
+    def dispatch(self, request, *args, **kwargs):
+        # AnonymousUser has no .id; let LoginRequiredMixin handle the redirect
+        # rather than querying the ORM with a lazy object.
+        if not request.user.is_authenticated:
+            return super().dispatch(request, *args, **kwargs)
+
+        from accounts.models import ProjectMembership
+
+        if not request.user.is_superuser and not ProjectMembership.objects.filter(
+            user=request.user, role=ProjectMembership.Role.ADMIN
+        ).exists():
+            from django.http import HttpResponseForbidden
+
+            return HttpResponseForbidden("Admin access required.")
+        return super().dispatch(request, *args, **kwargs)
+
+
+# ─── Health panel ────────────────────────────────────────────────────────────
+
+class HealthView(AdminRequiredMixin, TemplateView):
+    """System health dashboard. Initial snapshot is server-rendered; the page
+    then polls /api/health/ every few seconds for live updates."""
+
+    template_name = "health.html"
+
+    def get_context_data(self, **kw):
+        from infra.health import collect_health
+
+        kw.setdefault("health", collect_health())
+        return super().get_context_data(**kw)
+
+
 # ─── Auth ────────────────────────────────────────────────────────────────────
 
 class IndexView(TemplateView):

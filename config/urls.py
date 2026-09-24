@@ -15,6 +15,7 @@ from infra.ui import (
     CompareView,
     DashboardExportView,
     DashboardView,
+    HealthView,
     IndexView,
     LoginView,
     ModelDeleteView,
@@ -38,6 +39,7 @@ from infra.ui import (
     logout_view,
 )
 from accounts.views import healthz, readyz
+from infra.health_api import health_panel_api
 
 # --- Static file serving ---------------------------------------------------
 # For the canonical Docker Compose self-hosted deployment Django serves its
@@ -69,6 +71,7 @@ urlpatterns = [
     path("healthz", healthz, name="healthz"),
     path("readyz", readyz, name="readyz"),
     # API
+    path("api/health/", health_panel_api, name="health_panel_api"),
     path("api/schema/", SpectacularAPIView.as_view(), name="schema"),
     path("api/docs/", SpectacularSwaggerView.as_view(url_name="schema"), name="swagger-ui"),
     path("api/auth/", include("accounts.auth_urls")),
@@ -82,6 +85,7 @@ urlpatterns = [
     path("register/", RegisterView.as_view(), name="register"),
     path("logout/", logout_view, name="logout"),
     path("dashboard/", DashboardView.as_view(), name="dashboard"),
+    path("health/", HealthView.as_view(), name="health"),
     path("audits/new/", NewAuditView.as_view(), name="new_audit"),
     path("queue/", QueueView.as_view(), name="queue"),
     path("scenarios/", ScenariosView.as_view(), name="scenarios"),

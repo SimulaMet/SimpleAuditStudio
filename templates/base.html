@@ -51,6 +51,11 @@
       <a href="{% url 'compare' %}" class="flex items-center gap-3 px-3 py-2 rounded-lg text-sm whitespace-nowrap {% if request.path == '/compare/' %}bg-accent/15 text-accent font-medium{% else %}text-gray-400 hover:text-gray-200 hover:bg-surface-overlay{% endif %}">
         <span class="text-base w-5 text-center">⇄</span><span class="sidebar-label">Compare</span>
       </a>
+      {% if is_admin %}
+      <a href="{% url 'health' %}" class="flex items-center gap-3 px-3 py-2 rounded-lg text-sm whitespace-nowrap {% if request.path == '/health/' %}bg-accent/15 text-accent font-medium{% else %}text-gray-400 hover:text-gray-200 hover:bg-surface-overlay{% endif %}">
+        <span class="text-base w-5 text-center">⚕</span><span class="sidebar-label">Health</span>
+      </a>
+      {% endif %}
     </nav>
     <div class="p-3 border-t border-gray-800">
       <div class="flex items-center gap-2">

@@ -1,0 +1,211 @@
+{% extends "base.html" %}
+{% block title %}Health — SimpleAudit Studio{% endblock %}
+{% block content %}
+<div class="flex items-center justify-between mb-6">
+  <h1 class="text-lg font-semibold text-gray-100">System Health</h1>
+  <div class="flex items-center gap-3">
+    <span id="overall-badge" class="px-2.5 py-1 rounded-full text-xs font-medium bg-gray-800 text-gray-400">…</span>
+    <span id="last-updated" class="text-xs text-gray-600"></span>
+  </div>
+</div>
+
+<!-- Component status grid -->
+<h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wide mb-3">Components</h2>
+<div id="component-grid" class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3 mb-8">
+  {% for name, comp in health.components.items %}
+  <div class="bg-surface-raised rounded-xl border border-gray-800 p-4" data-component="{{ name }}">
+    <div class="flex items-center justify-between mb-2">
+      <span class="text-sm font-medium text-gray-200 capitalize">{{ name }}</span>
+      <span class="status-dot w-2.5 h-2.5 rounded-full bg-gray-600" data-dot></span>
+    </div>
+    <p class="text-xs text-gray-500 min-h-[1rem]" data-detail>{{ comp.detail|default:"" }}</p>
+    <p class="text-xs text-gray-600 mt-1" data-latency>{% if comp.latency_ms is not None %}{{ comp.latency_ms }} ms{% endif %}</p>
+    {% if name == "engine" %}
+    <p class="text-xs text-gray-500 mt-1 truncate" data-engine>{{ comp.version|default:"—" }}{% if comp.commit %} · {{ comp.commit|slice:":8" }}{% endif %}</p>
+    {% endif %}
+    {% if name == "model_endpoints" %}
+    <ul class="mt-2 space-y-1 max-h-32 overflow-y-auto" data-endpoints>
+      {% for ep in comp.endpoints %}
+      <li class="flex items-center gap-2 text-xs">
+        <span class="ep-dot w-2 h-2 rounded-full bg-gray-600 shrink-0" data-ep-id="{{ ep.id }}"></span>
+        <span class="text-gray-400 truncate flex-1">{{ ep.display_name }}</span>
+        <span class="ep-status text-gray-600" data-ep-status="{{ ep.id }}">{{ ep.status }}</span>
+      </li>
+      {% endfor %}
+    </ul>
+    {% endif %}
+  </div>
+  {% endfor %}
+</div>
+
+<!-- Resource & bottleneck panel -->
+<h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wide mb-3">Resources &amp; Throughput</h2>
+<div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
+  <!-- Memory -->
+  <div class="bg-surface-raised rounded-xl border border-gray-800 p-4" data-resource="memory">
+    <div class="flex items-center justify-between mb-2">
+      <span class="text-sm font-medium text-gray-200">Memory</span>
+      <span class="status-dot w-2.5 h-2.5 rounded-full bg-gray-600" data-dot></span>
+    </div>
+    <div class="bar-track h-1.5 rounded-full bg-gray-800 mb-2"><div class="bar-fill h-1.5 rounded-full bg-accent" data-bar style="width:0%"></div></div>
+    <p class="text-xs text-gray-500" data-summary>—</p>
+    <p class="text-xs text-gray-600 mt-1" data-sub></p>
+  </div>
+  <!-- Disk -->
+  <div class="bg-surface-raised rounded-xl border border-gray-800 p-4" data-resource="disk">
+    <div class="flex items-center justify-between mb-2">
+      <span class="text-sm font-medium text-gray-200">Disk</span>
+      <span class="status-dot w-2.5 h-2.5 rounded-full bg-gray-600" data-dot></span>
+    </div>
+    <div class="bar-track h-1.5 rounded-full bg-gray-800 mb-2"><div class="bar-fill h-1.5 rounded-full bg-accent" data-bar style="width:0%"></div></div>
+    <p class="text-xs text-gray-500" data-summary>—</p>
+    <p class="text-xs text-gray-600 mt-1" data-sub></p>
+  </div>
+  <!-- CPU -->
+  <div class="bg-surface-raised rounded-xl border border-gray-800 p-4" data-resource="cpu">
+    <div class="flex items-center justify-between mb-2">
+      <span class="text-sm font-medium text-gray-200">CPU Load</span>
+      <span class="status-dot w-2.5 h-2.5 rounded-full bg-gray-600" data-dot></span>
+    </div>
+    <p class="text-2xl font-bold text-gray-100" data-load>—</p>
+    <p class="text-xs text-gray-600 mt-1" data-sub></p>
+  </div>
+  <!-- Queue / throughput -->
+  <div class="bg-surface-raised rounded-xl border border-gray-800 p-4" data-resource="queue">
+    <div class="flex items-center justify-between mb-2">
+      <span class="text-sm font-medium text-gray-200">Audit Queue</span>
+      <span class="status-dot w-2.5 h-2.5 rounded-full bg-gray-600" data-dot></span>
+    </div>
+    <div class="grid grid-cols-2 gap-2 text-center" data-queue-counts>
+      <div><span class="text-lg font-bold text-amber-400" data-q="active">—</span><p class="text-[10px] text-gray-600 uppercase">Active</p></div>
+      <div><span class="text-lg font-bold text-gray-400" data-q="queued">—</span><p class="text-[10px] text-gray-600 uppercase">Queued</p></div>
+      <div><span class="text-lg font-bold text-emerald-400" data-q="completed">—</span><p class="text-[10px] text-gray-600 uppercase">Done</p></div>
+      <div><span class="text-lg font-bold text-red-400" data-q="failed">—</span><p class="text-[10px] text-gray-600 uppercase">Failed</p></div>
+    </div>
+    <p class="text-xs text-gray-600 mt-2" data-sub></p>
+  </div>
+</div>
+
+<script>
+(function () {
+  const REFRESH_MS = 5000;
+  const DOT_COLORS = { up: "bg-emerald-500", degraded: "bg-amber-500", down: "bg-red-500", unknown: "bg-gray-600" };
+  const OVERALL_STYLES = {
+    ok: "bg-emerald-900/40 text-emerald-300",
+    degraded: "bg-amber-900/40 text-amber-300",
+    down: "bg-red-900/40 text-red-300",
+  };
+
+  function fmtBytes(n) {
+    if (n === null || n === undefined) return "—";
+    const units = ["B", "KB", "MB", "GB", "TB"];
+    let i = 0, v = Number(n);
+    while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
+    return v.toFixed(v >= 100 || i === 0 ? 0 : 1) + " " + units[i];
+  }
+
+  function setDot(el, status) {
+    el.className = "status-dot w-2.5 h-2.5 rounded-full " + (DOT_COLORS[status] || DOT_COLORS.unknown);
+  }
+
+  function render(data) {
+    // Overall badge
+    const badge = document.getElementById("overall-badge");
+    badge.textContent = data.overall.toUpperCase();
+    badge.className = "px-2.5 py-1 rounded-full text-xs font-medium " + (OVERALL_STYLES[data.overall] || OVERALL_STYLES.degraded);
+    document.getElementById("last-updated").textContent = "updated " + new Date().toLocaleTimeString();
+
+    // Components
+    Object.entries(data.components || {}).forEach(([name, comp]) => {
+      const card = document.querySelector('[data-component="' + name + '"]');
+      if (!card) return;
+      setDot(card.querySelector("[data-dot]"), comp.status);
+      const detail = card.querySelector("[data-detail]");
+      if (detail) detail.textContent = comp.detail || "";
+      const lat = card.querySelector("[data-latency]");
+      if (lat) lat.textContent = comp.latency_ms != null ? comp.latency_ms + " ms" : "";
+      const eng = card.querySelector("[data-engine]");
+      if (eng) eng.textContent = (comp.version || "—") + (comp.commit ? " · " + String(comp.commit).slice(0, 8) : "");
+      // Model endpoints sub-list
+      if (comp.endpoints) {
+        const list = card.querySelector("[data-endpoints]");
+        if (list) {
+          list.innerHTML = comp.endpoints.map(ep =>
+            '<li class="flex items-center gap-2 text-xs">' +
+            '<span class="w-2 h-2 rounded-full shrink-0 ' + (DOT_COLORS[ep.status] || DOT_COLORS.unknown) + '"></span>' +
+            '<span class="text-gray-400 truncate flex-1">' + (ep.display_name || ("#" + ep.id)) + '</span>' +
+            '<span class="text-gray-600">' + (ep.status) + '</span></li>'
+          ).join("");
+        }
+      }
+    });
+
+    // Resources
+    const res = data.resources || {};
+    const mem = res.memory || {};
+    const memCard = document.querySelector('[data-resource="memory"]');
+    if (memCard) {
+      setDot(memCard.querySelector("[data-dot]"), mem.status);
+      const pct = mem.used_percent != null ? Math.min(mem.used_percent, 100) : 0;
+      const bar = memCard.querySelector("[data-bar]");
+      bar.style.width = pct + "%";
+      bar.className = "bar-fill h-1.5 rounded-full " + (pct > 90 ? "bg-red-500" : pct > 75 ? "bg-amber-500" : "bg-accent");
+      memCard.querySelector("[data-summary]").textContent =
+        mem.status === "up" ? fmtBytes(mem.used_bytes) + " / " + fmtBytes(mem.total_bytes) + " (" + mem.used_percent + "%)" : (mem.detail || "unavailable");
+      memCard.querySelector("[data-sub]").textContent =
+        mem.web_process_rss_bytes != null ? "web process: " + fmtBytes(mem.web_process_rss_bytes) : "";
+    }
+
+    const disk = res.disk || {};
+    const diskCard = document.querySelector('[data-resource="disk"]');
+    if (diskCard) {
+      setDot(diskCard.querySelector("[data-dot]"), disk.status);
+      const dpct = disk.used_percent != null ? Math.min(disk.used_percent, 100) : 0;
+      const dbar = diskCard.querySelector("[data-bar]");
+      dbar.style.width = dpct + "%";
+      dbar.className = "bar-fill h-1.5 rounded-full " + (dpct > 90 ? "bg-red-500" : dpct > 75 ? "bg-amber-500" : "bg-accent");
+      diskCard.querySelector("[data-summary]").textContent =
+        disk.status === "up" ? fmtBytes(disk.used_bytes) + " / " + fmtBytes(disk.total_bytes) + " (" + disk.used_percent + "%)" : (disk.detail || "unavailable");
+      diskCard.querySelector("[data-sub]").textContent = disk.status === "up" ? "free: " + fmtBytes(disk.free_bytes) : "";
+    }
+
+    const cpu = res.cpu || {};
+    const cpuCard = document.querySelector('[data-resource="cpu"]');
+    if (cpuCard) {
+      setDot(cpuCard.querySelector("[data-dot]"), cpu.status);
+      cpuCard.querySelector("[data-load]").textContent = cpu.load_1m != null ? cpu.load_1m : "—";
+      cpuCard.querySelector("[data-sub]").textContent =
+        cpu.status === "up" ? "per core " + cpu.load_per_core + " · " + cpu.cpu_count + " cores · 5m " + cpu.load_5m : (cpu.detail || "");
+    }
+
+    const q = res.queue || {};
+    const qCard = document.querySelector('[data-resource="queue"]');
+    if (qCard) {
+      setDot(qCard.querySelector("[data-dot]"), q.status);
+      const runs = q.runs || {};
+      ["active", "queued", "completed", "failed"].forEach(k => {
+        const el = qCard.querySelector('[data-q="' + k + '"]');
+        if (el) el.textContent = runs[k] != null ? runs[k] : "—";
+      });
+      qCard.querySelector("[data-sub]").textContent =
+        q.scenarios_in_flight != null ? q.scenarios_in_flight + " scenarios in flight" : "";
+    }
+  }
+
+  async function refresh() {
+    try {
+      const resp = await fetch("/api/health/", { headers: { Accept: "application/json" } });
+      if (!resp.ok) throw new Error("HTTP " + resp.status);
+      render(await resp.json());
+    } catch (e) {
+      const badge = document.getElementById("overall-badge");
+      badge.textContent = "REFRESH ERROR";
+      badge.className = "px-2.5 py-1 rounded-full text-xs font-medium bg-red-900/40 text-red-300";
+    }
+  }
+
+  refresh();
+  setInterval(refresh, REFRESH_MS);
+})();
+</script>
+{% endblock %}
