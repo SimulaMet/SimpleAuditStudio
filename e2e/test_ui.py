@@ -71,7 +71,6 @@ def test_navigation_all_views(page: Page) -> None:
     views = [
         ("/dashboard/", "Dashboard"),
         ("/audits/new/", "New Audit"),
-        ("/queue/", "Queue"),
         ("/scenarios/", "Scenario"),
         ("/models/", "Model"),
         ("/compare/", "Compare"),
@@ -160,15 +159,6 @@ def test_clone_prefills_form(page: Page) -> None:
     expect(page.locator('input[name="scenario_set_version"]')).to_be_attached()
 
 
-def test_queue_shows_runs(page: Page) -> None:
-    """Queue view shows active or finished runs section."""
-    login(page)
-    page.goto(f"{BASE_URL}/queue/")
-    page.wait_for_timeout(500)
-    main = page.locator("main")
-    expect(main).to_be_visible()
-
-
 def test_compare_view(page: Page) -> None:
     """Compare view loads and shows selection UI."""
     login(page)
@@ -197,7 +187,6 @@ def main() -> int:
             ("models_view_no_profiles", test_models_view_no_profiles),
             ("audit_detail_clone_button", test_audit_detail_clone_button),
             ("clone_prefills_form", test_clone_prefills_form),
-            ("queue_shows_runs", test_queue_shows_runs),
             ("compare_view", test_compare_view),
         ]
 

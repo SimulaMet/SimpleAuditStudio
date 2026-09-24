@@ -53,6 +53,7 @@ class AuditRun(models.Model):
     archived = models.BooleanField(default=False, db_index=True)
     created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
         db_table = "core_audit_run"
@@ -60,3 +61,17 @@ class AuditRun(models.Model):
 
     def __str__(self) -> str:
         return f"{self.name} ({self.status})"
+
+    @property
+    def duration_display(self) -> str:
+        """Human-readable wall-clock duration, e.g. '2 minutes' or '1 hour 3 minutes'."""
+        if not (self.started_at and self.finished_at):
+            return ""
+        seconds = int((self.finished_at - self.started_at).total_seconds())
+        if seconds < 60:
+            return f"{seconds}s"
+        minutes, secs = divmod(seconds, 60)
+        if minutes < 60:
+            return f"{minutes}m {secs}s"
+        hours, mins = divmod(minutes, 60)
+        return f"{hours}h {mins}m"

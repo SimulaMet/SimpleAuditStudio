@@ -57,8 +57,15 @@
       <thead>
         <tr class="border-b border-gray-800">
           <th class="text-left px-3 py-2 text-xs font-medium text-gray-500 uppercase">ID</th>
+          <th class="text-left px-3 py-2 text-xs font-medium text-gray-500 uppercase">Name</th>
           <th class="text-left px-3 py-2 text-xs font-medium text-gray-500 uppercase">Scenario Set</th>
+          <th class="text-left px-3 py-2 text-xs font-medium text-gray-500 uppercase">Target Model</th>
+          <th class="text-left px-3 py-2 text-xs font-medium text-gray-500 uppercase">Auditor Model</th>
+          <th class="text-left px-3 py-2 text-xs font-medium text-gray-500 uppercase">Judge Model</th>
           <th class="text-left px-3 py-2 text-xs font-medium text-gray-500 uppercase">Status</th>
+          <th class="text-left px-3 py-2 text-xs font-medium text-gray-500 uppercase">Progress</th>
+          <th class="text-left px-3 py-2 text-xs font-medium text-gray-500 uppercase">Pass Rate</th>
+          <th class="text-left px-3 py-2 text-xs font-medium text-gray-500 uppercase">Duration</th>
           <th class="text-left px-3 py-2 text-xs font-medium text-gray-500 uppercase">
             {% if current_sort == 'created_at' %}
             <a href="/dashboard/?sort=-created_at{% if current_status %}&status={{ current_status }}{% endif %}{% if search_query %}&q={{ search_query|urlencode }}{% endif %}" class="hover:text-gray-300">Created ↑</a>
@@ -73,20 +80,42 @@
         {% for run in runs %}
         <tr class="border-b border-gray-800/50 hover:bg-surface-overlay/50 cursor-pointer" onclick="location='/audits/{{ run.id }}/'">
           <td class="px-3 py-2.5 font-medium text-gray-200">#{{ run.id }}</td>
+          <td class="px-3 py-2.5 text-gray-300 max-w-[16rem] truncate" title="{{ run.name }}">{{ run.name }}</td>
           <td class="px-3 py-2.5"><a href="/scenarios/?set={{ run.scenario_set_version.scenario_set_id }}" onclick="event.stopPropagation()" class="text-gray-300 hover:text-accent transition-colors">{{ run.scenario_set_version.scenario_set.name|default:"—" }}</a></td>
+          <td class="px-3 py-2.5 text-gray-400 text-xs">{{ run.target_endpoint.display_name|default:"—" }}</td>
+          <td class="px-3 py-2.5 text-gray-400 text-xs">{{ run.auditor_endpoint.display_name|default:"—" }}</td>
+          <td class="px-3 py-2.5 text-gray-400 text-xs">{{ run.judge_endpoint.display_name|default:"—" }}</td>
           <td class="px-3 py-2.5">
             {% if run.status == "completed" %}<span class="inline-flex px-2 py-0.5 rounded-full text-xs font-semibold bg-emerald-900/50 text-emerald-300">completed</span>
             {% elif run.status == "failed" %}<span class="inline-flex px-2 py-0.5 rounded-full text-xs font-semibold bg-red-900/50 text-red-300">failed</span>
             {% elif run.status == "cancelled" %}<span class="inline-flex px-2 py-0.5 rounded-full text-xs font-semibold bg-gray-800 text-gray-400">cancelled</span>
             {% else %}<span class="inline-flex px-2 py-0.5 rounded-full text-xs font-semibold bg-amber-900/50 text-amber-300">{{ run.get_status_display }}</span>{% endif %}
           </td>
+          <td class="px-3 py-2.5 text-gray-400 text-xs whitespace-nowrap">{% if run.total_scenarios > 0 %}{{ run.completed_scenarios }}/{{ run.total_scenarios }}{% else %}—{% endif %}</td>
+          <td class="px-3 py-2.5 text-gray-400 text-xs whitespace-nowrap">{% if run.status == "completed" or run.status == "failed" or run.status == "cancelled" %}{% if run.summary_metrics.pass_rate is not None %}{{ run.summary_metrics.pass_rate|floatformat:1 }}%{% elif run.completed_scenarios > 0 %}{% widthratio run.successful_scenarios run.completed_scenarios 100 %}%{% else %}—{% endif %}{% else %}—{% endif %}</td>
+          <td class="px-3 py-2.5 text-gray-400 text-xs whitespace-nowrap">{{ run.duration_display|default:"—" }}</td>
           <td class="px-3 py-2.5 text-gray-500 text-xs">{{ run.created_at|date:"M j, H:i" }}</td>
           <td class="px-3 py-2.5 text-right whitespace-nowrap" onclick="event.stopPropagation()">
-            <a href="/audits/new/?clone_from={{ run.id }}" class="text-xs text-gray-400 hover:text-accent transition-colors" title="Clone this audit">Clone</a>
-            <span class="text-gray-700 mx-1.5">·</span>
+            {% if run.status != "completed" and run.status != "failed" and run.status != "cancelled" %}
+            <form method="post" action="/audits/{{ run.id }}/cancel/" class="inline mr-1" onsubmit="return confirm('Cancel run #{{ run.id }}?')">
+              {% csrf_token %}
+              <button type="submit" title="Cancel this audit" aria-label="Cancel this audit" class="inline-flex items-center justify-center w-7 h-7 rounded-md text-red-400 hover:text-red-300 hover:bg-red-900/30 transition-colors">
+                <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
+              </button>
+            </form>
+            {% endif %}
+            <a href="/audits/new/?clone_from={{ run.id }}" title="Clone this audit" aria-label="Clone this audit" class="group/clone inline-flex items-center justify-center w-7 h-7 rounded-md text-gray-500 hover:text-accent hover:bg-surface-overlay transition-colors">
+              <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+            </a>
             <form method="post" action="/audits/{{ run.id }}/archive/" class="inline">
               {% csrf_token %}
-              <button type="submit" class="text-xs text-gray-400 hover:text-gray-200 transition-colors" title="{% if run.archived %}Unarchive this audit{% else %}Archive this audit{% endif %}">{% if run.archived %}Unarchive{% else %}Archive{% endif %}</button>
+              <button type="submit" title="{% if run.archived %}Unarchive this audit{% else %}Archive this audit{% endif %}" aria-label="{% if run.archived %}Unarchive this audit{% else %}Archive this audit{% endif %}" class="group/arch inline-flex items-center justify-center w-7 h-7 rounded-md text-gray-500 hover:text-gray-200 hover:bg-surface-overlay transition-colors">
+                {% if run.archived %}
+                <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg>
+                {% else %}
+                <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="21 8 21 21 3 21 3 8"/><rect x="1" y="3" width="22" height="5"/><line x1="10" y1="12" x2="14" y2="12"/></svg>
+                {% endif %}
+              </button>
             </form>
           </td>
         </tr>
