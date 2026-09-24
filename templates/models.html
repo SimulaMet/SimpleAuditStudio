@@ -2,102 +2,118 @@
 {% block title %}Models — SimpleAudit{% endblock %}
 {% block content %}
 <h1 class="text-lg font-semibold text-gray-100 mb-6">Model Registry</h1>
-{% if highlight_id %}
-<script>document.getElementById('endpoint-{{ highlight_id }}')?.scrollIntoView({behavior:'smooth',block:'center'});</script>
-{% endif %}
-
 {% if error %}
 <div class="mb-4 text-sm text-red-300 bg-red-900/30 rounded-lg px-4 py-2">{{ error }}</div>
 {% endif %}
 
-<!-- Endpoints -->
+<!-- ═══ CONNECTIONS ═══════════════════════════════════════════════════════ -->
 <div class="bg-surface-raised rounded-xl border border-gray-800 p-4 mb-6">
   <div class="flex items-center justify-between flex-wrap gap-3 mb-3">
-    <h2 class="text-sm font-semibold text-gray-300">Endpoints{% if search_query %} <span class="text-gray-500 font-normal">— matching "{{ search_query }}"</span>{% endif %}</h2>
+    <h2 class="text-sm font-semibold text-gray-300">Connections</h2>
     <form method="get" class="flex gap-2">
-      <input type="text" name="q" value="{{ search_query }}" placeholder="Search by name or model ID…" aria-label="Search endpoints"
-             class="px-3 py-1.5 rounded-lg bg-surface-overlay border border-gray-700 text-xs w-56 focus:outline-none focus:ring-2 focus:ring-accent/50">
+      <input type="text" name="q" value="{{ search_query }}" placeholder="Search…" aria-label="Search connections and models"
+             class="px-3 py-1.5 rounded-lg bg-surface-overlay border border-gray-700 text-xs w-48 focus:outline-none focus:ring-2 focus:ring-accent/50">
       <button type="submit" class="px-3 py-1.5 rounded-lg bg-surface-overlay border border-gray-700 text-xs text-gray-400 hover:text-accent transition-colors">Search</button>
       {% if search_query %}<a href="{% url 'models' %}" class="px-2 py-1.5 text-xs text-gray-600 hover:text-accent">✕</a>{% endif %}
     </form>
   </div>
-  {% if endpoints %}
+
+  {% if connections %}
   <div class="space-y-3 mb-4">
-    {% for ep in endpoints %}
-    <div id="endpoint-{{ ep.id }}" class="rounded-lg border border-gray-800/60 p-3{% if highlight_id == ep.id|stringformat:'s' %} bg-accent/10 border-l-2 border-l-accent{% endif %}">
-      <!-- Display row -->
+    {% for conn in connections %}
+    <div id="conn-{{ conn.id }}" class="rounded-lg border border-gray-800/60 p-3">
       <div class="flex items-center justify-between flex-wrap gap-2">
         <div class="flex items-center gap-3 flex-wrap">
-          <span class="font-medium text-gray-200 text-sm">{{ ep.display_name }}</span>
-          <span class="text-xs text-gray-500">{{ ep.base_url }}</span>
-          <span class="text-xs text-gray-400 font-mono">{{ ep.model_id|default:"—" }}</span>
-          {% if not ep.enabled %}<span class="text-xs text-amber-400">disabled</span>{% endif %}
-          {% if ep.api_key_direct %}<span class="text-xs text-emerald-500" title="Direct API key set">🔑 direct</span>{% elif ep.secret_reference %}<span class="text-xs text-gray-600" title="Env var: {{ ep.secret_reference }}">🔑 {{ ep.secret_reference }}</span>{% endif %}
+          <span class="font-medium text-gray-200 text-sm">{{ conn.name }}</span>
+          <span class="text-xs text-gray-500">{{ conn.provider }} · {{ conn.base_url }}</span>
+          {% if conn.has_key %}<span class="text-xs text-emerald-500">🔑 key set</span>{% else %}<span class="text-xs text-yellow-500">⚠ no key</span>{% endif %}
+          <span class="text-xs text-gray-600">{{ conn.models.count }} model(s)</span>
         </div>
         <div class="flex items-center gap-2">
-          <button onclick="document.getElementById('edit-{{ ep.id }}').classList.toggle('hidden')"
+          <button onclick="document.getElementById('edit-conn-{{ conn.id }}').classList.toggle('hidden')"
                   class="text-xs text-gray-500 hover:text-accent transition-colors">Edit</button>
-          <form method="post" action="{% url 'model_delete' ep.id %}" onsubmit="return confirm('Delete?')">
+          <form method="post" action="{% url 'connection_delete' conn.id %}" onsubmit="return confirm('Delete connection "{{ conn.name }}" and all its models?')">
             {% csrf_token %}
             <button class="text-xs text-gray-600 hover:text-red-400">✕</button>
           </form>
         </div>
       </div>
-      <!-- Edit form (hidden by default) -->
-      <div id="edit-{{ ep.id }}" class="hidden mt-3 pt-3 border-t border-gray-800/60">
-        <form method="post">
+
+      <!-- Models under this connection -->
+      {% if conn.models.all %}
+      <div class="mt-2 pl-3 border-l-2 border-gray-800 space-y-1">
+        {% for m in conn.models.all %}
+        <div class="flex items-center justify-between text-xs text-gray-400">
+          <span>{{ m.display_name }} <span class="text-gray-600">({{ m.model_id }})</span></span>
+          <form method="post" onsubmit="return confirm('Remove {{ m.display_name }}?')">
+            {% csrf_token %}
+            <input type="hidden" name="action" value="delete_model">
+            <input type="hidden" name="rm_id" value="{{ m.id }}">
+            <button class="text-gray-600 hover:text-red-400">✕</button>
+          </form>
+        </div>
+        {% endfor %}
+      </div>
+      {% endif %}
+
+      <!-- Add model to this connection -->
+      <form method="post" class="mt-2 pl-3 flex gap-2 items-end">
+        {% csrf_token %}
+        <input type="hidden" name="action" value="add_model">
+        <input type="hidden" name="model_conn_id" value="{{ conn.id }}">
+        <div class="flex-1">
+          <label class="block text-xs text-gray-600 mb-0.5">Add model ID</label>
+          <input type="text" name="model_id" list="discovered-{{ conn.id }}" placeholder="e.g. Qwen3.8-27B"
+                 class="w-full px-2 py-1.5 rounded-lg bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-2 focus:ring-accent/50">
+          <datalist id="discovered-{{ conn.id }}"></datalist>
+        </div>
+        <div class="flex-1">
+          <label class="block text-xs text-gray-600 mb-0.5">Display name (optional)</label>
+          <input type="text" name="model_display_name" placeholder="auto = model ID"
+                 class="w-full px-2 py-1.5 rounded-lg bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-2 focus:ring-accent/50">
+        </div>
+        <button type="button" onclick="discoverForConn({{ conn.id }}, '{{ conn.base_url }}', '{{ conn.api_key_direct|default:"" }}', '{{ conn.provider }}')"
+                class="px-2 py-1.5 rounded-lg bg-surface-overlay border border-gray-700 text-xs text-gray-400 hover:text-accent hover:border-accent/50 whitespace-nowrap">🔍</button>
+        <button class="px-3 py-1.5 rounded-lg bg-surface-overlay border border-gray-700 text-xs text-gray-300 hover:bg-accent/20 hover:text-accent whitespace-nowrap">+ Add</button>
+      </form>
+
+      <!-- Edit connection form -->
+      <div id="edit-conn-{{ conn.id }}" class="hidden mt-3 pt-3 border-t border-gray-800/60">
+        <form method="post" class="grid grid-cols-1 md:grid-cols-3 gap-3">
           {% csrf_token %}
-          <input type="hidden" name="action" value="edit_endpoint">
-          <input type="hidden" name="endpoint_id" value="{{ ep.id }}">
-          <div class="grid grid-cols-1 md:grid-cols-3 gap-3 mb-3">
-            <div>
-              <label class="block text-xs text-gray-500 mb-1">Display Name</label>
-              <input type="text" name="display_name" value="{{ ep.display_name }}" required
-                     class="w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-accent/50">
-            </div>
-            <div>
-              <label class="block text-xs text-gray-500 mb-1">Base URL</label>
-              <input type="url" name="base_url" value="{{ ep.base_url }}" required
-                     class="w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-accent/50">
-            </div>
-            <div>
-              <label class="block text-xs text-gray-500 mb-1">Model ID</label>
-              <input type="text" name="model_id" value="{{ ep.model_id }}"
-                     class="w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-accent/50">
-            </div>
+          <input type="hidden" name="action" value="edit_connection">
+          <input type="hidden" name="conn_id" value="{{ conn.id }}">
+          <div>
+            <label class="block text-xs text-gray-500 mb-1">Name</label>
+            <input type="text" name="conn_name" value="{{ conn.name }}" required
+                   class="w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-accent/50">
           </div>
-          <div class="grid grid-cols-1 md:grid-cols-3 gap-3 mb-3">
-            <div>
-              <label class="block text-xs text-gray-500 mb-1">Provider</label>
-              <select name="provider" class="w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-accent/50">
-                <option value="openai"{% if ep.provider == "openai" %} selected{% endif %}>openai</option>
-                <option value="anthropic"{% if ep.provider == "anthropic" %} selected{% endif %}>anthropic</option>
-                <option value="google"{% if ep.provider == "google" %} selected{% endif %}>google</option>
-              </select>
-            </div>
-            <div class="md:col-span-2">
-              <label class="block text-xs text-gray-500 mb-1">API Key</label>
-              <div class="flex gap-2">
-                <select id="key-mode-{{ ep.id }}" onchange="(function(s){var e=document.getElementById('key-env-{{ ep.id }}');var d=document.getElementById('key-direct-{{ ep.id }}');if(s.value==='env'){e.style.display='';d.style.display='none';}else{d.style.display='';e.style.display='none';}})(this)"
-                        class="px-2 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-xs text-gray-400 focus:outline-none focus:ring-2 focus:ring-accent/50" style="width:110px;flex-shrink:0">
-                  <option value="env"{% if not ep.api_key_direct %} selected{% endif %}>Env var</option>
-                  <option value="direct"{% if ep.api_key_direct %} selected{% endif %}>Direct</option>
-                </select>
-                <input id="key-env-{{ ep.id }}" type="text" name="secret_reference" value="{{ ep.secret_reference }}" placeholder="SIMULACHAT_API_KEY"
-                       class="flex-1 px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-accent/50"
-                       {% if ep.api_key_direct %}style="display:none"{% endif %}>
-                <input id="key-direct-{{ ep.id }}" type="password" name="api_key_direct" value="" placeholder="{% if ep.api_key_direct %}•••• (set — leave blank to keep){% else %}sk-...{% endif %}" autocomplete="new-password"
-                       class="flex-1 px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-accent/50"
-                       {% if not ep.api_key_direct %}style="display:none"{% endif %}>
-              </div>
-              <p class="mt-1 text-xs text-gray-600">{% if ep.api_key_direct %}Key stored in DB.{% else %}Worker reads this env var at runtime.{% endif %}</p>
-            </div>
+          <div>
+            <label class="block text-xs text-gray-500 mb-1">Base URL</label>
+            <input type="url" name="conn_base_url" value="{{ conn.base_url }}" required
+                   class="w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-accent/50">
           </div>
-          <div class="flex items-center gap-3">
-            <label class="flex items-center gap-2 text-sm text-gray-400">
-              <input type="checkbox" name="enabled" value="1" {% if ep.enabled %}checked{% endif %}
-                     class="rounded border-gray-600 bg-surface-overlay">
-              Enabled
+          <div>
+            <label class="block text-xs text-gray-500 mb-1">Provider</label>
+            <select name="conn_provider" class="w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-accent/50">
+              <option value="openai"{% if conn.provider == "openai" %} selected{% endif %}>openai</option>
+              <option value="anthropic"{% if conn.provider == "anthropic" %} selected{% endif %}>anthropic</option>
+              <option value="google"{% if conn.provider == "google" %} selected{% endif %}>google</option>
+            </select>
+          </div>
+          <div>
+            <label class="block text-xs text-gray-500 mb-1">API Key (env var)</label>
+            <input type="text" name="conn_secret_ref" value="{{ conn.secret_reference }}" placeholder="MY_API_KEY"
+                   class="w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-accent/50">
+          </div>
+          <div>
+            <label class="block text-xs text-gray-500 mb-1">API Key (direct)</label>
+            <input type="password" name="conn_api_key" placeholder="sk-... (leave blank to keep)" autocomplete="off"
+                   class="w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-accent/50">
+          </div>
+          <div class="flex items-end gap-3">
+            <label class="flex items-center gap-2 text-xs text-gray-400">
+              <input type="checkbox" name="conn_enabled" value="1" {% if conn.enabled %}checked{% endif %} class="rounded"> Enabled
             </label>
             <button class="px-4 py-2 rounded-lg bg-accent text-white text-sm font-medium hover:bg-accent-hover ml-auto">Save</button>
           </div>
@@ -107,106 +123,48 @@
     {% endfor %}
   </div>
   {% else %}
-  <p class="text-sm text-gray-500 mb-4">No endpoints registered.</p>
+  <p class="text-sm text-gray-500 mb-4">No connections registered.</p>
   {% endif %}
 
-  <!-- Add form -->
+  <!-- Add connection form -->
   <form method="post" class="pt-3 border-t border-gray-800">
     {% csrf_token %}
-    <input type="hidden" name="action" value="add_endpoint">
+    <input type="hidden" name="action" value="add_connection">
     <div class="grid grid-cols-1 md:grid-cols-3 gap-3 mb-3">
       <div>
-        <label class="block text-xs text-gray-500 mb-1">Display Name</label>
-        <input type="text" name="display_name" placeholder="Qwen 3.8 27B" required
+        <label class="block text-xs text-gray-500 mb-1">Connection Name</label>
+        <input type="text" name="conn_name" placeholder="Simulachat" required
                class="w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-accent/50">
       </div>
       <div>
         <label class="block text-xs text-gray-500 mb-1">Base URL</label>
-        <input type="url" name="base_url" placeholder="https://api.example.com/v1" required
+        <input type="url" name="conn_base_url" placeholder="https://api.example.com/v1" required
                class="w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-accent/50">
       </div>
       <div>
-        <label class="block text-xs text-gray-500 mb-1">Model ID</label>
-        <div class="flex gap-2">
-          <input type="text" name="model_id" id="add-model-id" list="discovered-models" placeholder="qwen-3.8-27b (optional)"
-                 class="flex-1 px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-accent/50">
-          <datalist id="discovered-models"></datalist>
-          <button type="button" onclick="discoverModels()" id="discover-btn"
-                  class="px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-xs text-gray-400 hover:text-accent hover:border-accent/50 transition-colors whitespace-nowrap">
-            🔍 Discover
-          </button>
-        </div>
-        <p id="discover-status" class="mt-1 text-xs text-gray-600 hidden"></p>
-      </div>
-    </div>
-    <div class="flex flex-wrap gap-3 items-end">
-      <div>
         <label class="block text-xs text-gray-500 mb-1">Provider</label>
-        <select name="provider" id="add-provider" class="px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-accent/50" style="width:120px">
+        <select name="conn_provider" class="w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-accent/50">
           <option value="openai">openai</option>
           <option value="anthropic">anthropic</option>
           <option value="google">google</option>
         </select>
       </div>
-      <div class="flex-1 min-w-[200px]">
+      <div>
         <label class="block text-xs text-gray-500 mb-1">API Key (env var)</label>
-        <input type="text" name="secret_reference" placeholder="SIMULACHAT_API_KEY"
+        <input type="text" name="conn_secret_ref" placeholder="SIMULACHAT_API_KEY"
                class="w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-accent/50">
       </div>
-      <div class="flex-1 min-w-[200px]">
+      <div>
         <label class="block text-xs text-gray-500 mb-1">API Key (direct)</label>
-        <input type="password" name="api_key_direct" id="add-api-key" placeholder="sk-..." autocomplete="off"
+        <input type="password" name="conn_api_key" placeholder="sk-..." autocomplete="off"
                class="w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-accent/50">
       </div>
-      <button class="px-4 py-2 rounded-lg bg-accent text-white text-sm font-medium hover:bg-accent-hover whitespace-nowrap">+ Add</button>
     </div>
+    <button class="px-4 py-2 rounded-lg bg-accent text-white text-sm font-medium hover:bg-accent-hover">+ Add Connection</button>
   </form>
-  <script>
-  async function discoverModels() {
-    const btn = document.getElementById('discover-btn');
-    const status = document.getElementById('discover-status');
-    const datalist = document.getElementById('discovered-models');
-    const baseUrl = document.querySelector('[name="base_url"]').value.trim();
-    const apiKey = document.getElementById('add-api-key').value.trim();
-    const provider = document.getElementById('add-provider').value;
-
-    if (!baseUrl) { status.textContent = 'Enter a Base URL first.'; status.classList.remove('hidden'); return; }
-
-    btn.disabled = true;
-    btn.textContent = '⏳ ...';
-    status.textContent = 'Fetching models...';
-    status.classList.remove('hidden');
-    status.className = 'mt-1 text-xs text-gray-500';
-
-    try {
-      const body = new URLSearchParams({ base_url: baseUrl, api_key_direct: apiKey, provider });
-      const resp = await fetch('{% url "models_discover" %}', { method: 'POST', headers: {'X-CSRFToken': getCookie('csrftoken')}, body });
-      const data = await resp.json();
-      if (!resp.ok) throw new Error(data.error || 'Request failed');
-      datalist.innerHTML = '';
-      data.models.forEach(m => {
-        const opt = document.createElement('option');
-        opt.value = m;
-        datalist.appendChild(opt);
-      });
-      status.textContent = `Found ${data.models.length} model(s). Pick one below or type manually.`;
-      status.className = 'mt-1 text-xs text-emerald-400';
-    } catch (e) {
-      status.textContent = e.message;
-      status.className = 'mt-1 text-xs text-red-400';
-    } finally {
-      btn.disabled = false;
-      btn.textContent = '🔍 Discover';
-    }
-  }
-  function getCookie(name) {
-    const v = document.cookie.match(new RegExp('(^| )' + name + '=([^;]+)'));
-    return v ? v[2] : '';
-  }
-  </script>
 </div>
 
-<!-- Profiles -->
+<!-- ═══ AUDIT PROFILES ════════════════════════════════════════════════════ -->
 <div class="bg-surface-raised rounded-xl border border-gray-800 p-4">
   <h2 class="text-sm font-semibold text-gray-300 mb-3">Audit Profiles</h2>
   {% if profiles %}
@@ -216,7 +174,7 @@
       <div class="flex items-center justify-between flex-wrap gap-2">
         <div class="flex items-center gap-3 flex-wrap">
           <span class="font-medium text-gray-200 text-sm">{{ p.name }}</span>
-          <span class="text-xs text-gray-500">{{ p.max_turns }} turns · temp {{ p.temperature_target }}/{{ p.temperature_auditor }}/{{ p.temperature_judge }} · max {{ p.max_tokens }} tok · {{ p.language|default:"en" }}</span>
+          <span class="text-xs text-gray-500">{{ p.max_turns }} turns · temp {{ p.temperature_target }}/{{ p.temperature_auditor }}/{{ p.temperature_judge }} · max {{ p.max_tokens }} tok</span>
         </div>
         <div class="flex items-center gap-2">
           <button onclick="document.getElementById('edit-profile-{{ p.id }}').classList.toggle('hidden')"
@@ -227,7 +185,6 @@
           </form>
         </div>
       </div>
-      <!-- Profile edit form -->
       <div id="edit-profile-{{ p.id }}" class="hidden mt-3 pt-3 border-t border-gray-800/60">
         <form method="post" class="grid grid-cols-2 md:grid-cols-4 gap-3">
           {% csrf_token %}
@@ -256,16 +213,8 @@
           </div>
           <div>
             <label class="block text-xs text-gray-500 mb-1">Max Tokens</label>
-            <input type="number" name="max_tokens" value="{{ p.max_tokens }}" min="1" placeholder="2048"
+            <input type="number" name="max_tokens" value="{{ p.max_tokens }}" min="1"
                    class="w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-accent/50">
-          </div>
-          <div>
-            <label class="block text-xs text-gray-500 mb-1">Language</label>
-            <select name="language" class="w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-accent/50">
-              <option value=""{% if not p.language %} selected{% endif %}>Default</option>
-              <option value="English"{% if p.language == "English" %} selected{% endif %}>English</option>
-              <option value="Norwegian"{% if p.language == "Norwegian" %} selected{% endif %}>Norwegian</option>
-            </select>
           </div>
           <div class="col-span-2 md:col-span-4 flex justify-end">
             <button class="px-4 py-2 rounded-lg bg-accent text-white text-sm font-medium hover:bg-accent-hover">Save</button>
@@ -279,7 +228,6 @@
   <p class="text-sm text-gray-500 mb-4">No audit profiles defined.</p>
   {% endif %}
 
-  <!-- Add profile form -->
   <form method="post" class="pt-3 border-t border-gray-800">
     {% csrf_token %}
     <input type="hidden" name="action" value="add_profile">
@@ -318,4 +266,34 @@
     <button class="px-4 py-2 rounded-lg bg-accent text-white text-sm font-medium hover:bg-accent-hover">+ Add Profile</button>
   </form>
 </div>
+
+<script>
+async function discoverForConn(connId, baseUrl, apiKey, provider) {
+  const datalist = document.getElementById('discovered-' + connId);
+  if (!baseUrl) return;
+  try {
+    const body = new URLSearchParams({ base_url: baseUrl, api_key_direct: apiKey, provider });
+    const resp = await fetch('{% url "models_discover" %}', { method: 'POST', headers: {'X-CSRFToken': getCookie('csrftoken')}, body });
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(data.error || 'Request failed');
+    datalist.innerHTML = '';
+    data.models.forEach(m => {
+      const opt = document.createElement('option');
+      opt.value = m;
+      datalist.appendChild(opt);
+    });
+    // Auto-fill first model if input is empty
+    const input = datalist.previousElementSibling;
+    if (input && !input.value && data.models.length > 0) {
+      input.value = data.models[0];
+    }
+  } catch (e) {
+    alert('Discover failed: ' + e.message);
+  }
+}
+function getCookie(name) {
+  const v = document.cookie.match(new RegExp('(^| )' + name + '=([^;]+)'));
+  return v ? v[2] : '';
+}
+</script>
 {% endblock %}

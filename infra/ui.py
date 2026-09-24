@@ -630,14 +630,26 @@ class ModelsView(ProjectMixin, TemplateView):
 
     def get_context_data(self, **kw):
         from django.db.models import Q
+        from model_registry.models import ModelConnection, RegisteredModel
 
         p = self.request.project
         highlight_id = self.request.GET.get("highlight")
         q = (self.request.GET.get("q") or "").strip()
+
+        connections = ModelConnection.objects.filter(project=p).prefetch_related("models")
+        if q:
+            connections = connections.filter(
+                Q(name__icontains=q) | Q(base_url__icontains=q) | Q(models__display_name__icontains=q)
+            ).distinct()
+        connections = connections.order_by("name")
+
+        # Legacy endpoints (for backward compat display)
         endpoints = ModelEndpoint.objects.filter(project=p)
         if q:
             endpoints = endpoints.filter(Q(display_name__icontains=q) | Q(model_id__icontains=q))
+
         kw.update(
+            connections=connections,
             endpoints=endpoints.order_by("display_name"),
             profiles=AuditProfile.objects.filter(project=p).order_by("name"),
             highlight_id=highlight_id,
@@ -647,10 +659,64 @@ class ModelsView(ProjectMixin, TemplateView):
         return super().get_context_data(**kw)
 
     def post(self, request, *args, **kwargs):
+        from model_registry.models import ModelConnection, RegisteredModel
+
         p = request.project
         action = request.POST.get("action")
         error = None
-        if action == "add_endpoint":
+
+        # ── Connection actions ──────────────────────────────────────────────
+        if action == "add_connection":
+            name = request.POST.get("conn_name", "").strip()
+            base_url = request.POST.get("conn_base_url", "").strip()
+            if not name or not base_url:
+                error = "Connection name and Base URL are required."
+            else:
+                ModelConnection.objects.create(
+                    project=p,
+                    name=name,
+                    base_url=base_url,
+                    provider=request.POST.get("conn_provider", "openai"),
+                    secret_reference=request.POST.get("conn_secret_ref", "").strip(),
+                    api_key_direct=request.POST.get("conn_api_key", "").strip(),
+                    enabled=True,
+                    created_by=request.user,
+                )
+        elif action == "edit_connection":
+            conn = ModelConnection.objects.filter(pk=request.POST.get("conn_id"), project=p).first()
+            if not conn:
+                error = "Connection not found."
+            else:
+                conn.name = request.POST.get("conn_name", conn.name).strip()
+                conn.base_url = request.POST.get("conn_base_url", conn.base_url).strip()
+                conn.provider = request.POST.get("conn_provider", conn.provider)
+                conn.secret_reference = request.POST.get("conn_secret_ref", "").strip()
+                new_key = request.POST.get("conn_api_key", "").strip()
+                if new_key:
+                    conn.api_key_direct = new_key
+                conn.enabled = request.POST.get("conn_enabled") == "1"
+                conn.save()
+        elif action == "add_model":
+            conn = ModelConnection.objects.filter(pk=request.POST.get("model_conn_id"), project=p).first()
+            if not conn:
+                error = "Connection not found."
+            else:
+                model_id = request.POST.get("model_id", "").strip()
+                display_name = request.POST.get("model_display_name", model_id).strip()
+                if not model_id:
+                    error = "Model ID is required."
+                else:
+                    RegisteredModel.objects.update_or_create(
+                        connection=conn, model_id=model_id,
+                        defaults={"project": p, "display_name": display_name, "enabled": True},
+                    )
+        elif action == "delete_model":
+            rm = RegisteredModel.objects.filter(pk=request.POST.get("rm_id"), project=p).first()
+            if rm:
+                rm.delete()
+
+        # ── Legacy endpoint actions (kept for compat) ───────────────────────
+        elif action == "add_endpoint":
             if not all([request.POST.get(k) for k in ("display_name", "base_url")]):
                 error = "Name and URL are required."
             else:
@@ -676,7 +742,7 @@ class ModelsView(ProjectMixin, TemplateView):
                 ep.provider = request.POST.get("provider", ep.provider)
                 ep.secret_reference = request.POST.get("secret_reference", "").strip()
                 new_key = request.POST.get("api_key_direct", "").strip()
-                if new_key:  # empty means "keep existing" (form no longer echoes the stored key)
+                if new_key:
                     ep.api_key_direct = new_key
                 ep.enabled = request.POST.get("enabled") == "1"
                 ep.save()
@@ -715,6 +781,13 @@ class ModelsView(ProjectMixin, TemplateView):
 class ModelDeleteView(ProjectMixin, View):
     def post(self, request, endpoint_id):
         ModelEndpoint.objects.filter(pk=endpoint_id, project=request.project).delete()
+        return redirect("/models/")
+
+
+class ConnectionDeleteView(ProjectMixin, View):
+    def post(self, request, conn_id):
+        from model_registry.models import ModelConnection
+        ModelConnection.objects.filter(pk=conn_id, project=request.project).delete()
         return redirect("/models/")
 
 
