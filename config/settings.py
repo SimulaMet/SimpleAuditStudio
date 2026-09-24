@@ -237,7 +237,7 @@ WORKOS_ENABLED = bool(WORKOS_CLIENT_ID and WORKOS_API_KEY)
 APP_BASE_URL = os.environ.get("APP_BASE_URL", "http://localhost:8000").rstrip("/")
 
 DEMO_MODE = env_bool("DEMO_MODE", False)
-DEMO_USERNAME = os.environ.get("DEMO_USERNAME", "admin")
+DEMO_USERNAME = os.environ.get("DEMO_USERNAME", "studio")
 DEMO_PASSWORD = os.environ.get("DEMO_PASSWORD", "admin123")
 
 # Framing policy:

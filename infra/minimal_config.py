@@ -10,9 +10,9 @@ config:
 
 from __future__ import annotations
 
+import atexit
 import logging
 import os
-import tempfile
 import threading
 from typing import Any
 
@@ -28,11 +28,25 @@ def is_minimal_config() -> bool:
     return os.environ.get("SIMPLEAUDIT_MINIMAL", "").strip() == "1"
 
 
+def _data_dir() -> str:
+    """Return (and create) the persistent data dir for the embedded Postgres.
+
+    A fixed location avoids re-running initdb (~218M, ~15s) on every start.
+    Override with SIMPLEAUDIT_EMBEDDED_PG_DIR if needed.
+    """
+    d = os.path.expanduser(
+        os.environ.get("SIMPLEAUDIT_EMBEDDED_PG_DIR", "~/.simpleaudit-studio/embedded-pg")
+    )
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
 def start_embedded_hatchet() -> Any:
     """Start an embedded Hatchet engine and return the client.
 
     The sidecar binary downloads on first use (~53 MB) and caches at
-    ~/.hatchet/embedded/. Subsequent starts are faster.
+    ~/.hatchet/embedded/. The Postgres cluster persists in
+    ~/.simpleaudit-studio/embedded-pg/, so only the first start is slow.
 
     Returns the Hatchet client instance. Raises on failure.
     """
@@ -43,8 +57,7 @@ def start_embedded_hatchet() -> Any:
 
         from hatchet_sdk import ClientConfig, EmbeddedHatchetConfig, Hatchet
 
-        # Use a fresh temp dir per session to avoid stale postmaster.pid locks
-        data_dir = tempfile.mkdtemp(prefix="simpleaudit-hatchet-pg-")
+        data_dir = _data_dir()
         logger.info("Embedded Hatchet data dir: %s", data_dir)
 
         config = ClientConfig(
@@ -76,3 +89,7 @@ def stop_embedded_hatchet() -> None:
 def get_embedded_client() -> Any | None:
     """Return the running embedded Hatchet client, or None."""
     return _embedded_client
+
+
+# Best-effort clean shutdown even if the caller forgets to stop explicitly.
+atexit.register(stop_embedded_hatchet)

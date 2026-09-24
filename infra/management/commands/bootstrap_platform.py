@@ -11,7 +11,7 @@ class Command(BaseCommand):
     help = "Create initial admin user and default project if missing."
 
     def add_arguments(self, parser):
-        parser.add_argument("--username", default=os.environ.get("BOOTSTRAP_ADMIN_USERNAME", "admin"))
+        parser.add_argument("--username", default=os.environ.get("BOOTSTRAP_ADMIN_USERNAME", "studio"))
         parser.add_argument("--email", default=os.environ.get("BOOTSTRAP_ADMIN_EMAIL", "admin@example.local"))
         parser.add_argument("--password", default=os.environ.get("BOOTSTRAP_ADMIN_PASSWORD", ""))
         parser.add_argument("--project-name", default=os.environ.get("BOOTSTRAP_PROJECT_NAME", "Default"))

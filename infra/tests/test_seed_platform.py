@@ -35,7 +35,7 @@ def _safe_env():
 class SeedPlatformTests(TestCase):
     def setUp(self):
         self.user = User.objects.create_superuser(
-            username="admin", email="admin@example.local", password="pass12345"
+            username="studio", email="admin@example.local", password="pass12345"
         )
         self.project = Project.objects.create(name="Default", slug="default")
         ProjectMembership.objects.create(

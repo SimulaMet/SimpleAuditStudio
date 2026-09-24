@@ -70,7 +70,7 @@ class Client:
 def main():
     base_url = sys.argv[1] if len(sys.argv) > 1 else "http://localhost:8000"
     env = _load_env()
-    username = env.get("BOOTSTRAP_ADMIN_USERNAME", "admin")
+    username = env.get("BOOTSTRAP_ADMIN_USERNAME", "studio")
     password = env.get("BOOTSTRAP_ADMIN_PASSWORD", "")
     if not password:
         print("FATAL: BOOTSTRAP_ADMIN_PASSWORD not set in .env")
