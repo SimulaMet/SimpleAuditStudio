@@ -4,6 +4,7 @@ import os as _os
 from django.conf import settings
 from django.contrib import admin
 from django.http import Http404
+from django.shortcuts import redirect
 from django.urls import include, path
 from django.views.static import serve as _static_serve
 from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView
@@ -79,9 +80,20 @@ def _serve_static(request, path):
     raise Http404(f"Static file not found: {path}")
 
 
+def _favicon(request):
+    """Serve the favicon at /favicon.ico (browsers auto-request this path).
+
+    The real icon is referenced via <link> in base.html, but browsers also probe
+    /favicon.ico by default. Redirecting here avoids a 404 warning in logs and
+    ensures the tab icon loads even for clients that ignore <link> tags.
+    """
+    return redirect("static-serve", path="favicon-32x32.png")
+
+
 # --- URL patterns ----------------------------------------------------------
 urlpatterns = [
     path("static/<path:path>", _serve_static, name="static-serve"),
+    path("favicon.ico", _favicon, name="favicon"),
     path("admin/", admin.site.urls),
     path("healthz", healthz, name="healthz"),
     path("readyz", readyz, name="readyz"),
