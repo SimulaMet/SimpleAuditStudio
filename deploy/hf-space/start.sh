@@ -10,7 +10,8 @@
 #   4. Stop temporary Postgres
 #   5. Run Django migrations
 #   6. Bootstrap admin user + default project
-#   7. Hand off to supervisord (which starts all long-running processes)
+#   7. Seed scenario packs + default model connections (idempotent)
+#   8. Hand off to supervisord (which starts all long-running processes)
 #
 # If the Hatchet binary is missing (image extraction failed), we log a warning
 # and continue — the web UI will still work, but audit execution won't until
@@ -103,7 +104,16 @@ python manage.py bootstrap_platform \
     --password "${BOOTSTRAP_ADMIN_PASSWORD:-admin123}" \
     --project-name "${BOOTSTRAP_PROJECT_NAME:-Default}"
 
-# --- 6. Initialize Hatchet (migrations + config + worker token) -----------------
+# --- 6. Seed scenario packs + default model connections (idempotent) -----------
+# Same unified seed as the docker-compose web container. HF storage is
+# ephemeral so this effectively runs on every Space start; it skips anything
+# already present. A seed failure must not block the Space from starting.
+if [ "${SEED_ON_BOOT:-true}" != "false" ]; then
+    echo "[init] Seeding scenario packs + model connections..."
+    python manage.py seed_platform || echo "[WARN] seed_platform failed — continuing without seed data"
+fi
+
+# --- 7. Initialize Hatchet (migrations + config + worker token) -----------------
 HATCHET_DB_URL="postgresql://simpleaudit:simpleaudit_hf_demo@localhost:5432/hatchet?sslmode=disable"
 export DATABASE_URL="${HATCHET_DB_URL}"
 
@@ -129,11 +139,11 @@ else
     echo "[WARN] Hatchet binaries NOT found. Audit execution will be unavailable."
 fi
 
-# --- 7. Stop the init Postgres, hand off to supervisord which restarts it ------
+# --- 8. Stop the init Postgres, hand off to supervisord which restarts it ------
 # We stop here so supervisord owns the lifecycle (autorestart on crash).
 echo "[init] Stopping init PostgreSQL (supervisord will restart it)..."
 pg "${PG_BIN}/pg_ctl" -D "${PG_DATA}" stop -m fast
 
-# --- 8. Hand off to supervisord --------------------------------------------------
+# --- 9. Hand off to supervisord --------------------------------------------------
 echo "=== Startup complete. Launching supervisord ==="
 exec /usr/bin/supervisord -c /etc/supervisor/supervisord.conf
