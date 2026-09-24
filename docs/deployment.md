@@ -28,13 +28,15 @@ After startup, the user should get:
 
 No undocumented manual database setup is allowed.
 
-First-run bootstrap:
+First-run bootstrap (idempotent, runs automatically on container start):
 
-1. create initial admin user from environment or management command
-2. create default project
-3. assign admin user to default project
+1. create the platform owner account (`BOOTSTRAP_USERNAME`, default `studio`) with `is_staff=True` — not a Django superuser
+2. create the Default workspace
+3. grant the owner an ADMIN membership in the Default workspace
 4. optionally import a starter scenario pack into that project
 5. print or log next steps for model endpoint registration
+
+Configuration via environment variables: `BOOTSTRAP_USERNAME`, `BOOTSTRAP_EMAIL`, `BOOTSTRAP_PASSWORD`, `BOOTSTRAP_PROJECT_NAME`.
 
 Bootstrap must be idempotent and must not require hand-editing SQL.
 
