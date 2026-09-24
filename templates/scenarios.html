@@ -25,10 +25,16 @@
     <!-- Create new set -->
     <form method="post" action="{% url 'scenario_set_create' %}" class="pt-2 border-t border-gray-800 mt-3 space-y-2">
       {% csrf_token %}
-      <input type="text" name="name" placeholder="New set name" required
-             class="w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-accent/50">
-      <input type="text" name="description" placeholder="Description (optional)"
-             class="w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-accent/50">
+      <div>
+        <label class="block text-xs text-gray-500 mb-1">Set Name</label>
+        <input type="text" name="name" placeholder="e.g. Medical Safety v2" required
+               class="w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-accent/50">
+      </div>
+      <div>
+        <label class="block text-xs text-gray-500 mb-1">Description</label>
+        <input type="text" name="description" placeholder="Optional description"
+               class="w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-accent/50">
+      </div>
       <button class="px-3 py-1.5 rounded-lg bg-accent text-white text-xs font-medium hover:bg-accent-hover">+ New Set</button>
     </form>
   </div>
