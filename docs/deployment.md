@@ -243,8 +243,8 @@ a cloned checkout. Pin a specific tag (e.g. `v1.2.0` or `sha-<short-sha>`) in
 
 There are two images:
 
-- **Root `Dockerfile`** — the single-container all-in-one image (Postgres +
-  Hatchet + web + worker in one container via supervisord, serves :7860). This
+- **Root `Dockerfile`** — the minimal-config single-process image (SQLite +
+  embedded Hatchet + web + worker in one Python process, serves :7860). This
   is what Hugging Face Spaces build (HF only builds the root Dockerfile) and
   what the "no clone" quick start uses:
 
