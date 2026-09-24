@@ -56,17 +56,21 @@ This repo is designed to be pushed **as-is** to an HF Space. The root
 `README.md` contains the required YAML frontmatter (`sdk: docker`,
 `app_port: 7860`) and the root `Dockerfile` is what HF builds.
 
-1. Create a new Space: [huggingface.co/spaces/new](https://huggingface.co/spaces/new)
+1. Go to [huggingface.co/spaces](https://huggingface.co/spaces) → **Create new Space**
+   - **Name:** e.g. `simpleaudit-studio`
    - **SDK:** Docker
-   - **Hardware:** `cpu-basic` minimum (GPU if you want local model inference)
-2. In Space **Settings → Source**, link this GitHub repo:
-   `SushantGautam/SimpleAuditStudio` (branch `main`)
-   — or push directly: `git remote add space https://huggingface.co/spaces/<user>/<space>` then `git push space main`
-3. Set these **Space Secrets** (Settings → Repository secrets):
+   - **Hardware:** CPU Basic (free, 2 vCPU / 16 GB)
+2. Push this repo to the Space:
+   ```bash
+   git remote add space https://huggingface.co/spaces/<your-user>/<space-name>
+   git push space main
+   ```
+   (Authenticate with your HF token: `hf auth login` first, or embed it in the URL.)
+3. Set **Variables & Secrets** (Space → Settings → Variables & Secrets):
    - `POSTGRES_PASSWORD` — any strong string
    - `DJANGO_SECRET_KEY` — any long random string
    - `HATCHET_ADMIN_TOKEN` — any random token
-4. Click **Save**. First build takes ~5 min.
+4. The Space auto-builds on push. First build takes ~5 min.
 
 The Space will be live at `https://<your-username>.hf.space/<space-name>/`.
 
