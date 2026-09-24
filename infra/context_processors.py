@@ -19,3 +19,41 @@ def admin_status(request):
             user=user, role=ProjectMembership.Role.ADMIN
         ).exists()
     }
+
+
+def workspaces(request):
+    """Expose the user's workspaces to templates (sidebar switcher).
+
+    Returns a list of ``{id, name, is_admin, is_current}`` ordered by name.
+    Superusers see every workspace; everyone else sees their memberships only.
+    Anonymous users get an empty list without hitting the DB.
+    """
+    user = getattr(request, "user", None)
+    if user is None or not user.is_authenticated:
+        return {"workspaces": []}
+
+    from accounts.models import Project, ProjectMembership
+
+    if user.is_superuser:
+        projects = Project.objects.all()
+    else:
+        projects = Project.objects.filter(memberships__user=user).distinct()
+
+    roles = {}
+    if not user.is_superuser:
+        roles = dict(
+            ProjectMembership.objects.filter(project__in=list(projects), user=user).values_list("project_id", "role")
+        )
+    current_id = request.session.get("active_project_id")
+
+    items = []
+    for project in projects.order_by("name"):
+        items.append(
+            {
+                "id": project.id,
+                "name": project.name,
+                "is_admin": user.is_superuser or roles.get(project.id) == ProjectMembership.Role.ADMIN,
+                "is_current": project.id == current_id,
+            }
+        )
+    return {"workspaces": items}

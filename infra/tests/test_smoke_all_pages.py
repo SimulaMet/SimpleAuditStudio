@@ -73,6 +73,7 @@ class AllPagesSmokeTest(TestCase):
     def test_main_pages(self):
         self._ok("/scenarios/", "Scenario Library")
         self._ok("/models/", "Models")
+        self._ok("/workspaces/", "Workspaces")
 
     def test_audit_detail(self):
         self._ok(f"/audits/{self.run.id}/", "Audit detail (single)")
