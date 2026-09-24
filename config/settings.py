@@ -209,7 +209,9 @@ DEMO_USERNAME = os.environ.get("DEMO_USERNAME", "admin")
 DEMO_PASSWORD = os.environ.get("DEMO_PASSWORD", "admin123")
 
 # Operational settings used by health checks and bootstrap commands.
-MINIO_ENDPOINT = os.environ.get("MINIO_ENDPOINT", "http://minio:9000")
+# MinIO is OFF by default; enable via `docker compose --profile storage up`
+# and set MINIO_ACCESS_KEY / MINIO_SECRET_KEY in .env.
+MINIO_ENDPOINT = os.environ.get("MINIO_ENDPOINT", "")
 MINIO_ACCESS_KEY = os.environ.get("MINIO_ACCESS_KEY", "")
 MINIO_SECRET_KEY = os.environ.get("MINIO_SECRET_KEY", "")
 MINIO_BUCKET = os.environ.get("MINIO_BUCKET", "simpleaudit-artifacts")

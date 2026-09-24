@@ -144,7 +144,6 @@ services:
     env_file: .env
     environment:
       POSTGRES_HOST: postgres
-      MINIO_ENDPOINT: http://minio:9000
       HATCHET_SERVER_URL: http://hatchet-server:8888
       HATCHET_GRPC_URL: hatchet-server:7077
       # Web enqueues audit tasks to Hatchet, so it needs the same worker API
