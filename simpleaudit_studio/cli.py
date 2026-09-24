@@ -100,7 +100,7 @@ def main() -> None:
     time.sleep(1)
 
     username = os.environ.get("BOOTSTRAP_USERNAME", "studio")
-    password = os.environ.get("BOOTSTRAP_PASSWORD", "admin12345")
+    password = os.environ.get("BOOTSTRAP_PASSWORD", "admin123")
 
     print("┌─────────────────────────────────────────────────────────┐")
     print("│                                                         │")
@@ -142,7 +142,7 @@ def _seed_demo_data() -> None:
     # Respect env vars (set by Dockerfile for HF Space, or defaults for local)
     username = os.environ.get("BOOTSTRAP_USERNAME", "studio")
     email = os.environ.get("BOOTSTRAP_EMAIL", "admin@localhost")
-    password = os.environ.get("BOOTSTRAP_PASSWORD", "admin12345")
+    password = os.environ.get("BOOTSTRAP_PASSWORD", "admin123")
     project_name = os.environ.get("BOOTSTRAP_PROJECT_NAME", "Demo Project")
 
     user, project = bootstrap_admin_and_default_project(
