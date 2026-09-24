@@ -66,3 +66,26 @@ class BootstrapTests(TestCase):
         user = User.objects.get(username="admin")
         self.assertFalse(user.is_superuser)
         self.assertTrue(user.is_staff)
+
+
+    def test_bootstrap_demotes_legacy_superuser(self):
+        """If a pre-existing admin was created as superuser by an older
+        bootstrap version, re-running bootstrap must demote it so workspace
+        isolation is restored on the next container start."""
+        legacy = User.objects.create_user(
+            username="admin", password="old-pass", is_superuser=True
+        )
+        self.assertTrue(legacy.is_superuser)
+
+        with _safe_env():
+            call_command(
+                "bootstrap_platform",
+                username="admin",
+                email="admin@example.local",
+                    password="admin-pass-123",
+                project_name="Default",
+            )
+
+        legacy.refresh_from_db()
+        self.assertFalse(legacy.is_superuser)
+        self.assertTrue(legacy.is_staff)

@@ -39,6 +39,12 @@ def bootstrap_admin_and_default_project(
     if not user.is_staff:
         user.is_staff = True
         user.save(update_fields=["is_staff"])
+    # Demote legacy superuser flag from earlier bootstrap versions. The admin
+    # is a normal account with ADMIN membership in the Default workspace;
+    # superuser status would bypass all workspace isolation.
+    if user.is_superuser:
+        user.is_superuser = False
+        user.save(update_fields=["is_superuser"])
 
     slug = slugify(project_name) or "default"
     default_description = "Public common workspaces visible to all users, used for demo"
