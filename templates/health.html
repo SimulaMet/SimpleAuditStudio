@@ -7,15 +7,15 @@
     <span id="overall-badge" class="px-2.5 py-1 rounded-full text-xs font-medium bg-gray-800 text-gray-400">…</span>
     <span id="last-updated" class="text-xs text-gray-600"></span>
     <div class="relative group/refresh">
-      <button id="refresh-btn" class="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-surface-overlay border border-gray-700 text-xs text-gray-400 hover:text-gray-200 hover:border-gray-600 transition-colors">
-        <span class="relative inline-flex items-center justify-center w-4 h-4">
-          <svg class="w-4 h-4 -rotate-90" viewBox="0 0 16 16">
-            <circle cx="8" cy="8" r="7" fill="none" stroke="currentColor" stroke-opacity="0.15" stroke-width="1.5"/>
-            <circle id="refresh-ring" cx="8" cy="8" r="7" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-dasharray="43.98" stroke-dashoffset="0"/>
+      <button id="refresh-btn" class="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-surface-overlay border border-gray-700 text-xs text-gray-400 hover:text-gray-200 hover:border-gray-600 transition-colors">
+        <span class="relative inline-flex items-center justify-center w-6 h-6">
+          <svg class="w-6 h-6 -rotate-90" viewBox="0 0 24 24">
+            <circle cx="12" cy="12" r="10" fill="none" stroke="#34d399" stroke-opacity="0.15" stroke-width="2"/>
+            <circle id="refresh-ring" cx="12" cy="12" r="10" fill="none" stroke="#34d399" stroke-width="2" stroke-linecap="round" stroke-dasharray="62.83" stroke-dashoffset="0"/>
           </svg>
-          <svg class="absolute w-2.5 h-2.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+          <svg class="absolute w-3 h-3 text-emerald-400" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
         </span>
-        <span id="refresh-label">30s</span>
+        <span id="refresh-label" class="text-emerald-400 font-medium">30s</span>
       </button>
       <div id="refresh-menu" class="hidden absolute right-0 top-full mt-1 w-36 bg-surface-raised border border-gray-700 rounded-lg shadow-xl z-50 py-1">
         <button data-sec="10" class="refresh-opt w-full text-left px-3 py-1.5 text-xs text-gray-400 hover:bg-surface-overlay hover:text-gray-200">Every 10 seconds</button>
@@ -123,7 +123,7 @@
   const menu = document.getElementById("refresh-menu");
   const label = document.getElementById("refresh-label");
   const ring = document.getElementById("refresh-ring");
-  const CIRC = 43.98;
+  const CIRC = 62.83;
 
   function tick() {
     const remain = Math.max(0, (nextAt - Date.now()) / 1000);
