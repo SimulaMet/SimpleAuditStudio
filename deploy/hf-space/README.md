@@ -100,23 +100,27 @@ Click **Create**. HF will initialize an empty repo for you.
 
 #### Step 2: Push the code
 
-The Space has its own git repository (separate from GitHub). You push directly to it:
+The Space has its own git repository (separate from GitHub). The simplest approach: clone the **GitHub** repo, then push it to the **Space** as a second remote.
 
 ```bash
-# Clone the Space's repo (replace <your-hf-username>)
-git clone https://huggingface.co/spaces/<your-hf-username>/simpleaudit-studio
-cd simpleaudit-studio
+# 1. Clone the GitHub repo (the source of truth)
+git clone https://github.com/SushantGautam/SimpleAuditStudio
+cd SimpleAuditStudio
 
-# Copy all project files into it (from your local checkout of the GitHub repo)
-cp -r /path/to/SimpleAuditStudio/* .
-cp /path/to/SimpleAuditStudio/.dockerignore .
-cp /path/to/SimpleAuditStudio/.env.example .
+# 2. Add the Space as a remote (replace <your-hf-username>)
+#    Authenticate with your HF token: https://huggingface.co/settings/tokens
+git remote add space https://<your-hf-username>:<YOUR_HF_TOKEN>@huggingface.co/spaces/<your-hf-username>/simpleaudit-studio
 
-# Commit and push
-git add .
-git commit -m "Deploy SimpleAudit Studio"
-git push origin main
+# 3. Push main branch to the Space
+git push space main
 ```
+
+> **Alternative:** If you already have a local checkout, just add the `space` remote and push. No need to re-clone.
+
+> **Tip:** To avoid storing your token in the remote URL permanently, use a credential helper or set it per-push:
+> ```bash
+> git push https://<user>:<token>@huggingface.co/spaces/<user>/simpleaudit-studio main
+> ```
 
 > **What happens when you push?** HF detects the new commit, builds the Docker image (takes ~5–10 min the first time), then starts the container. You can watch progress at:
 > `https://huggingface.co/spaces/<your-hf-username>/simpleaudit-studio`
@@ -295,13 +299,13 @@ This adds MinIO (S3-compatible storage) for storing raw audit outputs. Configure
 
 ```bash
 # 1. Create Space (Docker SDK, CPU) at huggingface.co/new-space
-# 2. Push code
-git clone https://huggingface.co/spaces/$USER/simpleaudit-studio && cd $_
-cp -r /path/to/SimpleAuditStudio/{*,.[!.]*} .
-git add . && git commit -m "deploy" && git push origin main
-# 3. Watch: huggingface.co/spaces/$USER/simpleaudit-studio
+# 2. Push from your local GitHub checkout
+git clone https://github.com/SushantGautam/SimpleAuditStudio && cd $_
+git remote add space https://$HF_USER:$HF_TOKEN@huggingface.co/spaces/$HF_USER/simpleaudit-studio
+git push space main
+# 3. Watch: huggingface.co/spaces/$HF_USER/simpleaudit-studio
 # 4. Set vars in Settings → Variables & Secrets (DJANGO_SECRET_KEY, BOOTSTRAP_ADMIN_PASSWORD)
-# 5. Verify: curl -s https://${USER}-simpleaudit-studio.hf.space/healthz
+# 5. Verify: curl -s https://${HF_USER}-simpleaudit-studio.hf.space/healthz
 ```
 
 ### Docker Compose deploy
