@@ -1,42 +1,44 @@
 {% extends "base.html" %}
 {% block title %}Register — SimpleAudit Studio{% endblock %}
 {% block auth_content %}
-<div class="w-full max-w-sm">
+<div class="min-h-screen flex items-center justify-center p-6 bg-gradient-to-br from-gray-950 via-gray-900 to-gray-950">
+  <div class="w-full max-w-md">
     <div class="text-center mb-8">
       {% load static %}
-      <img src="{% static 'logo.png' %}" alt="SimpleAudit" class="w-16 h-16 rounded-xl mx-auto mb-3">
-      <h1 class="text-2xl font-bold text-gray-100">SimpleAudit Studio</h1>
-      <p class="text-sm text-gray-500 mt-1">Create account</p>
+      <img src="{% static 'logo.png' %}" alt="SimpleAudit" class="w-20 h-20 rounded-2xl mx-auto mb-4 shadow-lg shadow-accent/10">
+      <h1 class="text-3xl font-bold text-gray-100">SimpleAudit Studio</h1>
+      <p class="text-sm text-gray-500 mt-2">Create your account</p>
     </div>
-    <form method="post" class="bg-surface-raised rounded-xl border border-gray-800 p-5 space-y-4">
+    <form method="post" class="bg-surface-raised rounded-2xl border border-gray-800 p-8 space-y-5 shadow-xl">
       {% csrf_token %}
       {% if error %}
-        <div class="text-xs text-red-400 bg-red-900/30 rounded-lg px-3 py-2">{{ error }}</div>
+        <div class="text-sm text-red-400 bg-red-900/30 rounded-lg px-3 py-2">{{ error }}</div>
       {% endif %}
       <div>
-        <label class="block text-xs font-medium text-gray-500 mb-1 uppercase tracking-wide">Username</label>
+        <label class="block text-xs font-medium text-gray-400 mb-1.5 uppercase tracking-wide">Username</label>
         <input type="text" name="username" required
-               class="w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-accent/50"
+               class="w-full px-4 py-3 rounded-lg bg-surface-overlay border border-gray-700 text-sm text-gray-100 focus:outline-none focus:ring-2 focus:ring-accent/50"
                placeholder="your-name">
       </div>
       <div>
-        <label class="block text-xs font-medium text-gray-500 mb-1 uppercase tracking-wide">Password</label>
+        <label class="block text-xs font-medium text-gray-400 mb-1.5 uppercase tracking-wide">Password</label>
         <input type="password" name="password" required autocomplete="new-password"
-               class="w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-accent/50"
+               class="w-full px-4 py-3 rounded-lg bg-surface-overlay border border-gray-700 text-sm text-gray-100 focus:outline-none focus:ring-2 focus:ring-accent/50"
                placeholder="••••••••">
       </div>
       <div>
-        <label class="block text-xs font-medium text-gray-500 mb-1 uppercase tracking-wide">Email (optional)</label>
+        <label class="block text-xs font-medium text-gray-400 mb-1.5 uppercase tracking-wide">Email (optional)</label>
         <input type="email" name="email"
-               class="w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-accent/50"
+               class="w-full px-4 py-3 rounded-lg bg-surface-overlay border border-gray-700 text-sm text-gray-100 focus:outline-none focus:ring-2 focus:ring-accent/50"
                placeholder="you@example.com">
       </div>
-      <button type="submit" class="w-full px-3 py-2 rounded-lg bg-accent text-white text-sm font-medium hover:bg-accent-hover transition-colors">
+      <button type="submit" class="w-full px-4 py-3 rounded-lg bg-accent text-white text-sm font-semibold hover:bg-accent-hover transition-colors">
         Register
       </button>
     </form>
-    <p class="text-center text-xs text-gray-600 mt-4">
+    <p class="text-center text-sm text-gray-500 mt-5">
       Have an account? <a href="{% url 'login' %}" class="text-accent hover:underline">Sign in</a>
     </p>
+  </div>
 </div>
 {% endblock %}
