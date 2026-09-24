@@ -7,7 +7,7 @@
 <div class="mb-4 text-sm text-red-300 bg-red-900/30 rounded-lg px-4 py-2">{{ error }}</div>
 {% endif %}
 
-<form method="get" class="max-w-2xl">
+<form method="get" class="max-w-2xl" onsubmit="return submitCompareForm(this)">
   <div class="bg-surface-raised rounded-xl border border-gray-800 p-4 mb-6">
     <h2 class="text-sm font-semibold text-gray-300 mb-3">Select completed runs (min 2)</h2>
     {% if runs %}
@@ -108,6 +108,12 @@
 {% endif %}
 
 <script>
+function submitCompareForm(form) {
+  const checked = Array.from(form.querySelectorAll('input[name="runs[]"]:checked')).map(cb => cb.value);
+  if (checked.length < 2) { alert('Select at least 2 runs to compare.'); return false; }
+  window.location.href = '/compare/?runs=' + checked.join(',');
+  return false;
+}
 function filterCompareRuns(query) {
   const q = (query || '').toLowerCase();
   document.querySelectorAll('#compare-run-list label').forEach(el => {
