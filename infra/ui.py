@@ -1224,6 +1224,23 @@ class AuditArchiveView(ProjectMixin, View):
         return redirect(request.META.get("HTTP_REFERER") or f"/audits/{run_id}/")
 
 
+class AuditRenameView(ProjectMixin, View):
+    """Rename an audit run. The name is a display label only; it does not
+    affect the frozen reproducibility manifest."""
+
+    def post(self, request, run_id):
+        run = AuditRun.objects.filter(pk=run_id, project=request.project).first()
+        if run:
+            name = request.POST.get("name", "").strip()
+            if name and len(name) <= 250:
+                run.name = name
+                run.save(update_fields=["name"])
+                messages.success(request, "Audit renamed.")
+            else:
+                messages.error(request, "Name must be 1-250 characters.")
+        return redirect(f"/audits/{run_id}/")
+
+
 # ─── Scenario Result Detail ──────────────────────────────────────────────────
 
 class ScenarioResultDetailView(ProjectMixin, TemplateView):

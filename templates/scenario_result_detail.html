@@ -1,8 +1,8 @@
 {% extends "base.html" %}
-{% block title %}{{ scenario_name }} — Audit #{{ run.id }}{% endblock %}
+{% block title %}{{ scenario_name }} — {{ run.name }} (Audit #{{ run.id }}){% endblock %}
 {% block content %}
 <div class="mb-4">
-  <a href="{% url 'audit_detail' run.id %}" class="text-xs text-gray-500 hover:text-accent">← Back to Audit #{{ run.id }}</a>
+  <a href="{% url 'audit_detail' run.id %}" class="text-xs text-gray-500 hover:text-accent">← Back to {{ run.name }} (Audit #{{ run.id }})</a>
 </div>
 
 <!-- Header -->
