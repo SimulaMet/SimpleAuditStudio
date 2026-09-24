@@ -21,8 +21,7 @@ After startup, the user should get:
 - PostgreSQL initialized/migrated
 - object storage bucket initialized
 - workflow server available to workers
-- CPU worker running
-- optional GPU worker running if hardware/config present
+- worker running
 - health checks passing
 - documented first-run bootstrap command
 
@@ -48,8 +47,7 @@ Bootstrap must be idempotent and must not require hand-editing SQL.
 | PostgreSQL | authoritative state | `postgres` |
 | MinIO/S3 | artifacts | `minio` |
 | Hatchet server | durable workflow/queue | `hatchet-server` |
-| CPU worker | runs audits on CPU/API models | `worker-cpu` |
-| GPU worker | runs local/GPU inference | `worker-gpu` optional |
+| Worker | runs audits (CPU + external API models) | `worker` |
 | OTel collector | traces/logs/metrics | optional |
 | Langfuse | LLM observability | optional |
 
@@ -83,7 +81,7 @@ Requirements:
 
 - isolated data
 - same migration path as production
-- access to representative GPU/API endpoints if available
+- access to representative model API endpoints if available
 
 ### 3.3 Production
 
@@ -347,8 +345,7 @@ Components:
 - PostgreSQL
 - MinIO/S3
 - Hatchet server
-- CPU worker
-- optional GPU worker
+- worker
 - web/API
 - optional OTel collector/Langfuse
 
@@ -360,7 +357,7 @@ Components:
 
 - PostgreSQL
 - Hatchet server
-- CPU worker
+- worker
 - web/API
 - local volume or managed object storage compatible with the same artifact interface
 
@@ -373,13 +370,11 @@ PostgreSQL, authentication, and object-storage-compatible artifact persistence.
 Single host:
 
 - scale worker concurrency within host resources
-- run GPU worker only if GPU available
 
 Multi host:
 
 - remote workers point to same Postgres/MinIO/Hatchet
 - add labels for capabilities
-- no web server access to GPU required
 - consider separate network segmentation for workers
 
 Do not scale horizontally until single-host bottlenecks are measured.
