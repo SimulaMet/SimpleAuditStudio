@@ -138,7 +138,7 @@ class DashboardView(ProjectMixin, ListView):
         from django.db.models import Q
 
         qs = AuditRun.objects.filter(project=self.request.project).select_related(
-            "scenario_set_version__scenario_set"
+            "scenario_set_version__scenario_set", "target_endpoint", "auditor_endpoint", "judge_endpoint"
         )
         # Status filter via ?status=active|completed|failed|cancelled|archived
         status = self.request.GET.get("status", "")
@@ -265,29 +265,6 @@ class NewAuditView(ProjectMixin, TemplateView):
 
 
 # ─── Queue ───────────────────────────────────────────────────────────────────
-
-class QueueView(ProjectMixin, TemplateView):
-    template_name = "queue.html"
-
-    def get_context_data(self, **kw):
-        runs = (
-            AuditRun.objects.filter(project=self.request.project, archived=False)
-            .select_related("scenario_set_version__scenario_set")
-            .order_by("-created_at")[:100]
-        )
-        active_statuses = ["queued", "preparing", "target_execution", "auditing", "judging", "aggregation", "report_generation"]
-        now = timezone.now()
-        active = []
-        for r in runs:
-            if r.status in active_statuses:
-                r.elapsed = (now - r.started_at).total_seconds() if r.started_at else None
-                active.append(r)
-        kw.update(
-            active=active,
-            finished=[r for r in runs if r.status not in active_statuses],
-        )
-        return super().get_context_data(**kw)
-
 
 # ─── Scenarios ───────────────────────────────────────────────────────────────
 

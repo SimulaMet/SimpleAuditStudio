@@ -71,7 +71,6 @@ class AllPagesSmokeTest(TestCase):
         )
 
     def test_main_pages(self):
-        self._ok("/queue/", "Queue")
         self._ok("/scenarios/", "Scenario Library")
         self._ok("/models/", "Models")
 
