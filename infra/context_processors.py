@@ -1,6 +1,7 @@
 """Template context processors for the server-rendered UI."""
 
 
+
 def admin_status(request):
     """Expose ``is_admin`` to templates so nav can show admin-only entries.
 

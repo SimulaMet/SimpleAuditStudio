@@ -3,7 +3,10 @@ import os
 
 
 def _local_sqlite_mode() -> bool:
-    return os.environ.get("SIMPLEAUDIT_LOCAL_SQLITE", "").strip().lower() in {"1", "true", "yes", "on"}
+    return (
+        os.environ.get("SIMPLEAUDIT_LOCAL_SQLITE", "").strip().lower() in {"1", "true", "yes", "on"}
+        or os.environ.get("SIMPLEAUDIT_MINIMAL", "").strip() == "1"
+    )
 
 
 def validate_startup_environment(bootstrap_password: str | None = None) -> list[str]:
