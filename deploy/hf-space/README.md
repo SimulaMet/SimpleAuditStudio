@@ -52,11 +52,16 @@ Browser → Django/Gunicorn (:7860)
 
 ## Deploy to Hugging Face Spaces
 
+This repo is designed to be pushed **as-is** to an HF Space. The root
+`README.md` contains the required YAML frontmatter (`sdk: docker`,
+`app_port: 7860`) and the root `Dockerfile` is what HF builds.
+
 1. Create a new Space: [huggingface.co/spaces/new](https://huggingface.co/spaces/new)
    - **SDK:** Docker
    - **Hardware:** `cpu-basic` minimum (GPU if you want local model inference)
 2. In Space **Settings → Source**, link this GitHub repo:
    `SushantGautam/SimpleAuditStudio` (branch `main`)
+   — or push directly: `git remote add space https://huggingface.co/spaces/<user>/<space>` then `git push space main`
 3. Set these **Space Secrets** (Settings → Repository secrets):
    - `POSTGRES_PASSWORD` — any strong string
    - `DJANGO_SECRET_KEY` — any long random string
@@ -65,10 +70,9 @@ Browser → Django/Gunicorn (:7860)
 
 The Space will be live at `https://<your-username>.hf.space/<space-name>/`.
 
-> **Note:** The Dockerfile lives at `deploy/hf-space/Dockerfile`. If HF cannot
-> find it automatically, add `dockerfile: deploy/hf-space/Dockerfile` to the
-> YAML frontmatter above, or copy the three files (`Dockerfile`, `start.sh`,
-> `supervisord.conf`) to the repo root.
+> **Note:** This `deploy/hf-space/` folder contains an alternative
+> single-container Dockerfile (with supervisord) for reference. The live
+> Space uses the **root** `Dockerfile` instead.
 
 ## Self-Hosting
 
