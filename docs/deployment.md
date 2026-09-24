@@ -218,6 +218,35 @@ Rules:
 - include healthcheck
 - record application version and SimpleAudit commit in `/app/version.json` or equivalent
 
+### 5.1 Pre-built images (no local clone)
+
+CI (`.github/workflows/docker-image.yml`) builds the image from the pushed
+commit — BuildKit fetches the source directly from the git context, so even
+the CI runner does not check out the repo — and pushes it to GHCR:
+
+```
+ghcr.io/sushantgautam/simpleauditstudio:<branch|semver|sha->
+```
+
+On a deployment host that has no copy of this repository, run:
+
+```bash
+docker compose pull
+docker compose up -d
+```
+
+The `web`, `worker`, and `mock-model` services reference
+`${SIMPLEAUDIT_IMAGE:-ghcr.io/sushantgautam/simpleauditstudio:latest}` with a
+`build:` fallback, so hosts without registry access still build locally from
+a cloned checkout. Pin a specific tag (e.g. `v1.2.0` or `sha-<short-sha>`) in
+`.env` for reproducible deployments; `latest` tracks `main`.
+
+Single-container variant (Hugging Face Spaces):
+
+```bash
+docker build -f deploy/hf-space/Dockerfile https://github.com/SushantGautam/SimpleAuditStudio.git#main
+```
+
 ## 6. Migrations
 
 Startup sequence:
