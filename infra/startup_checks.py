@@ -47,8 +47,8 @@ def validate_startup_environment(bootstrap_password: str | None = None) -> list[
             if minio_access_key in {"", "change-me"} or minio_secret_key in {"", "change-me"}:
                 errors.append("MINIO_ACCESS_KEY and MINIO_SECRET_KEY must be set when MINIO_ENDPOINT is configured.")
 
-    effective_bootstrap_password = bootstrap_password if bootstrap_password is not None else os.environ.get("BOOTSTRAP_ADMIN_PASSWORD", "")
+    effective_bootstrap_password = bootstrap_password if bootstrap_password is not None else os.environ.get("BOOTSTRAP_PASSWORD", "")
     if effective_bootstrap_password in {"", "change-me"}:
-        errors.append("BOOTSTRAP_ADMIN_PASSWORD must be set and must not be change-me.")
+        errors.append("BOOTSTRAP_PASSWORD must be set and must not be change-me.")
 
     return errors

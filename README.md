@@ -51,7 +51,7 @@ For teams, multi-user setups, or GPU worker pools, use Docker Compose:
 git clone https://github.com/SushantGautam/SimpleAuditStudio
 cd SimpleAuditStudio
 cp .env.example .env
-# edit POSTGRES_PASSWORD and BOOTSTRAP_ADMIN_PASSWORD at minimum
+# edit POSTGRES_PASSWORD and BOOTSTRAP_PASSWORD at minimum
 docker compose up -d
 ```
 
