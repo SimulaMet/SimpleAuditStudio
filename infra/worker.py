@@ -191,12 +191,61 @@ def _scenario_execute_impl(workflow_input: ScenarioInput, ctx: Context) -> dict:
 
     gen_params = run.generation_parameters_snapshot or {}
     n_reps = int(gen_params.get("n_repetitions") or 1)
+    max_turns = int(gen_params.get("max_turns") or 5)
+
+    # Granular stage detail for the frontend: which phase of the scenario is
+    # starting (target execution begins with the auditor generating a probe).
+    append_event(
+        run_id,
+        "_run",
+        "run_stage",
+        {
+            "stage": "target_execution",
+            "detail": f"Turn 1/{max_turns} — Auditor generating probe",
+        },
+    )
+
+    # --- Turn-level progress collection -------------------------------------
+    # The engine invokes callbacks from inside asyncio.run(); Django ORM writes
+    # (append_event) cannot happen there. So turn events are collected into a
+    # list during async execution and flushed in sync context afterward.
+    pending_events: list[tuple[str, dict]] = []
+    # Mutable holder for the active rep index so _on_turn can stamp each turn
+    # with the correct rep number.
+    current_rep = [0]
+
+    def _on_turn(turn_index: int, max_t: int, role: str) -> None:
+        """Collect a per-turn progress event (flushed after asyncio.run())."""
+        pending_events.append((
+            "scenario_turn",
+            {
+                "turn": turn_index,
+                "max_turns": max_t,
+                "role": role,
+                "rep": current_rep[0],
+                "total_reps": n_reps,
+            },
+        ))
+
+    def _on_rep_started(rep_idx: int) -> None:
+        """Track the active rep so turn events carry the right rep number."""
+        current_rep[0] = rep_idx + 1
+        pending_events.append((
+            "scenario_rep_started",
+            {"rep": rep_idx + 1, "total_reps": n_reps},
+        ))
 
     def _on_rep_done(rep_idx: int, rep_result: dict) -> None:
         """Emit a progress event after each repetition completes."""
         append_event(run_id, version_item_id, "scenario_rep_completed", {
             "rep": rep_idx + 1, "total": n_reps, "severity": rep_result.get("severity", ""),
         })
+
+    def _flush_pending_events() -> None:
+        """Flush collected turn/rep-started events (sync context only)."""
+        for kind, payload in pending_events:
+            append_event(run_id, version_item_id, kind, payload)
+        pending_events.clear()
 
     try:
         if n_reps > 1:
@@ -211,6 +260,8 @@ def _scenario_execute_impl(workflow_input: ScenarioInput, ctx: Context) -> dict:
                 generation=gen_params,
                 n_repetitions=n_reps,
                 on_rep_done=_on_rep_done,
+                on_turn=_on_turn,
+                on_rep_started=_on_rep_started,
             )
             # Use aggregated severity for the run-level counter
             severity = result_payload.get("aggregated_severity", "")
@@ -224,8 +275,12 @@ def _scenario_execute_impl(workflow_input: ScenarioInput, ctx: Context) -> dict:
                 auditor=run.auditor_config_snapshot,
                 judge=run.judge_config_snapshot,
                 generation=gen_params,
+                on_turn=_on_turn,
             )
             severity = result_payload.get("severity", "")
+        # Flush turn-level events collected during async execution. Safe here:
+        # we're back in sync context after asyncio.run() returned.
+        _flush_pending_events()
     except EngineError as exc:
         # A load/config failure is a hard error for this scenario: record it and
         # let Hatchet retry per policy. Do not swallow — the run must reflect it.
@@ -291,6 +346,14 @@ def _run_finalize_impl(workflow_input: FinalizeInput, ctx: Context) -> dict:
     run_id = workflow_input.run_id
     expected_version = workflow_input.simpleaudit_version
     expected_commit = workflow_input.git_commit
+
+    logger.info(
+        "FINALIZE_DIAG run=%s expected_version=%r expected_commit=%r "
+        "worker_version=%r worker_commit=%r type(ev)=%s",
+        run_id, expected_version, expected_commit,
+        WORKER_SIMPLEAUDIT_VERSION, WORKER_GIT_COMMIT,
+        type(expected_version).__name__,
+    )
 
     # Version is authoritative provenance: a mismatch means the worker's engine
     # differs from what the run was frozen against, so the run must fail.

@@ -8,10 +8,18 @@
 <div class="flex items-center justify-between mb-6">
   <h1 class="text-lg font-semibold text-gray-100">Audit #{{ run.id }}</h1>
   <div class="flex items-center gap-2">
-    <a href="{% url 'new_audit' %}?clone_from={{ run.id }}" class="px-3 py-1.5 rounded-lg bg-surface-overlay text-gray-300 text-xs font-medium hover:text-accent">Clone Audit</a>
+    <a href="{% url 'new_audit' %}?clone_from={{ run.id }}" title="Clone this audit" aria-label="Clone this audit" class="inline-flex items-center justify-center w-8 h-8 rounded-lg bg-surface-overlay text-gray-400 hover:text-accent transition-colors">
+      <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+    </a>
     <form method="post" action="{% url 'audit_archive' run.id %}" class="inline">
       {% csrf_token %}
-      <button class="px-3 py-1.5 rounded-lg bg-surface-overlay text-gray-400 text-xs font-medium hover:text-gray-200">{% if run.archived %}Unarchive{% else %}Archive{% endif %}</button>
+      <button type="submit" title="{% if run.archived %}Unarchive this audit{% else %}Archive this audit{% endif %}" aria-label="{% if run.archived %}Unarchive this audit{% else %}Archive this audit{% endif %}" class="inline-flex items-center justify-center w-8 h-8 rounded-lg bg-surface-overlay text-gray-400 hover:text-gray-200 transition-colors">
+        {% if run.archived %}
+        <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg>
+        {% else %}
+        <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="21 8 21 21 3 21 3 8"/><rect x="1" y="3" width="22" height="5"/><line x1="10" y1="12" x2="14" y2="12"/></svg>
+        {% endif %}
+      </button>
     </form>
     {% if run.archived %}<span class="inline-flex px-2 py-0.5 rounded-full text-xs font-semibold bg-gray-800 text-gray-400">archived</span>{% endif %}
     {% if run.status == "queued" or run.status == "preparing" or run.status == "target_execution" or run.status == "auditing" or run.status == "judging" or run.status == "aggregation" %}
@@ -31,6 +39,65 @@
     <span class="inline-flex items-center gap-1.5 text-xs text-emerald-400">
       <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span> streaming
     </span>
+  </div>
+  <!-- Turn / Role / Rep tracker (hidden until first turn event) -->
+  <style>
+    @keyframes pulse-role {
+      0%, 100% { transform: scale(1); opacity: 1; }
+      50% { transform: scale(1.08); opacity: 0.75; }
+    }
+    @keyframes slide-in {
+      from { opacity: 0; transform: translateY(-4px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    .event-log-entry { animation: slide-in 0.3s ease; }
+    .role-node {
+      transition: all 0.3s ease;
+      border: 1px solid transparent;
+    }
+    .role-node.active-auditor {
+      border-color: rgb(129 140 248);
+      background: rgb(99 102 241 / 0.25);
+      color: rgb(165 180 252);
+      box-shadow: 0 0 12px rgb(99 102 241 / 0.5);
+      animation: pulse-role 1.2s ease-in-out infinite;
+    }
+    .role-node.active-target {
+      border-color: rgb(52 211 153);
+      background: rgb(16 185 129 / 0.25);
+      color: rgb(110 231 183);
+      box-shadow: 0 0 12px rgb(16 185 129 / 0.5);
+      animation: pulse-role 1.2s ease-in-out infinite;
+    }
+    .role-node.active-judge {
+      border-color: rgb(251 191 36);
+      background: rgb(245 158 11 / 0.25);
+      color: rgb(253 230 138);
+      box-shadow: 0 0 12px rgb(245 158 11 / 0.5);
+      animation: pulse-role 1.2s ease-in-out infinite;
+    }
+    .turn-bar-fill { transition: width 0.3s ease, background-color 0.3s ease; }
+    .rep-dot { transition: all 0.3s ease; }
+  </style>
+  <div id="turn-section" class="mb-4 hidden">
+    <!-- Turn counter + progress bar -->
+    <div class="flex items-center justify-between mb-1">
+      <span id="turn-label" class="text-xs font-medium text-gray-300">Turn —</span>
+      <span id="rep-label" class="text-xs font-medium text-gray-400"></span>
+    </div>
+    <div class="h-1.5 rounded-full bg-surface-overlay overflow-hidden mb-3">
+      <div id="turn-bar" class="turn-bar-fill h-full rounded-full bg-indigo-400" style="width: 0%"></div>
+    </div>
+    <!-- Role diagram: Auditor → Target → Judge -->
+    <div class="flex items-center justify-center gap-2 mb-3">
+      <div id="role-auditor" class="role-node px-3 py-1.5 rounded-lg text-[11px] font-semibold bg-surface-overlay text-gray-500">Auditor</div>
+      <svg class="w-4 h-4 text-gray-600 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
+      <div id="role-target" class="role-node px-3 py-1.5 rounded-lg text-[11px] font-semibold bg-surface-overlay text-gray-500">Target</div>
+      <svg class="w-4 h-4 text-gray-600 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
+      <div id="role-judge" class="role-node px-3 py-1.5 rounded-lg text-[11px] font-semibold bg-surface-overlay text-gray-500">Judge</div>
+    </div>
+    <!-- Rep tracker dots -->
+    <div id="rep-dots" class="flex items-center justify-center gap-1.5"></div>
   </div>
   <!-- Stage pipeline -->
   <div id="stage-pipeline" class="flex items-center gap-1 mb-4 overflow-x-auto pb-1">
@@ -84,10 +151,87 @@
     if (!log) return;
     if (log.querySelector('p')) log.innerHTML = '';
     const p = document.createElement('p');
+    p.className = 'event-log-entry';
     const t = new Date().toLocaleTimeString();
     p.textContent = `[${t}] ${kind}: ${JSON.stringify(data).slice(0, 120)}`;
     log.prepend(p);
     while (log.children.length > 50) log.lastChild.remove();
+  }
+
+  // --- Turn / Role / Rep tracking ---
+  const ROLE_COLORS = { auditor: 'bg-indigo-400', target: 'bg-emerald-400', judge: 'bg-amber-400' };
+  let maxTurns = 0, totalReps = 0, currentRep = 0;
+
+  function showTurnSection() {
+    const sec = document.getElementById('turn-section');
+    if (sec) sec.classList.remove('hidden');
+  }
+
+  function renderRepDots() {
+    const wrap = document.getElementById('rep-dots');
+    if (!wrap || !totalReps) return;
+    wrap.innerHTML = '';
+    for (let i = 1; i <= totalReps; i++) {
+      const dot = document.createElement('span');
+      const done = i < currentRep;
+      const active = i === currentRep;
+      dot.className = 'rep-dot inline-flex items-center justify-center w-5 h-5 rounded-full text-[9px] font-bold ' +
+        (done ? 'bg-emerald-900/60 text-emerald-300 border border-emerald-500/50'
+             : active ? 'bg-accent/30 text-accent border border-accent/60'
+                     : 'bg-surface-overlay text-gray-600 border border-gray-700');
+      dot.textContent = done ? '✓' : i;
+      wrap.appendChild(dot);
+    }
+  }
+
+  function setRole(role) {
+    ['auditor', 'target', 'judge'].forEach(r => {
+      const el = document.getElementById('role-' + r);
+      if (!el) return;
+      el.classList.remove('active-auditor', 'active-target', 'active-judge');
+      if (r === role) el.classList.add('active-' + r);
+    });
+    const bar = document.getElementById('turn-bar');
+    if (bar && ROLE_COLORS[role]) bar.className = 'turn-bar-fill h-full rounded-full ' + ROLE_COLORS[role];
+  }
+
+  function clearRole() {
+    ['auditor', 'target', 'judge'].forEach(r => {
+      const el = document.getElementById('role-' + r);
+      if (el) el.classList.remove('active-auditor', 'active-target', 'active-judge');
+    });
+  }
+
+  function handleScenarioTurn(payload) {
+    showTurnSection();
+    const turn = payload.turn || 0;
+    maxTurns = payload.max_turns || maxTurns;
+    if (payload.rep && payload.total_reps) {
+      currentRep = payload.rep;
+      totalReps = payload.total_reps;
+    }
+    const label = document.getElementById('turn-label');
+    if (label) label.textContent = maxTurns ? `Turn ${turn}/${maxTurns}` : `Turn ${turn}`;
+    const repLabel = document.getElementById('rep-label');
+    if (repLabel) repLabel.textContent = totalReps > 1 ? `Rep ${currentRep}/${totalReps}` : '';
+    const bar = document.getElementById('turn-bar');
+    if (bar && maxTurns) bar.style.width = Math.min(100, (turn / maxTurns) * 100) + '%';
+    if (payload.role) setRole(payload.role);
+    renderRepDots();
+  }
+
+  function handleRepStarted(payload) {
+    showTurnSection();
+    currentRep = payload.rep || 1;
+    totalReps = payload.total_reps || totalReps;
+    const repLabel = document.getElementById('rep-label');
+    if (repLabel) repLabel.textContent = totalReps > 1 ? `Rep ${currentRep}/${totalReps}` : '';
+    const label = document.getElementById('turn-label');
+    if (label) label.textContent = maxTurns ? `Turn 0/${maxTurns}` : 'Turn 0';
+    const bar = document.getElementById('turn-bar');
+    if (bar) bar.style.width = '0%';
+    clearRole();
+    renderRepDots();
   }
 
   let done = {{ run.completed_scenarios }}, ok = {{ run.successful_scenarios }}, fail = {{ run.failed_scenarios }};
@@ -100,11 +244,20 @@
     const d = JSON.parse(e.data);
     logEvent('attempt', { vi: d.version_item_id, attempt: (d.payload||{}).attempt });
   });
+  es.addEventListener('scenario_turn', e => {
+    const d = JSON.parse(e.data);
+    handleScenarioTurn(d.payload || {});
+  });
+  es.addEventListener('scenario_rep_started', e => {
+    const d = JSON.parse(e.data);
+    handleRepStarted(d.payload || {});
+  });
   es.addEventListener('scenario_completed', e => {
     const d = JSON.parse(e.data);
     const p = d.payload || {};
     done++; if (p.severity !== 'ERROR') ok++; else fail++;
     updateCounter('prog-done', done); updateCounter('prog-ok', ok); updateCounter('prog-fail', fail);
+    clearRole();
     logEvent('done', { vi: d.version_item_id, severity: p.severity });
   });
   es.addEventListener('scenario_failed', e => {
@@ -112,6 +265,7 @@
     const p = d.payload || {};
     done++; fail++;
     updateCounter('prog-done', done); updateCounter('prog-fail', fail);
+    clearRole();
     logEvent('fail', { vi: d.version_item_id, error: p.error });
   });
   ['run_completed','run_failed','run_cancelled'].forEach(term => {
