@@ -23,7 +23,7 @@ from scenarios.models import (
     Scenario, ScenarioRevision, ScenarioSet,
     ScenarioSetVersion, ScenarioSetVersionItem,
 )
-from model_registry.models import ModelConnection, RegisteredModel, AuditProfile
+from model_registry.models import ModelConnection, RegisteredModel, ModelEndpoint, AuditProfile
 
 # ─── Import SimpleAudit scenario packs ──────────────────────────────────────────
 # The simpleaudit package is installed in the container.
@@ -145,7 +145,7 @@ def main():
         print("ERROR: No project found. Create one first via the UI or API.")
         return
 
-    user = User.objects.filter(project__isnull=False).first() or User.objects.first()
+    user = User.objects.filter(is_superuser=True).first() or User.objects.first()
     if not user:
         user = User.objects.create_superuser("admin", "admin@local", "admin")
 
@@ -211,7 +211,20 @@ def main():
                 "default_parameters": {"temperature": 0.7, "max_tokens": 4096},
             }
         )
-        if m_created:
+        # Also create legacy ModelEndpoint (AuditRun FKs still reference this)
+        _, ep_created = ModelEndpoint.objects.get_or_create(
+            project=project,
+            display_name=display_name,
+            defaults={
+                "provider": "openai",
+                "base_url": "https://api.openai.com/v1",
+                "model_id": model_id,
+                "secret_reference": "OPENAI_API_KEY",
+                "enabled": True,
+                "created_by": user,
+            }
+        )
+        if m_created or ep_created:
             print(f"    + {display_name} ({model_id})")
 
     # ── 3. Default Audit Profile ─────────────────────────────────────────────
