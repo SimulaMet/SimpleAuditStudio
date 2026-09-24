@@ -41,23 +41,25 @@ class WorkspacesPageTest(TestCase):
         resp = self.client.get(f"/workspaces/?manage={self.w_admin.id}")
         self.assertEqual(resp.status_code, 200)
         content = resp.content.decode()
-        self.assertIn("Team — Alpha Team", content)
+        self.assertIn("Manage — Alpha Team", content)
         self.assertIn("Add member", content)
         self.assertIn("Danger zone", content)
+        self.assertIn("Workspace details", content)
 
     def test_manage_panel_read_only_for_viewer(self):
         resp = self.client.get(f"/workspaces/?manage={self.w_viewer.id}")
         self.assertEqual(resp.status_code, 200)
         content = resp.content.decode()
-        self.assertIn("Team — Beta Team", content)
+        self.assertIn("Manage — Beta Team", content)
         self.assertNotIn("Add member", content)
         self.assertNotIn("Danger zone", content)
+        self.assertNotIn("Workspace details", content)
 
     def test_manage_other_users_workspace_hidden(self):
         stranger_ws = ProjectFactory(name="Gamma Team")
         resp = self.client.get(f"/workspaces/?manage={stranger_ws.id}")
         self.assertEqual(resp.status_code, 200)
-        self.assertNotIn("Team — Gamma Team", resp.content.decode())
+        self.assertNotIn("Manage — Gamma Team", resp.content.decode())
 
     def test_new_workspace_button_for_admin(self):
         resp = self.client.get("/workspaces/")
