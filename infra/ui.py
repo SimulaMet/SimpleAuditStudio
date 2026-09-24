@@ -731,6 +731,67 @@ class ProfileDeleteView(ProjectMixin, View):
         return redirect("/models/")
 
 
+class DiscoverModelsView(ProjectMixin, View):
+    """Proxy GET {base_url}/models to auto-discover available models."""
+
+    def post(self, request):
+        import json as _json
+        import urllib.request
+        import urllib.error
+
+        base_url = (request.POST.get("base_url") or "").strip().rstrip("/")
+        api_key = (request.POST.get("api_key_direct") or "").strip()
+        provider = (request.POST.get("provider") or "openai").strip()
+
+        if not base_url:
+            return JsonResponse({"error": "Base URL is required."}, status=400)
+
+        # Build the models endpoint URL
+        if provider == "openai" or "/v1" in base_url:
+            url = f"{base_url}/models"
+        elif provider == "anthropic":
+            url = f"{base_url}/v1/models"
+        else:
+            url = f"{base_url}/models"
+
+        headers = {"Accept": "application/json"}
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+
+        try:
+            req = urllib.request.Request(url, headers=headers, method="GET")
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = _json.loads(resp.read().decode())
+        except urllib.error.HTTPError as e:
+            body = ""
+            try:
+                body = e.read().decode()[:200]
+            except Exception:
+                pass
+            return JsonResponse({"error": f"HTTP {e.code}: {body or e.reason}"}, status=502)
+        except Exception as e:
+            return JsonResponse({"error": str(e)}, status=502)
+
+        # Normalize response — OpenAI-compatible: {"data": [{"id": "...", ...}]}
+        models = []
+        if isinstance(data, dict) and "data" in data:
+            for item in data["data"]:
+                mid = item.get("id") or item.get("model") or ""
+                if mid:
+                    models.append(mid)
+        elif isinstance(data, list):
+            for item in data:
+                if isinstance(item, str):
+                    models.append(item)
+                elif isinstance(item, dict):
+                    mid = item.get("id") or item.get("model") or ""
+                    if mid:
+                        models.append(mid)
+
+        models.sort()
+        return JsonResponse({"models": models})
+
+
 # ─── Compare ─────────────────────────────────────────────────────────────────
 
 class CompareView(ProjectMixin, TemplateView):
