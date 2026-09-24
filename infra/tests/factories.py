@@ -11,7 +11,7 @@ from accounts.models import User, Project, ProjectMembership
 from scenarios.models import (
     Scenario, ScenarioRevision, ScenarioSet, ScenarioSetVersion, ScenarioSetVersionItem,
 )
-from model_registry.models import ModelEndpoint
+from model_registry.models import ModelConnection, ModelEndpoint, RegisteredModel
 from audits.models import AuditRun
 from audits.events import ScenarioResult
 
@@ -97,6 +97,26 @@ class ModelEndpointFactory(DjangoModelFactory):
     provider = "openai"
     base_url = "http://localhost:9999/v1"
     model_id = "test-model"
+
+
+class ModelConnectionFactory(DjangoModelFactory):
+    class Meta:
+        model = ModelConnection
+    project = factory.SubFactory(ProjectFactory)
+    name = factory.Sequence(lambda n: f"Connection {n}")
+    provider = "openai"
+    base_url = "http://localhost:9999/v1"
+    enabled = True
+
+
+class RegisteredModelFactory(DjangoModelFactory):
+    class Meta:
+        model = RegisteredModel
+    connection = factory.SubFactory(ModelConnectionFactory)
+    project = factory.LazyAttribute(lambda o: o.connection.project)
+    display_name = factory.Sequence(lambda n: f"Model {n}")
+    model_id = factory.Sequence(lambda n: f"model-{n}")
+    enabled = True
 
 
 
