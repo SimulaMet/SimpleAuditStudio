@@ -178,6 +178,76 @@ class DashboardView(ProjectMixin, ListView):
         return ctx
 
 
+# ─── Workspaces ──────────────────────────────────────────────────────────────
+
+
+class WorkspacesView(LoginRequiredMixin, TemplateView):
+    """Workspace overview + team management.
+
+    Every authenticated user sees the workspaces they belong to (superusers see
+    all). Admins of a workspace can manage its team and delete it; the page
+    degrades to read-only for viewers.
+    """
+
+    template_name = "workspaces.html"
+
+    def get_context_data(self, **kw):
+        from accounts.models import Project, ProjectMembership
+
+        user = self.request.user
+        if user.is_superuser:
+            projects = Project.objects.all()
+        else:
+            projects = Project.objects.filter(memberships__user=user).distinct()
+        projects = list(projects.order_by("name"))
+
+        roles = {}
+        if not user.is_superuser:
+            roles = dict(
+                ProjectMembership.objects.filter(project__in=projects, user=user).values_list("project_id", "role")
+            )
+        from django.db.models import Count
+
+        member_counts = dict(
+            ProjectMembership.objects.filter(project__in=projects)
+            .values("project_id")
+            .annotate(n=Count("id"))
+            .values_list("project_id", "n")
+        )
+
+        current_id = self.request.session.get("active_project_id")
+        cards = []
+        for project in projects:
+            is_admin = user.is_superuser or roles.get(project.id) == ProjectMembership.Role.ADMIN
+            cards.append(
+                {
+                    "project": project,
+                    "is_admin": is_admin,
+                    "is_current": project.id == current_id,
+                    "member_count": member_counts.get(project.id, 0),
+                }
+            )
+
+        # Manage panel: ?manage=<id>, only rendered with controls for admins.
+        manage_id = self.request.GET.get("manage")
+        managed = None
+        if manage_id and manage_id.isdigit():
+            candidate = next((c for c in cards if c["project"].id == int(manage_id)), None)
+            if candidate:
+                memberships = candidate["project"].memberships.select_related("user").order_by("created_at")
+                managed = {
+                    "workspace": candidate,
+                    "memberships": memberships,
+                    "can_manage": candidate["is_admin"],
+                }
+
+        kw["workspace_cards"] = cards
+        kw["managed"] = managed
+        kw["current_workspace"] = self.request.project
+        kw["can_create"] = user.is_superuser or any(c["is_admin"] for c in cards)
+        return super().get_context_data(**kw)
+
+
 # ─── New Audit ───────────────────────────────────────────────────────────────
 
 class NewAuditView(ProjectMixin, TemplateView):

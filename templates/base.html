@@ -36,7 +36,30 @@
       <span class="sidebar-label ml-2 text-sm font-semibold text-gray-300 whitespace-nowrap">SimpleAudit Studio</span>
       <button id="sidebar-toggle" class="ml-auto p-1.5 -m-1.5 text-gray-400 hover:text-gray-200 text-base leading-none" title="Toggle sidebar">⟨</button>
     </div>
-    <nav class="flex-1 py-3 space-y-0.5 px-2">
+    <nav class="flex-1 py-3 space-y-0.5 px-2 overflow-y-auto">
+      <!-- Workspace switcher -->
+      <div class="relative mb-2" id="workspace-switcher">
+        <button type="button" id="workspace-switcher-btn"
+                class="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm bg-surface-overlay border border-gray-700/60 text-gray-200 hover:border-accent/40 transition-colors"
+                title="{{ request.project.name|default:'No workspace' }}">
+          <span class="text-base w-5 text-center shrink-0">▣</span>
+          <span class="flex-1 text-left truncate font-medium">{{ request.project.name|default:"No workspace" }}</span>
+          <span class="text-[10px] text-gray-500 shrink-0">▾</span>
+        </button>
+        <div id="workspace-dropdown" class="hidden absolute left-2 right-2 top-full mt-1 z-50 bg-surface-raised border border-gray-700 rounded-lg shadow-xl max-h-72 overflow-y-auto">
+          <p class="text-[10px] uppercase tracking-wide text-gray-500 px-3 pt-2 pb-1">Workspaces</p>
+          {% for ws in workspaces %}
+          <button type="button" data-workspace-id="{{ ws.id }}"
+                  class="workspace-row w-full flex items-center gap-2 px-3 py-2 text-sm text-left whitespace-nowrap {% if ws.is_current %}bg-accent/15 text-accent font-medium{% else %}text-gray-300 hover:bg-surface-overlay{% endif %}">
+            <span class="flex-1 truncate">{{ ws.name }}</span>
+            {% if ws.is_admin %}<span class="text-[10px] bg-accent/20 text-accent rounded px-1 shrink-0">Admin</span>{% endif %}
+          </button>
+          {% empty %}
+          <p class="px-3 py-2 text-xs text-gray-500">No workspaces yet.</p>
+          {% endfor %}
+          <a href="{% url 'workspaces' %}?new=1" class="block px-3 py-2 text-sm text-gray-400 hover:text-gray-200 hover:bg-surface-overlay border-t border-gray-800">＋ New workspace</a>
+        </div>
+      </div>
       <a href="{% url 'dashboard' %}" class="flex items-center gap-3 px-3 py-2 rounded-lg text-sm whitespace-nowrap {% if request.path == '/' or request.path == '/dashboard/' %}bg-accent/15 text-accent font-medium{% else %}text-gray-400 hover:text-gray-200 hover:bg-surface-overlay{% endif %}">
         <span class="text-base w-5 text-center">◉</span><span class="sidebar-label">Dashboard</span>
       </a>
@@ -51,6 +74,9 @@
       </a>
       <a href="{% url 'compare' %}" class="flex items-center gap-3 px-3 py-2 rounded-lg text-sm whitespace-nowrap {% if request.path == '/compare/' %}bg-accent/15 text-accent font-medium{% else %}text-gray-400 hover:text-gray-200 hover:bg-surface-overlay{% endif %}">
         <span class="text-base w-5 text-center">⇄</span><span class="sidebar-label">Compare</span>
+      </a>
+      <a href="{% url 'workspaces' %}" class="flex items-center gap-3 px-3 py-2 rounded-lg text-sm whitespace-nowrap {% if request.path == '/workspaces/' %}bg-accent/15 text-accent font-medium{% else %}text-gray-400 hover:text-gray-200 hover:bg-surface-overlay{% endif %}">
+        <span class="text-base w-5 text-center">◫</span><span class="sidebar-label">Workspaces</span>
       </a>
       {% if is_admin %}
       <a href="{% url 'health' %}" class="flex items-center gap-3 px-3 py-2 rounded-lg text-sm whitespace-nowrap {% if request.path == '/health/' %}bg-accent/15 text-accent font-medium{% else %}text-gray-400 hover:text-gray-200 hover:bg-surface-overlay{% endif %}">
@@ -107,6 +133,49 @@
 </div>
 {% endif %}
 <script>
+// Workspace switcher: toggle dropdown, POST /api/projects/switch/, reload.
+(function() {
+  const wrap = document.getElementById('workspace-switcher');
+  if (!wrap) return;
+  const btn = document.getElementById('workspace-switcher-btn');
+  const dd = document.getElementById('workspace-dropdown');
+
+  function csrfToken() {
+    const m = document.cookie.match(/(?:^|;\s*)csrftoken=([^;]+)/);
+    return m ? m[1] : '';
+  }
+
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    dd.classList.toggle('hidden');
+  });
+  document.addEventListener('click', (e) => {
+    if (!wrap.contains(e.target)) dd.classList.add('hidden');
+  });
+
+  dd.querySelectorAll('.workspace-row').forEach((row) => {
+    row.addEventListener('click', async () => {
+      const id = row.dataset.workspaceId;
+      try {
+        const resp = await fetch('/api/projects/switch/', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json', 'X-CSRFToken': csrfToken()},
+          body: JSON.stringify({project_id: Number(id)}),
+        });
+        if (!resp.ok) {
+          const data = await resp.json().catch(() => ({}));
+          alert(data?.error?.message || 'Could not switch workspace.');
+          return;
+        }
+        window.location.reload();
+      } catch {
+        alert('Network error while switching workspace.');
+      }
+    });
+  });
+})();
+</script>
+<script>
 (function() {
   const btn = document.getElementById('sidebar-toggle');
   const sidebar = document.getElementById('sidebar');
@@ -114,7 +183,7 @@
   const isMobile = window.innerWidth < 768;
   let collapsed = isMobile ? true : (localStorage.getItem('sa-sidebar-collapsed') === '1');
   function apply() {
-    sidebar.style.width = collapsed ? '4rem' : '13rem';
+    sidebar.style.width = collapsed ? '5.5rem' : '13rem';
     btn.textContent = collapsed ? '\u27E9' : '\u27E8';
     document.querySelectorAll('.sidebar-label').forEach(el => el.classList.toggle('hidden', collapsed));
     // Center the header content when collapsed

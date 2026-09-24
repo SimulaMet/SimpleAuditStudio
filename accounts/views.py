@@ -13,13 +13,24 @@ from rest_framework.response import Response
 from infra.exceptions import StableAPIError
 from accounts.models import Project, ProjectMembership, User
 from accounts.serializers import (
+    MemberAddSerializer,
+    MemberRoleSerializer,
     ProjectMembershipSerializer,
     ProjectSerializer,
     RegisterSerializer,
     UserSerializer,
+    WorkspaceCreateSerializer,
+    WorkspaceItemSerializer,
+    WorkspaceUpdateSerializer,
 )
 from infra.readiness import ready_payload
-from accounts.services import bootstrap_admin_and_default_project, ensure_project_access
+from accounts.services import (
+    bootstrap_admin_and_default_project,
+    create_workspace,
+    delete_workspace,
+    ensure_project_access,
+    update_workspace,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -67,39 +78,92 @@ def me(request):
     return Response(UserSerializer(request.user).data)
 
 
+# ─── Workspaces (a.k.a. Projects) ─────────────────────────────────────────────
+
+
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
-def list_projects(request):
+def list_workspaces(request):
     if request.user.is_superuser:
         projects = Project.objects.all()
     else:
         projects = Project.objects.filter(memberships__user=request.user).distinct()
-    return Response(ProjectSerializer(projects, many=True).data)
+    return Response(_serialize_workspaces(projects, request))
 
 
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
-def create_project(request):
-    if not request.user.is_superuser:
-        raise StableAPIError(detail="Only superusers can create projects.", code="project_create_forbidden")
-    serializer = ProjectSerializer(data=request.data)
+def create_workspace_view(request):
+    serializer = WorkspaceCreateSerializer(data=request.data)
     serializer.is_valid(raise_exception=True)
-    project = serializer.save()
-    ProjectMembership.objects.get_or_create(
-        project=project,
-        user=request.user,
-        defaults={"role": ProjectMembership.Role.ADMIN},
-    )
-    return Response(ProjectSerializer(project).data, status=status.HTTP_201_CREATED)
+    project = create_workspace(user=request.user, **serializer.validated_data)
+    return Response(_serialize_workspaces([project], request)[0], status=status.HTTP_201_CREATED)
 
 
-@api_view(["GET"])
+@api_view(["GET", "PATCH", "PUT", "DELETE"])
 @permission_classes([IsAuthenticated])
-def get_project(request, project_id):
+def workspace_detail(request, project_id):
     project = _get_project_or_404(project_id)
     if not ensure_project_access(request.user, project):
-        raise StableAPIError(detail="Project access denied.", code="project_access_denied", http_status=403)
-    return Response(ProjectSerializer(project).data)
+        raise StableAPIError(detail="Workspace access denied.", code="workspace_access_denied", http_status=403)
+
+    if request.method == "DELETE":
+        delete_workspace(user=request.user, project=project)
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+    if request.method in ("PATCH", "PUT"):
+        serializer = WorkspaceUpdateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        project = update_workspace(user=request.user, project=project, **serializer.validated_data)
+
+    return Response(_serialize_workspaces([project], request)[0])
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def switch_workspace(request):
+    """Set the session's active workspace so all UI pages scope to it."""
+    raw_id = request.data.get("project_id") or request.data.get("workspace_id")
+    if not raw_id or not str(raw_id).isdigit():
+        raise StableAPIError(detail="project_id is required.", code="invalid_workspace_id")
+    project = _get_project_or_404(int(raw_id))
+    if not ensure_project_access(request.user, project):
+        raise StableAPIError(detail="You are not a member of this workspace.", code="workspace_access_denied", http_status=403)
+    request.session["active_project_id"] = project.id
+    return Response({"ok": True, "workspace": _serialize_workspaces([project], request)[0]})
+
+
+def _serialize_workspaces(projects, request) -> list[dict]:
+    items = WorkspaceItemSerializer(projects, many=True, context={"request": request}).data
+    # Batch the per-workspace admin check into one query for non-superusers.
+    if request.user.is_superuser:
+        for item in items:
+            item["is_admin"] = True
+        return items
+    roles = dict(
+        ProjectMembership.objects.filter(
+            project__in=list(projects), user=request.user
+        ).values_list("project_id", "role")
+    )
+    for item in items:
+        item["is_admin"] = roles.get(item["id"]) == ProjectMembership.Role.ADMIN
+    return items
+
+
+# ─── Team members ────────────────────────────────────────────────────────────
+
+
+def _require_workspace_admin_request(request, project) -> None:
+    if request.user.is_superuser:
+        return
+    if not ProjectMembership.objects.filter(
+        project=project, user=request.user, role=ProjectMembership.Role.ADMIN
+    ).exists():
+        raise StableAPIError(detail="Workspace admin role required.", code="workspace_admin_required", http_status=403)
+
+
+def _admin_count(project) -> int:
+    return project.memberships.filter(role=ProjectMembership.Role.ADMIN).count()
 
 
 @api_view(["GET"])
@@ -107,8 +171,8 @@ def get_project(request, project_id):
 def list_members(request, project_id):
     project = _get_project_or_404(project_id)
     if not ensure_project_access(request.user, project):
-        raise StableAPIError(detail="Project access denied.", code="project_access_denied", http_status=403)
-    memberships = project.memberships.select_related("user").all()
+        raise StableAPIError(detail="Workspace access denied.", code="workspace_access_denied", http_status=403)
+    memberships = project.memberships.select_related("user").order_by("created_at")
     return Response(ProjectMembershipSerializer(memberships, many=True).data)
 
 
@@ -116,28 +180,82 @@ def list_members(request, project_id):
 @permission_classes([IsAuthenticated])
 def add_member(request, project_id):
     project = _get_project_or_404(project_id)
-    if not ensure_project_access(request.user, project) or not request.user.is_superuser:
-        raise StableAPIError(detail="Project admin or superuser required.", code="membership_forbidden", http_status=403)
+    _require_workspace_admin_request(request, project)
 
-    username = request.data.get("username")
-    role = request.data.get("role", ProjectMembership.Role.VIEWER)
-    if role not in dict(ProjectMembership.Role.choices):
-        raise StableAPIError(detail="Invalid role.", code="invalid_role")
+    serializer = MemberAddSerializer(data=request.data)
+    serializer.is_valid(raise_exception=True)
+    username = serializer.validated_data["username"]
+    role = serializer.validated_data["role"]
     try:
-        user = User.objects.get(username=username)
+        target = User.objects.get(username=username)
     except User.DoesNotExist:
         raise StableAPIError(detail="User not found.", code="user_not_found", http_status=404)
 
-    membership, _ = ProjectMembership.objects.update_or_create(
+    membership, _created = ProjectMembership.objects.update_or_create(
         project=project,
-        user=user,
+        user=target,
         defaults={"role": role},
     )
     return Response(ProjectMembershipSerializer(membership).data, status=status.HTTP_201_CREATED)
+
+
+@api_view(["PUT", "PATCH", "DELETE"])
+@permission_classes([IsAuthenticated])
+def update_or_remove_member(request, project_id, user_id):
+    project = _get_project_or_404(project_id)
+    _require_workspace_admin_request(request, project)
+
+    try:
+        target = User.objects.get(pk=user_id)
+    except User.DoesNotExist:
+        raise StableAPIError(detail="User not found.", code="user_not_found", http_status=404)
+    if target.is_superuser:
+        raise StableAPIError(detail="System (superuser) accounts cannot be modified.", code="cannot_modify_superuser", http_status=403)
+
+    try:
+        membership = project.memberships.get(user=target)
+    except ProjectMembership.DoesNotExist:
+        raise StableAPIError(detail="User is not a member of this workspace.", code="member_not_found", http_status=404)
+
+    if request.method == "DELETE":
+        if membership.role == ProjectMembership.Role.ADMIN and _admin_count(project) <= 1:
+            raise StableAPIError(detail="A workspace must keep at least one admin.", code="last_admin", http_status=409)
+        membership.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+    serializer = MemberRoleSerializer(data=request.data)
+    serializer.is_valid(raise_exception=True)
+    new_role = serializer.validated_data["role"]
+    if membership.role == ProjectMembership.Role.ADMIN and new_role != ProjectMembership.Role.ADMIN and _admin_count(project) <= 1:
+        raise StableAPIError(detail="A workspace must keep at least one admin.", code="last_admin", http_status=409)
+    membership.role = new_role
+    membership.save(update_fields=["role"])
+    return Response(ProjectMembershipSerializer(membership).data)
+
+
+# ─── Legacy aliases (kept for backward compatibility) ────────────────────────
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def list_projects(request):
+    return list_workspaces(request)
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def create_project(request):
+    return create_workspace_view(request)
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def get_project(request, project_id):
+    return workspace_detail(request, project_id)
 
 
 def _get_project_or_404(project_id) -> Project:
     try:
         return Project.objects.get(pk=project_id)
     except Project.DoesNotExist as exc:
-        raise StableAPIError(detail="Project not found.", code="project_not_found", http_status=404) from exc
+        raise StableAPIError(detail="Workspace not found.", code="workspace_not_found", http_status=404) from exc
