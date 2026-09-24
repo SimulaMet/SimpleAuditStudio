@@ -9,7 +9,7 @@ The production platform must be:
 
 - self-hostable with Docker Compose
 - durable across web/API and worker restarts
-- safe for long-running and GPU-backed jobs
+- safe for long-running audit jobs
 - observable end to end
 - reproducible at the audit level
 - maintainable by multiple developers
@@ -39,10 +39,8 @@ flowchart TD
     Web --> Obj[(S3/MinIO Object Storage)]
     Web --> WF[Workflow/Queue System]
     WF --> CPU[CPU Workers]
-    WF --> GPU[GPU Workers]
     WF --> APIWorkers[External API Workers]
     CPU --> SA[SimpleAudit Engine]
-    GPU --> SA
     APIWorkers --> SA
     SA --> Obj
     SA --> PG
@@ -120,20 +118,16 @@ to credential material inside the worker environment.
 Workers register labels/capabilities:
 
 - `cpu`
-- `gpu`
-- `h200`
-- `gh200`
 - `external-api`
 - `local-inference`
 
-Jobs request required capabilities. The web server never needs GPU access.
+Jobs request required capabilities. The web server never needs direct model access.
 
 Concurrency limits are configured per pool:
 
 - global max concurrent audits
 - per-run max concurrent scenarios
 - per-model endpoint rate limit where known
-- GPU worker slot count
 
 ### 4.4 Idempotency
 
@@ -334,8 +328,7 @@ docker compose
 ├── postgres
 ├── minio
 ├── hatchet-server
-├── hatchet-worker-cpu
-├── hatchet-worker-gpu   # optional, same host or remote
+├── hatchet-worker
 ├── web
 └── collector            # optional
 ```

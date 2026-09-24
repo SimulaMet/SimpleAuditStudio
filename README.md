@@ -36,7 +36,7 @@ The pre-seeded connections point at a built-in mock server. To run real audits, 
 | Provider | Base URL | Example |
 |----------|----------|---------|
 | Ollama (local) | `http://localhost:11434/v1` | Qwen 3, Llama 3.3, Mistral |
-| vLLM (GPU) | `http://your-gpu-server:8000/v1` | Any HF model |
+| vLLM | `http://your-vllm-server:8000/v1` | Any HF model |
 | OpenAI | `https://api.openai.com/v1` | GPT-4o, o3 |
 | Together AI | `https://api.together.xyz/v1` | Many open models |
 | Groq | `https://api.groq.com/openai/v1` | Fast inference |
@@ -45,7 +45,7 @@ Set the API key in the connection form (leave blank for local servers that don't
 
 ## 🐳 Self-Hosting
 
-For teams, multi-user setups, or GPU worker pools, use Docker Compose:
+For teams or multi-user setups, use Docker Compose:
 
 ```bash
 git clone https://github.com/SushantGautam/SimpleAuditStudio
@@ -57,7 +57,7 @@ docker compose up -d
 
 Services: Web UI (:8000), PostgreSQL, Hatchet queue (:8888), Worker. Optional profiles: `--profile storage` (MinIO), `--profile mock` (mock model API).
 
-See [docs/deployment.md](docs/deployment.md) for production hardening, GPU workers, backups, and upgrades.
+See [docs/deployment.md](docs/deployment.md) for production hardening, backups, and upgrades.
 
 ## ✨ What You Can Do
 
@@ -84,7 +84,7 @@ Browser → Django/Gunicorn (:7860)
 
 - [Architecture](docs/architecture.md) — system design, service boundaries, deployment topology
 - [Domain Model](docs/domain-model.md) — scenarios, scenario sets, audit runs, immutability invariants
-- [Deployment](docs/deployment.md) — Docker Compose, production hardening, GPU workers, upgrades
+- [Deployment](docs/deployment.md) — Docker Compose, production hardening, upgrades
 
 ## 🤝 Contributing
 
