@@ -6,14 +6,29 @@
   <div class="flex items-center gap-3">
     <span id="overall-badge" class="px-2.5 py-1 rounded-full text-xs font-medium bg-gray-800 text-gray-400">…</span>
     <span id="last-updated" class="text-xs text-gray-600"></span>
-    <select id="refresh-interval" class="bg-surface-overlay border border-gray-700 rounded-lg px-2 py-1 text-xs text-gray-400 focus:outline-none focus:ring-1 focus:ring-accent/50">
-      <option value="10">10s</option>
-      <option value="30" selected>30s</option>
-      <option value="60">60s</option>
-      <option value="custom">Custom…</option>
-    </select>
-    <input id="refresh-custom" type="number" min="10" max="3600" placeholder="sec"
-           class="hidden w-16 bg-surface-overlay border border-gray-700 rounded-lg px-2 py-1 text-xs text-gray-400 focus:outline-none focus:ring-1 focus:ring-accent/50">
+    <div class="relative group/refresh">
+      <button id="refresh-btn" class="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-surface-overlay border border-gray-700 text-xs text-gray-400 hover:text-gray-200 hover:border-gray-600 transition-colors">
+        <span class="relative inline-flex items-center justify-center w-4 h-4">
+          <svg class="w-4 h-4 -rotate-90" viewBox="0 0 16 16">
+            <circle cx="8" cy="8" r="7" fill="none" stroke="currentColor" stroke-opacity="0.15" stroke-width="1.5"/>
+            <circle id="refresh-ring" cx="8" cy="8" r="7" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-dasharray="43.98" stroke-dashoffset="0"/>
+          </svg>
+          <svg class="absolute w-2.5 h-2.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+        </span>
+        <span id="refresh-label">30s</span>
+      </button>
+      <div id="refresh-menu" class="hidden absolute right-0 top-full mt-1 w-36 bg-surface-raised border border-gray-700 rounded-lg shadow-xl z-50 py-1">
+        <button data-sec="10" class="refresh-opt w-full text-left px-3 py-1.5 text-xs text-gray-400 hover:bg-surface-overlay hover:text-gray-200">Every 10 seconds</button>
+        <button data-sec="30" class="refresh-opt w-full text-left px-3 py-1.5 text-xs text-gray-400 hover:bg-surface-overlay hover:text-gray-200">Every 30 seconds</button>
+        <button data-sec="60" class="refresh-opt w-full text-left px-3 py-1.5 text-xs text-gray-400 hover:bg-surface-overlay hover:text-gray-200">Every 60 seconds</button>
+        <hr class="my-1 border-gray-700/50">
+        <div class="px-3 py-1.5 flex items-center gap-2">
+          <input id="refresh-custom" type="number" min="10" max="3600" placeholder="sec"
+                 class="w-full bg-surface-overlay border border-gray-700 rounded px-2 py-1 text-xs text-gray-300 focus:outline-none focus:ring-1 focus:ring-accent/50">
+          <button id="refresh-custom-set" class="text-xs text-accent hover:text-white whitespace-nowrap">Set</button>
+        </div>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -103,30 +118,37 @@
 
 <script>
 (function () {
-  let timer = null;
-  const sel = document.getElementById("refresh-interval");
-  const customInput = document.getElementById("refresh-custom");
+  let intervalSec = 30, nextAt = 0, rafId = null;
+  const btn = document.getElementById("refresh-btn");
+  const menu = document.getElementById("refresh-menu");
+  const label = document.getElementById("refresh-label");
+  const ring = document.getElementById("refresh-ring");
+  const CIRC = 43.98;
 
-  function getIntervalMs() {
-    const v = sel.value;
-    if (v === "custom") {
-      const n = parseInt(customInput.value, 10);
-      return (isNaN(n) || n < 10 ? 10 : n) * 1000;
-    }
-    return parseInt(v, 10) * 1000;
+  function tick() {
+    const remain = Math.max(0, (nextAt - Date.now()) / 1000);
+    ring.style.strokeDashoffset = CIRC * (1 - remain / intervalSec);
+    rafId = requestAnimationFrame(tick);
   }
 
-  function scheduleRefresh() {
-    if (timer) clearInterval(timer);
-    timer = setInterval(refresh, getIntervalMs());
+  function schedule() {
+    cancelAnimationFrame(rafId);
+    nextAt = Date.now() + intervalSec * 1000;
+    label.textContent = intervalSec + "s";
+    setTimeout(refresh, intervalSec * 1000);
+    rafId = requestAnimationFrame(tick);
   }
 
-  sel.addEventListener("change", () => {
-    customInput.classList.toggle("hidden", sel.value !== "custom");
-    if (sel.value === "custom") customInput.focus();
-    scheduleRefresh();
+  btn.onclick = (e) => { e.stopPropagation(); menu.classList.toggle("hidden"); };
+  document.onclick = () => menu.classList.add("hidden");
+  menu.onclick = (e) => e.stopPropagation();
+  menu.querySelectorAll("[data-sec]").forEach(b => b.onclick = () => {
+    intervalSec = +b.dataset.sec; menu.classList.add("hidden"); schedule();
   });
-  customInput.addEventListener("change", scheduleRefresh);
+  const ci = document.getElementById("refresh-custom");
+  const applyCustom = () => { const n = +ci.value; if (n >= 10) { intervalSec = n; menu.classList.add("hidden"); schedule(); } };
+  document.getElementById("refresh-custom-set").onclick = applyCustom;
+  ci.onkeydown = (e) => { if (e.key === "Enter") applyCustom(); };
 
   const DOT_COLORS = { up: "bg-emerald-500", degraded: "bg-amber-500", down: "bg-red-500", unknown: "bg-gray-600" };
   const OVERALL_STYLES = {
@@ -250,7 +272,7 @@
   }
 
   refresh();
-  scheduleRefresh();
+  schedule();
 })();
 </script>
 {% endblock %}
