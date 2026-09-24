@@ -66,6 +66,12 @@ def _csrf_trusted_origins() -> list[str]:
         "https://*.hf.space",
         "https://*.huggingface.co",
     ]
+    # In demo mode the app is embedded in an iframe on huggingface.co (the Space
+    # page). Form POSTs from inside that frame carry Origin: https://huggingface.co,
+    # so it must be a trusted origin or Django rejects them with 403 "CSRF
+    # verification failed". The wildcard above does NOT match the bare domain.
+    if env_bool("DEMO_MODE", False):
+        fallbacks.append("https://huggingface.co")
     combined = list(explicit)
     for origin in derived + fallbacks:
         if origin not in combined:
@@ -206,6 +212,17 @@ LOGOUT_REDIRECT_URL = "/login/"
 
 # Demo mode: prefill login form with demo credentials and show a hint banner.
 # Enable for public demos / HF Spaces so visitors can log in without knowing creds.
+# WorkOS AuthKit (passwordless email verification + SSO). The flow is enabled
+# only when both values are configured; the login page hides the button otherwise.
+WORKOS_CLIENT_ID = os.environ.get("WORKOS_CLIENT_ID", "")
+WORKOS_API_KEY = os.environ.get("WORKOS_API_KEY", "")
+WORKOS_ENABLED = bool(WORKOS_CLIENT_ID and WORKOS_API_KEY)
+# Public base URL of this deployment, used to build OAuth redirect URIs.
+# e.g. http://localhost:8000 or https://studio.example.com
+# NOTE: named APP_BASE_URL (not WORKOS_BASE_URL) because the WorkOS SDK itself
+# reads WORKOS_BASE_URL as its *API* endpoint and would be misconfigured.
+APP_BASE_URL = os.environ.get("APP_BASE_URL", "http://localhost:8000").rstrip("/")
+
 DEMO_MODE = env_bool("DEMO_MODE", False)
 DEMO_USERNAME = os.environ.get("DEMO_USERNAME", "admin")
 DEMO_PASSWORD = os.environ.get("DEMO_PASSWORD", "admin123")
@@ -215,6 +232,19 @@ DEMO_PASSWORD = os.environ.get("DEMO_PASSWORD", "admin123")
 #   Space page on huggingface.co can embed the app served from *.hf.space.
 # - Normal deployments: SAMEORIGIN keeps clickjacking protection intact.
 X_FRAME_OPTIONS = "ALLOWALL" if DEMO_MODE else "SAMEORIGIN"
+
+# Cross-site cookie policy for demo mode. The app is embedded in an iframe on
+# huggingface.co, which makes every form POST a *cross-site* request from the
+# browser's perspective. Cookies with SameSite=Lax (Django default) are not
+# sent on cross-site POSTs, so the CSRF token never reaches the server and
+# login fails with 403. In demo mode we relax to SameSite=None + Secure so the
+# csrftoken/sessionid cookies flow inside the embed. This is safe here because
+# *.hf.space is always HTTPS; normal deployments keep the strict Lax default.
+if DEMO_MODE:
+    SESSION_COOKIE_SAMESITE = "None"
+    CSRF_COOKIE_SAMESITE = "None"
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SECURE = True
 
 # Operational settings used by health checks and bootstrap commands.
 # MinIO is OFF by default; enable via `docker compose --profile storage up`

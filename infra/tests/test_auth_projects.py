@@ -1,7 +1,9 @@
 from django.contrib.auth import get_user_model
-from django.test import TestCase
+from django.test import Client, TestCase, override_settings
 
 from accounts.models import Project, ProjectMembership
+
+from config.settings import DEMO_MODE
 
 User = get_user_model()
 
@@ -52,3 +54,52 @@ class AuthProjectTests(TestCase):
             {"username": "bob", "role": "viewer"},
         )
         self.assertEqual(response.status_code, 403)
+
+
+class LoginCSRFTests(TestCase):
+    """Login must work when the app is embedded in an HF Space iframe.
+
+    The Space page on huggingface.co frames the app served from *.hf.space.
+    Form POSTs from inside that frame carry Origin: https://huggingface.co,
+    which must be a trusted CSRF origin in demo mode or login fails with 403.
+    """
+
+    def setUp(self):
+        self.user = User.objects.create_user(username="demo", password="pass")
+
+    @override_settings(DEMO_MODE=True)
+    def test_login_from_hf_space_embed_origin(self):
+        client = Client()
+        # GET first so the CSRF cookie is issued for the app origin.
+        client.get("/login/")
+        response = client.post(
+            "/login/",
+            {"username": "demo", "password": "pass"},
+            HTTP_ORIGIN="https://huggingface.co",
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response.url, "/dashboard/")
+
+    def test_demo_mode_uses_cross_site_cookie_policy(self):
+        # In demo mode (DEMO_MODE=true in env at settings load time) cookies
+        # must be SameSite=None + Secure so they are sent on cross-site POSTs
+        # from inside the huggingface.co iframe.
+        if not DEMO_MODE:
+            self.skipTest("requires DEMO_MODE=true environment")
+        from django.conf import settings as dj_settings
+
+        self.assertEqual(dj_settings.SESSION_COOKIE_SAMESITE, "None")
+        self.assertEqual(dj_settings.CSRF_COOKIE_SAMESITE, "None")
+        self.assertTrue(dj_settings.SESSION_COOKIE_SECURE)
+        self.assertTrue(dj_settings.CSRF_COOKIE_SECURE)
+
+    def test_normal_mode_keeps_strict_cookie_policy(self):
+        # Outside demo mode the strict Lax default must remain in place.
+        if DEMO_MODE:
+            self.skipTest("requires DEMO_MODE=false environment")
+        from django.conf import settings as dj_settings
+
+        self.assertEqual(dj_settings.SESSION_COOKIE_SAMESITE, "Lax")
+        self.assertEqual(dj_settings.CSRF_COOKIE_SAMESITE, "Lax")
+        self.assertFalse(dj_settings.SESSION_COOKIE_SECURE)
+        self.assertFalse(dj_settings.CSRF_COOKIE_SECURE)
