@@ -1,3 +1,5 @@
+import json
+
 from django.test import TestCase
 
 from accounts.models import Project, ProjectMembership, User
@@ -80,4 +82,4 @@ class AuditCloneTests(TestCase):
         self.assertEqual(clone["max_turns"], 9)
         self.assertEqual(clone["language"], "Norwegian")
         self.assertEqual(clone["n_repetitions"], 3)
-        self.assertIn('"target_params": {"temperature": 0.4}', clone["generation_json"])
+        self.assertEqual(json.loads(clone["generation_json"])["target_params"]["temperature"], 0.4)
