@@ -12,9 +12,12 @@
     {# ── Primary: WorkOS email code (shown only when configured) ── #}
     {% if workos_enabled %}
     <a href="{% url 'workos_login' %}"
-       class="flex items-center justify-center gap-3 w-full px-6 py-4 rounded-xl bg-accent text-white text-base font-semibold hover:bg-accent-hover transition-colors shadow-lg shadow-accent/20">
-      <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>
-      Continue with email code
+       class="flex flex-col items-center justify-center gap-1 w-full px-6 py-4 rounded-xl bg-accent text-white hover:bg-accent-hover transition-colors shadow-lg shadow-accent/20">
+      <span class="flex items-center justify-center gap-3 text-base font-semibold">
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>
+        Continue with email code
+      </span>
+      <span class="text-xs text-white/70">No account needed — we'll create one automatically</span>
     </a>
     <div class="flex items-center gap-4 my-5">
       <div class="h-px flex-1 bg-gray-800"></div>
