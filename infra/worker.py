@@ -433,11 +433,20 @@ def _run_finalize_impl(workflow_input: FinalizeInput, ctx: Context) -> dict:
         return {"status": current.status.value if hasattr(current.status, "value") else str(current.status)}
 
     # Ordering guarantee: wait until every pinned scenario has a result row.
+    # Poll briefly before raising so Hatchet's retry backoff isn't the only
+    # mechanism covering tail latency of slow scenarios.
+    import time as _time
+
     done = _count_results(run_id)
     total = workflow_input.total_scenarios or current.total_scenarios or 0
     if total and done < total:
-        append_event(run_id, "_run", "finalize_waiting", {"done": done, "total": total})
-        raise RuntimeError(f"finalize premature: {done}/{total} scenarios have results")
+        deadline = _time.monotonic() + 30.0
+        while done < total and _time.monotonic() < deadline:
+            _time.sleep(2.0)
+            done = _count_results(run_id)
+        if done < total:
+            append_event(run_id, "_run", "finalize_waiting", {"done": done, "total": total})
+            raise RuntimeError(f"finalize premature: {done}/{total} scenarios have results")
 
     append_event(run_id, "_run", "run_stage", {"stage": "aggregation"})
     append_event(run_id, "_run", "run_completed", {"scenarios": done})
