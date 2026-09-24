@@ -25,7 +25,7 @@ A self-hostable platform for running reproducible AI model audits using the [Sim
 uvx simpleaudit-studio
 ```
 
-[`uvx`](https://docs.astral.sh/uv/#uvx) installs the [`simpleaudit-studio`](https://pypi.org/project/simpleaudit-studio/) package and runs it in an isolated environment. No Docker, no Postgres, no manual setup. Opens at http://localhost:8000 (login: `admin` / `admin12345`). A mock model server is pre-seeded so you can run an audit immediately.
+[`uvx`](https://docs.astral.sh/uv/#uvx) installs the [`simpleaudit-studio`](https://pypi.org/project/simpleaudit-studio/) package and runs it in an isolated environment. No Docker, no Postgres, no manual setup. Opens at http://localhost:8000 (login: `admin` / `admin12345`). A mock model server is pre-seeded so you can start exploring audit results immediately.
 
 🌐 Or skip the setup entirely — try the live demo: <a href="https://sushantgautam-simpleaudit-studio.hf.space" target="_blank" rel="noopener noreferrer">sushantgautam-simpleaudit-studio.hf.space</a>
 
