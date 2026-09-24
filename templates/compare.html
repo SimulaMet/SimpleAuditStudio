@@ -7,8 +7,7 @@
 <div class="mb-4 text-sm text-red-300 bg-red-900/30 rounded-lg px-4 py-2">{{ error }}</div>
 {% endif %}
 
-<form method="post" class="max-w-2xl">
-  {% csrf_token %}
+<form method="get" class="max-w-2xl">
   <div class="bg-surface-raised rounded-xl border border-gray-800 p-4 mb-6">
     <h2 class="text-sm font-semibold text-gray-300 mb-3">Select completed runs (min 2)</h2>
     {% if runs %}
@@ -32,7 +31,7 @@
   <div class="flex items-center gap-3">
     <button type="submit" class="px-4 py-2 rounded-lg bg-accent text-white text-sm font-medium hover:bg-accent-hover">Compare</button>
     {% if result and selected_ids %}
-    <a href="?runs={{ selected_ids|join:','}}" class="text-xs text-gray-500 hover:text-accent transition-colors">Copy shareable link</a>
+    <button type="button" onclick="copyCompareLink()" class="text-xs text-gray-500 hover:text-accent transition-colors cursor-pointer bg-transparent border-none p-0">Copy shareable link</button>
     {% endif %}
   </div>
 </form>
@@ -113,6 +112,15 @@ function filterCompareRuns(query) {
   document.querySelectorAll('#compare-run-list label').forEach(el => {
     el.style.display = el.textContent.toLowerCase().includes(q) ? '' : 'none';
   });
+}
+function copyCompareLink() {
+  const checked = Array.from(document.querySelectorAll('input[name="runs[]"]:checked')).map(cb => cb.value);
+  if (checked.length < 2) return;
+  const url = window.location.origin + '/compare/?runs=' + checked.join(',');
+  navigator.clipboard.writeText(url).then(() => {
+    const btn = document.querySelector('[onclick="copyCompareLink()"]');
+    if (btn) { btn.textContent = '✓ Copied!'; setTimeout(() => btn.textContent = 'Copy shareable link', 1500); }
+  }).catch(() => { prompt('Copy this link:', url); });
 }
 function exportCompareCSV() {
   const table = document.getElementById('compare-results-table');
