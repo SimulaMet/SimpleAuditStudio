@@ -42,6 +42,11 @@ COPY requirements.txt .
 RUN pip install -r requirements.txt
 
 # --- Application code --------------------------------------------------------
+# BUILD_ID busts the COPY/collectstatic cache layers so newly added or changed
+# files (e.g. static assets) are always picked up on rebuild. HF Spaces caches
+# Docker layers aggressively; without this, a fresh static file can 404 because
+# the collectstatic layer is reused from an older build that lacked the file.
+ARG BUILD_ID=0
 COPY . .
 
 # Collect static files so Django can serve them without DEBUG.
