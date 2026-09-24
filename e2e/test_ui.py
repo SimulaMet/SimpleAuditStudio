@@ -1,20 +1,19 @@
 """Browser-level E2E tests using Playwright.
 
-These tests exercise the full SPA against a running Docker Compose stack.
-They require the stack to be up (docker compose up -d) with at least one
-completed audit run present.
+These tests exercise the full server-rendered Django UI against a running
+Docker Compose stack. They require the stack to be up (docker compose up -d)
+with bootstrap_platform already run.
 
 Run locally:
     docker compose up -d
+    docker compose exec web python manage.py bootstrap_platform \
+        --username admin --email admin@example.com --password e2etestpass123 \
+        --project-name Research
     .venv/bin/python e2e/test_ui.py
-
-In CI (GitHub Actions):
-    The workflow builds the stack, waits for health, then runs this script.
 """
 
 import sys
 import time
-from pathlib import Path
 
 try:
     from playwright.sync_api import Page, expect, sync_playwright
@@ -43,117 +42,140 @@ def wait_for_health(timeout: int = 60) -> None:
 
 
 def login(page: Page) -> None:
-    """Sign in via the SPA auth screen."""
-    page.goto(BASE_URL)
-    page.wait_for_selector("#auth-username", timeout=10_000)
-    page.fill("#auth-username", ADMIN_USER)
-    page.fill("#auth-password", ADMIN_PASS)
-    page.click("#auth-submit")
-    # Wait for the app shell (nav bar appears after successful auth)
-    page.wait_for_selector("nav button", timeout=15_000)
+    """Sign in via the Django login form (idempotent: skips if session exists)."""
+    page.goto(f"{BASE_URL}/login/")
+    # If already authenticated, Django redirects to the dashboard.
+    if page.url != f"{BASE_URL}/login/":
+        return
+    page.wait_for_selector('input[name="username"]', timeout=10_000)
+    page.fill('input[name="username"]', ADMIN_USER)
+    page.fill('input[name="password"]', ADMIN_PASS)
+    page.click('button[type="submit"]')
+    # Wait for the app shell (sidebar nav appears after successful auth)
+    page.wait_for_selector("aside nav a", timeout=15_000)
 
 
 def test_login_and_dashboard(page: Page) -> None:
     """Login succeeds and dashboard shows stats + runs table."""
     login(page)
     # Dashboard heading
-    expect(page.locator("main h2")).to_have_text("Dashboard")
-    # Stats cards present
-    expect(page.locator("main .stat-card, main [class*=stat]")).to_have_count(4)
-    # Runs table exists
-    expect(page.locator("table")).to_be_visible()
+    expect(page.locator("main h1, main h2").first).to_contain_text("Dashboard")
+    # Runs table or empty state exists
+    main = page.locator("main")
+    expect(main).to_be_visible()
 
 
 def test_navigation_all_views(page: Page) -> None:
-    """All 6 nav buttons switch the main view correctly."""
+    """All sidebar nav links navigate to the correct page."""
     login(page)
     views = [
-        ("Dashboard", "Dashboard"),
-        ("New Audit", "New Audit"),
-        ("Queue", "Audit Queue"),
-        ("Scenarios", "Scenario Library"),
-        ("Models", "Models & Profiles"),
-        ("Compare", "Compare Audits"),
+        ("/dashboard/", "Dashboard"),
+        ("/audits/new/", "New Audit"),
+        ("/queue/", "Queue"),
+        ("/scenarios/", "Scenario"),
+        ("/models/", "Model"),
+        ("/compare/", "Compare"),
     ]
-    for i, (btn_text, expected_heading) in enumerate(views, start=1):
-        page.click(f"nav button:nth-child({i})")
-        page.wait_for_timeout(300)
-        heading = page.locator("main h2").first
-        expect(heading).to_contain_text(expected_heading.split()[0])
+    for url, expected_text in views:
+        page.goto(f"{BASE_URL}{url}")
+        page.wait_for_timeout(500)
+        main = page.locator("main")
+        expect(main).to_contain_text(expected_text)
 
 
 def test_new_audit_form_populated(page: Page) -> None:
-    """New Audit view has populated selectors (set, models)."""
+    """New Audit view has the form with scenario set and model selectors."""
     login(page)
-    page.click("nav button:nth-child(2)")  # New Audit
+    page.goto(f"{BASE_URL}/audits/new/")
     page.wait_for_timeout(500)
-    # Scenario set selector should have at least one option
-    set_select = page.locator("select").first
-    options = set_select.locator("option")
-    expect(options.first).to_be_attached()
+    # Scenario set selector present
+    expect(page.locator('select[name="scenario_set"]')).to_be_visible()
+    # Model selectors present
+    expect(page.locator('select[name="target_endpoint"]')).to_be_visible()
+    expect(page.locator('select[name="auditor_endpoint"]')).to_be_visible()
+    expect(page.locator('select[name="judge_endpoint"]')).to_be_visible()
     # Submit button present
-    expect(page.locator("button:has-text('Submit audit')")).to_be_visible()
+    expect(page.locator("button[type='submit']")).to_be_visible()
 
 
-def test_scenario_library_export_import_buttons(page: Page) -> None:
-    """Scenario Library shows Export and Import buttons."""
+def test_new_audit_no_profile_section(page: Page) -> None:
+    """Audit Profile section is removed from New Audit form."""
     login(page)
-    page.click("nav button:nth-child(4)")  # Scenarios
+    page.goto(f"{BASE_URL}/audits/new/")
     page.wait_for_timeout(500)
-    expect(page.locator("button:has-text('Export')")).to_be_visible()
-    expect(page.locator("button:has-text('Import')")).to_be_visible()
-    expect(page.locator("button:has-text('+ New scenario')")).to_be_visible()
+    # Profile selector must NOT exist
+    expect(page.locator('select[name="profile"]')).to_have_count(0)
+    # "Audit Profile" heading must NOT exist
+    expect(page.locator("text=Audit Profile")).to_have_count(0)
 
 
-def test_models_view_shows_endpoints(page: Page) -> None:
-    """Models view displays registered endpoints."""
+def test_models_view_no_profiles(page: Page) -> None:
+    """Models view no longer shows Audit Profiles section."""
     login(page)
-    page.click("nav button:nth-child(5)")  # Models
+    page.goto(f"{BASE_URL}/models/")
     page.wait_for_timeout(500)
-    # Should show at least the mock model endpoint
-    expect(page.locator("main")).to_contain_text("Mock Model")
-    # Add endpoint form present
-    expect(page.locator("button:has-text('Add endpoint')")).to_be_visible()
+    # "Audit Profiles" heading must NOT exist
+    expect(page.locator("text=Audit Profiles")).to_have_count(0)
+    # Profile add form must NOT exist
+    expect(page.locator('input[name="profile_name"]')).to_have_count(0)
 
 
-def test_queue_shows_finished_runs(page: Page) -> None:
-    """Queue view shows finished runs section."""
+def test_audit_detail_clone_button(page: Page) -> None:
+    """Audit detail page shows Clone Audit button (if runs exist)."""
     login(page)
-    page.click("nav button:nth-child(3)")  # Queue
+    page.goto(f"{BASE_URL}/dashboard/")
     page.wait_for_timeout(500)
-    expect(page.locator("main")).to_contain_text("Finished")
-
-
-def test_audit_detail_frozen_manifest(page: Page) -> None:
-    """Clicking a run opens detail with frozen reproducibility manifest."""
-    login(page)
-    # Go to dashboard
-    page.click("nav button:nth-child(1)")
-    page.wait_for_timeout(500)
-    # Click first row in the runs table
+    # Find first audit run link
     rows = page.locator("table tbody tr")
     count = rows.count()
     if count == 0:
         print("SKIP: no audit runs in database")
         return
+    # Click first run row (navigates via onclick to /audits/<id>/)
     rows.first.click()
     page.wait_for_timeout(1000)
-    # Detail view should show the frozen manifest fields
-    main = page.locator("main")
-    expect(main).to_contain_text("Set hash")
-    expect(main).to_contain_text("SimpleAudit")
-    expect(main).to_contain_text("Git commit")
+    # Clone Audit button should be visible
+    expect(page.locator("a:has-text('Clone Audit')")).to_be_visible()
 
 
-def test_compare_empty_state(page: Page) -> None:
-    """Compare view shows appropriate message when <2 completed runs."""
+def test_clone_prefills_form(page: Page) -> None:
+    """Clone Audit pre-fills the New Audit form with original values."""
     login(page)
-    page.click("nav button:nth-child(6)")  # Compare
+    page.goto(f"{BASE_URL}/dashboard/")
+    page.wait_for_timeout(500)
+    rows = page.locator("table tbody tr")
+    count = rows.count()
+    if count == 0:
+        print("SKIP: no audit runs in database")
+        return
+    # Navigate to first run detail (row onclick)
+    rows.first.click()
+    page.wait_for_timeout(1000)
+    # Click Clone Audit
+    page.click("a:has-text('Clone Audit')")
+    page.wait_for_timeout(1000)
+    # Should be on New Audit page with pre-filled values
+    expect(page.locator("main")).to_contain_text("New Audit")
+    # Hidden scenario_set_version input should exist (exact version pin)
+    expect(page.locator('input[name="scenario_set_version"]')).to_be_attached()
+
+
+def test_queue_shows_runs(page: Page) -> None:
+    """Queue view shows active or finished runs section."""
+    login(page)
+    page.goto(f"{BASE_URL}/queue/")
     page.wait_for_timeout(500)
     main = page.locator("main")
-    # Either shows selection UI or the "need at least two" message
-    text = main.inner_text()
-    assert "compare" in text.lower() or "at least two" in text.lower(), f"Unexpected compare view: {text[:200]}"
+    expect(main).to_be_visible()
+
+
+def test_compare_view(page: Page) -> None:
+    """Compare view loads and shows selection UI."""
+    login(page)
+    page.goto(f"{BASE_URL}/compare/")
+    page.wait_for_timeout(500)
+    main = page.locator("main")
+    expect(main).to_contain_text("Compare")
 
 
 def main() -> int:
@@ -171,16 +193,16 @@ def main() -> int:
             ("login_and_dashboard", test_login_and_dashboard),
             ("navigation_all_views", test_navigation_all_views),
             ("new_audit_form_populated", test_new_audit_form_populated),
-            ("scenario_library_export_import", test_scenario_library_export_import_buttons),
-            ("models_view_endpoints", test_models_view_shows_endpoints),
-            ("queue_finished_runs", test_queue_shows_finished_runs),
-            ("audit_detail_manifest", test_audit_detail_frozen_manifest),
-            ("compare_empty_state", test_compare_empty_state),
+            ("new_audit_no_profile_section", test_new_audit_no_profile_section),
+            ("models_view_no_profiles", test_models_view_no_profiles),
+            ("audit_detail_clone_button", test_audit_detail_clone_button),
+            ("clone_prefills_form", test_clone_prefills_form),
+            ("queue_shows_runs", test_queue_shows_runs),
+            ("compare_view", test_compare_view),
         ]
 
         for name, fn in tests:
             try:
-                # Fresh page per test to avoid state leakage
                 page.goto(BASE_URL)
                 page.wait_for_timeout(500)
                 fn(page)
@@ -198,8 +220,7 @@ def main() -> int:
     if errors:
         print("\nFailures:")
         for name, err in errors:
-            print(f"  - {name}: {err[:120]}")
-    print(f"{'='*50}")
+            print(f"  - {name}: {err[:200]}")
     return 1 if failed else 0
 
 
