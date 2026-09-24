@@ -714,9 +714,12 @@ class ModelsView(ProjectMixin, TemplateView):
             rm = RegisteredModel.objects.filter(pk=request.POST.get("rm_id"), project=p).first()
             if rm:
                 new_name = request.POST.get("model_display_name", "").strip()
+                new_id = request.POST.get("model_id_new", "").strip()
                 if new_name:
                     rm.display_name = new_name
-                    rm.save()
+                if new_id and new_id != rm.model_id:
+                    rm.model_id = new_id
+                rm.save()
         elif action == "delete_model":
             rm = RegisteredModel.objects.filter(pk=request.POST.get("rm_id"), project=p).first()
             if rm:

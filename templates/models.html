@@ -43,27 +43,36 @@
       {% if conn.models.all %}
       <div class="mt-2 pl-3 border-l-2 border-gray-800 space-y-1">
         {% for m in conn.models.all %}
-        <div class="flex items-center justify-between text-xs text-gray-400 group">
-          <span id="model-label-{{ m.id }}">{{ m.display_name }} <span class="text-gray-600">({{ m.model_id }})</span></span>
-          <div class="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-            <button onclick="editModel({{ m.id }}, '{{ m.display_name }}', '{{ m.model_id }}')"
-                    class="text-gray-600 hover:text-accent px-1">✎</button>
-            <form method="post" onsubmit="return confirm('Remove {{ m.display_name }}?')">
-              {% csrf_token %}
-              <input type="hidden" name="action" value="delete_model">
-              <input type="hidden" name="rm_id" value="{{ m.id }}">
-              <button class="text-gray-600 hover:text-red-400 px-1">✕</button>
-            </form>
+        <div class="text-xs text-gray-400 group">
+          <div class="flex items-center justify-between">
+            <span class="flex items-center gap-1.5">
+              <span id="model-dot-{{ m.id }}" class="w-2 h-2 rounded-full bg-gray-700" title="Unknown"></span>
+              <span id="model-label-{{ m.id }}">{{ m.display_name|default:m.model_id }}{% if m.display_name %} <span class="text-gray-600">({{ m.model_id }})</span>{% endif %}</span>
+            </span>
+            <div class="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+              <button onclick="pingModel({{ m.id }})"
+                      class="text-gray-600 hover:text-emerald-400 px-1" title="Check health">●</button>
+              <button onclick="editModel({{ m.id }}, '{{ m.display_name }}', '{{ m.model_id }}')"
+                      class="text-gray-600 hover:text-accent px-1">✎</button>
+              <form method="post" onsubmit="return confirm('Remove {{ m.display_name|default:m.model_id }}?')">
+                {% csrf_token %}
+                <input type="hidden" name="action" value="delete_model">
+                <input type="hidden" name="rm_id" value="{{ m.id }}">
+                <button class="text-gray-600 hover:text-red-400 px-1">✕</button>
+              </form>
+            </div>
           </div>
           <!-- Inline edit form (hidden by default) -->
-          <form id="edit-model-{{ m.id }}" method="post" class="hidden w-full mt-1 flex gap-2 items-center">
+          <form id="edit-model-{{ m.id }}" method="post" class="hidden mt-1 flex gap-2 items-center">
             {% csrf_token %}
             <input type="hidden" name="action" value="edit_model">
             <input type="hidden" name="rm_id" value="{{ m.id }}">
             <input type="text" name="model_display_name" value="{{ m.display_name }}" placeholder="Display name" aria-label="Edit display name"
                    class="flex-1 px-2 py-1 rounded bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-1 focus:ring-accent/50">
+            <input type="text" name="model_id_new" value="{{ m.model_id }}" placeholder="Model ID" aria-label="Edit model ID"
+                   class="w-32 px-2 py-1 rounded bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-1 focus:ring-accent/50">
             <button class="px-2 py-1 rounded bg-accent/20 text-accent text-xs hover:bg-accent/30">Save</button>
-            <button type="button" onclick="document.getElementById('edit-model-{{ m.id }}').classList.add('hidden')"
+            <button type="button" onclick="cancelEdit({{ m.id }})"
                     class="px-2 py-1 rounded text-gray-500 text-xs hover:text-gray-300">Cancel</button>
           </form>
         </div>
@@ -314,10 +323,31 @@ function getCookie(name) {
   const v = document.cookie.match(new RegExp('(^| )' + name + '=([^;]+)'));
   return v ? v[2] : '';
 }
-function editModel(id, currentName, modelId) {
-  // Hide label, show edit form
+function editModel(id, displayName, modelId) {
   document.getElementById('model-label-' + id).classList.add('hidden');
-  document.getElementById('edit-model-' + id).classList.remove('hidden');
+  const form = document.getElementById('edit-model-' + id);
+  form.classList.remove('hidden');
+  form.querySelector('[name="model_display_name"]').value = displayName || '';
+  form.querySelector('[name="model_id_new"]').value = modelId;
+  form.querySelector('[name="model_display_name"]').focus();
+}
+function cancelEdit(id) {
+  document.getElementById('edit-model-' + id).classList.add('hidden');
+  document.getElementById('model-label-' + id).classList.remove('hidden');
+}
+async function pingModel(id, baseUrl, modelId) {
+  const dot = document.getElementById('model-dot-' + id);
+  dot.className = 'w-2 h-2 rounded-full bg-amber-500 animate-pulse';
+  try {
+    const resp = await fetch('/api/models/ping/' + id + '/', { headers: { Accept: 'application/json' } });
+    const data = await resp.json();
+    if (data.status === 'up') { dot.className = 'w-2 h-2 rounded-full bg-emerald-500'; dot.title = 'Online'; }
+    else if (data.status === 'not_found') { dot.className = 'w-2 h-2 rounded-full bg-amber-500'; dot.title = 'Not found on server'; }
+    else { dot.className = 'w-2 h-2 rounded-full bg-red-500'; dot.title = data.detail || 'Error'; }
+  } catch (e) {
+    dot.className = 'w-2 h-2 rounded-full bg-red-500';
+    dot.title = 'Unreachable';
+  }
 }
 </script>
 {% endblock %}

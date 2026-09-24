@@ -15,4 +15,5 @@ urlpatterns = [
         views.create_audit_profile_view,
         name="audit-profile-create",
     ),
+    path("models/ping/<int:model_pk>/", views.ping_model, name="model-ping"),
 ]

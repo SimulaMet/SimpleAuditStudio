@@ -1,10 +1,12 @@
+import httpx
+
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 from infra.exceptions import StableAPIError
-from model_registry.models import AuditProfile, ModelEndpoint
+from model_registry.models import AuditProfile, ModelConnection, ModelEndpoint, RegisteredModel
 from model_registry.serializers import (
     AuditProfileCreateSerializer,
     AuditProfileSerializer,
@@ -66,3 +68,28 @@ def create_audit_profile_view(request, project_id):
     serializer.is_valid(raise_exception=True)
     profile = create_audit_profile(project=project, user=request.user, **serializer.validated_data)
     return Response(AuditProfileSerializer(profile).data, status=status.HTTP_201_CREATED)
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def ping_model(request, model_pk):
+    """Check if a registered model is reachable on its connection."""
+    rm = RegisteredModel.objects.select_related("connection").filter(pk=model_pk).first()
+    if not rm:
+        raise StableAPIError(detail="Model not found.", code="model_not_found", http_status=404)
+    conn = rm.connection
+    base_url = conn.base_url.rstrip("/")
+    headers = {}
+    api_key = conn.api_key_direct or ""
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    try:
+        resp = httpx.get(f"{base_url}/models", headers=headers, timeout=8)
+        if resp.status_code != 200:
+            return Response({"status": "error", "detail": f"HTTP {resp.status_code}"})
+        data = resp.json()
+        ids = [m.get("id") for m in data.get("data", [])]
+        found = rm.model_id in ids
+        return Response({"status": "up" if found else "not_found", "model_id": rm.model_id})
+    except Exception as e:
+        return Response({"status": "error", "detail": str(e)})
