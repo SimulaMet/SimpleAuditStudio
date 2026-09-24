@@ -20,6 +20,11 @@
       <option value="">No scenario sets available</option>
       {% endfor %}
     </select>
+    {% if not sets %}
+    <p class="mt-2 text-xs text-gray-500">
+      No sets yet? <a href="{% url 'scenarios' %}" class="text-accent hover:underline">Create a scenario set →</a>
+    </p>
+    {% endif %}
   </div>
 
   <div class="bg-surface-raised rounded-xl border border-gray-800 p-4">
@@ -28,22 +33,27 @@
       <div>
         <label class="block text-xs font-medium text-gray-500 mb-1 uppercase tracking-wide">Target</label>
         <select name="target_endpoint" required class="w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-accent/50">
-          {% for ep in endpoints %}<option value="{{ ep.id }}">{{ ep.display_name }}</option>{% endfor %}
+          {% for ep in endpoints %}<option value="{{ ep.id }}">{{ ep.display_name }}</option>{% empty %}<option value="">No models registered</option>{% endfor %}
         </select>
       </div>
       <div>
         <label class="block text-xs font-medium text-gray-500 mb-1 uppercase tracking-wide">Auditor</label>
         <select name="auditor_endpoint" required class="w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-accent/50">
-          {% for ep in endpoints %}<option value="{{ ep.id }}">{{ ep.display_name }}</option>{% endfor %}
+          {% for ep in endpoints %}<option value="{{ ep.id }}">{{ ep.display_name }}</option>{% empty %}<option value="">No models registered</option>{% endfor %}
         </select>
       </div>
       <div>
         <label class="block text-xs font-medium text-gray-500 mb-1 uppercase tracking-wide">Judge</label>
         <select name="judge_endpoint" required class="w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-accent/50">
-          {% for ep in endpoints %}<option value="{{ ep.id }}">{{ ep.display_name }}</option>{% endfor %}
+          {% for ep in endpoints %}<option value="{{ ep.id }}">{{ ep.display_name }}</option>{% empty %}<option value="">No models registered</option>{% endfor %}
         </select>
       </div>
     </div>
+    {% if not endpoints %}
+    <p class="mt-2 text-xs text-gray-500">
+      No models yet? <a href="{% url 'models' %}" class="text-accent hover:underline">Register a model endpoint →</a>
+    </p>
+    {% endif %}
   </div>
 
   {% if profiles %}
