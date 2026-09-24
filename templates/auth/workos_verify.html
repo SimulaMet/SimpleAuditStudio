@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block title %}Enter code — SimpleAudit Studio{% endblock %}
+{% block auth_content %}
+<div class="w-full max-w-md">
+    <div class="text-center mb-8">
+      {% load static %}
+      <img src="{% static 'logo.svg' %}" alt="SimpleAudit" class="w-20 h-20 rounded-2xl mx-auto mb-4 shadow-lg shadow-accent/10">
+      <h1 class="text-3xl font-bold text-gray-100">SimpleAudit Studio</h1>
+      <p class="text-sm text-gray-500 mt-2">Reproducible AI Model Auditing</p>
+    </div>
+    <div class="bg-surface-raised rounded-2xl border border-gray-800 p-8 space-y-5 shadow-xl">
+      <h2 class="text-base font-semibold text-gray-200">Enter verification code</h2>
+      <p class="text-sm text-gray-400">
+        We sent a 6-digit code to <span class="text-gray-200 font-medium">{{ email }}</span>.
+      </p>
+
+      {% if error %}
+      <div class="text-sm text-red-400 bg-red-900/30 rounded-lg px-3 py-2">{{ error }}</div>
+      {% endif %}
+
+      <form method="post" action="{% url 'workos_verify' %}" class="space-y-5">
+        {% csrf_token %}
+        <div>
+          <label for="code" class="block text-sm font-medium text-gray-300 mb-1">6-digit code</label>
+          <input type="text" name="code" id="code" required
+                 pattern="[0-9]{6}" maxlength="6" inputmode="numeric" autocomplete="one-time-code"
+                 class="w-full px-4 py-3 rounded-lg bg-gray-900 border border-gray-700 text-gray-100 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-center text-2xl tracking-[0.5em] font-mono"
+                 placeholder="000000" autofocus>
+        </div>
+        <button type="submit"
+                class="w-full px-4 py-3 rounded-lg bg-blue-600 hover:bg-blue-500 text-white font-semibold transition-colors">
+          Verify and sign in
+        </button>
+      </form>
+    </div>
+    <a href="{% url 'workos_login' %}" class="block text-center text-sm text-gray-500 hover:text-gray-400 mt-5">
+      ← Use a different email
+    </a>
+</div>
+{% endblock %}

@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block title %}Sign in with email — SimpleAudit Studio{% endblock %}
+{% block auth_content %}
+<div class="w-full max-w-md">
+    <div class="text-center mb-8">
+      {% load static %}
+      <img src="{% static 'logo.svg' %}" alt="SimpleAudit" class="w-20 h-20 rounded-2xl mx-auto mb-4 shadow-lg shadow-accent/10">
+      <h1 class="text-3xl font-bold text-gray-100">SimpleAudit Studio</h1>
+      <p class="text-sm text-gray-500 mt-2">Reproducible AI Model Auditing</p>
+    </div>
+    <form method="post" action="{% url 'workos_login' %}" class="bg-surface-raised rounded-2xl border border-gray-800 p-8 space-y-5 shadow-xl">
+      {% csrf_token %}
+      <h2 class="text-base font-semibold text-gray-200">Sign in with email</h2>
+      <p class="text-sm text-gray-400">Enter your email address and we'll send you a 6-digit sign-in code.</p>
+
+      {% if error %}
+      <div class="text-sm text-red-400 bg-red-900/30 rounded-lg px-3 py-2">{{ error }}</div>
+      {% endif %}
+
+      <div>
+        <label for="email" class="block text-sm font-medium text-gray-300 mb-1">Email</label>
+        <input type="email" name="email" id="email" required
+               class="w-full px-4 py-3 rounded-lg bg-gray-900 border border-gray-700 text-gray-100 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+               placeholder="you@example.com" autofocus>
+      </div>
+      <button type="submit"
+              class="w-full px-4 py-3 rounded-lg bg-blue-600 hover:bg-blue-500 text-white font-semibold transition-colors">
+        Send sign-in code
+      </button>
+    </form>
+    <a href="{% url 'login' %}" class="block text-center text-sm text-gray-500 hover:text-gray-400 mt-5">
+      ← Back to password sign-in
+    </a>
+</div>
+{% endblock %}
