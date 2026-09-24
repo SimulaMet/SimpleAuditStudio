@@ -9,7 +9,7 @@ no real API keys (the mock-model service stands in for all three endpoints).
 
 Usage:
     python deploy/e2e_smoke.py [base_url]     # default http://localhost:8000
-Reads BOOTSTRAP_ADMIN_USERNAME/EMAIL/PASSWORD from .env.
+Reads BOOTSTRAP_USERNAME/EMAIL/PASSWORD from .env.
 """
 from __future__ import annotations
 
@@ -70,10 +70,10 @@ class Client:
 def main():
     base_url = sys.argv[1] if len(sys.argv) > 1 else "http://localhost:8000"
     env = _load_env()
-    username = env.get("BOOTSTRAP_ADMIN_USERNAME", "studio")
-    password = env.get("BOOTSTRAP_ADMIN_PASSWORD", "")
+    username = env.get("BOOTSTRAP_USERNAME", "studio")
+    password = env.get("BOOTSTRAP_PASSWORD", "")
     if not password:
-        print("FATAL: BOOTSTRAP_ADMIN_PASSWORD not set in .env")
+        print("FATAL: BOOTSTRAP_PASSWORD not set in .env")
         sys.exit(2)
 
     c = Client(base_url)
