@@ -50,10 +50,25 @@ _STATIC_ROOT = str(settings.STATIC_ROOT)
 
 
 def _serve_static(request, path):
-    """Serve from STATIC_ROOT if present, else fall back to finders (dev)."""
+    """Serve from STATIC_ROOT, then source dirs, then finders.
+
+    Order matters for resilience against stale Docker layer caches (a known
+    HF Spaces issue): collectstatic runs at build time, so a freshly added
+    asset can be missing from STATIC_ROOT even after a "rebuild" if the
+    collectstatic layer was cached. Falling back to the source static dirs
+    (which COPY . . always brings up to date) means new assets serve as soon
+    as the app code layer is fresh, independent of collectstatic caching.
+    """
     full_path = _os.path.join(_STATIC_ROOT, path)
     if _os.path.isfile(full_path):
         return _static_serve(request, path, document_root=_STATIC_ROOT)
+
+    # Fall back to the configured source static dirs (e.g. <repo>/static).
+    for source_dir in getattr(settings, "STATICFILES_DIRS", []):
+        candidate = _os.path.join(str(source_dir), path)
+        if _os.path.isfile(candidate):
+            return _static_serve(request, path, document_root=str(source_dir))
+
     from django.contrib.staticfiles.finders import find
 
     found = find(path)
