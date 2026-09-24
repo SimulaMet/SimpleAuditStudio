@@ -21,3 +21,6 @@ sentry-sdk[django]>=2.0
 # a gitignored simpleaudit-dependency.yaml with a `git_ref:` key (dev only).
 simpleaudit @ git+https://github.com/kelkalot/simpleaudit.git@6c14a0bf69641a7429ef35f61b8f76e42b683d10
 
+# --- Test dependencies ---
+factory_boy==3.3.2
+

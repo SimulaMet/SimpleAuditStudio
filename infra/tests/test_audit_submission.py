@@ -70,8 +70,11 @@ class AuditSubmissionTest(TestCase):
         snapshot_before = run.target_config_snapshot
         version_before = run.scenario_set_version_id
 
-        # No live Hatchet server/token in the test env -> get_client() raises.
-        result = submit_audit_run(run)
+        # Simulate no live Hatchet server: get_client() raises so submission
+        # degrades gracefully regardless of whether a server is actually reachable.
+        from unittest import mock
+        with mock.patch("infra.worker.get_client", side_effect=RuntimeError("no hatchet server")):
+            result = submit_audit_run(run)
         self.assertIsNone(result)
 
         run.refresh_from_db()
