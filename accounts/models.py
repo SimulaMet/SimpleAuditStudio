@@ -19,6 +19,9 @@ class User(AbstractUser):
     related_names so they do not clash with auth.User's reverse accessors.
     """
 
+    # Stable WorkOS AuthKit user id; null for locally-created accounts.
+    workos_user_id = models.CharField(max_length=64, unique=True, null=True, blank=True)
+
     groups = models.ManyToManyField(
         "auth.Group",
         blank=True,

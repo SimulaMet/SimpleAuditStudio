@@ -35,6 +35,17 @@
         Sign in
       </button>
     </form>
+    {% if workos_enabled %}
+    <div class="flex items-center gap-3 my-5">
+      <div class="h-px flex-1 bg-gray-800"></div>
+      <span class="text-xs text-gray-600 uppercase tracking-wide">or</span>
+      <div class="h-px flex-1 bg-gray-800"></div>
+    </div>
+    <a href="{% url 'workos_login' %}"
+       class="block w-full max-w-md mx-auto -mt-2 px-4 py-3 rounded-lg border border-gray-700 bg-surface-overlay text-sm font-semibold text-gray-200 hover:bg-gray-800 hover:border-gray-600 transition-colors text-center">
+      Continue with email (WorkOS)
+    </a>
+    {% endif %}
     <p class="text-center text-sm text-gray-500 mt-5">
       No account? <a href="{% url 'register' %}" class="text-accent hover:underline">Register</a>
     </p>
