@@ -75,10 +75,6 @@ def _csrf_trusted_origins() -> list[str]:
 
 CSRF_TRUSTED_ORIGINS = _csrf_trusted_origins()
 
-# Allow same-origin framing (e.g. Hugging Face Spaces embeds the app in an
-# iframe on the same origin). Cross-origin framing stays blocked, preserving
-# clickjacking protection.
-X_FRAME_OPTIONS = "SAMEORIGIN"
 
 INSTALLED_APPS = [
     "django.contrib.admin",
@@ -213,6 +209,12 @@ LOGOUT_REDIRECT_URL = "/login/"
 DEMO_MODE = env_bool("DEMO_MODE", False)
 DEMO_USERNAME = os.environ.get("DEMO_USERNAME", "admin")
 DEMO_PASSWORD = os.environ.get("DEMO_PASSWORD", "admin123")
+
+# Framing policy:
+# - Demo mode (HF Spaces / public demos): allow cross-origin framing so the
+#   Space page on huggingface.co can embed the app served from *.hf.space.
+# - Normal deployments: SAMEORIGIN keeps clickjacking protection intact.
+X_FRAME_OPTIONS = "ALLOWALL" if DEMO_MODE else "SAMEORIGIN"
 
 # Operational settings used by health checks and bootstrap commands.
 # MinIO is OFF by default; enable via `docker compose --profile storage up`
