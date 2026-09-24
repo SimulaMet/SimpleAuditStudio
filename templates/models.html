@@ -269,26 +269,33 @@
 
 <script>
 async function discoverForConn(connId, baseUrl, apiKey, provider) {
-  const datalist = document.getElementById('discovered-' + connId);
-  if (!baseUrl) return;
+  const btn = event.currentTarget;
+  btn.textContent = '⏳';
+  btn.disabled = true;
   try {
     const body = new URLSearchParams({ base_url: baseUrl, api_key_direct: apiKey, provider });
     const resp = await fetch('{% url "models_discover" %}', { method: 'POST', headers: {'X-CSRFToken': getCookie('csrftoken')}, body });
     const data = await resp.json();
     if (!resp.ok) throw new Error(data.error || 'Request failed');
-    datalist.innerHTML = '';
-    data.models.forEach(m => {
-      const opt = document.createElement('option');
-      opt.value = m;
-      datalist.appendChild(opt);
-    });
-    // Auto-fill first model if input is empty
-    const input = datalist.previousElementSibling;
-    if (input && !input.value && data.models.length > 0) {
-      input.value = data.models[0];
+    // Auto-register all discovered models under this connection
+    let added = 0;
+    for (const m of data.models) {
+      const addBody = new URLSearchParams({
+        csrfmiddlewaretoken: getCookie('csrftoken'),
+        action: 'add_model',
+        model_conn_id: connId,
+        model_id: m,
+        model_display_name: m
+      });
+      await fetch('/models/', { method: 'POST', headers: {'Content-Type': 'application/x-www-form-urlencoded'}, body: addBody.toString() });
+      added++;
     }
+    btn.textContent = `✓ ${added}`;
+    setTimeout(() => location.reload(), 800);
   } catch (e) {
     alert('Discover failed: ' + e.message);
+    btn.textContent = '🔍';
+    btn.disabled = false;
   }
 }
 function getCookie(name) {
