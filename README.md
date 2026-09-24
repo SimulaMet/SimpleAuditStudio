@@ -57,7 +57,7 @@ Browser → Django/Gunicorn (:7860)
 Build and run directly from GitHub — no local checkout required:
 
 ```bash
-docker build -f deploy/hf-space/Dockerfile \
+docker build \
   https://github.com/SushantGautam/SimpleAuditStudio.git#main \
   -t simpleaudit-studio
 
