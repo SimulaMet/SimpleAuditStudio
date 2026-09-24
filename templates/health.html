@@ -24,15 +24,22 @@
     <p class="text-xs text-gray-500 mt-1 truncate" data-engine>{{ comp.version|default:"—" }}{% if comp.commit %} · {{ comp.commit|slice:":8" }}{% endif %}</p>
     {% endif %}
     {% if name == "model_endpoints" %}
-    <ul class="mt-2 space-y-1 max-h-32 overflow-y-auto" data-endpoints>
-      {% for ep in comp.endpoints %}
-      <li class="flex items-center gap-2 text-xs">
-        <span class="ep-dot w-2 h-2 rounded-full bg-gray-600 shrink-0" data-ep-id="{{ ep.id }}"></span>
-        <span class="text-gray-400 truncate flex-1">{{ ep.display_name }}</span>
-        <span class="ep-status text-gray-600" data-ep-status="{{ ep.id }}">{{ ep.status }}</span>
-      </li>
+    <div class="mt-2 space-y-2 max-h-48 overflow-y-auto" data-endpoints>
+      {% for group in comp.groups %}
+      <div data-group="{{ group.name }}">
+        <p class="text-[10px] font-medium text-gray-500 uppercase tracking-wide mb-1">{{ group.name }} <span class="text-gray-600 normal-case">· {{ group.provider }}</span></p>
+        <ul class="space-y-0.5">
+          {% for m in group.models %}
+          <li class="flex items-center gap-2 text-xs">
+            <span class="w-2 h-2 rounded-full shrink-0 bg-gray-600"></span>
+            <span class="text-gray-400 truncate flex-1">{{ m.display_name }}</span>
+            <span class="text-gray-600">{{ m.status }}</span>
+          </li>
+          {% endfor %}
+        </ul>
+      </div>
       {% endfor %}
-    </ul>
+    </div>
     {% endif %}
   </div>
   {% endfor %}
@@ -126,15 +133,21 @@
       if (lat) lat.textContent = comp.latency_ms != null ? comp.latency_ms + " ms" : "";
       const eng = card.querySelector("[data-engine]");
       if (eng) eng.textContent = (comp.version || "—") + (comp.commit ? " · " + String(comp.commit).slice(0, 8) : "");
-      // Model endpoints sub-list
-      if (comp.endpoints) {
+      // Model endpoints grouped by connection
+      if (comp.groups) {
         const list = card.querySelector("[data-endpoints]");
         if (list) {
-          list.innerHTML = comp.endpoints.map(ep =>
-            '<li class="flex items-center gap-2 text-xs">' +
-            '<span class="w-2 h-2 rounded-full shrink-0 ' + (DOT_COLORS[ep.status] || DOT_COLORS.unknown) + '"></span>' +
-            '<span class="text-gray-400 truncate flex-1">' + (ep.display_name || ("#" + ep.id)) + '</span>' +
-            '<span class="text-gray-600">' + (ep.status) + '</span></li>'
+          list.innerHTML = comp.groups.map(g =>
+            '<div data-group="' + g.name + '">' +
+            '<p class="text-[10px] font-medium text-gray-500 uppercase tracking-wide mb-1">' + g.name + ' <span class="text-gray-600 normal-case">· ' + g.provider + '</span></p>' +
+            '<ul class="space-y-0.5">' +
+            g.models.map(m =>
+              '<li class="flex items-center gap-2 text-xs">' +
+              '<span class="w-2 h-2 rounded-full shrink-0 ' + (DOT_COLORS[m.status] || DOT_COLORS.unknown) + '"></span>' +
+              '<span class="text-gray-400 truncate flex-1">' + (m.display_name || m.model_id) + '</span>' +
+              '<span class="text-gray-600">' + m.status + '</span></li>'
+            ).join("") +
+            '</ul></div>'
           ).join("");
         }
       }

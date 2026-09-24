@@ -166,33 +166,84 @@ def _engine_probe() -> dict[str, Any]:
 
 
 def _model_endpoints_probe() -> dict[str, Any]:
-    """Ping each registered model endpoint's base_url (best-effort, short timeout)."""
-    from model_registry.models import ModelEndpoint
+    """Ping each registered model endpoint's base_url, grouped by connection."""
+    from model_registry.models import ModelConnection, RegisteredModel
 
-    endpoints = []
-    for ep in ModelEndpoint.objects.filter(enabled=True).order_by("id"):
-        entry: dict[str, Any] = {"id": ep.id, "display_name": ep.display_name, "provider": ep.provider}
-        base = (ep.base_url or "").strip()
+    groups: list[dict[str, Any]] = []
+
+    # New model: connections with their models
+    conns = ModelConnection.objects.filter(enabled=True).prefetch_related("models").order_by("id")
+    seen_urls: set[str] = set()
+    for conn in conns:
+        base = (conn.base_url or "").strip()
         if not base:
-            entry["status"] = "unknown"
-            entry["detail"] = "no base_url"
-        else:
-            try:
-                import requests
+            continue
+        # Ping the connection once
+        conn_status = "down"
+        latency = None
+        detail = ""
+        try:
+            import requests
+            start = _now_ms()
+            url = base.rstrip("/")
+            if not url.endswith("/models"):
+                url = f"{url}/models"
+            requests.get(url, timeout=2)
+            conn_status = "up"
+            latency = round(_now_ms() - start, 1)
+        except Exception as exc:  # noqa: BLE001
+            detail = f"{type(exc).__name__}"
 
-                start = _now_ms()
-                # A lightweight GET; most OpenAI-compatible servers answer /v1/models.
-                url = base.rstrip("/")
-                if not url.endswith("/models"):
-                    url = f"{url}/models"
-                requests.get(url, timeout=2)
-                entry["status"] = "up"
-                entry["latency_ms"] = round(_now_ms() - start, 1)
-            except Exception as exc:  # noqa: BLE001
-                entry["status"] = "down"
-                entry["detail"] = f"{type(exc).__name__}"
-        endpoints.append(entry)
-    return {"status": "up", "endpoints": endpoints}
+        models = [
+            {"id": m.id, "display_name": m.display_name, "model_id": m.model_id, "status": conn_status}
+            for m in conn.models.filter(enabled=True).order_by("display_name")
+        ]
+        if models:
+            groups.append({
+                "name": conn.name,
+                "provider": conn.provider,
+                "base_url": base,
+                "status": conn_status,
+                "latency_ms": latency,
+                "detail": detail,
+                "models": models,
+            })
+        seen_urls.add(base)
+
+    # Legacy flat endpoints not already covered by a connection
+    from model_registry.models import ModelEndpoint
+    legacy_eps = ModelEndpoint.objects.filter(enabled=True).exclude(base_url__in=list(seen_urls)).order_by("id")
+    if legacy_eps:
+        legacy_models = []
+        for ep in legacy_eps:
+            base = (ep.base_url or "").strip()
+            status = "unknown"
+            detail = "no base_url"
+            if base:
+                try:
+                    import requests
+                    url = base.rstrip("/")
+                    if not url.endswith("/models"):
+                        url = f"{url}/models"
+                    requests.get(url, timeout=2)
+                    status = "up"
+                    detail = ""
+                except Exception as exc:  # noqa: BLE001
+                    status = "down"
+                    detail = f"{type(exc).__name__}"
+            legacy_models.append({"id": ep.id, "display_name": ep.display_name, "model_id": ep.model_id, "status": status})
+        groups.append({
+            "name": "Legacy Endpoints",
+            "provider": "—",
+            "base_url": "",
+            "status": "up" if any(m["status"] == "up" for m in legacy_models) else "down",
+            "latency_ms": None,
+            "detail": "",
+            "models": legacy_models,
+        })
+
+    overall = "up" if all(g["status"] != "down" for g in groups) else "down"
+    return {"status": overall, "groups": groups}
 
 
 # ─── Resource probes (host + process) ────────────────────────────────────────
