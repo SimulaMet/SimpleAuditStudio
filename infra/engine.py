@@ -354,19 +354,6 @@ def run_scenario_repeated(
     gen = dict(generation or {})
     language = gen.get("language") or "English"
 
-    # When per-turn callbacks are requested, use a manual rep loop that passes
-    # on_turn directly to run_scenario(). The AuditExperiment path creates its
-    # own ModelAuditor internally and doesn't forward on_turn to each rep.
-    if on_turn:
-        return _run_scenario_repeated_with_turns(
-            name=name, description=description,
-            expected_behavior=expected_behavior, test_prompt=test_prompt,
-            target=target, auditor=auditor, judge=judge,
-            generation=generation, n_repetitions=n_repetitions,
-            on_rep_done=on_rep_done, on_turn=on_turn,
-            on_rep_started=on_rep_started, cancel_event=cancel_event,
-        )
-
     # Build the scenario dict in the format the engine expects
     scenario: dict[str, Any] = {
         "name": name,
@@ -523,6 +510,7 @@ def run_scenario_repeated(
                 scenario=scenario,
                 max_turns=max_turns,
                 language=language,
+                on_turn=on_turn,
             )
         )
     except EngineError:
@@ -562,85 +550,6 @@ def run_scenario_repeated(
         "_language": language,
     }
 
-
-def _run_scenario_repeated_with_turns(
-    *,
-    name: str,
-    description: str,
-    expected_behavior: list[str] | None,
-    test_prompt: str | None,
-    target: dict,
-    auditor: dict,
-    judge: dict,
-    generation: dict | None = None,
-    n_repetitions: int = 1,
-    on_rep_done: callable | None = None,
-    on_turn: callable | None = None,
-    on_rep_started: callable | None = None,
-    cancel_event: asyncio.Event | None = None,
-) -> dict[str, Any]:
-    """Manual rep loop with per-turn progress (used when on_turn is requested).
-
-    Builds a fresh ModelAuditor per rep and passes on_turn to run_scenario().
-    Bypasses AuditExperiment because its internal ModelAuditor construction
-    doesn't forward the on_turn callback to each rep's execution.
-    """
-    gen = dict(generation or {})
-    max_turns = int(gen.get("max_turns") or 5)
-    reps: list[dict[str, Any]] = []
-    language = None
-
-    for i in range(n_repetitions):
-        if cancel_event is not None and cancel_event.is_set():
-            break
-
-        if on_rep_started:
-            on_rep_started(i)
-
-        auditor_instance, language = build_model_auditor(
-            target=target, auditor=auditor, judge=judge, generation=gen
-        )
-        try:
-            result = asyncio.run(
-                auditor_instance.run_scenario(
-                    name=name,
-                    description=description,
-                    expected_behavior=expected_behavior,
-                    test_prompt=test_prompt,
-                    language=language,
-                    on_turn=on_turn,
-                )
-            )
-        except EngineError:
-            raise
-        except Exception as exc:
-            raise EngineError(f"Scenario execution crashed (rep {i+1}): {type(exc).__name__}: {exc}") from exc
-
-        rep_payload = result.to_dict()
-        rep_payload["_language"] = language
-        rep_payload["_rep_index"] = i
-        reps.append(rep_payload)
-
-        if on_rep_done:
-            on_rep_done(i, rep_payload)
-
-    severities = [r.get("severity", "") for r in reps]
-    sev_counts: dict[str, int] = {}
-    for s in severities:
-        sev_counts[s] = sev_counts.get(s, 0) + 1
-
-    _SEV_RANK = {"ERROR": 6, "critical": 5, "high": 4, "medium": 3, "low": 2, "pass": 1}
-    modal_severity = max(sev_counts.keys(), key=lambda s: (sev_counts[s], _SEV_RANK.get(s, 0))) if sev_counts else "ERROR"
-    agreement_rate = sev_counts[modal_severity] / len(reps) if reps else 0.0
-
-    return {
-        "reps": reps,
-        "aggregated_severity": modal_severity,
-        "agreement_rate": round(agreement_rate, 4),
-        "severity_distribution": sev_counts,
-        "n_repetitions": len(reps),
-        "_language": language,
-    }
 
 
 def _run_scenario_repeated_fallback(
