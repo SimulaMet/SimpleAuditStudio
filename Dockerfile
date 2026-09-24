@@ -50,7 +50,10 @@ ARG BUILD_ID=20260924-logo
 COPY . .
 
 # Collect static files so Django can serve them without DEBUG.
-RUN python manage.py collectstatic --noinput
+# Reference $BUILD_ID in the command so BuildKit invalidates this layer when
+# the ARG changes — guaranteeing newly added/changed static assets are picked up
+# even though COPY's own cache is keyed on file content hashes.
+RUN echo "build=$BUILD_ID" && python manage.py collectstatic --noinput
 
 # --- Hatchet binaries + static assets -------------------------------------------
 COPY --from=hatchet-src /hatchet-lite /usr/local/bin/hatchet-lite
