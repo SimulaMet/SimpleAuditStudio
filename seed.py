@@ -180,13 +180,13 @@ def main():
         defaults={
             "provider": "openai",
             "base_url": "https://api.openai.com/v1",
-            "secret_reference": "OPENAI_API_KEY",
+            "secret_reference": "",
             "enabled": True,
             "created_by": user,
         }
     )
     if conn_created:
-        print("  ✓ Created 'OpenAI' connection (api.openai.com/v1, env: OPENAI_API_KEY)")
+        print("  ✓ Created 'OpenAI' connection (api.openai.com/v1) — add your API key in Models page")
     else:
         print("  ⏭ 'OpenAI' connection already exists")
 
@@ -218,7 +218,7 @@ def main():
                 "provider": "openai",
                 "base_url": "https://api.openai.com/v1",
                 "model_id": model_id,
-                "secret_reference": "OPENAI_API_KEY",
+                "secret_reference": "",
                 "enabled": True,
                 "created_by": user,
             }
