@@ -80,6 +80,11 @@ class LoginView(TemplateView):
 
     def get_context_data(self, **kw):
         kw.setdefault("form", AuthenticationForm())
+        from django.conf import settings
+        if getattr(settings, "DEMO_MODE", False):
+            kw["demo_mode"] = True
+            kw["demo_username"] = settings.DEMO_USERNAME
+            kw["demo_password"] = settings.DEMO_PASSWORD
         return super().get_context_data(**kw)
 
     def post(self, request, *args, **kwargs):

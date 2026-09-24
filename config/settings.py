@@ -202,6 +202,12 @@ LOGIN_URL = "/login/"
 LOGIN_REDIRECT_URL = "/"
 LOGOUT_REDIRECT_URL = "/login/"
 
+# Demo mode: prefill login form with demo credentials and show a hint banner.
+# Enable for public demos / HF Spaces so visitors can log in without knowing creds.
+DEMO_MODE = env_bool("DEMO_MODE", False)
+DEMO_USERNAME = os.environ.get("DEMO_USERNAME", "admin")
+DEMO_PASSWORD = os.environ.get("DEMO_PASSWORD", "admin123")
+
 # Operational settings used by health checks and bootstrap commands.
 MINIO_ENDPOINT = os.environ.get("MINIO_ENDPOINT", "http://minio:9000")
 MINIO_ACCESS_KEY = os.environ.get("MINIO_ACCESS_KEY", "")
