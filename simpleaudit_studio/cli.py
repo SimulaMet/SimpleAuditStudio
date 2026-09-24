@@ -152,11 +152,8 @@ def _seed_demo_data() -> None:
         project_name=project_name,
     )
 
-    # Seed scenario packs + model connections (idempotent)
+    # Seed scenario packs + model connections + demo audit runs (all idempotent)
     call_command("seed_platform", project=project.id, verbosity=0)
-
-    # Seed demo audit runs from pre-recorded fixture (idempotent)
-    call_command("seed_demo_audits", project=project.id, verbosity=0)
 
 
 def _update_model_endpoints(mock_url: str) -> None:
