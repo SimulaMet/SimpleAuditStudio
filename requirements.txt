@@ -19,5 +19,5 @@ sentry-sdk[django]>=2.0
 # (version + commit) is read from the installed package metadata automatically —
 # see infra/simpleaudit_package.py. To develop against an unmerged revision, add
 # a gitignored simpleaudit-dependency.yaml with a `git_ref:` key (dev only).
-simpleaudit @ git+https://github.com/kelkalot/simpleaudit.git@d19785f0d9d3bd9cb647b519c08661cbab0c4d60
+simpleaudit @ git+https://github.com/kelkalot/simpleaudit.git@a4832de3144f5b79c0f15f23dd064987df3d58fa
 
