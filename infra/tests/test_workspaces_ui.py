@@ -65,6 +65,23 @@ class WorkspacesPageTest(TestCase):
         resp = self.client.get("/workspaces/")
         self.assertIn("New workspace", resp.content.decode())
 
+    def test_new_workspace_button_for_viewer_only_user(self):
+        """A user who is only a viewer (e.g. WorkOS magic-auth signup) can still create."""
+        viewer = UserFactory()
+        viewer.set_password("testpass123")
+        viewer.save()
+        MembershipFactory(user=viewer, project=self.w_viewer, role="viewer")
+        c = Client(SERVER_NAME="localhost")
+        c.login(username=viewer.username, password="testpass123")
+        resp = c.get("/workspaces/")
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn("New workspace", resp.content.decode())
+
+    def test_csrf_cookie_set_for_authenticated_user(self):
+        """The csrftoken cookie must be present so fetch POSTs work in iframes."""
+        resp = self.client.get("/workspaces/")
+        self.assertIn("csrftoken", resp.cookies)
+
     def test_no_workspaces_state(self):
         lonely = UserFactory()
         lonely.set_password("testpass123")
@@ -73,4 +90,7 @@ class WorkspacesPageTest(TestCase):
         c.login(username=lonely.username, password="testpass123")
         resp = c.get("/workspaces/")
         self.assertEqual(resp.status_code, 200)
-        self.assertIn("You don't belong to any workspace yet.", resp.content.decode())
+        content = resp.content.decode()
+        self.assertIn("You don't belong to any workspace yet.", content)
+        # A user with zero memberships must still see the create button.
+        self.assertIn("New workspace", content)

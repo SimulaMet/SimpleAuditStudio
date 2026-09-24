@@ -64,6 +64,25 @@ def clear_correlation_context():
     """Clear correlation fields (call in finally/teardown)."""
     CorrelationLogFilter.clear_context()
 
+class CsrfCookieMiddleware(MiddlewareMixin):
+    """Guarantees the csrftoken cookie is set for authenticated users.
+
+    Django only sets the cookie when a response renders ``{% csrf_token %}``.
+    In the HF Space iframe (demo mode) the login page may be the only place
+    that does so; if the user signed in via WorkOS magic auth or the cookie
+    expired, subsequent fetch POSTs fail with 403. Marking the CSRF cookie
+    for update on every authenticated request fixes this.
+    """
+
+    def process_request(self, request):
+        if hasattr(request, "user") and request.user.is_authenticated:
+            from django.middleware.csrf import _add_new_csrf_cookie
+
+            # Generates a secret in request.META and marks it for update;
+            # CsrfViewMiddleware.process_response then sets the cookie.
+            _add_new_csrf_cookie(request)
+
+
 class ProjectMiddleware(MiddlewareMixin):
     """Attaches the user's active project to the request.
 

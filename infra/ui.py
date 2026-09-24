@@ -402,7 +402,9 @@ class WorkspacesView(LoginRequiredMixin, TemplateView):
         kw["workspace_cards"] = cards
         kw["managed"] = managed
         kw["current_workspace"] = self.request.project
-        kw["can_create"] = user.is_superuser or any(c["is_admin"] for c in cards)
+        # Any authenticated user may create a workspace (matches the API, which
+        # allows self-service bootstrap without an existing admin).
+        kw["can_create"] = True
         return super().get_context_data(**kw)
 
 
