@@ -47,9 +47,6 @@ services:
   # through the live worker.
   mock-model:
     profiles: ["mock"]
-    # Pre-built image from CI (GHCR); falls back to a local build when the
-    # image is not available, so `docker compose up` still works offline.
-    image: ${SIMPLEAUDIT_IMAGE:-ghcr.io/sushantgautam/simpleauditstudio:latest}
     # Compose application image (web + worker only). The root Dockerfile is the
     # single-container HF Space image and must NOT be used here.
     build:
@@ -115,7 +112,6 @@ services:
   # SimpleAudit worker pool. Runs separately from the web process; the web server
   # never executes model calls. Scale by adding replicas or GPU-labeled workers.
   worker:
-    image: ${SIMPLEAUDIT_IMAGE:-ghcr.io/sushantgautam/simpleauditstudio:latest}
     # Compose application image (web + worker only). The root Dockerfile is the
     # single-container HF Space image and must NOT be used here.
     build:
@@ -152,7 +148,6 @@ services:
     restart: unless-stopped
 
   web:
-    image: ${SIMPLEAUDIT_IMAGE:-ghcr.io/sushantgautam/simpleauditstudio:latest}
     build: .
     env_file: .env
     environment:

@@ -1,8 +1,7 @@
 # SimpleAudit Studio — Deployment
 
-Status: Phase 0 draft for independent review  
-Date: 2026-09-22  
-Owner: DevOps / Release role
+Status: current  
+Date: 2026-09-22
 
 ## 1. Deployment goals
 
@@ -218,43 +217,16 @@ Rules:
 - include healthcheck
 - record application version and SimpleAudit commit in `/app/version.json` or equivalent
 
-### 5.1 Pre-built images (no local clone)
-
-CI (`.github/workflows/docker-image.yml`) builds the image from the pushed
-commit — BuildKit fetches the source directly from the git context, so even
-the CI runner does not check out the repo — and pushes it to GHCR:
-
-```
-ghcr.io/sushantgautam/simpleauditstudio:<branch|semver|sha->
-```
-
-On a deployment host that has no copy of this repository, run:
-
-```bash
-docker compose pull
-docker compose up -d
-```
-
-The `web`, `worker`, and `mock-model` services reference
-`${SIMPLEAUDIT_IMAGE:-ghcr.io/sushantgautam/simpleauditstudio:latest}` with a
-`build:` fallback, so hosts without registry access still build locally from
-a cloned checkout. Pin a specific tag (e.g. `v1.2.0` or `sha-<short-sha>`) in
-`.env` for reproducible deployments; `latest` tracks `main`.
-
-There are two images:
-
-- **Root `Dockerfile`** — the minimal-config single-process image (SQLite +
-  embedded Hatchet + web + worker in one Python process, serves :7860). This
-  is what Hugging Face Spaces build (HF only builds the root Dockerfile) and
-  what the "no clone" quick start uses:
-
-  ```bash
-  docker build https://github.com/SushantGautam/SimpleAuditStudio.git#main
-  ```
+The self-hosting deployment uses one image:
 
 - **`deploy/compose/Dockerfile`** — the compose-stack application image
   (web + worker only; Postgres/Hatchet run as separate containers). Referenced
-  by `docker-compose.yml` and CI. Do not use it for a Space.
+  by `docker-compose.yml`, which builds it from the cloned checkout.
+
+> Note: the repository also contains a root `Dockerfile` (a minimal-config
+> single-process image serving :7860). It exists solely so Hugging Face Spaces
+> can build the project (HF Spaces build only the root Dockerfile) and is not a
+> documented self-hosting path.
 
 ## 6. Migrations
 
@@ -425,7 +397,7 @@ Do not scale horizontally until single-host bottlenecks are measured.
 - SSRF policy configured for model endpoints
 - audit logging enabled
 
-## 13. Release process
+## 14. Release process
 
 Release candidate:
 
