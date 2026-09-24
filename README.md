@@ -52,13 +52,36 @@ Browser → Django/Gunicorn (:7860)
 
 ## Self-Hosting
 
-For a persistent, production deployment, use Docker Compose:
+### Quick start (single container, no clone needed)
+
+Build and run directly from GitHub — no local checkout required:
+
+```bash
+docker build -f deploy/hf-space/Dockerfile \
+  https://github.com/SushantGautam/SimpleAuditStudio.git#main \
+  -t simpleaudit-studio
+
+docker run -d -p 7860:7860 --name simpleaudit simpleaudit-studio
+```
+
+Open http://localhost:7860 — log in with `admin` / `admin123`.
+
+> **Note:** This single-container mode uses ephemeral storage. Data is lost on
+> restart. For persistent deployments with separate Postgres/Hatchet/worker
+> containers, use Docker Compose below.
+
+### Full stack (Docker Compose, persistent)
 
 ```bash
 git clone https://github.com/SushantGautam/SimpleAuditStudio
 cd SimpleAuditStudio
 cp .env.example .env
+# edit POSTGRES_PASSWORD and BOOTSTRAP_ADMIN_PASSWORD at minimum
 docker compose up -d
 ```
 
-See the [full documentation](https://github.com/SushantGautam/SimpleAuditStudio#readme) for details.
+Services: Web UI (:8000), PostgreSQL, Hatchet queue (:8888), Worker.
+Optional profiles: `--profile storage` (MinIO), `--profile mock` (mock model API).
+
+See [docs/deployment.md](docs/deployment.md) for production hardening, GPU
+workers, backups, and upgrade procedures.
