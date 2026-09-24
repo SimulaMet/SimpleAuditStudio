@@ -21,7 +21,10 @@ dependencies = [
     "pydantic>=2.7,<3",
     "sentry-sdk[django]>=2.0",
     "workos==10.4.0",
-    "simpleaudit @ git+https://github.com/kelkalot/simpleaudit.git@6c14a0bf69641a7429ef35f61b8f76e42b683d10",
+    # PyPI release (not a git ref): PyPI forbids direct URL dependencies in
+    # package metadata, so the engine must be a registry dependency. 0.2.0 is
+    # the first release containing run_scenario_reps (n_repetitions support).
+    "simpleaudit==0.2.0",
 ]
 
 [project.optional-dependencies]

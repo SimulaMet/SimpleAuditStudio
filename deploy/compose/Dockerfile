@@ -3,10 +3,8 @@
 # SimpleAudit Studio — compose-stack application image (web + worker)
 #
 # This is the image built by docker-compose.yml for the `web`, `worker`, and
-# `mock-model` services, and the one CI pushes to GHCR
-# (ghcr.io/sushantgautam/simpleauditstudio). It contains only the Django app
-# and its dependencies; Postgres and Hatchet run as separate containers in the
-# compose stack.
+# `mock-model` services. It contains only the Django app and its dependencies;
+# Postgres and Hatchet run as separate containers in the compose stack.
 #
 # NOTE: This is NOT the root Dockerfile. The root Dockerfile is the
 # single-container HF Space image (Postgres + Hatchet + web + worker in one

@@ -8,46 +8,30 @@ app_port: 7860
 pinned: false
 ---
 
-# SimpleAudit Studio — AI Model Audit Platform
+# SimpleAudit Studio
+<a href="https://sushantgautam-simpleaudit-studio.hf.space" target="_blank" rel="noopener noreferrer">
+  <img alt="SimpleAudit Studio — a platform for reproducible AI model audits" src="https://github.com/user-attachments/assets/d9e0105a-9e2c-4455-a855-ad5854fd604f" />
+</a>
 
-A production-quality platform for running reproducible AI model audits using the
-[SimpleAudit](https://github.com/kelkalot/simpleaudit) engine (Target → Auditor → Judge).
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
+[![Python](https://img.shields.io/badge/Python-3.11%2B-blue.svg)](https://www.python.org/)
+[![PyPI](https://img.shields.io/pypi/v/simpleaudit-studio)](https://pypi.org/project/simpleaudit-studio/)
 
-## Demo Credentials
+A self-hostable platform for running reproducible AI model audits using the [SimpleAudit](https://github.com/kelkalot/simpleaudit) engine (Target → Auditor → Judge). Every audit captures frozen, versioned inputs so historical results stay interpretable years later.
 
-- **Username:** `admin`
-- **Password:** `admin123`
-
-## What You Can Do
-
-- Browse the scenario library and create new audit scenarios
-- Register model endpoints (OpenAI-compatible APIs)
-- Launch audits and watch live progress
-- Compare results across runs
-- Explore the visualizer for detailed analysis
-
-## Quick Start (Minimal Config)
-
-Run SimpleAudit Studio locally in seconds — no Docker, no Postgres, no infrastructure:
+## 🚀 Quick Start
 
 ```bash
 uvx simpleaudit-studio
 ```
 
-This boots a full local stack in one process:
-- **Django web UI** at http://localhost:8000 (login: `admin` / `admin12345`)
-- **Hatchet workflow engine** (embedded mode — real persistent queue + worker, no Docker)
-- **SQLite database** (auto-created, persists across restarts)
-- **Mock model server** (pre-seeded so you can try an audit immediately)
+[`uvx`](https://docs.astral.sh/uv/#uvx) installs the [`simpleaudit-studio`](https://pypi.org/project/simpleaudit-studio/) package and runs it in an isolated environment. No Docker, no Postgres, no manual setup. Opens at http://localhost:8000 (login: `admin` / `admin12345`). A mock model server is pre-seeded so you can run an audit immediately.
 
-First run downloads a ~53 MB Hatchet sidecar binary (cached in `~/.hatchet/`).
-Subsequent starts are faster. Press `Ctrl+C` to stop.
+🌐 Or skip the setup entirely — try the live demo: <a href="https://sushantgautam-simpleaudit-studio.hf.space" target="_blank" rel="noopener noreferrer">sushantgautam-simpleaudit-studio.hf.space</a>
 
-### Using Real Models
+### 🤖 Using Real Models
 
-The pre-seeded model connections point at a built-in mock server so you can
-explore the UI without any setup. To run **real audits**, update your model
-connections in the UI (Models page) to point at any OpenAI-compatible endpoint:
+The pre-seeded connections point at a built-in mock server. To run real audits, update your model connections on the **Models** page to any OpenAI-compatible endpoint. A few common options:
 
 | Provider | Base URL | Example |
 |----------|----------|---------|
@@ -57,23 +41,33 @@ connections in the UI (Models page) to point at any OpenAI-compatible endpoint:
 | Together AI | `https://api.together.xyz/v1` | Many open models |
 | Groq | `https://api.groq.com/openai/v1` | Fast inference |
 
-Set the API key in the connection form (or leave blank for local servers that
-don't require auth). Then launch an audit from the Scenario Library.
+Set the API key in the connection form (leave blank for local servers that don't require auth), then launch an audit from the Scenario Library.
 
-### When to Use What
+## 🐳 Self-Hosting
 
-| Setup | Best for |
-|-------|----------|
-| `uvx simpleaudit-studio` | Small projects, research, single user, quick experiments, local GPU audits |
-| [Docker Compose](#self-hosting) | Teams, multi-user, production, GPU worker pools, long-running jobs |
+For teams, multi-user setups, or GPU worker pools, use Docker Compose:
 
-The minimal config uses the **same code paths** as the full deployment — same
-worker, same engine, same queue semantics. The only differences are SQLite
-instead of Postgres and embedded Hatchet instead of a standalone server.
+```bash
+git clone https://github.com/SushantGautam/SimpleAuditStudio
+cd SimpleAuditStudio
+cp .env.example .env
+# edit POSTGRES_PASSWORD and BOOTSTRAP_ADMIN_PASSWORD at minimum
+docker compose up -d
+```
 
-## Architecture
+Services: Web UI (:8000), PostgreSQL, Hatchet queue (:8888), Worker. Optional profiles: `--profile storage` (MinIO), `--profile mock` (mock model API).
 
-This Space runs the full stack in a single container:
+See [docs/deployment.md](docs/deployment.md) for production hardening, GPU workers, backups, and upgrades.
+
+## ✨ What You Can Do
+
+- Browse the scenario library and create new audit scenarios
+- Register model endpoints (OpenAI-compatible APIs)
+- Launch audits and watch live progress
+- Compare results across runs
+- Explore the visualizer for detailed analysis
+
+## 🏗️ Architecture
 
 ```
 Browser → Django/Gunicorn (:7860)
@@ -86,47 +80,20 @@ Browser → Django/Gunicorn (:7860)
               Target → Auditor → Judge
 ```
 
-## Notes
+## 📚 Documentation
 
-- **Ephemeral storage**: All data is lost when the Space restarts or is redeployed.
-  This is a demo, not a persistent deployment.
-- **CPU-only**: Audits run on CPU. For GPU-backed model inference, point your
-  model endpoint at an external API.
-- **Cold start**: The first request after idle may take 30–60 seconds while all
-  services initialize.
+- [Architecture](docs/architecture.md) — system design, service boundaries, deployment topology
+- [Domain Model](docs/domain-model.md) — scenarios, scenario sets, audit runs, immutability invariants
+- [Deployment](docs/deployment.md) — Docker Compose, production hardening, GPU workers, upgrades
 
-## Self-Hosting
+## 🤝 Contributing
 
-### Quick start (single container, no clone needed)
+Architecture decisions are documented in [docs/architecture.md](docs/architecture.md).
 
-Build and run directly from GitHub — no local checkout required:
 
-```bash
-docker build \
-  https://github.com/SushantGautam/SimpleAuditStudio.git#main \
-  -t simpleaudit-studio
 
-docker run -d -p 7860:7860 --name simpleaudit simpleaudit-studio
-```
 
-Open http://localhost:7860 — log in with `admin` / `admin123`.
 
-> **Note:** This single-container mode uses ephemeral storage. Data is lost on
-> restart. For persistent deployments with separate Postgres/Hatchet/worker
-> containers, use Docker Compose below.
 
-### Full stack (Docker Compose, persistent)
 
-```bash
-git clone https://github.com/SushantGautam/SimpleAuditStudio
-cd SimpleAuditStudio
-cp .env.example .env
-# edit POSTGRES_PASSWORD and BOOTSTRAP_ADMIN_PASSWORD at minimum
-docker compose up -d
-```
 
-Services: Web UI (:8000), PostgreSQL, Hatchet queue (:8888), Worker.
-Optional profiles: `--profile storage` (MinIO), `--profile mock` (mock model API).
-
-See [docs/deployment.md](docs/deployment.md) for production hardening, GPU
-workers, backups, and upgrade procedures.

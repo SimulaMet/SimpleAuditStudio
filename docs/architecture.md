@@ -1,9 +1,7 @@
 # SimpleAudit Studio — Architecture
 
-Status: Phase 0 draft for independent review  
-Date: 2026-09-22  
-Owner: Architecture role  
-Related ADRs: `docs/adr/`
+Status: current  
+Date: 2026-09-22
 
 ## 1. Goals
 
@@ -280,8 +278,6 @@ must not lose an in-progress cancellation.
 - strict output encoding for HTML
 - dependency pinning and supply-chain review
 - audit logging for admin actions
-
-See `docs/threat-model.md`.
 
 ## 9. Observability architecture
 

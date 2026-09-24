@@ -1,8 +1,7 @@
 # SimpleAudit Studio — Domain Model
 
-Status: Phase 0 draft for independent review  
-Date: 2026-09-22  
-Owner: Data / Versioning role and SimpleAudit Domain role
+Status: current  
+Date: 2026-09-22
 
 ## 1. Core invariant
 
@@ -192,9 +191,9 @@ LOCAL_INFERENCE_NO_SECRET
 
 Production may later add a `Secret` table with encrypted values or external vault IDs, but audit manifests must store only the reference.
 
-## 6. Audit run
+## 5. Audit run
 
-### 6.1 `AuditRun`
+### 5.1 `AuditRun`
 
 The scientific experiment record.
 
@@ -255,7 +254,7 @@ Rules:
 - worker must verify loaded SimpleAudit version/commit against the run manifest and fail with stable error `SIMPLEAUDIT_VERSION_MISMATCH` on mismatch
 - `workflow_run_id` links to execution system but is not authoritative domain state
 
-### 6.2 Reproducibility manifest
+### 5.2 Reproducibility manifest
 
 Derived from `AuditRun` and pinned entities:
 
@@ -285,9 +284,9 @@ Derived from `AuditRun` and pinned entities:
 
 The manifest must be downloadable and stable.
 
-## 7. Results
+## 6. Results
 
-### 7.1 `AuditRunScenario`
+### 6.1 `AuditRunScenario`
 
 Per-scenario result row.
 
@@ -321,7 +320,7 @@ Rules:
 - large conversation text may live in artifact storage while DB stores summary/judgment
 - retries update attempt metadata but preserve final idempotent result identity
 
-### 7.2 `AuditArtifact`
+### 6.2 `AuditArtifact`
 
 Stored file reference.
 
@@ -342,9 +341,9 @@ Rules:
 - hash enables integrity verification
 - artifacts are immutable once written
 
-## 8. Events and progress
+## 7. Events and progress
 
-### 8.1 `AuditEvent`
+### 7.1 `AuditEvent`
 
 Durable event row.
 
@@ -366,9 +365,9 @@ Rules:
 - SSE replays from `Last-Event-ID`
 - counters are derived from events or maintained transactionally with result writes
 
-## 9. Comparisons
+## 8. Comparisons
 
-### 9.1 `Comparison`
+### 8.1 `Comparison`
 
 Saved comparison definition.
 
@@ -387,7 +386,7 @@ Recommended production shape uses a join table:
 
 - `comparison_run(comparison_id, run_id, position)`
 
-### 9.2 Comparison validity
+### 8.2 Comparison validity
 
 Comparison engine computes compatibility flags:
 
@@ -417,7 +416,7 @@ should be recommended or default for cross-judge comparisons.
 
 UI displays warnings and offers intersection mode. It must not silently compare incompatible experiments.
 
-## 10. Users and authorization
+## 9. Users and authorization
 
 Minimum MVP:
 
@@ -444,7 +443,7 @@ Permissions:
 | view results | yes | yes | yes |
 | manage users | yes | no | no |
 
-## 11. Migration strategy
+## 10. Migration strategy
 
 Initial production schema should be created with Django migrations.
 
@@ -459,7 +458,7 @@ Important constraints:
 
 Backfill from prototype is optional and should be treated as import, not as source of truth.
 
-## 12. SimpleAudit compatibility
+## 11. SimpleAudit compatibility
 
 The platform must preserve existing SimpleAudit semantics:
 

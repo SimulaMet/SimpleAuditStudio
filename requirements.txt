@@ -13,14 +13,12 @@ sentry-sdk[django]>=2.0
 workos==10.4.0
 
 # --- SimpleAudit engine (Target -> Auditor -> Judge) ---
-# The engine is a normal pip dependency. It is pinned to a git ref (not a PyPI
-# release) because the current n_repetitions feature (AuditExperiment.run_scenario_reps)
-# is not yet in a published release; the ref's own pyproject.toml declares
-# version 0.1.13, which importlib.metadata reports at runtime. Provenance
-# (version + commit) is read from the installed package metadata automatically —
-# see infra/simpleaudit_package.py. To develop against an unmerged revision, add
-# a gitignored simpleaudit-dependency.yaml with a `git_ref:` key (dev only).
-simpleaudit @ git+https://github.com/kelkalot/simpleaudit.git@6c14a0bf69641a7429ef35f61b8f76e42b683d10
+# The engine is a normal pip dependency, pinned to a PyPI release. 0.2.0 is the
+# first release containing run_scenario_reps (n_repetitions support). Provenance
+# (version) is read from the installed package metadata automatically — see
+# infra/simpleaudit_package.py. To develop against an unmerged revision, add a
+# gitignored simpleaudit-dependency.yaml with a `git_ref:` key (dev only).
+simpleaudit==0.2.0
 
 # --- Test dependencies ---
 factory_boy==3.3.2
