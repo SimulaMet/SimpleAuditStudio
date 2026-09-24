@@ -49,7 +49,10 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: https://github.com/${{ github.repository }}.git#${{ github.sha }}
-          file: deploy/hf-space/Dockerfile
+          # The compose-stack application image (web + worker). The HF Space
+          # single-container variant (deploy/hf-space/Dockerfile) is built on
+          # demand, not published here.
+          file: Dockerfile
           platforms: linux/amd64
           push: true
           tags: ${{ steps.meta.outputs.tags }}

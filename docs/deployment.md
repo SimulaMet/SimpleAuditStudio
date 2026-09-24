@@ -241,7 +241,9 @@ The `web`, `worker`, and `mock-model` services reference
 a cloned checkout. Pin a specific tag (e.g. `v1.2.0` or `sha-<short-sha>`) in
 `.env` for reproducible deployments; `latest` tracks `main`.
 
-Single-container variant (Hugging Face Spaces):
+The root `Dockerfile` is the compose-stack application image (web + worker);
+`deploy/hf-space/Dockerfile` is the single-container all-in-one variant for
+Hugging Face Spaces, built on demand:
 
 ```bash
 docker build -f deploy/hf-space/Dockerfile https://github.com/SushantGautam/SimpleAuditStudio.git#main
