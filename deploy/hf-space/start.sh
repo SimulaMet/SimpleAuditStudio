@@ -103,6 +103,10 @@ python manage.py bootstrap_platform \
     --password "${BOOTSTRAP_ADMIN_PASSWORD:-admin123}" \
     --project-name "${BOOTSTRAP_PROJECT_NAME:-Default}"
 
+# --- 5b. Seed demo data (scenario packs + model connection) --------------------
+echo "[init] Seeding demo data (idempotent)..."
+python /app/seed.py || echo "[WARN] Seed failed (non-fatal)"
+
 # --- 6. Initialize Hatchet (migrations + config + worker token) -----------------
 HATCHET_DB_URL="postgresql://simpleaudit:simpleaudit_hf_demo@localhost:5432/hatchet?sslmode=disable"
 export DATABASE_URL="${HATCHET_DB_URL}"
