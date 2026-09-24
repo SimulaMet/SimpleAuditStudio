@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1
 # =============================================================================
 # SimpleAudit Studio — Hugging Face Space (single-container) deployment
 #
