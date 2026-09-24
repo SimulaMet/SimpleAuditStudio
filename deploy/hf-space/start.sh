@@ -111,6 +111,12 @@ python manage.py bootstrap_platform \
 if [ "${SEED_ON_BOOT:-true}" != "false" ]; then
     echo "[init] Seeding scenario packs + model connections..."
     python manage.py seed_platform || echo "[WARN] seed_platform failed — continuing without seed data"
+
+    # Seed demo audit runs (idempotent — skips if already present)
+    if [ "${SEED_DEMO_AUDITS:-true}" != "false" ]; then
+        echo "[init] Seeding demo audit runs..."
+        python deploy/seed_demo_audits.py || echo "[WARN] Demo audit seed failed — continuing"
+    fi
 fi
 
 # --- 7. Initialize Hatchet (migrations + config + worker token) -----------------
