@@ -710,6 +710,13 @@ class ModelsView(ProjectMixin, TemplateView):
                         connection=conn, model_id=model_id,
                         defaults={"project": p, "display_name": display_name, "enabled": True},
                     )
+        elif action == "edit_model":
+            rm = RegisteredModel.objects.filter(pk=request.POST.get("rm_id"), project=p).first()
+            if rm:
+                new_name = request.POST.get("model_display_name", "").strip()
+                if new_name:
+                    rm.display_name = new_name
+                    rm.save()
         elif action == "delete_model":
             rm = RegisteredModel.objects.filter(pk=request.POST.get("rm_id"), project=p).first()
             if rm:

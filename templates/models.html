@@ -43,13 +43,28 @@
       {% if conn.models.all %}
       <div class="mt-2 pl-3 border-l-2 border-gray-800 space-y-1">
         {% for m in conn.models.all %}
-        <div class="flex items-center justify-between text-xs text-gray-400">
-          <span>{{ m.display_name }} <span class="text-gray-600">({{ m.model_id }})</span></span>
-          <form method="post" onsubmit="return confirm('Remove {{ m.display_name }}?')">
+        <div class="flex items-center justify-between text-xs text-gray-400 group">
+          <span id="model-label-{{ m.id }}">{{ m.display_name }} <span class="text-gray-600">({{ m.model_id }})</span></span>
+          <div class="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+            <button onclick="editModel({{ m.id }}, '{{ m.display_name }}', '{{ m.model_id }}')"
+                    class="text-gray-600 hover:text-accent px-1">✎</button>
+            <form method="post" onsubmit="return confirm('Remove {{ m.display_name }}?')">
+              {% csrf_token %}
+              <input type="hidden" name="action" value="delete_model">
+              <input type="hidden" name="rm_id" value="{{ m.id }}">
+              <button class="text-gray-600 hover:text-red-400 px-1">✕</button>
+            </form>
+          </div>
+          <!-- Inline edit form (hidden by default) -->
+          <form id="edit-model-{{ m.id }}" method="post" class="hidden w-full mt-1 flex gap-2 items-center">
             {% csrf_token %}
-            <input type="hidden" name="action" value="delete_model">
+            <input type="hidden" name="action" value="edit_model">
             <input type="hidden" name="rm_id" value="{{ m.id }}">
-            <button class="text-gray-600 hover:text-red-400">✕</button>
+            <input type="text" name="model_display_name" value="{{ m.display_name }}" placeholder="Display name"
+                   class="flex-1 px-2 py-1 rounded bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-1 focus:ring-accent/50">
+            <button class="px-2 py-1 rounded bg-accent/20 text-accent text-xs hover:bg-accent/30">Save</button>
+            <button type="button" onclick="document.getElementById('edit-model-{{ m.id }}').classList.add('hidden')"
+                    class="px-2 py-1 rounded text-gray-500 text-xs hover:text-gray-300">Cancel</button>
           </form>
         </div>
         {% endfor %}
@@ -270,6 +285,7 @@
 <script>
 async function discoverForConn(connId, baseUrl, apiKey, provider) {
   const btn = event.currentTarget;
+  const datalist = document.getElementById('discovered-' + connId);
   btn.textContent = '⏳';
   btn.disabled = true;
   try {
@@ -277,30 +293,31 @@ async function discoverForConn(connId, baseUrl, apiKey, provider) {
     const resp = await fetch('{% url "models_discover" %}', { method: 'POST', headers: {'X-CSRFToken': getCookie('csrftoken')}, body });
     const data = await resp.json();
     if (!resp.ok) throw new Error(data.error || 'Request failed');
-    // Auto-register all discovered models under this connection
-    let added = 0;
-    for (const m of data.models) {
-      const addBody = new URLSearchParams({
-        csrfmiddlewaretoken: getCookie('csrftoken'),
-        action: 'add_model',
-        model_conn_id: connId,
-        model_id: m,
-        model_display_name: m
-      });
-      await fetch('/models/', { method: 'POST', headers: {'Content-Type': 'application/x-www-form-urlencoded'}, body: addBody.toString() });
-      added++;
-    }
-    btn.textContent = `✓ ${added}`;
-    setTimeout(() => location.reload(), 800);
+    datalist.innerHTML = '';
+    data.models.forEach(m => {
+      const opt = document.createElement('option');
+      opt.value = m;
+      datalist.appendChild(opt);
+    });
+    btn.textContent = `✓ ${data.models.length}`;
+    // Focus the input so user sees the dropdown
+    const input = datalist.previousElementSibling;
+    if (input) input.focus();
   } catch (e) {
     alert('Discover failed: ' + e.message);
     btn.textContent = '🔍';
+  } finally {
     btn.disabled = false;
   }
 }
 function getCookie(name) {
   const v = document.cookie.match(new RegExp('(^| )' + name + '=([^;]+)'));
   return v ? v[2] : '';
+}
+function editModel(id, currentName, modelId) {
+  // Hide label, show edit form
+  document.getElementById('model-label-' + id).classList.add('hidden');
+  document.getElementById('edit-model-' + id).classList.remove('hidden');
 }
 </script>
 {% endblock %}
