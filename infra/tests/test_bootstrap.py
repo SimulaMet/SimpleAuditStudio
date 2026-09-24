@@ -1,10 +1,13 @@
 import os
 from contextlib import contextmanager
 
+from django.contrib.auth import get_user_model
 from django.core.management import call_command
 from django.test import TestCase
 
 from accounts.models import Project, ProjectMembership
+
+User = get_user_model()
 
 
 @contextmanager
@@ -46,3 +49,20 @@ class BootstrapTests(TestCase):
         memberships = ProjectMembership.objects.filter(project=project)
         self.assertEqual(memberships.count(), 1)
         self.assertEqual(memberships.first().role, ProjectMembership.Role.ADMIN)
+
+    def test_bootstrap_admin_is_not_superuser(self):
+        """The bootstrap admin must be a normal account (is_staff only), not a
+        Django superuser. Superuser status bypasses all workspace membership
+        checks, making the admin appear as owner of every workspace."""
+        with _safe_env():
+            call_command(
+                "bootstrap_platform",
+                username="admin",
+                email="admin@example.local",
+                    password="admin-pass-123",
+                project_name="Default",
+            )
+
+        user = User.objects.get(username="admin")
+        self.assertFalse(user.is_superuser)
+        self.assertTrue(user.is_staff)
