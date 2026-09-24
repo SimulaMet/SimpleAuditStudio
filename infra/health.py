@@ -76,9 +76,19 @@ def _postgres_probe() -> dict[str, Any]:
 
 
 def _hatchet_probe() -> dict[str, Any]:
-    import requests
-
     from django.conf import settings
+
+    # In minimal config, the embedded Hatchet API requires an auth token.
+    # Instead of hitting the HTTP endpoint, just check the client is alive.
+    if getattr(settings, "MINIMAL_CONFIG", False):
+        from infra.minimal_config import get_embedded_client
+
+        client = get_embedded_client()
+        if client is not None:
+            return {"status": "up", "detail": "embedded"}
+        return {"status": "down", "detail": "embedded client not started"}
+
+    import requests
 
     base = getattr(settings, "HATCHET_SERVER_URL", "").rstrip("/")
     if not base:
