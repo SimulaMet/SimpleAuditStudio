@@ -137,8 +137,6 @@ class Command(BaseCommand):
                     content_hash=self._compute_hash(description, expected_behavior, test_prompt),
                 )
 
-                scenario.current_revision = revision
-                scenario.save(update_fields=["current_revision"])
                 scenario_ids.append(scenario.id)
 
             # Publish v1
