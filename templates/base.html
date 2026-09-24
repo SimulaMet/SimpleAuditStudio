@@ -7,6 +7,9 @@
   <meta http-equiv="Pragma" content="no-cache">
   <meta http-equiv="Expires" content="0">
   <title>{% block title %}SimpleAudit Studio{% endblock %}</title>
+  {% load static %}
+  <link rel="icon" type="image/png" sizes="32x32" href="{% static 'favicon-32x32.png' %}">
+  <link rel="icon" type="image/png" sizes="16x16" href="{% static 'favicon-16x16.png' %}">
   <script src="https://cdn.tailwindcss.com"></script>
   <script>
     tailwind.config = {
@@ -28,9 +31,9 @@
   <!-- Sidebar -->
   <aside id="sidebar" class="w-52 transition-all duration-200 flex flex-col bg-surface-raised border-r border-gray-800 shrink-0 overflow-hidden">
     <div class="h-14 flex items-center px-4 border-b border-gray-800">
-      <span class="text-lg font-bold text-accent">SA</span>
+      <img src="{% static 'logo.png' %}?v=2" alt="SimpleAudit" class="h-8 w-8 object-contain rounded-lg shrink-0">
       <span class="sidebar-label ml-2 text-sm font-semibold text-gray-300 whitespace-nowrap">SimpleAudit Studio</span>
-      <button id="sidebar-toggle" class="ml-auto text-gray-500 hover:text-gray-300 text-sm" title="Toggle sidebar">⟨</button>
+      <button id="sidebar-toggle" class="ml-auto p-1.5 -m-1.5 text-gray-400 hover:text-gray-200 text-base leading-none" title="Toggle sidebar">⟨</button>
     </div>
     <nav class="flex-1 py-3 space-y-0.5 px-2">
       <a href="{% url 'dashboard' %}" class="flex items-center gap-3 px-3 py-2 rounded-lg text-sm whitespace-nowrap {% if request.path == '/' or request.path == '/dashboard/' %}bg-accent/15 text-accent font-medium{% else %}text-gray-400 hover:text-gray-200 hover:bg-surface-overlay{% endif %}">
@@ -91,9 +94,16 @@
   const isMobile = window.innerWidth < 768;
   let collapsed = isMobile ? true : (localStorage.getItem('sa-sidebar-collapsed') === '1');
   function apply() {
-    sidebar.style.width = collapsed ? '3.5rem' : '13rem';
+    sidebar.style.width = collapsed ? '4rem' : '13rem';
     btn.textContent = collapsed ? '\u27E9' : '\u27E8';
     document.querySelectorAll('.sidebar-label').forEach(el => el.classList.toggle('hidden', collapsed));
+    // Center the header content when collapsed
+    const header = sidebar.querySelector(':scope > div:first-child');
+    if (header) {
+      header.classList.toggle('justify-center', collapsed);
+      header.classList.toggle('px-2', collapsed);
+      header.classList.toggle('px-4', !collapsed);
+    }
   }
   apply();
   btn.addEventListener('click', () => {
