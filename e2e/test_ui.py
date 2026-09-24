@@ -51,8 +51,9 @@ def login(page: Page) -> None:
     page.fill('input[name="username"]', ADMIN_USER)
     page.fill('input[name="password"]', ADMIN_PASS)
     page.click('button[type="submit"]')
-    # Wait for the app shell (sidebar nav appears after successful auth)
-    page.wait_for_selector("aside nav a", timeout=15_000)
+    # Wait for the app shell. The first "aside nav a" is the hidden
+    # "New workspace" dropdown item, so wait for the visible main nav links.
+    page.wait_for_selector("aside nav a:visible", timeout=15_000)
 
 
 def test_login_and_dashboard(page: Page) -> None:
@@ -133,8 +134,8 @@ def test_audit_detail_clone_button(page: Page) -> None:
     # Click first run row (navigates via onclick to /audits/<id>/)
     rows.first.click()
     page.wait_for_timeout(1000)
-    # Clone Audit button should be visible
-    expect(page.locator("a:has-text('Clone Audit')")).to_be_visible()
+    # Clone Audit button (icon-only link) should be visible
+    expect(page.locator("a[aria-label='Clone this audit']")).to_be_visible()
 
 
 def test_clone_prefills_form(page: Page) -> None:
@@ -150,8 +151,8 @@ def test_clone_prefills_form(page: Page) -> None:
     # Navigate to first run detail (row onclick)
     rows.first.click()
     page.wait_for_timeout(1000)
-    # Click Clone Audit
-    page.click("a:has-text('Clone Audit')")
+    # Click Clone Audit (icon-only link)
+    page.click("a[aria-label='Clone this audit']")
     page.wait_for_timeout(1000)
     # Should be on New Audit page with pre-filled values
     expect(page.locator("main")).to_contain_text("New Audit")
