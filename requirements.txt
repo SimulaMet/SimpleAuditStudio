@@ -10,6 +10,7 @@ gunicorn==23.0.0
 hatchet-sdk==1.41.0
 pydantic>=2.7,<3
 sentry-sdk[django]>=2.0
+workos==10.4.0
 
 # --- SimpleAudit engine (Target -> Auditor -> Judge) ---
 # The engine is a normal pip dependency. It is pinned to a git ref (not a PyPI
