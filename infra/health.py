@@ -210,38 +210,6 @@ def _model_endpoints_probe() -> dict[str, Any]:
             })
         seen_urls.add(base)
 
-    # Legacy flat endpoints not already covered by a connection
-    from model_registry.models import ModelEndpoint
-    legacy_eps = ModelEndpoint.objects.filter(enabled=True).exclude(base_url__in=list(seen_urls)).order_by("id")
-    if legacy_eps:
-        legacy_models = []
-        for ep in legacy_eps:
-            base = (ep.base_url or "").strip()
-            status = "unknown"
-            detail = "no base_url"
-            if base:
-                try:
-                    import requests
-                    url = base.rstrip("/")
-                    if not url.endswith("/models"):
-                        url = f"{url}/models"
-                    requests.get(url, timeout=2)
-                    status = "up"
-                    detail = ""
-                except Exception as exc:  # noqa: BLE001
-                    status = "down"
-                    detail = f"{type(exc).__name__}"
-            legacy_models.append({"id": ep.id, "display_name": ep.display_name, "model_id": ep.model_id, "status": status})
-        groups.append({
-            "name": "Legacy Endpoints",
-            "provider": "—",
-            "base_url": "",
-            "status": "up" if any(m["status"] == "up" for m in legacy_models) else "down",
-            "latency_ms": None,
-            "detail": "",
-            "models": legacy_models,
-        })
-
     overall = "up" if all(g["status"] != "down" for g in groups) else "down"
     return {"status": overall, "groups": groups}
 
