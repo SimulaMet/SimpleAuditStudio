@@ -294,17 +294,19 @@ def _scenario_execute_impl(workflow_input: ScenarioInput, ctx: Context) -> dict:
         # let Hatchet retry per policy. Do not swallow — the run must reflect it.
         append_event(run_id, version_item_id, "scenario_failed", {"error": str(exc)})
         with transaction.atomic():
+            pre_existing = _result_row_exists(run_id, version_item_id)
             upsert_scenario_result(run_id, version_item_id, status="failed", attempts=attempt, result={"error": str(exc)})
-            _bump_run_counters(run_id, version_item_id, succeeded=False)
+            _bump_run_counters(run_id, version_item_id, succeeded=False, pre_existing=pre_existing)
         raise
 
     severity = result_payload.get("severity", "")
     failed = severity.upper() == "ERROR"
     with transaction.atomic():
+        pre_existing = _result_row_exists(run_id, version_item_id)
         upsert_scenario_result(
             run_id, version_item_id, status="failed" if failed else "completed", attempts=attempt, result=result_payload
         )
-        _bump_run_counters(run_id, version_item_id, succeeded=not failed)
+        _bump_run_counters(run_id, version_item_id, succeeded=not failed, pre_existing=pre_existing)
 
     append_event(
         run_id,
@@ -321,28 +323,48 @@ def _iter_attempted_events(run_id: str, version_item_id: str):
     return [e for e in list_events(run_id) if e["version_item_id"] == version_item_id and e["kind"] == "scenario_attempted"]
 
 
-def _bump_run_counters(run_id: str, version_item_id: str, *, succeeded: bool) -> None:
+def _result_row_exists(run_id: str, version_item_id: str) -> bool:
+    """Whether a durable ScenarioResult row already exists for this item.
+
+    Must be called BEFORE upserting the result so the counter bump can tell a
+    first execution (bump) apart from a retry (adjust only).
+    """
+    from audits.events import ScenarioResult
+
+    return ScenarioResult.objects.filter(
+        run_id=int(run_id), version_item_id=version_item_id
+    ).exists()
+
+
+def _bump_run_counters(
+    run_id: str, version_item_id: str, *, succeeded: bool, pre_existing: bool
+) -> None:
     """Idempotently bump run counters for a given version item.
 
-    Only increments if no prior ScenarioResult exists for this version_item,
-    preventing double-counting when Hatchet retries re-execute the task.
+    ``pre_existing`` must be captured by the caller BEFORE upserting the
+    ScenarioResult row: it tells us whether a durable result already existed
+    before this execution. First execution (no prior row) increments the
+    counters; a retry (prior row present) only adjusts pass/fail if the
+    outcome changed, never double-counting.
     """
     from audits.models import AuditRun
-    from audits.events import ScenarioResult
 
     try:
         run = AuditRun.objects.get(pk=int(run_id))
     except (AuditRun.DoesNotExist, ValueError):
         return
 
-    # If a result row already exists for this version_item, the counter was
-    # already bumped on the first execution. Update severity in place instead.
-    existing = ScenarioResult.objects.filter(
-        run_id=int(run_id), version_item_id=version_item_id
-    ).first()
-    if existing:
-        # Re-execution (retry): adjust pass/fail if outcome changed
-        was_success = existing.status == "completed"
+    if pre_existing:
+        # Re-execution (retry): the counter was already bumped on the first
+        # execution. Adjust pass/fail only if the outcome changed. The stored
+        # status is still the PREVIOUS attempt's (the upsert runs after this
+        # check in the caller), so read it directly.
+        from audits.events import ScenarioResult
+
+        existing = ScenarioResult.objects.filter(
+            run_id=int(run_id), version_item_id=version_item_id
+        ).first()
+        was_success = existing is not None and existing.status == "completed"
         if was_success != succeeded:
             if succeeded:
                 run.successful_scenarios = max(0, run.successful_scenarios - (1 if not was_success else 0))

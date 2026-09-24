@@ -10,7 +10,9 @@ from infra.tests.factories import (
     UserFactory,
     ProjectFactory,
     MembershipFactory,
+    ModelConnectionFactory,
     ModelEndpointFactory,
+    RegisteredModelFactory,
 )
 
 
@@ -64,10 +66,14 @@ class HealthProbeTest(TestCase):
         from infra.health import _model_endpoints_probe
 
         user, project = _make_admin()
-        ep = ModelEndpointFactory(project=project, base_url="http://127.0.0.1:1/v1", enabled=True)
+        conn = ModelConnectionFactory(project=project, base_url="http://127.0.0.1:1/v1", enabled=True)
+        model = RegisteredModelFactory(connection=conn, project=project, enabled=True)
         result = _model_endpoints_probe()
-        ids = [e["id"] for e in result["endpoints"]]
-        self.assertIn(ep.id, ids)
+        groups = result.get("groups", [])
+        self.assertTrue(any(g["name"] == conn.name for g in groups))
+        group = next(g for g in groups if g["name"] == conn.name)
+        model_ids = [m["id"] for m in group["models"]]
+        self.assertIn(model.id, model_ids)
 
     def test_queue_throughput_counts_runs(self):
         from infra.health import _queue_throughput_probe
@@ -92,7 +98,7 @@ class HealthProbeTest(TestCase):
 
         from infra import health
 
-        with override_settings(MINIO_ENDPOINT="http://127.0.0.1:1", MINIO_BUCKET="b"):
+        with override_settings(MINIO_ENDPOINT="http://127.0.0.1:1", MINIO_ACCESS_KEY="test", MINIO_SECRET_KEY="test", MINIO_BUCKET="b"):
             start = time.monotonic()
             # Call through _probe() exactly as collect_health() does, so the
             # raised ClientError is normalized to a down component.
