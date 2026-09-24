@@ -8,7 +8,7 @@ PY := $(VENV)/bin/python
 DJANGO := $(PY) manage.py
 
 .PHONY: help venv local-setup local-web local-worker docker-up docker-down \
-        docker-logs docker-build test test-smoke migrate worker e2e
+        docker-logs docker-build test test-smoke migrate worker e2e seed
 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
@@ -17,11 +17,12 @@ venv: ## Create the local virtualenv and install dependencies
 	python3 -m venv $(VENV)
 	$(VENV)/bin/pip install -r requirements.txt
 
-local-setup: ## Local dev: venv + .env + migrations + bootstrap (idempotent)
+local-setup: ## Local dev: venv + .env + migrations + bootstrap + seed (idempotent)
 	@test -d $(VENV) || $(MAKE) venv
 	@test -f .env || cp .env.local.example .env
 	$(DJANGO) migrate
 	$(DJANGO) bootstrap_platform
+	$(DJANGO) seed_platform
 
 local-web: ## Run the web server locally (http://localhost:8000)
 	$(DJANGO) runserver
@@ -49,6 +50,9 @@ test-smoke: ## Run only the all-pages smoke test
 
 migrate: ## Apply database migrations
 	$(DJANGO) migrate
+
+seed: ## Seed scenario packs + default model connections (idempotent)
+	$(DJANGO) seed_platform
 
 worker: ## Alias for local-worker
 	$(MAKE) local-worker
