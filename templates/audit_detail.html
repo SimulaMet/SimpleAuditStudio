@@ -44,6 +44,12 @@
   </div>
 </div>
 
+<script>
+function toggleRename() {
+  document.getElementById('rename-form').classList.toggle('hidden');
+}
+</script>
+
 <!-- Live Progress (SSE) -->
 {% if run.status != "completed" and run.status != "failed" and run.status != "cancelled" %}
 <div id="progress-panel" class="bg-surface-raised rounded-xl border border-accent/30 p-4 mb-6">
@@ -132,9 +138,6 @@
   </div>
 </div>
 <script>
-function toggleRename() {
-  document.getElementById('rename-form').classList.toggle('hidden');
-}
 (function() {
   const project_id = {{ request.project.id }};
   const run_id = {{ run.id }};
