@@ -25,6 +25,7 @@ from accounts.serializers import (
 )
 from infra.readiness import ready_payload
 from accounts.services import (
+    DEFAULT_PROJECT_SLUG,
     bootstrap_admin_and_default_project,
     create_workspace,
     delete_workspace,
@@ -87,7 +88,11 @@ def list_workspaces(request):
     if request.user.is_superuser:
         projects = Project.objects.all()
     else:
-        projects = Project.objects.filter(memberships__user=request.user).distinct()
+        from django.db.models import Q
+
+        projects = Project.objects.filter(
+            Q(memberships__user=request.user) | Q(slug=DEFAULT_PROJECT_SLUG)
+        ).distinct()
     return Response(_serialize_workspaces(projects, request))
 
 

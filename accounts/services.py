@@ -53,10 +53,17 @@ def bootstrap_admin_and_default_project(
     return user, project
 
 
+#: Slug of the shared workspace visible to every authenticated user.
+DEFAULT_PROJECT_SLUG = "default"
+
+
 def ensure_project_access(user, project) -> bool:
     if not user or not user.is_authenticated:
         return False
     if user.is_superuser:
+        return True
+    # The Default workspace is always accessible to all users.
+    if project.slug == DEFAULT_PROJECT_SLUG:
         return True
     return ProjectMembership.objects.filter(project=project, user=user).exists()
 
@@ -77,15 +84,11 @@ def _require_workspace_admin(user, project) -> None:
 def create_workspace(*, user, name: str, description: str = "") -> Project:
     """Create a workspace; the creator becomes its ADMIN member.
 
-    Allowed for superusers and any user who already administers at least one
-    workspace (so teams can grow without contacting the platform operator).
+    Any authenticated user may create a workspace — this is how new users
+    bootstrap their own space without needing an existing admin to invite them.
     """
     if not user or not user.is_authenticated:
         raise StableAPIError(detail="Authentication required.", code="authentication_required", http_status=401)
-    if not user.is_superuser and not ProjectMembership.objects.filter(
-        user=user, role=ProjectMembership.Role.ADMIN
-    ).exists():
-        raise StableAPIError(detail="You must administer a workspace before creating new ones.", code="workspace_create_forbidden", http_status=403)
 
     clean_name = (name or "").strip()
     if not clean_name:

@@ -103,3 +103,35 @@ class LoginCSRFTests(TestCase):
         self.assertEqual(dj_settings.CSRF_COOKIE_SAMESITE, "Lax")
         self.assertFalse(dj_settings.SESSION_COOKIE_SECURE)
         self.assertFalse(dj_settings.CSRF_COOKIE_SECURE)
+class GrantDefaultProjectTest(TestCase):
+    """New WorkOS users must land in the 'Default' project (by slug), not
+    whichever project happens to be oldest."""
+
+    def setUp(self):
+        from infra.ui import _grant_default_project
+
+        self._grant = _grant_default_project
+
+    def test_grants_viewer_on_default_slug(self):
+        # A project created before 'default' exists — should NOT be targeted.
+        Project.objects.create(name="Early", slug="early")
+        default = Project.objects.create(name="Default", slug="default")
+
+        user = User.objects.create_user(username="newbie", password="test-pass-123")
+        self._grant(user)
+
+        self.assertTrue(
+            ProjectMembership.objects.filter(project=default, user=user, role="viewer").exists()
+        )
+        self.assertFalse(
+            ProjectMembership.objects.filter(project__slug="early", user=user).exists()
+        )
+
+    def test_no_membership_if_default_missing(self):
+        # If the 'Default' project was deleted, no membership is created.
+        Project.objects.create(name="Other", slug="other")
+        user = User.objects.create_user(username="orphan", password="test-pass-123")
+        self._grant(user)
+        self.assertEqual(ProjectMembership.objects.filter(user=user).count(), 0)
+
+

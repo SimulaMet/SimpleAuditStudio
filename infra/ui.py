@@ -261,10 +261,14 @@ class WorkOSCallbackView(View):
 
 
 def _grant_default_project(user):
-    """Give first-time WorkOS users membership in the default project (viewer)."""
+    """Give first-time WorkOS users membership in the 'Default' project (viewer).
+
+    The 'Default' workspace is reserved for this purpose — it is created during
+    platform bootstrap and serves as the shared landing space for new users.
+    """
     from accounts.models import Project, ProjectMembership
 
-    project = Project.objects.order_by("created_at").first()
+    project = Project.objects.filter(slug="default").first()
     if project:
         ProjectMembership.objects.get_or_create(
             project=project, user=user, defaults={"role": ProjectMembership.Role.VIEWER}
@@ -338,13 +342,18 @@ class WorkspacesView(LoginRequiredMixin, TemplateView):
     template_name = "workspaces.html"
 
     def get_context_data(self, **kw):
+        from django.db.models import Q
+
         from accounts.models import Project, ProjectMembership
+        from accounts.services import DEFAULT_PROJECT_SLUG
 
         user = self.request.user
         if user.is_superuser:
             projects = Project.objects.all()
         else:
-            projects = Project.objects.filter(memberships__user=user).distinct()
+            projects = Project.objects.filter(
+                Q(memberships__user=user) | Q(slug=DEFAULT_PROJECT_SLUG)
+            ).distinct()
         projects = list(projects.order_by("name"))
 
         roles = {}
