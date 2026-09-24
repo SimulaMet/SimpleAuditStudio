@@ -50,7 +50,11 @@ services:
     # Pre-built image from CI (GHCR); falls back to a local build when the
     # image is not available, so `docker compose up` still works offline.
     image: ${SIMPLEAUDIT_IMAGE:-ghcr.io/sushantgautam/simpleauditstudio:latest}
-    build: .
+    # Compose application image (web + worker only). The root Dockerfile is the
+    # single-container HF Space image and must NOT be used here.
+    build:
+      context: .
+      dockerfile: deploy/compose/Dockerfile
     command: python /app/deploy/mock_openai_server.py
     environment:
       PORT: "8901"
@@ -112,7 +116,11 @@ services:
   # never executes model calls. Scale by adding replicas or GPU-labeled workers.
   worker:
     image: ${SIMPLEAUDIT_IMAGE:-ghcr.io/sushantgautam/simpleauditstudio:latest}
-    build: .
+    # Compose application image (web + worker only). The root Dockerfile is the
+    # single-container HF Space image and must NOT be used here.
+    build:
+      context: .
+      dockerfile: deploy/compose/Dockerfile
     env_file: .env
     environment:
       POSTGRES_HOST: postgres

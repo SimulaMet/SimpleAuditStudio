@@ -241,13 +241,20 @@ The `web`, `worker`, and `mock-model` services reference
 a cloned checkout. Pin a specific tag (e.g. `v1.2.0` or `sha-<short-sha>`) in
 `.env` for reproducible deployments; `latest` tracks `main`.
 
-The root `Dockerfile` is the compose-stack application image (web + worker);
-`deploy/hf-space/Dockerfile` is the single-container all-in-one variant for
-Hugging Face Spaces, built on demand:
+There are two images:
 
-```bash
-docker build -f deploy/hf-space/Dockerfile https://github.com/SushantGautam/SimpleAuditStudio.git#main
-```
+- **Root `Dockerfile`** — the single-container all-in-one image (Postgres +
+  Hatchet + web + worker in one container via supervisord, serves :7860). This
+  is what Hugging Face Spaces build (HF only builds the root Dockerfile) and
+  what the "no clone" quick start uses:
+
+  ```bash
+  docker build https://github.com/SushantGautam/SimpleAuditStudio.git#main
+  ```
+
+- **`deploy/compose/Dockerfile`** — the compose-stack application image
+  (web + worker only; Postgres/Hatchet run as separate containers). Referenced
+  by `docker-compose.yml` and CI. Do not use it for a Space.
 
 ## 6. Migrations
 
