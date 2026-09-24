@@ -46,7 +46,7 @@ RUN pip install -r requirements.txt
 # files (e.g. static assets) are always picked up on rebuild. HF Spaces caches
 # Docker layers aggressively; without this, a fresh static file can 404 because
 # the collectstatic layer is reused from an older build that lacked the file.
-ARG BUILD_ID=0
+ARG BUILD_ID=20260924-logo
 COPY . .
 
 # Collect static files so Django can serve them without DEBUG.
