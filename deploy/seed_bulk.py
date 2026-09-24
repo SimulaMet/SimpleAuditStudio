@@ -1,10 +1,15 @@
-"""Bulk seed script — insert thousands of fake data points to stress-test UI.
+"""Bulk stress-test data generator — inserts thousands of FAKE data points.
+
+NOT part of the first-run seed. The unified first-run seed is the
+``seed_platform`` management command (see infra/seed.py). This script exists
+only to stress-test the UI with large volumes of synthetic scenarios, model
+endpoints, and audit runs.
 
 Run inside the web container:
-    docker compose exec web python /app/seed_bulk.py
+    docker compose exec web python /app/deploy/seed_bulk.py
 
 Or locally with SQLite:
-    SIMPLEAUDIT_LOCAL_SQLITE=1 .venv/bin/python manage.py shell < seed_bulk.py
+    SIMPLEAUDIT_LOCAL_SQLITE=1 .venv/bin/python manage.py shell < deploy/seed_bulk.py
 """
 import os
 import sys
