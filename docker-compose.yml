@@ -177,7 +177,7 @@ services:
     # collection, then serve with gunicorn. The seed is safe on every start:
     # it skips anything already present. Set SEED_ON_BOOT=false to opt out.
     # Set SEED_DEMO_AUDITS=false to skip demo audit runs only.
-    command: 'sh -c "python manage.py migrate --noinput && python manage.py bootstrap_platform --username ${BOOTSTRAP_ADMIN_USERNAME:-admin} --email ${BOOTSTRAP_ADMIN_EMAIL:-admin@example.local} --password ${BOOTSTRAP_ADMIN_PASSWORD:?Set BOOTSTRAP_ADMIN_PASSWORD in .env} --project-name ${BOOTSTRAP_PROJECT_NAME:-Default} && if [ "${SEED_ON_BOOT:-true}" != "false" ]; then SEED_ARGS=\"\"; if [ \"${SEED_DEMO_AUDITS:-true}\" = \"false\" ]; then SEED_ARGS=\"--skip-demo-audits\"; fi; python manage.py seed_platform $SEED_ARGS || echo ''WARNING: seed_platform failed - continuing without seed data''; fi && python manage.py collectstatic --noinput && gunicorn config.wsgi:application --bind 0.0.0.0:8000 --workers 2"'
+    command: 'sh -c "python manage.py migrate --noinput && python manage.py bootstrap_platform --username ${BOOTSTRAP_ADMIN_USERNAME:-studio} --email ${BOOTSTRAP_ADMIN_EMAIL:-admin@example.local} --password ${BOOTSTRAP_ADMIN_PASSWORD:?Set BOOTSTRAP_ADMIN_PASSWORD in .env} --project-name ${BOOTSTRAP_PROJECT_NAME:-Default} && if [ "${SEED_ON_BOOT:-true}" != "false" ]; then SEED_ARGS=\"\"; if [ \"${SEED_DEMO_AUDITS:-true}\" = \"false\" ]; then SEED_ARGS=\"--skip-demo-audits\"; fi; python manage.py seed_platform $SEED_ARGS || echo ''WARNING: seed_platform failed - continuing without seed data''; fi && python manage.py collectstatic --noinput && gunicorn config.wsgi:application --bind 0.0.0.0:8000 --workers 2"'
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:8000/healthz"]
       interval: 30s

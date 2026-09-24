@@ -7,7 +7,7 @@ with bootstrap_platform already run.
 Run locally:
     docker compose up -d
     docker compose exec web python manage.py bootstrap_platform \
-        --username admin --email admin@example.com --password e2etestpass123 \
+        --username studio --email studio@example.local --password e2etestpass123 \
         --project-name Research
     .venv/bin/python e2e/test_ui.py
 """
@@ -22,7 +22,7 @@ except ImportError:
     sys.exit(1)
 
 BASE_URL = "http://localhost:8000"
-ADMIN_USER = "admin"
+ADMIN_USER = "studio"
 ADMIN_PASS = "e2etestpass123"
 
 

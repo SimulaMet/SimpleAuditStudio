@@ -99,7 +99,7 @@ def main() -> None:
     # Give the web server a moment to bind
     time.sleep(1)
 
-    username = os.environ.get("BOOTSTRAP_ADMIN_USERNAME", "admin")
+    username = os.environ.get("BOOTSTRAP_ADMIN_USERNAME", "studio")
     password = os.environ.get("BOOTSTRAP_ADMIN_PASSWORD", "admin12345")
 
     print("┌─────────────────────────────────────────────────────────┐")
@@ -140,7 +140,7 @@ def _seed_demo_data() -> None:
     from django.core.management import call_command
 
     # Respect env vars (set by Dockerfile for HF Space, or defaults for local)
-    username = os.environ.get("BOOTSTRAP_ADMIN_USERNAME", "admin")
+    username = os.environ.get("BOOTSTRAP_ADMIN_USERNAME", "studio")
     email = os.environ.get("BOOTSTRAP_ADMIN_EMAIL", "admin@localhost")
     password = os.environ.get("BOOTSTRAP_ADMIN_PASSWORD", "admin12345")
     project_name = os.environ.get("BOOTSTRAP_PROJECT_NAME", "Demo Project")

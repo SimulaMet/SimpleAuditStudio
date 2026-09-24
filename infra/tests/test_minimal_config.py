@@ -26,12 +26,12 @@ class TestDemoBootSequence(TestCase):
         from model_registry.models import ModelEndpoint
 
         user, project = bootstrap_admin_and_default_project(
-            username="admin",
+            username="studio",
             email="admin@localhost",
             password="admin12345",
             project_name="Demo Project",
         )
-        self.assertEqual(user.username, "admin")
+        self.assertEqual(user.username, "studio")
         self.assertEqual(project.name, "Demo Project")
 
         call_command("seed_platform", project=project.id, verbosity=0)
@@ -56,7 +56,7 @@ class TestDemoBootSequence(TestCase):
         from model_registry.models import ModelEndpoint
 
         _, project = bootstrap_admin_and_default_project(
-            username="admin", email="admin@localhost", password="admin12345",
+            username="studio", email="admin@localhost", password="admin12345",
             project_name="Demo Project",
         )
         call_command("seed_platform", project=project.id, verbosity=0)
@@ -84,6 +84,30 @@ class TestEmbeddedHatchetLifecycle(TestCase):
     These require the sidecar binary and network access. They will be slow
     (~15s first run) but verify the full lifecycle works.
     """
+
+    def test_data_dir_is_persistent(self):
+        """The embedded Postgres data dir is a fixed location, not a temp dir."""
+        from infra.minimal_config import _data_dir
+
+        d1 = _data_dir()
+        d2 = _data_dir()
+        self.assertEqual(d1, d2)
+        self.assertTrue(os.path.isdir(d1))
+        # Must not be a per-run temp dir (the old leak: 37 x 218M in $TMPDIR)
+        self.assertNotIn("simpleaudit-hatchet-pg-", os.path.basename(d1))
+
+    def test_data_dir_env_override(self):
+        """SIMPLEAUDIT_EMBEDDED_PG_DIR overrides the default location."""
+        import tempfile as _tempfile
+
+        from infra.minimal_config import _data_dir
+
+        with patch.dict(os.environ, {"SIMPLEAUDIT_EMBEDDED_PG_DIR": "/tmp/custom-pg-dir-test"}):
+            d = _data_dir()
+        self.assertEqual(d, "/tmp/custom-pg-dir-test")
+        self.assertTrue(os.path.isdir(d))
+        import shutil
+        shutil.rmtree("/tmp/custom-pg-dir-test", ignore_errors=True)
 
     def test_start_and_stop(self):
         from infra.minimal_config import start_embedded_hatchet, stop_embedded_hatchet

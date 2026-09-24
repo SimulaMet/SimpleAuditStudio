@@ -133,7 +133,7 @@ RUN_STATUS_DISTRIBUTION = (
 
 def main():
     project = Project.objects.get(id=1)
-    admin = User.objects.get(username="admin")
+    admin = User.objects.get(username="studio")
 
     # ─── 1. Model Endpoints (15) ───────────────────────────────────────────────
     print(f"Model endpoints before: {ModelEndpoint.objects.count()}")

@@ -39,7 +39,7 @@ class BootstrapTests(TestCase):
             for _ in range(2):
                 call_command(
                     "bootstrap_platform",
-                    username="admin",
+                    username="studio",
                     email="admin@example.local",
                     password="admin-pass-123",
                     project_name="Default",
@@ -57,12 +57,12 @@ class BootstrapTests(TestCase):
         with _safe_env():
             call_command(
                 "bootstrap_platform",
-                username="admin",
+                username="studio",
                 email="admin@example.local",
                     password="admin-pass-123",
                 project_name="Default",
             )
 
-        user = User.objects.get(username="admin")
+        user = User.objects.get(username="studio")
         self.assertFalse(user.is_superuser)
         self.assertTrue(user.is_staff)
