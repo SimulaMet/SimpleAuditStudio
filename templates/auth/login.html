@@ -8,14 +8,25 @@
       <h1 class="text-3xl font-bold text-gray-100">SimpleAudit Studio</h1>
       <p class="text-sm text-gray-500 mt-2">Reproducible AI Model Auditing</p>
     </div>
-    {% if demo_mode %}
-    <div class="mb-4 px-4 py-3 rounded-lg text-sm bg-amber-900/30 border border-amber-800 text-amber-300 text-center">
-      🎯 Demo mode — credentials are prefilled. Just click <strong>Sign in</strong>.
+
+    {# ── Primary: WorkOS email code (shown only when configured) ── #}
+    {% if workos_enabled %}
+    <a href="{% url 'workos_login' %}"
+       class="flex items-center justify-center gap-3 w-full px-6 py-4 rounded-xl bg-accent text-white text-base font-semibold hover:bg-accent-hover transition-colors shadow-lg shadow-accent/20">
+      <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>
+      Continue with email code
+    </a>
+    <div class="flex items-center gap-4 my-5">
+      <div class="h-px flex-1 bg-gray-800"></div>
+      <span class="text-xs text-gray-500 uppercase tracking-wider">or</span>
+      <div class="h-px flex-1 bg-gray-800"></div>
     </div>
     {% endif %}
+
+    {# ── Secondary: username/password (always available) ── #}
     <form method="post" class="bg-surface-raised rounded-2xl border border-gray-800 p-8 space-y-5 shadow-xl">
       {% csrf_token %}
-      <h2 class="text-base font-semibold text-gray-200">Sign in</h2>
+      <h2 class="text-base font-semibold text-gray-200">Sign in with password</h2>
       {% if form.non_field_errors %}
         <div class="text-sm text-red-400 bg-red-900/30 rounded-lg px-3 py-2">{{ form.non_field_errors.0 }}</div>
       {% endif %}
@@ -31,24 +42,11 @@
                class="w-full px-4 py-3 rounded-lg bg-surface-overlay border border-gray-700 text-sm text-gray-100 focus:outline-none focus:ring-2 focus:ring-accent/50"
                placeholder="••••••••">
       </div>
-      <button type="submit" class="w-full px-4 py-3 rounded-lg bg-accent text-white text-sm font-semibold hover:bg-accent-hover transition-colors">
+      <button type="submit" class="w-full px-4 py-3 rounded-lg bg-surface-overlay border border-gray-700 text-sm font-semibold text-gray-200 hover:bg-gray-800 hover:border-gray-600 transition-colors">
         Sign in
       </button>
     </form>
-    {% if workos_enabled %}
-    <div class="flex items-center gap-3 my-5">
-      <div class="h-px flex-1 bg-gray-800"></div>
-      <span class="text-xs text-gray-600 uppercase tracking-wide">or</span>
-      <div class="h-px flex-1 bg-gray-800"></div>
-    </div>
-    <div class="space-y-2">
-      <a href="{% url 'workos_login' %}"
-         class="flex items-center justify-center gap-3 w-full max-w-md mx-auto px-4 py-3 rounded-lg border border-gray-700 bg-surface-overlay text-sm font-semibold text-gray-200 hover:bg-gray-800 hover:border-gray-600 transition-colors">
-        <svg class="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>
-        Continue with email code
-      </a>
-    </div>
-    {% endif %}
+
     <p class="text-center text-sm text-gray-500 mt-5">
       No account? <a href="{% url 'register' %}" class="text-accent hover:underline">Register</a>
     </p>
