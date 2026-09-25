@@ -25,12 +25,9 @@ def migrations_pending() -> bool:
         return True
 
     pending = 0
-    in_unapplied_section = False
     for line in out.getvalue().splitlines():
         if line.startswith("[ ]"):
             pending += 1
-        elif line.startswith("[X]"):
-            in_unapplied_section = False
     return pending > 0
 
 

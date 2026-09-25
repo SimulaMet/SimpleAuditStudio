@@ -2,7 +2,6 @@
 import logging
 
 from django.contrib.auth import authenticate, login
-from django.db import connection
 from django.http import JsonResponse
 from rest_framework import status
 from rest_framework.authtoken.models import Token
@@ -16,7 +15,6 @@ from accounts.serializers import (
     MemberAddSerializer,
     MemberRoleSerializer,
     ProjectMembershipSerializer,
-    ProjectSerializer,
     RegisterSerializer,
     UserSerializer,
     WorkspaceCreateSerializer,
@@ -26,7 +24,6 @@ from accounts.serializers import (
 from infra.readiness import ready_payload
 from accounts.services import (
     DEFAULT_PROJECT_SLUG,
-    bootstrap_admin_and_default_project,
     create_workspace,
     delete_workspace,
     ensure_project_access,

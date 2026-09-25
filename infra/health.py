@@ -177,7 +177,7 @@ def _engine_probe() -> dict[str, Any]:
 
 def _model_endpoints_probe() -> dict[str, Any]:
     """Ping each registered model endpoint's base_url, grouped by connection."""
-    from model_registry.models import ModelConnection, RegisteredModel
+    from model_registry.models import ModelConnection
 
     groups: list[dict[str, Any]] = []
 

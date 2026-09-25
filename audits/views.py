@@ -214,7 +214,6 @@ def stream_audit_run_events(request, project_id, run_id):
     with a higher id — standard SSE replay semantics. The stream ends when a
     terminal run event (completed/failed/cancelled) is observed.
     """
-    from django.contrib.auth.decorators import login_required
     from django.http import Http404
 
     # This is called via URL dispatch; enforce auth manually since we're not using DRF.

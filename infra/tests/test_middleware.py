@@ -1,8 +1,7 @@
 """Tests for request-ID middleware and correlation logging."""
 import logging
-from unittest import mock
 
-from django.test import TestCase, override_settings
+from django.test import TestCase
 
 from infra.middleware import CorrelationLogFilter
 

@@ -6,7 +6,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 from infra.exceptions import StableAPIError
-from model_registry.models import ModelConnection, ModelEndpoint, RegisteredModel
+from model_registry.models import ModelConnection, ModelEndpoint
 from model_registry.serializers import (
     ModelEndpointCreateSerializer,
     ModelEndpointSerializer,

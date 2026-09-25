@@ -37,7 +37,7 @@ class EndpointURLField(serializers.Field):
         m = re.match(r"^(https?)://([^/@?#]+)(/.*)?$", url)
         if not m:
             self.fail("invalid")
-        scheme, authority, _path = m.group(1), m.group(2), m.group(3)
+        _scheme, authority, _path = m.group(1), m.group(2), m.group(3)
         # Strip userinfo if present; then split host from port.
         hostport = authority.rsplit("@", 1)[-1]
         if hostport.startswith("["):

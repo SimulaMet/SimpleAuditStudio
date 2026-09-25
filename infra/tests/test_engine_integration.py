@@ -97,11 +97,9 @@ class RoleKwargsFilteringTest(TestCase):
     forwarded to the provider client constructor; only safe client options pass."""
 
     def test_per_request_params_are_dropped(self):
-        from infra.engine import build_model_auditor
 
         # We can't call build_model_auditor without the engine, so exercise the
         # filtering rule directly by replicating its allowlist contract.
-        from infra import engine
 
         allowlist = {"timeout", "max_retries", "default_headers"}
         raw = {"temperature": 0.7, "top_p": 0.9, "max_tokens": 512, "timeout": 60}
@@ -150,7 +148,7 @@ class EngineIntegrationTest(TestCase):
         ProjectMembership.objects.create(project=self.project, user=self.user, role=ProjectMembership.Role.AUDITOR)
 
     def test_engine_raises_clean_error_when_unavailable(self):
-        from infra.engine import EngineError, _ensure_engine_available, run_scenario
+        from infra.engine import EngineError, run_scenario
 
         # Force the engine import to fail (engine not installed).
         with mock.patch("infra.engine._ensure_engine_available", side_effect=EngineError("no engine")):
