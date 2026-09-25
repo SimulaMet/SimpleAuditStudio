@@ -77,7 +77,8 @@ def main():
         sys.exit(2)
 
     c = Client(base_url)
-    step = lambda m: print(f"\n=== {m} ===")
+    def step(m):
+        print(f"\n=== {m} ===")
     # Unique suffix so the smoke test is repeatable without colliding with the
     # (project, display_name) / set-name uniqueness constraints on prior runs.
     import time as _t

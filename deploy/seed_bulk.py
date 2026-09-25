@@ -12,7 +12,6 @@ Or locally with SQLite:
     SIMPLEAUDIT_LOCAL_SQLITE=1 .venv/bin/python manage.py shell < deploy/seed_bulk.py
 """
 import os
-import sys
 import random
 import hashlib
 from datetime import datetime, timedelta
@@ -23,11 +22,11 @@ os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings")
 import django
 django.setup()
 
-from accounts.models import User, Project
-from scenarios.models import Scenario, ScenarioRevision, ScenarioSet, ScenarioSetVersion, ScenarioSetVersionItem
-from model_registry.models import ModelEndpoint
-from audits.models import AuditRun
-from audits.events import ScenarioResult, append_event
+from accounts.models import User, Project  # noqa: E402
+from scenarios.models import Scenario, ScenarioRevision, ScenarioSet, ScenarioSetVersion, ScenarioSetVersionItem  # noqa: E402
+from model_registry.models import ModelEndpoint  # noqa: E402
+from audits.models import AuditRun  # noqa: E402
+from audits.events import ScenarioResult, append_event  # noqa: E402
 
 random.seed(42)
 

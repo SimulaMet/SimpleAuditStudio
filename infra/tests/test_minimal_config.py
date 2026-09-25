@@ -13,7 +13,7 @@ import os
 import urllib.request
 from unittest.mock import patch
 
-from django.test import TestCase, override_settings
+from django.test import TestCase
 
 
 class TestDemoBootSequence(TestCase):
@@ -98,7 +98,6 @@ class TestEmbeddedHatchetLifecycle(TestCase):
 
     def test_data_dir_env_override(self):
         """SIMPLEAUDIT_EMBEDDED_PG_DIR overrides the default location."""
-        import tempfile as _tempfile
 
         from infra.minimal_config import _data_dir
 

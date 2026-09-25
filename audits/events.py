@@ -15,7 +15,6 @@ events are inputs only; the worker bridges them into these rows.
 """
 from __future__ import annotations
 
-import json
 
 from django.db import models, transaction
 

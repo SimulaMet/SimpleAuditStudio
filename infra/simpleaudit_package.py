@@ -33,7 +33,6 @@ engine is always consumed as an installed package.
 from __future__ import annotations
 
 import json
-import os
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path

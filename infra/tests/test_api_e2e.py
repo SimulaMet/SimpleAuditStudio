@@ -10,13 +10,8 @@ from rest_framework.test import APITestCase
 
 from audits.events import ScenarioResult
 from audits.models import AuditRun
-from model_registry.models import ModelEndpoint
 from accounts.models import Project, ProjectMembership, User
 from scenarios.models import (
-    Scenario,
-    ScenarioRevision,
-    ScenarioSet,
-    ScenarioSetVersion,
     ScenarioSetVersionItem,
 )
 

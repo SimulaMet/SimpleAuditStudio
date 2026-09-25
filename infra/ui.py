@@ -4,7 +4,6 @@ import hashlib
 import io
 import json
 import logging
-import os
 
 from django.contrib import messages
 from django.contrib.auth import login, logout
@@ -13,7 +12,7 @@ from django.contrib.auth.mixins import LoginRequiredMixin
 from django.http import HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404, redirect
 from django.utils import timezone
-from django.views.generic import CreateView, DetailView, ListView, TemplateView, View
+from django.views.generic import DetailView, ListView, TemplateView, View
 
 from audits.events import ScenarioResult
 from audits.models import AuditRun
@@ -727,13 +726,13 @@ class ScenarioRevertView(ProjectMixin, View):
             elif in_latest and not in_target:
                 removed.append({"key": key, **latest_map[key]})
             else:
-                l, t = latest_map[key], target_map[key]
-                if l["description"] != t["description"] or l["expected_behavior"] != t["expected_behavior"]:
-                    changed.append({"key": key, "title": t["title"],
-                                    "latest_desc": l["description"], "target_desc": t["description"],
-                                    "latest_eb": l["expected_behavior"], "target_eb": t["expected_behavior"]})
+                latest, target = latest_map[key], target_map[key]
+                if latest["description"] != target["description"] or latest["expected_behavior"] != target["expected_behavior"]:
+                    changed.append({"key": key, "title": target["title"],
+                                    "latest_desc": latest["description"], "target_desc": target["description"],
+                                    "latest_eb": latest["expected_behavior"], "target_eb": target["expected_behavior"]})
                 else:
-                    unchanged.append({"key": key, "title": t["title"]})
+                    unchanged.append({"key": key, "title": target["title"]})
 
         return JsonResponse({
             "target_version": target_ver,
@@ -867,7 +866,7 @@ class ModelsView(ProjectMixin, TemplateView):
 
     def get_context_data(self, **kw):
         from django.db.models import Q
-        from model_registry.models import ModelConnection, RegisteredModel
+        from model_registry.models import ModelConnection
 
         p = self.request.project
         highlight_id = self.request.GET.get("highlight")

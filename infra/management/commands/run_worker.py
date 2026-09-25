@@ -7,7 +7,6 @@ The worker connects to the external Hatchet server (HATCHET_SERVER_URL /
 HATCHET_GRPC_URL) and executes audit scenario/finalize tasks. It runs in its own
 process, separate from the web/API server, which never executes model calls.
 """
-import os
 
 from django.conf import settings
 from django.core.management.base import BaseCommand

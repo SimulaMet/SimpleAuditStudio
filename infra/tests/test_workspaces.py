@@ -119,7 +119,7 @@ class WorkspaceListCreateTest(TestCase):
         w_viewer = ProjectFactory(name="Beta")
         MembershipFactory(user=user, project=w_admin, role="admin")
         MembershipFactory(user=user, project=w_viewer, role="viewer")
-        other = ProjectFactory(name="Gamma")  # not a member
+        ProjectFactory(name="Gamma")  # not a member
         self.client.force_authenticate(user)
 
         resp = self.client.get("/api/projects/")
@@ -232,7 +232,7 @@ class WorkspaceMemberTest(TestCase):
         self.assertEqual(resp.status_code, 403)
 
     def test_admin_adds_member(self):
-        new_user = UserFactory(username="newbie")
+        UserFactory(username="newbie")
         self.client.force_authenticate(self.admin)
         resp = self.client.post(
             f"/api/projects/{self.project.id}/members/add/",

@@ -17,7 +17,6 @@ Usage:
 from __future__ import annotations
 
 import os
-import sys
 import threading
 import time
 
@@ -71,7 +70,7 @@ def main() -> None:
     # --- Step 3: Start embedded Hatchet ---
     from infra.minimal_config import start_embedded_hatchet, stop_embedded_hatchet
 
-    client = start_embedded_hatchet()
+    start_embedded_hatchet()
 
     # --- Step 4: Start mock OpenAI server (unless --no-mock) ---
     mock_server = None
@@ -104,18 +103,18 @@ def main() -> None:
 
     print("┌─────────────────────────────────────────────────────────┐")
     print("│                                                         │")
-    print(f"│   🚀 SimpleAudit Studio is running!                     │")
-    print(f"│                                                         │")
+    print("│   🚀 SimpleAudit Studio is running!                     │")
+    print("│                                                         │")
     print(f"│   Web UI:     http://localhost:{port}                   │")
     print(f"│   Login:      {username} / {password:<20s}│")
     print(f"│   API Docs:   http://localhost:{port}/api/schema/       │")
-    print(f"│                                                         │")
+    print("│                                                         │")
     if not args.no_mock:
-        print(f"│   Models:     Built-in mock (swap for real in UI)      │")
+        print("│   Models:     Built-in mock (swap for real in UI)      │")
     else:
-        print(f"│   Models:     Configure your own endpoints in the UI    │")
-    print(f"│                                                         │")
-    print(f"│   Press Ctrl+C to stop.                                 │")
+        print("│   Models:     Configure your own endpoints in the UI    │")
+    print("│                                                         │")
+    print("│   Press Ctrl+C to stop.                                 │")
     print("└─────────────────────────────────────────────────────────┘")
     print()
 

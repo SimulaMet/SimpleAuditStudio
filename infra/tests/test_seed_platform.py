@@ -122,7 +122,6 @@ class SeedPlatformTests(TestCase):
     def test_seed_recovers_from_interrupted_import(self):
         """A set created by an interrupted run (no published version) is
         re-imported cleanly instead of being skipped forever."""
-        from scenarios.models import ScenarioRevision
 
         set_obj = ScenarioSet.objects.create(
             project=self.project, name="SimpleAudit: safety", created_by=self.user

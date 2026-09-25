@@ -1,7 +1,6 @@
 """Audit run creation and freeze services."""
 import logging
 
-from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
 
