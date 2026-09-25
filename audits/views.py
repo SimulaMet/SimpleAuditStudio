@@ -9,6 +9,8 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
+from accounts.models import Project
+from accounts.services import ensure_project_access
 from audits.events import ScenarioResult, list_events
 from audits.models import AuditRun
 from audits.serializers import AuditRunCreateSerializer, AuditRunSerializer
@@ -16,9 +18,7 @@ from audits.services import create_audit_run, submit_audit_run
 from infra.exceptions import StableAPIError
 from infra.middleware import set_correlation_context
 from model_registry.models import ModelEndpoint
-from accounts.models import Project
 from scenarios.models import ScenarioSetVersion
-from accounts.services import ensure_project_access
 
 logger = logging.getLogger("simpleaudit.audit")
 

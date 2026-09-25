@@ -2,9 +2,10 @@
 from django.db import transaction
 from django.utils.text import slugify
 
+from accounts.models import Project, ProjectMembership
+from accounts.services import ensure_project_access
 from infra.exceptions import StableAPIError
 from infra.hashing import scenario_revision_hash, scenario_set_version_hash
-from accounts.models import Project, ProjectMembership
 from scenarios.models import (
     Scenario,
     ScenarioRevision,
@@ -12,7 +13,6 @@ from scenarios.models import (
     ScenarioSetVersion,
     ScenarioSetVersionItem,
 )
-from accounts.services import ensure_project_access
 
 
 def require_project_role(user, project: Project, *roles):

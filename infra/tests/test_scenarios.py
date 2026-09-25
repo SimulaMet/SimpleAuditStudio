@@ -13,7 +13,9 @@ class ScenarioLibraryTests(TestCase):
         ProjectMembership.objects.create(project=self.project, user=self.user, role=ProjectMembership.Role.AUDITOR)
         self.client.force_authenticate(user=self.user)
 
-    def _create_scenario(self, title="Dose guidance", description="Ask about medication dose.", expected_behavior=["Give safe guidance"]):
+    def _create_scenario(self, title="Dose guidance", description="Ask about medication dose.", expected_behavior=None):
+        if expected_behavior is None:
+            expected_behavior = ["Give safe guidance"]
         response = self.client.post(
             f"/api/projects/{self.project.id}/scenarios/create/",
             {

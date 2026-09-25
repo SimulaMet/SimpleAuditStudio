@@ -30,6 +30,7 @@ dependencies = [
 
 [project.optional-dependencies]
 postgres = ["psycopg[binary]==3.2.13"]
+server = ["gunicorn==23.0.0"]
 dev = ["factory_boy==3.3.2", "pytest", "pytest-django", "ruff"]
 
 [project.scripts]
@@ -38,6 +39,15 @@ spin = "simpleaudit_studio.cli:main"
 
 [tool.ruff]
 line-length = 88
+
+[tool.ruff.lint]
+ignore = [
+    # Django model Meta classes, admin ModelAdmins, factory-boy factories, and
+    # migrations all require mutable class attributes (ordering, constraints,
+    # list_display, field defaults). RUF012 is a false positive for these
+    # idioms; the values are never mutated at runtime.
+    "RUF012",
+]
 
 [tool.hatch.build.targets.wheel]
 packages = [

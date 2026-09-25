@@ -11,22 +11,29 @@ Run inside the web container:
 Or locally with SQLite:
     SIMPLEAUDIT_LOCAL_SQLITE=1 .venv/bin/python manage.py shell < deploy/seed_bulk.py
 """
+import hashlib
 import os
 import random
-import hashlib
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings")
 # Do NOT set SIMPLEAUDIT_LOCAL_SQLITE — use whatever DB the environment provides
 
 import django
+
 django.setup()
 
-from accounts.models import User, Project  # noqa: E402
-from scenarios.models import Scenario, ScenarioRevision, ScenarioSet, ScenarioSetVersion, ScenarioSetVersionItem  # noqa: E402
-from model_registry.models import ModelEndpoint  # noqa: E402
-from audits.models import AuditRun  # noqa: E402
-from audits.events import ScenarioResult, append_event  # noqa: E402
+from accounts.models import Project, User
+from audits.events import ScenarioResult, append_event
+from audits.models import AuditRun
+from model_registry.models import ModelEndpoint
+from scenarios.models import (
+    Scenario,
+    ScenarioRevision,
+    ScenarioSet,
+    ScenarioSetVersion,
+    ScenarioSetVersionItem,
+)
 
 random.seed(42)
 
@@ -255,7 +262,7 @@ def main():
                 version=ver,
                 scenario_count=len(items_for_ver),
                 content_hash=make_hash(f"{st.name}-v{ver}-{random.random()}"),
-                published_at=datetime.now() - timedelta(days=random.randint(0, 90)),
+                published_at=datetime.now(UTC) - timedelta(days=random.randint(0, 90)),
                 published_by=admin,
             )
             version_batch.append((vs, items_for_ver))
@@ -292,7 +299,7 @@ def main():
     print(f"Audit runs before: {AuditRun.objects.count()}")
     all_versions = list(ScenarioSetVersion.objects.all())
     run_batch = []
-    base_time = datetime.now() - timedelta(days=90)
+    base_time = datetime.now(UTC) - timedelta(days=90)
 
     for i in range(500):
         status = random.choice(RUN_STATUS_DISTRIBUTION)

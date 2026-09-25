@@ -6,11 +6,17 @@ runtime_metadata, and the immutable frozen inputs are untouched.
 """
 from django.test import TestCase
 
+from accounts.models import Project, ProjectMembership, User
 from audits.models import AuditRun
 from audits.services import create_audit_run, submit_audit_run
 from model_registry.models import ModelEndpoint
-from accounts.models import Project, ProjectMembership, User
-from scenarios.models import Scenario, ScenarioRevision, ScenarioSet, ScenarioSetVersion, ScenarioSetVersionItem
+from scenarios.models import (
+    Scenario,
+    ScenarioRevision,
+    ScenarioSet,
+    ScenarioSetVersion,
+    ScenarioSetVersionItem,
+)
 
 
 class AuditSubmissionTest(TestCase):

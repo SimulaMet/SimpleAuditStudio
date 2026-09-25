@@ -1,6 +1,12 @@
 from django.contrib import admin
 
-from .models import Scenario, ScenarioRevision, ScenarioSet, ScenarioSetVersion, ScenarioSetVersionItem
+from .models import (
+    Scenario,
+    ScenarioRevision,
+    ScenarioSet,
+    ScenarioSetVersion,
+    ScenarioSetVersionItem,
+)
 
 
 @admin.register(Scenario)

@@ -15,7 +15,6 @@ events are inputs only; the worker bridges them into these rows.
 """
 from __future__ import annotations
 
-
 from django.db import models, transaction
 
 
@@ -123,8 +122,7 @@ def upsert_scenario_result(
             result=result or {},
         )
         return
-    if attempts > existing.attempts:
-        existing.attempts = attempts
+    existing.attempts = max(existing.attempts, attempts)
     existing.status = status
     if result is not None:
         existing.result = result

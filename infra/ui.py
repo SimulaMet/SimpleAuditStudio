@@ -14,14 +14,20 @@ from django.shortcuts import get_object_or_404, redirect
 from django.utils import timezone
 from django.views.generic import DetailView, ListView, TemplateView, View
 
+from accounts import workos_auth
+from audits.comparison import compare_runs
 from audits.events import ScenarioResult
 from audits.models import AuditRun
 from audits.services import create_audit_run, submit_audit_run
-from audits.comparison import compare_runs
 from model_registry.models import ModelEndpoint
-from scenarios.models import Scenario, ScenarioRevision, ScenarioSet, ScenarioSetVersion, ScenarioSetVersionItem
+from scenarios.models import (
+    Scenario,
+    ScenarioRevision,
+    ScenarioSet,
+    ScenarioSetVersion,
+    ScenarioSetVersionItem,
+)
 from scenarios.services import publish_scenario_set_version
-from accounts import workos_auth
 
 logger = logging.getLogger(__name__)
 
@@ -166,7 +172,7 @@ class WorkOSLoginView(TemplateView):
                 ip_address=request.META.get("REMOTE_ADDR"),
                 user_agent=request.META.get("HTTP_USER_AGENT", ""),
             )
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             logger.exception("WorkOS magic auth send failed")
             return self.render_to_response(self.get_context_data(error=f"Could not send code: {exc}"))
         request.session["workos_email"] = email
@@ -201,7 +207,7 @@ class WorkOSVerifyView(TemplateView):
                 ip_address=request.META.get("REMOTE_ADDR"),
                 user_agent=request.META.get("HTTP_USER_AGENT", ""),
             )
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             logger.exception("WorkOS magic auth verification failed")
             return self.render_to_response(self.get_context_data(error=f"Verification failed: {exc}"))
 
@@ -248,7 +254,7 @@ class WorkOSCallbackView(View):
                 ip_address=request.META.get("REMOTE_ADDR"),
                 user_agent=request.META.get("HTTP_USER_AGENT", ""),
             )
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             logger.exception("WorkOS code exchange failed")
             messages.error(request, f"WorkOS sign-in failed: {exc}")
             return redirect("login")
@@ -469,9 +475,9 @@ class NewAuditView(ProjectMixin, TemplateView):
                 try:
                     parsed = json.loads(gen_json_raw)
                     if not isinstance(parsed, dict):
-                        raise ValueError("Must be a JSON object")
+                        raise TypeError("Must be a JSON object")
                     gen_config_override = parsed
-                except Exception as e:
+                except Exception as e:  # noqa: BLE001 - any parse failure is a user error
                     return self.render_to_response(self.get_context_data(error=f"Invalid generation config JSON: {e}"))
 
             run = create_audit_run(
@@ -489,7 +495,7 @@ class NewAuditView(ProjectMixin, TemplateView):
             )
             submit_audit_run(run)
             return redirect(f"/audits/{run.id}/")
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - surface any creation failure to the user
             return self.render_to_response(self.get_context_data(error=str(e)))
 
 
@@ -605,7 +611,7 @@ class ScenarioSetDeleteView(ProjectMixin, View):
             try:
                 sset.delete()
                 messages.success(request, "Scenario set deleted.")
-            except Exception:
+            except Exception:  # noqa: BLE001 - any FK constraint violation means "in use"
                 messages.error(request, "Cannot delete: this set is referenced by audit runs.")
         return redirect("/scenarios/")
 
@@ -620,7 +626,7 @@ class ScenarioCreateView(ProjectMixin, View):
         set_id = request.POST.get("set_id", "").strip()
         if name:
             key = hashlib.sha256(name.encode()).hexdigest()[:12]
-            scenario, created = Scenario.objects.get_or_create(
+            scenario, _created = Scenario.objects.get_or_create(
                 project=request.project, key=key,
                 defaults={"title": name, "category": category},
             )
@@ -854,7 +860,7 @@ class ScenarioImportView(ProjectMixin, View):
                 new_ids.append(scenario.id)
             # Auto-publish after import (include newly imported scenarios)
             _publish_new_version(sset, request.user, extra_scenario_ids=new_ids)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - surface any import/publish failure to the user
             return JsonResponse({"error": str(e)}, status=400)
         return redirect(f"/scenarios/?set={set_id}")
 
@@ -866,6 +872,7 @@ class ModelsView(ProjectMixin, TemplateView):
 
     def get_context_data(self, **kw):
         from django.db.models import Q
+
         from model_registry.models import ModelConnection
 
         p = self.request.project
@@ -962,7 +969,7 @@ class ModelsView(ProjectMixin, TemplateView):
 
         # ── Legacy endpoint actions (kept for compat) ───────────────────────
         elif action == "add_endpoint":
-            if not all([request.POST.get(k) for k in ("display_name", "base_url")]):
+            if not all(request.POST.get(k) for k in ("display_name", "base_url")):
                 error = "Name and URL are required."
             else:
                 ModelEndpoint.objects.create(
@@ -1012,8 +1019,8 @@ class DiscoverModelsView(ProjectMixin, View):
 
     def post(self, request):
         import json as _json
-        import urllib.request
         import urllib.error
+        import urllib.request
 
         base_url = (request.POST.get("base_url") or "").strip().rstrip("/")
         api_key = (request.POST.get("api_key_direct") or "").strip()
@@ -1042,10 +1049,10 @@ class DiscoverModelsView(ProjectMixin, View):
             body = ""
             try:
                 body = e.read().decode()[:200]
-            except Exception:
+            except Exception:  # noqa: BLE001,S110 - body read is best-effort
                 pass
             return JsonResponse({"error": f"HTTP {e.code}: {body or e.reason}"}, status=502)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - surface any upstream failure to the user
             return JsonResponse({"error": str(e)}, status=502)
 
         # Normalize response — OpenAI-compatible: {"data": [{"id": "...", ...}]}
@@ -1121,7 +1128,7 @@ class CompareView(ProjectMixin, TemplateView):
             else:
                 try:
                     result = self._reshape_result(compare_runs(p, selected_ids))
-                except Exception as e:
+                except Exception as e:  # noqa: BLE001 - surface any comparison failure to the user
                     error = str(e)
         kw.update(
             runs=AuditRun.objects.filter(project=p, status="completed").select_related(
@@ -1142,7 +1149,7 @@ class CompareView(ProjectMixin, TemplateView):
         else:
             try:
                 result = self._reshape_result(compare_runs(request.project, ids))
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - surface any comparison failure to the user
                 error = str(e)
         return self.render_to_response(self.get_context_data(result=result, error=error, selected_ids=ids))
 

@@ -16,7 +16,11 @@ import logging
 
 from django.core.management.base import BaseCommand, CommandError
 
-from infra.seed import DEFAULT_PACKS, import_scenario_pack, seed_default_model_connections
+from infra.seed import (
+    DEFAULT_PACKS,
+    import_scenario_pack,
+    seed_default_model_connections,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -47,8 +51,9 @@ class Command(BaseCommand):
         )
 
     def handle(self, *args, **options):
-        from accounts.models import Project
         from django.contrib.auth import get_user_model
+
+        from accounts.models import Project
 
         User = get_user_model()
 

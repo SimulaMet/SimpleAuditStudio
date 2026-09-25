@@ -12,11 +12,17 @@ from unittest import mock
 
 from django.test import TestCase
 
+from accounts.models import Project, ProjectMembership, User
 from audits.events import get_result
 from audits.models import AuditRun
 from model_registry.models import ModelEndpoint
-from accounts.models import Project, ProjectMembership, User
-from scenarios.models import Scenario, ScenarioRevision, ScenarioSet, ScenarioSetVersion, ScenarioSetVersionItem
+from scenarios.models import (
+    Scenario,
+    ScenarioRevision,
+    ScenarioSet,
+    ScenarioSetVersion,
+    ScenarioSetVersionItem,
+)
 
 
 def _build_run(user, project):
@@ -66,6 +72,7 @@ class SecretValidationTest(TestCase):
 
     def test_missing_secret_raises_clean_error_naming_role_and_ref(self):
         import os
+
         from infra.engine import EngineError, _validate_secrets
 
         saved = os.environ.pop("UNSET_TARGET_KEY", None)
@@ -151,12 +158,12 @@ class EngineIntegrationTest(TestCase):
         from infra.engine import EngineError, run_scenario
 
         # Force the engine import to fail (engine not installed).
-        with mock.patch("infra.engine._ensure_engine_available", side_effect=EngineError("no engine")):
-            with self.assertRaises(EngineError):
-                run_scenario(
-                    name="dose", description="d", expected_behavior=None, test_prompt=None,
-                    target={}, auditor={}, judge={}, generation={},
-                )
+        with mock.patch("infra.engine._ensure_engine_available", side_effect=EngineError("no engine")), \
+             self.assertRaises(EngineError):
+            run_scenario(
+                name="dose", description="d", expected_behavior=None, test_prompt=None,
+                target={}, auditor={}, judge={}, generation={},
+            )
 
     def test_worker_records_failed_result_when_engine_missing(self):
         from infra import worker
@@ -164,9 +171,9 @@ class EngineIntegrationTest(TestCase):
 
         run, item = _build_run(self.user, self.project)
         # Force the engine import to fail inside the worker's execution path.
-        with mock.patch("infra.engine._ensure_engine_available", side_effect=EngineError("no engine")):
-            with self.assertRaises(EngineError):
-                worker._scenario_execute_impl(worker.ScenarioInput(run_id=str(run.id), version_item_id=str(item.id)), ctx=None)
+        with mock.patch("infra.engine._ensure_engine_available", side_effect=EngineError("no engine")), \
+             self.assertRaises(EngineError):
+            worker._scenario_execute_impl(worker.ScenarioInput(run_id=str(run.id), version_item_id=str(item.id)), ctx=None)
 
         result = get_result(run.id, str(item.id))
         self.assertIsNotNone(result)
@@ -225,8 +232,8 @@ class WorkerLifecycleTest(TestCase):
         }
 
     def test_full_run_reaches_completed_with_terminal_event(self):
-        from infra import worker
         from audits.events import list_events
+        from infra import worker
 
         run, item = _build_run(self.user, self.project)
         # Match the worker's loaded provenance so the finalize guard passes.
@@ -265,8 +272,9 @@ class WorkerLifecycleTest(TestCase):
         self.assertIsNotNone(run.started_at)
 
     def test_started_at_not_overwritten_on_later_executions(self):
-        from infra import worker
         from django.utils import timezone
+
+        from infra import worker
 
         run, item = _build_run(self.user, self.project)
         original = timezone.now() - timezone.timedelta(minutes=5)
@@ -282,15 +290,15 @@ class WorkerLifecycleTest(TestCase):
     def test_finalize_provenance_mismatch_fails_run(self):
         from infra import worker
 
-        run, item = _build_run(self.user, self.project)
+        run, _item = _build_run(self.user, self.project)
         # Worker claims a different commit than the frozen manifest -> hard fail.
         with mock.patch.object(worker, "WORKER_SIMPLEAUDIT_VERSION", "0.1.0"), \
-             mock.patch.object(worker, "WORKER_GIT_COMMIT", "WRONG"):
-            with self.assertRaises(RuntimeError):
-                worker._run_finalize_impl(
-                    worker.FinalizeInput(run_id=str(run.id), simpleaudit_version="0.1.0", git_commit="deadbeef"),
-                    ctx=None,
-                )
+             mock.patch.object(worker, "WORKER_GIT_COMMIT", "WRONG"), \
+             self.assertRaises(RuntimeError):
+            worker._run_finalize_impl(
+                worker.FinalizeInput(run_id=str(run.id), simpleaudit_version="0.1.0", git_commit="deadbeef"),
+                ctx=None,
+            )
         run.refresh_from_db()
         self.assertEqual(run.status, AuditRun.Status.FAILED)
         self.assertEqual(run.error_code, "SIMPLEAUDIT_VERSION_MISMATCH")
@@ -308,22 +316,22 @@ class FinalizeOrderingGuardTest(TestCase):
         ProjectMembership.objects.create(project=self.project, user=self.user, role=ProjectMembership.Role.AUDITOR)
 
     def test_premature_finalize_raises_and_does_not_complete(self):
-        from infra import worker
         from audits.events import list_events
+        from infra import worker
 
-        run, item = _build_run(self.user, self.project)
+        run, _item = _build_run(self.user, self.project)
         # No scenario has executed yet -> 0/1 results. Finalize must raise so the
         # queue retries it, and must NOT flip the run to completed.
         with mock.patch.object(worker, "WORKER_SIMPLEAUDIT_VERSION", "0.1.0"), \
-             mock.patch.object(worker, "WORKER_GIT_COMMIT", "deadbeef"):
-            with self.assertRaises(RuntimeError) as ctx:
-                worker._run_finalize_impl(
-                    worker.FinalizeInput(
-                        run_id=str(run.id), simpleaudit_version="0.1.0", git_commit="deadbeef",
-                        total_scenarios=1,
-                    ),
-                    ctx=None,
-                )
+             mock.patch.object(worker, "WORKER_GIT_COMMIT", "deadbeef"), \
+             self.assertRaises(RuntimeError) as ctx:
+            worker._run_finalize_impl(
+                worker.FinalizeInput(
+                    run_id=str(run.id), simpleaudit_version="0.1.0", git_commit="deadbeef",
+                    total_scenarios=1,
+                ),
+                ctx=None,
+            )
         self.assertIn("finalize premature", str(ctx.exception))
         run.refresh_from_db()
         self.assertNotEqual(run.status, AuditRun.Status.COMPLETED)
@@ -405,8 +413,8 @@ class MissingKeyAsFailureTest(TestCase):
         ProjectMembership.objects.create(project=self.project, user=self.user, role=ProjectMembership.Role.AUDITOR)
 
     def test_unresolvable_secret_yields_failed_result_not_completion(self):
-        from infra import worker
         from audits.events import get_result
+        from infra import worker
         from infra.engine import EngineError
 
         # Build a run whose target references a secret that is NOT in the env.
@@ -418,12 +426,11 @@ class MissingKeyAsFailureTest(TestCase):
         with mock.patch(
             "infra.engine.run_scenario",
             side_effect=EngineError("Missing API key for role 'target' (secret_reference='TARGET_KEY')"),
-        ):
+        ), self.assertRaises(EngineError):
             # The impl records the failure durably then re-raises for the queue.
-            with self.assertRaises(EngineError):
-                worker._scenario_execute_impl(
-                    worker.ScenarioInput(run_id=str(run.id), version_item_id=str(item.id)), ctx=None
-                )
+            worker._scenario_execute_impl(
+                worker.ScenarioInput(run_id=str(run.id), version_item_id=str(item.id)), ctx=None
+            )
 
         # The durable result row must reflect the failure, not a silent completion.
         result = get_result(run.id, str(item.id))
@@ -446,12 +453,14 @@ class CrashRecoveryTest(TestCase):
 
     def test_recovers_stuck_queued_run(self):
         from datetime import timedelta
-        from django.utils import timezone
-        from infra.worker import _recover_stuck_runs
-        from infra.tests.test_engine_integration import _build_run
         from unittest.mock import patch
 
-        run, item = _build_run(self.user, self.project)
+        from django.utils import timezone
+
+        from infra.tests.test_engine_integration import _build_run
+        from infra.worker import _recover_stuck_runs
+
+        run, _item = _build_run(self.user, self.project)
         # Make it look stuck: old updated_at, status queued
         AuditRun.objects.filter(pk=run.pk).update(
             status="queued",
@@ -468,12 +477,14 @@ class CrashRecoveryTest(TestCase):
 
     def test_does_not_recover_archived_run(self):
         from datetime import timedelta
-        from django.utils import timezone
-        from infra.worker import _recover_stuck_runs
-        from infra.tests.test_engine_integration import _build_run
         from unittest.mock import patch
 
-        run, item = _build_run(self.user, self.project)
+        from django.utils import timezone
+
+        from infra.tests.test_engine_integration import _build_run
+        from infra.worker import _recover_stuck_runs
+
+        run, _item = _build_run(self.user, self.project)
         AuditRun.objects.filter(pk=run.pk).update(
             status="queued",
             archived=True,
@@ -485,11 +496,12 @@ class CrashRecoveryTest(TestCase):
             mock_submit.assert_not_called()
 
     def test_does_not_recover_recently_updated_run(self):
-        from infra.worker import _recover_stuck_runs
-        from infra.tests.test_engine_integration import _build_run
         from unittest.mock import patch
 
-        run, item = _build_run(self.user, self.project)
+        from infra.tests.test_engine_integration import _build_run
+        from infra.worker import _recover_stuck_runs
+
+        run, _item = _build_run(self.user, self.project)
         # updated_at is just now (within grace period) — should NOT recover
         AuditRun.objects.filter(pk=run.pk).update(status="queued")
 
@@ -499,12 +511,14 @@ class CrashRecoveryTest(TestCase):
 
     def test_does_not_recover_completed_run(self):
         from datetime import timedelta
-        from django.utils import timezone
-        from infra.worker import _recover_stuck_runs
-        from infra.tests.test_engine_integration import _build_run
         from unittest.mock import patch
 
-        run, item = _build_run(self.user, self.project)
+        from django.utils import timezone
+
+        from infra.tests.test_engine_integration import _build_run
+        from infra.worker import _recover_stuck_runs
+
+        run, _item = _build_run(self.user, self.project)
         AuditRun.objects.filter(pk=run.pk).update(
             status="completed",
             updated_at=timezone.now() - timedelta(seconds=60),

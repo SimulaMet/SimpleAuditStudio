@@ -150,6 +150,5 @@ class SeedPlatformTests(TestCase):
     def test_seed_fails_cleanly_without_project(self):
         from django.core.management.base import CommandError
 
-        with _safe_env():
-            with self.assertRaises(CommandError):
-                call_command("seed_platform", project=99999)
+        with _safe_env(), self.assertRaises(CommandError):
+            call_command("seed_platform", project=99999)

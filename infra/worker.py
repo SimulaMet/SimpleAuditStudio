@@ -28,14 +28,12 @@ from __future__ import annotations
 import logging
 import os
 
-from pydantic import BaseModel
-
 from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
-
 from hatchet_sdk import ClientConfig, Context, Hatchet, Worker
 from hatchet_sdk.config import ClientTLSConfig
+from pydantic import BaseModel
 
 from infra.simpleaudit_package import resolve_engine_provenance
 
@@ -67,7 +65,7 @@ class FinalizeInput(BaseModel):
     total_scenarios: int = 0
 
 
-_CLIENT: "Hatchet | None" = None
+_CLIENT: Hatchet | None = None
 
 
 def get_client() -> Hatchet:
@@ -211,7 +209,8 @@ def _scenario_execute_impl(workflow_input: ScenarioInput, ctx: Context) -> dict:
             started_at=timezone.now()
         )
 
-    from infra.engine import EngineError, run_scenario as engine_run_scenario, run_scenario_repeated
+    from infra.engine import EngineError, run_scenario_repeated
+    from infra.engine import run_scenario as engine_run_scenario
 
     gen_params = run.generation_parameters_snapshot or {}
     n_reps = int(gen_params.get("n_repetitions") or 1)
@@ -596,9 +595,10 @@ def _recover_stuck_runs() -> None:
     Only recovers runs that have been stuck for more than a short grace period
     to avoid racing with a concurrent healthy worker.
     """
+    from django.utils import timezone as dj_timezone
+
     from audits.models import AuditRun
     from scenarios.models import ScenarioSetVersionItem
-    from django.utils import timezone as dj_timezone
 
     grace = dj_timezone.now() - __import__("datetime").timedelta(seconds=30)
     stuck = AuditRun.objects.filter(
@@ -624,7 +624,7 @@ def _recover_stuck_runs() -> None:
             )
             recovered += 1
             logger.info("Crash recovery: re-submitted run %s (%d scenarios)", run.pk, len(vids))
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - crash recovery must not fail the whole sweep
             logger.warning("Crash recovery: failed to re-submit run %s: %s", run.pk, exc)
 
     if recovered:
@@ -664,7 +664,7 @@ def start_worker(max_startup_retries: int = 30, startup_retry_delay: float = 2.0
     # Re-submit runs orphaned by a previous worker crash/restart.
     try:
         _recover_stuck_runs()
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - crash recovery must not block worker startup
         logger.warning("Crash recovery skipped: %s", exc)
 
     print(f"Starting SimpleAudit worker (pool={settings.WORKER_POOL})...", flush=True)

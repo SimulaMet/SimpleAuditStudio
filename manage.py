@@ -12,7 +12,7 @@ try:
     from dotenv import load_dotenv
 
     load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
-except ImportError:  # pragma: no cover - python-dotenv is in requirements.txt
+except ImportError:  # pragma: no cover - python-dotenv is in pyproject.toml
     pass
 
 

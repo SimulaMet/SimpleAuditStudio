@@ -1,10 +1,11 @@
 import httpx
-
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
+from accounts.models import Project
+from accounts.services import ensure_project_access
 from infra.exceptions import StableAPIError
 from model_registry.models import ModelConnection, ModelEndpoint
 from model_registry.serializers import (
@@ -12,8 +13,6 @@ from model_registry.serializers import (
     ModelEndpointSerializer,
 )
 from model_registry.services import create_model_endpoint
-from accounts.models import Project
-from accounts.services import ensure_project_access
 
 
 def _get_project_or_404(project_id) -> Project:
@@ -65,7 +64,7 @@ def ping_connection(request, conn_pk):
         if resp.status_code != 200:
             return Response({"status": "error", "detail": f"HTTP {resp.status_code}"})
         data = resp.json()
-        server_ids = set(m.get("id") for m in data.get("data", []))
+        server_ids = {m.get("id") for m in data.get("data", [])}
         models = []
         found_count = 0
         for rm in conn.models.all():
@@ -74,5 +73,5 @@ def ping_connection(request, conn_pk):
                 found_count += 1
             models.append({"id": rm.id, "found": found})
         return Response({"status": "up", "found": found_count, "total": len(models), "models": models})
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - surface any registry lookup failure to the client
         return Response({"status": "error", "detail": str(e)})

@@ -3,8 +3,9 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
-from infra.exceptions import StableAPIError
 from accounts.models import Project
+from accounts.services import ensure_project_access
+from infra.exceptions import StableAPIError
 from scenarios.models import Scenario, ScenarioRevision, ScenarioSet, ScenarioSetVersion
 from scenarios.serializers import (
     PublishScenarioSetVersionSerializer,
@@ -16,8 +17,12 @@ from scenarios.serializers import (
     ScenarioSetVersionSerializer,
     ScenarioUpdateSerializer,
 )
-from accounts.services import ensure_project_access
-from scenarios.services import create_scenario, create_scenario_set, publish_scenario_set_version, update_scenario_content
+from scenarios.services import (
+    create_scenario,
+    create_scenario_set,
+    publish_scenario_set_version,
+    update_scenario_content,
+)
 
 
 def _get_project_or_404(project_id) -> Project:
@@ -208,7 +213,7 @@ def import_scenarios(request, project_id):
                 tags=item.get("tags", []),
             )
             created += 1
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - collect per-scenario import errors
             errors.append({"key": key, "error": str(exc)})
 
     return Response({"created": created, "skipped": skipped, "errors": errors}, status=status.HTTP_201_CREATED if created else status.HTTP_200_OK)

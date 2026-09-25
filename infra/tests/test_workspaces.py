@@ -3,7 +3,12 @@ from django.test import Client, TestCase
 from rest_framework.test import APIClient
 
 from accounts.models import Project, ProjectMembership, User
-from infra.tests.factories import MembershipFactory, ProjectFactory, ScenarioFactory, UserFactory
+from infra.tests.factories import (
+    MembershipFactory,
+    ProjectFactory,
+    ScenarioFactory,
+    UserFactory,
+)
 
 
 def _superuser() -> User:

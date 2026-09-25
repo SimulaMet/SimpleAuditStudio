@@ -54,8 +54,9 @@ class Command(BaseCommand):
         )
 
     def handle(self, *args, **options):
-        from accounts.models import Project
         from django.contrib.auth import get_user_model
+
+        from accounts.models import Project
 
         User = get_user_model()
         project_id = options["project"]

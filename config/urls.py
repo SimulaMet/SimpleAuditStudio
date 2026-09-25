@@ -9,21 +9,19 @@ from django.urls import include, path
 from django.views.static import serve as _static_serve
 from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView
 
+from accounts.views import healthz, readyz
+from infra.health_api import health_panel_api
 from infra.ui import (
-    AuditCancelView,
     AuditArchiveView,
-    AuditRenameView,
+    AuditCancelView,
     AuditDetailView,
     AuditExportView,
+    AuditRenameView,
     CompareView,
     ConnectionDeleteView,
     DashboardExportView,
     DashboardView,
     DiscoverModelsView,
-    WorkOSCallbackView,
-    WorkOSLoginView,
-    WorkOSVerifyView,
-    WorkspacesView,
     HealthView,
     IndexView,
     LoginView,
@@ -43,10 +41,12 @@ from infra.ui import (
     ScenarioSetDeleteView,
     ScenarioSetRenameView,
     ScenariosView,
+    WorkOSCallbackView,
+    WorkOSLoginView,
+    WorkOSVerifyView,
+    WorkspacesView,
     logout_view,
 )
-from accounts.views import healthz, readyz
-from infra.health_api import health_panel_api
 
 # --- Static file serving ---------------------------------------------------
 # For the canonical Docker Compose self-hosted deployment Django serves its

@@ -23,11 +23,7 @@ import re
 import threading
 import time
 import uuid
-
-try:
-    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-except Exception:  # pragma: no cover - stdlib always present
-    raise
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 JUDGE_JSON_RE = re.compile(r"\{.*\}", re.DOTALL)
 
@@ -91,11 +87,11 @@ def _completion_body(messages, model) -> dict:
 
 
 class Handler(BaseHTTPRequestHandler):
-    def log_message(self, fmt, *args):  # noqa: N802 - stdlib signature
+    def log_message(self, fmt, *args):
         # Keep logs quiet but useful.
         print("[mock-openai] %s" % (fmt % args), flush=True)
 
-    def do_GET(self):  # noqa: N802
+    def do_GET(self):
         if self.path.rstrip("/") in ("", "/healthz"):
             self._send_json({"status": "ok"})
         elif self.path.rstrip("/") == "/v1/models":
@@ -108,7 +104,7 @@ class Handler(BaseHTTPRequestHandler):
         else:
             self._send_json({"error": "not found"}, status=404)
 
-    def do_POST(self):  # noqa: N802
+    def do_POST(self):
         length = int(self.headers.get("Content-Length", 0) or 0)
         raw = self.rfile.read(length) if length else b""
         try:

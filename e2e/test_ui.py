@@ -35,7 +35,7 @@ def wait_for_health(timeout: int = 60) -> None:
             resp = urllib.request.urlopen(f"{BASE_URL}/healthz", timeout=3)
             if resp.status == 200:
                 return
-        except Exception:
+        except Exception:  # noqa: BLE001,S110 - retry loop; not healthy yet
             pass
         time.sleep(2)
     raise RuntimeError(f"Web service did not become healthy within {timeout}s")
@@ -198,7 +198,7 @@ def main() -> int:
                 fn(page)
                 print(f"  PASS  {name}")
                 passed += 1
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - test harness reports any failure
                 print(f"  FAIL  {name}: {e}")
                 failed += 1
                 errors.append((name, str(e)))
