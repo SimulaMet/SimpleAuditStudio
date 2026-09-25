@@ -29,11 +29,17 @@ dependencies = [
 
 [project.optional-dependencies]
 postgres = ["psycopg[binary]==3.2.13"]
-dev = ["factory_boy==3.3.2", "pytest", "pytest-django"]
+dev = ["factory_boy==3.3.2", "pytest", "pytest-django", "ruff"]
 
 [project.scripts]
 simpleaudit-studio = "simpleaudit_studio.cli:main"
 spin = "simpleaudit_studio.cli:main"
+
+[tool.ruff]
+line-length = 88
+
+[tool.ruff.lint]
+select = ["E1", "E2", "W1", "W2"]   # indentation & whitespace rules
 
 [tool.hatch.build.targets.wheel]
 packages = [
