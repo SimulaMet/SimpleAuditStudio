@@ -29,11 +29,12 @@ RUN apt-get update \
 
 # --- Python dependencies -----------------------------------------------------
 # pyproject.toml is the single source of truth; uv.lock pins exact versions.
-# This minimal image runs on SQLite, so the postgres extra is not installed.
+# The postgres extra is included because Django imports the psycopg driver at
+# startup even when SIMPLEAUDIT_MINIMAL=1 uses SQLite for the domain DB.
 # uv sync creates /app/.venv; the PATH update keeps the `python` entrypoint.
 COPY pyproject.toml uv.lock README.md ./
 RUN pip install uv \
-    && uv sync --frozen --no-install-project --no-dev
+    && uv sync --frozen --no-install-project --no-dev --extra postgres
 ENV PATH="/app/.venv/bin:$PATH"
 
 # --- Application code --------------------------------------------------------
