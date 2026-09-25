@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import asyncio
 import os
-import sys
 from typing import Any
 
 
@@ -29,18 +28,19 @@ class EngineError(RuntimeError):
 def _ensure_engine_available() -> None:
     """Ensure the SimpleAudit engine package is importable.
 
-    The engine is a normal pip dependency (see ``requirements.txt``); there is no
-    path-based fallback. If it is not installed (e.g. a web-only process or a
-    test environment without the engine), raise a clean ``EngineError`` so the
-    caller can record a durable failure instead of crashing on import.
+    The engine is a normal pip dependency (declared in ``pyproject.toml``);
+    there is no path-based fallback. If it is not installed (e.g. a web-only
+    process or a test environment without the engine), raise a clean
+    ``EngineError`` so the caller can record a durable failure instead of
+    crashing on import.
     """
     try:
         import simpleaudit  # noqa: F401
         return
     except ModuleNotFoundError as exc:
         raise EngineError(
-            "SimpleAudit engine is not installed. Install it from requirements.txt "
-            "(pip install -r requirements.txt) before running audits."
+            "SimpleAudit engine is not installed. Install the project "
+            "dependencies (uv sync) before running audits."
         ) from exc
 
 
@@ -168,7 +168,7 @@ def build_model_auditor(*, target: dict, auditor: dict, judge: dict, generation:
     _ensure_engine_available()
     try:
         from simpleaudit.model_auditor import ModelAuditor
-    except Exception as exc:  # noqa: BLE001 - surface any import failure uniformly
+    except Exception as exc:
         raise EngineError(f"Failed to import SimpleAudit ModelAuditor: {exc}") from exc
 
     gen = dict(generation or {})
@@ -263,7 +263,7 @@ def build_model_auditor(*, target: dict, auditor: dict, judge: dict, generation:
         )
     except EngineError:
         raise
-    except Exception as exc:  # noqa: BLE001 - any construction failure (bad base_url, provider, etc.)
+    except Exception as exc:
         raise EngineError(f"Failed to construct ModelAuditor: {type(exc).__name__}: {exc}") from exc
     return instance, language
 
@@ -309,7 +309,7 @@ def run_scenario(
         )
     except EngineError:
         raise
-    except Exception as exc:  # noqa: BLE001 - unexpected engine crash
+    except Exception as exc:
         raise EngineError(f"Scenario execution crashed: {type(exc).__name__}: {exc}") from exc
 
     payload = result.to_dict()

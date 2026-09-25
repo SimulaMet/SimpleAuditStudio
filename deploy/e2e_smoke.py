@@ -25,12 +25,13 @@ def _load_env(path=".env"):
     env = {}
     if not os.path.exists(path):
         return env
-    for line in open(path):
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        k, _, v = line.partition("=")
-        env[k.strip()] = v.strip()
+    with open(path) as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            k, _, v = line.partition("=")
+            env[k.strip()] = v.strip()
     return env
 
 
@@ -56,7 +57,7 @@ class Client:
             raw = e.read().decode()
             try:
                 parsed = json.loads(raw)
-            except Exception:
+            except Exception:  # noqa: BLE001 - fall back to raw body if not JSON
                 parsed = raw
             return e.code, parsed
 

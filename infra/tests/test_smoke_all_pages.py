@@ -6,13 +6,21 @@ and view bugs before they reach a user's browser.
 Run:
     SIMPLEAUDIT_LOCAL_SQLITE=1 .venv/bin/python manage.py test infra.tests.test_smoke_all_pages
 """
-from django.test import TestCase, Client
+from django.test import Client, TestCase
 
 from infra.tests.factories import (
-    UserFactory, ProjectFactory, MembershipFactory,
-    AuditRunFactory, ScenarioResultFactory, RepeatedScenarioResultFactory,
-    ScenarioSetFactory, ScenarioSetVersionFactory, ScenarioFactory,
-    ScenarioRevisionFactory, ScenarioSetVersionItemFactory, ModelEndpointFactory,
+    AuditRunFactory,
+    MembershipFactory,
+    ModelEndpointFactory,
+    ProjectFactory,
+    RepeatedScenarioResultFactory,
+    ScenarioFactory,
+    ScenarioResultFactory,
+    ScenarioRevisionFactory,
+    ScenarioSetFactory,
+    ScenarioSetVersionFactory,
+    ScenarioSetVersionItemFactory,
+    UserFactory,
 )
 
 

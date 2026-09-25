@@ -61,7 +61,9 @@ def import_scenario_pack(project, user, pack_name: str, dry_run: bool = False):
     from simpleaudit import get_scenarios
 
     from scenarios.models import (
-        Scenario, ScenarioRevision, ScenarioSet,
+        Scenario,
+        ScenarioRevision,
+        ScenarioSet,
     )
     from scenarios.services import publish_scenario_set_version
 

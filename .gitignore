@@ -16,7 +16,7 @@ staticfiles/
 .env.local
 
 # Dev-only SimpleAudit engine override (git_ref). Never committed — production
-# relies on the requirements.txt pin. See infra/simpleaudit_package.py.
+# relies on the pyproject.toml pin. See infra/simpleaudit_package.py.
 simpleaudit-dependency.yaml
 
 # IDE

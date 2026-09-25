@@ -5,7 +5,13 @@ from django.test import TestCase
 from accounts.models import Project, ProjectMembership, User
 from audits.models import AuditRun
 from model_registry.models import ModelEndpoint
-from scenarios.models import Scenario, ScenarioRevision, ScenarioSet, ScenarioSetVersion, ScenarioSetVersionItem
+from scenarios.models import (
+    Scenario,
+    ScenarioRevision,
+    ScenarioSet,
+    ScenarioSetVersion,
+    ScenarioSetVersionItem,
+)
 
 
 class AuditCloneTests(TestCase):

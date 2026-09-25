@@ -37,14 +37,14 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-          cache: pip
+      - uses: astral-sh/setup-uv@v7
       - name: Install dependencies
-        run: pip install -r requirements.txt
+        run: uv sync --frozen --extra dev --extra postgres
       - name: Lint (ruff)
-        run: ruff check .
+        run: uv run ruff check .
       - name: Django checks
-        run: python manage.py check
+        run: uv run python manage.py check
       - name: Migrations from empty database
-        run: python manage.py migrate
+        run: uv run python manage.py migrate
       - name: Run tests
-        run: python manage.py test infra
+        run: uv run python manage.py test infra

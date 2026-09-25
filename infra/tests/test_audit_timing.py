@@ -9,7 +9,10 @@ from django.utils import timezone
 
 from audits.models import AuditRun
 from infra.tests.factories import (
-    UserFactory, ProjectFactory, MembershipFactory, AuditRunFactory,
+    AuditRunFactory,
+    MembershipFactory,
+    ProjectFactory,
+    UserFactory,
 )
 
 

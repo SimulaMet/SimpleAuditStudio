@@ -1,9 +1,9 @@
 from django.test import TestCase
 from rest_framework.test import APIClient
 
+from accounts.models import Project, ProjectMembership, User
 from audits.models import AuditRun
 from model_registry.models import ModelEndpoint
-from accounts.models import Project, ProjectMembership, User
 from scenarios.models import Scenario, ScenarioRevision, ScenarioSet, ScenarioSetVersion
 
 

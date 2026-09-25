@@ -2,7 +2,6 @@ from django.contrib.auth import get_user_model
 from django.test import Client, TestCase, override_settings
 
 from accounts.models import Project, ProjectMembership
-
 from config.settings import DEMO_MODE
 
 User = get_user_model()

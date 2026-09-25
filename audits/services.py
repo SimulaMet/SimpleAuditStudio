@@ -4,12 +4,12 @@ import logging
 from django.db import transaction
 from django.utils import timezone
 
+from accounts.models import Project
 from audits.events import append_event
 from audits.models import AuditRun
 from infra.exceptions import StableAPIError
 from infra.simpleaudit_package import resolve_engine_provenance
 from model_registry.models import ModelEndpoint
-from accounts.models import Project
 from scenarios.models import ScenarioSetVersion
 from scenarios.services import require_project_role
 
@@ -130,7 +130,9 @@ def submit_audit_run(run: AuditRun) -> str | None:
     reason is recorded in ``runtime_metadata["submission"]`` so an operator (or a
     later retry command) can resubmit without re-freezing inputs.
     """
-    from infra.worker import submit_run_workflow  # lazy: needs no live server at import time
+    from infra.worker import (
+        submit_run_workflow,  # lazy: needs no live server at import time
+    )
 
     items = list(
         run.scenario_set_version.items.select_related("scenario", "revision").order_by("position")

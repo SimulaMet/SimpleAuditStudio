@@ -21,8 +21,9 @@ class TestDemoBootSequence(TestCase):
 
     def test_bootstrap_and_seed(self):
         """Bootstrap admin + seed creates model endpoints."""
-        from accounts.services import bootstrap_admin_and_default_project
         from django.core.management import call_command
+
+        from accounts.services import bootstrap_admin_and_default_project
         from model_registry.models import ModelEndpoint
 
         user, project = bootstrap_admin_and_default_project(
@@ -50,9 +51,10 @@ class TestDemoBootSequence(TestCase):
 
     def test_model_endpoints_updated_to_mock(self):
         """After pointing endpoints at the mock server, they have api_key_direct set."""
+        from django.core.management import call_command
+
         from accounts.services import bootstrap_admin_and_default_project
         from deploy.mock_openai_server import start_mock_server, stop_mock_server
-        from django.core.management import call_command
         from model_registry.models import ModelEndpoint
 
         _, project = bootstrap_admin_and_default_project(
@@ -121,9 +123,8 @@ class TestEmbeddedHatchetLifecycle(TestCase):
         with patch.dict(os.environ, {"SIMPLEAUDIT_MINIMAL": "1"}):
             client = start_embedded_hatchet()
             try:
-                from infra.worker import get_client
-
                 import infra.worker as w
+                from infra.worker import get_client
                 w._CLIENT = None
                 c = get_client()
                 self.assertIs(c, client)

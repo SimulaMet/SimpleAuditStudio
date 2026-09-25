@@ -14,8 +14,9 @@ def migrations_pending() -> bool:
     The result is cached per process because migration state changes only when
     an operator runs migrations, not during normal request handling.
     """
-    from django.core.management import call_command
     from io import StringIO
+
+    from django.core.management import call_command
 
     out = StringIO()
     try:

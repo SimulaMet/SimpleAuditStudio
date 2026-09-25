@@ -14,8 +14,7 @@ help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
 
 venv: ## Create the local virtualenv and install dependencies
-	python3 -m venv $(VENV)
-	$(VENV)/bin/pip install -r requirements.txt
+	uv sync --extra dev --extra postgres
 
 local-setup: ## Local dev: venv + .env + migrations + bootstrap + seed (idempotent)
 	@test -d $(VENV) || $(MAKE) venv

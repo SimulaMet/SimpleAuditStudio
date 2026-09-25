@@ -24,7 +24,13 @@ class _Base(TestCase):
     def _make_run(self):
         from audits.models import AuditRun
         from model_registry.models import ModelEndpoint
-        from scenarios.models import Scenario, ScenarioRevision, ScenarioSet, ScenarioSetVersion, ScenarioSetVersionItem
+        from scenarios.models import (
+            Scenario,
+            ScenarioRevision,
+            ScenarioSet,
+            ScenarioSetVersion,
+            ScenarioSetVersionItem,
+        )
 
         target = ModelEndpoint.objects.create(
             project=self.project, display_name="t", provider="openai", base_url="http://x", model_id="m"

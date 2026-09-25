@@ -9,7 +9,6 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 
-from infra.exceptions import StableAPIError
 from accounts.models import Project, ProjectMembership, User
 from accounts.serializers import (
     MemberAddSerializer,
@@ -21,7 +20,6 @@ from accounts.serializers import (
     WorkspaceItemSerializer,
     WorkspaceUpdateSerializer,
 )
-from infra.readiness import ready_payload
 from accounts.services import (
     DEFAULT_PROJECT_SLUG,
     create_workspace,
@@ -29,6 +27,8 @@ from accounts.services import (
     ensure_project_access,
     update_workspace,
 )
+from infra.exceptions import StableAPIError
+from infra.readiness import ready_payload
 
 logger = logging.getLogger(__name__)
 

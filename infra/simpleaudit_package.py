@@ -1,7 +1,7 @@
 """Resolve SimpleAudit engine provenance from the installed package.
 
 The SimpleAudit engine is a normal pip dependency of this project (declared in
-``requirements.txt``). Its provenance — the version stamped into every frozen
+``pyproject.toml``). Its provenance — the version stamped into every frozen
 AuditRun manifest and the optional git commit — is read from the *installed*
 package metadata, never configured by hand:
 
@@ -26,7 +26,7 @@ a ``simpleaudit-dependency.yaml`` at the project root containing ONLY a
 
 That value is recorded as the run's ``git_commit`` provenance instead of the
 installed package's commit. It is a dev convenience only — production relies on
-the committed ``requirements.txt`` pin, and the file is gitignored so it can
+the committed ``pyproject.toml`` pin, and the file is gitignored so it can
 never leak into a deployment. There is intentionally no ``path:`` override: the
 engine is always consumed as an installed package.
 """

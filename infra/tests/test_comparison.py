@@ -1,11 +1,11 @@
 """Tests for the comparison engine (core.comparison)."""
 from django.test import TestCase
 
+from accounts.models import Project, ProjectMembership, User
+from audits.comparison import ComparisonIncompatible, compare_runs
 from audits.events import ScenarioResult
 from audits.models import AuditRun
-from audits.comparison import ComparisonIncompatible, compare_runs
 from model_registry.models import ModelEndpoint
-from accounts.models import Project, ProjectMembership, User
 from scenarios.models import (
     Scenario,
     ScenarioRevision,

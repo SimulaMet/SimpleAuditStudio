@@ -14,7 +14,12 @@ from django.db import transaction
 from audits.events import AuditEvent, ScenarioResult
 from audits.models import AuditRun
 from model_registry.models import ModelEndpoint
-from scenarios.models import Scenario, ScenarioSet, ScenarioSetVersion, ScenarioSetVersionItem
+from scenarios.models import (
+    Scenario,
+    ScenarioSet,
+    ScenarioSetVersion,
+    ScenarioSetVersionItem,
+)
 
 
 class Command(BaseCommand):

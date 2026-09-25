@@ -188,7 +188,7 @@ MAX_CONCURRENT_AUDITS=2
 MAX_SCENARIOS_PER_RUN=500
 
 # SimpleAudit engine: no env vars needed. It is a pip dependency pinned in
-# requirements.txt; provenance is read from installed package metadata.
+# pyproject.toml; provenance is read from installed package metadata.
 
 # Optional observability
 OTEL_EXPORTER_OTLP_ENDPOINT=

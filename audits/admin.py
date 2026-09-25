@@ -1,7 +1,7 @@
 from django.contrib import admin
 
-from .models import AuditRun
 from .events import AuditEvent, ScenarioResult
+from .models import AuditRun
 
 
 @admin.register(AuditRun)

@@ -8,9 +8,9 @@ the entire user journey without requiring a live worker or Docker stack.
 """
 from rest_framework.test import APITestCase
 
+from accounts.models import Project, ProjectMembership, User
 from audits.events import ScenarioResult
 from audits.models import AuditRun
-from accounts.models import Project, ProjectMembership, User
 from scenarios.models import (
     ScenarioSetVersionItem,
 )

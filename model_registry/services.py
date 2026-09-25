@@ -1,9 +1,9 @@
 """Services for the model registry."""
 from django.db import IntegrityError, transaction
 
+from accounts.models import Project
 from infra.exceptions import StableAPIError
 from model_registry.models import ModelEndpoint
-from accounts.models import Project
 from scenarios.services import require_project_role
 
 

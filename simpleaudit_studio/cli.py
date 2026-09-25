@@ -135,8 +135,9 @@ def main() -> None:
 
 def _seed_demo_data() -> None:
     """Bootstrap admin user, default project, scenario packs, and model connections."""
-    from accounts.services import bootstrap_admin_and_default_project
     from django.core.management import call_command
+
+    from accounts.services import bootstrap_admin_and_default_project
 
     # Respect env vars (set by Dockerfile for HF Space, or defaults for local)
     username = os.environ.get("BOOTSTRAP_USERNAME", "studio")
@@ -144,7 +145,7 @@ def _seed_demo_data() -> None:
     password = os.environ.get("BOOTSTRAP_PASSWORD", "admin123")
     project_name = os.environ.get("BOOTSTRAP_PROJECT_NAME", "Demo Project")
 
-    user, project = bootstrap_admin_and_default_project(
+    _user, project = bootstrap_admin_and_default_project(
         username=username,
         email=email,
         password=password,

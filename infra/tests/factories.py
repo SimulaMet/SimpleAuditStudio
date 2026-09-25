@@ -7,13 +7,17 @@ Usage in any test:
 import factory
 from factory.django import DjangoModelFactory
 
-from accounts.models import User, Project, ProjectMembership
-from scenarios.models import (
-    Scenario, ScenarioRevision, ScenarioSet, ScenarioSetVersion, ScenarioSetVersionItem,
-)
-from model_registry.models import ModelConnection, ModelEndpoint, RegisteredModel
-from audits.models import AuditRun
+from accounts.models import Project, ProjectMembership, User
 from audits.events import ScenarioResult
+from audits.models import AuditRun
+from model_registry.models import ModelConnection, ModelEndpoint, RegisteredModel
+from scenarios.models import (
+    Scenario,
+    ScenarioRevision,
+    ScenarioSet,
+    ScenarioSetVersion,
+    ScenarioSetVersionItem,
+)
 
 
 class UserFactory(DjangoModelFactory):

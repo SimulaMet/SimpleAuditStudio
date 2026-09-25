@@ -25,7 +25,12 @@ class AuditSSEStreamTest(TestCase):
     def _make_run(self):
         from audits.models import AuditRun
         from model_registry.models import ModelEndpoint
-        from scenarios.models import Scenario, ScenarioRevision, ScenarioSet, ScenarioSetVersion
+        from scenarios.models import (
+            Scenario,
+            ScenarioRevision,
+            ScenarioSet,
+            ScenarioSetVersion,
+        )
 
         # Build minimal immutable inputs directly; SSE only reads events + status.
         target = ModelEndpoint.objects.create(

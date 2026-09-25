@@ -23,16 +23,20 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-# curl: healthchecks; git: required to install the SimpleAudit engine from its
-# pinned git ref in requirements.txt.
+# curl: healthchecks
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         curl \
-        git \
     && rm -rf /var/lib/apt/lists/*
 
-COPY requirements.txt .
-RUN pip install -r requirements.txt
+# pyproject.toml is the single source of truth; uv.lock pins exact versions.
+# The compose stack runs against external Postgres (postgres extra) and serves
+# via gunicorn (server extra). uv sync creates /app/.venv; the PATH update
+# keeps the `python`/`gunicorn` entrypoints working.
+COPY pyproject.toml uv.lock README.md ./
+RUN pip install uv \
+    && uv sync --frozen --no-install-project --no-dev --extra postgres --extra server
+ENV PATH="/app/.venv/bin:$PATH"
 
 COPY . .
 

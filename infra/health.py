@@ -70,7 +70,7 @@ def _postgres_probe() -> dict[str, Any]:
             row = cursor.fetchone()
             if row:
                 signals["db_size_bytes"] = int(row[0])
-    except Exception:  # noqa: BLE001 - non-Postgres or permission issue
+    except Exception:  # noqa: BLE001,S110 - non-Postgres or permission issue; size is optional
         pass
     return {"status": "up", **signals}
 

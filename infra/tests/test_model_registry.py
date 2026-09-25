@@ -58,7 +58,7 @@ class EndpointURLFieldTests(TestCase):
         field = EndpointURLField()
         try:
             return field.run_validation(url), None
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - test helper captures any validation error
             return None, exc
 
     def test_accepts_single_label_service_name(self):

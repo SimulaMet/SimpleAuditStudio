@@ -160,7 +160,7 @@ def compare_runs(project, run_ids: list[int]) -> dict:
             elif label == "Scenario set version" and r.scenario_set_version:
                 url = f"/scenarios/?set={r.scenario_set_version.scenario_set_id}"
             cells.append(_cell(text, url))
-        differs = len(set(c["text"] for c in cells)) > 1
+        differs = len({c["text"] for c in cells}) > 1
         input_rows.append({"label": label, "cells": cells, "differs": differs})
 
     return {

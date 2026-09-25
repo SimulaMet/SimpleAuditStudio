@@ -2,17 +2,17 @@
 import time
 from unittest import mock
 
-from django.test import TestCase, Client
+from django.test import Client, TestCase
 from rest_framework.test import APIClient
 
 from accounts.models import ProjectMembership
 from infra.tests.factories import (
-    UserFactory,
-    ProjectFactory,
     MembershipFactory,
     ModelConnectionFactory,
     ModelEndpointFactory,
+    ProjectFactory,
     RegisteredModelFactory,
+    UserFactory,
 )
 
 
@@ -65,7 +65,7 @@ class HealthProbeTest(TestCase):
     def test_model_endpoints_probe_lists_enabled_endpoints(self):
         from infra.health import _model_endpoints_probe
 
-        user, project = _make_admin()
+        _user, project = _make_admin()
         conn = ModelConnectionFactory(project=project, base_url="http://127.0.0.1:1/v1", enabled=True)
         model = RegisteredModelFactory(connection=conn, project=project, enabled=True)
         result = _model_endpoints_probe()
@@ -76,11 +76,15 @@ class HealthProbeTest(TestCase):
         self.assertIn(model.id, model_ids)
 
     def test_queue_throughput_counts_runs(self):
-        from infra.health import _queue_throughput_probe
         from audits.models import AuditRun
-        from infra.tests.factories import AuditRunFactory, ScenarioSetVersionFactory, ScenarioSetFactory
+        from infra.health import _queue_throughput_probe
+        from infra.tests.factories import (
+            AuditRunFactory,
+            ScenarioSetFactory,
+            ScenarioSetVersionFactory,
+        )
 
-        user, project = _make_admin()
+        _user, project = _make_admin()
         sset = ScenarioSetFactory(project=project)
         version = ScenarioSetVersionFactory(scenario_set=sset, version=1)
         endpoint = ModelEndpointFactory(project=project)
