@@ -27,6 +27,12 @@ uvx simpleaudit-studio
 
 [`uvx`](https://docs.astral.sh/uv/#uvx) installs the [`simpleaudit-studio`](https://pypi.org/project/simpleaudit-studio/) package and runs it in an isolated environment. No Docker, no Postgres, no manual setup. Opens at http://localhost:8000 (login: `studio` / `admin123`). A mock model server is pre-seeded so you can start exploring audit results immediately.
 
+Want the **latest unreleased code** from this repo instead of the PyPI release? Same one-liner, pointed at git:
+
+```bash
+uvx --from "git+https://github.com/SushantGautam/SimpleAuditStudio" spin
+```
+
 🌐 Or skip the setup entirely — try the live demo: <a href="https://sushantgautam-simpleaudit-studio.hf.space" target="_blank" rel="noopener noreferrer">sushantgautam-simpleaudit-studio.hf.space</a>
 
 ### 🤖 Using Real Models
