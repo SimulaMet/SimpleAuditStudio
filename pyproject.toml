@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "simpleaudit-studio"
-version = "0.2.4"
+version = "0.2.5"
 description = "Production AI model audit platform — one-liner demo mode via uvx"
 readme = "README.md"
 requires-python = ">=3.11"
