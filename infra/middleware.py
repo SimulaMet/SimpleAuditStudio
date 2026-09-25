@@ -70,17 +70,23 @@ class CsrfCookieMiddleware(MiddlewareMixin):
     Django only sets the cookie when a response renders ``{% csrf_token %}``.
     In the HF Space iframe (demo mode) the login page may be the only place
     that does so; if the user signed in via WorkOS magic auth or the cookie
-    expired, subsequent fetch POSTs fail with 403. Marking the CSRF cookie
-    for update on every authenticated request fixes this.
+    expired, subsequent fetch POSTs fail with 403.
+
+    We only set the cookie if it is missing, rather than rotating it on every
+    request. Rotating on every request causes token/cookie drift: a form
+    rendered with token A becomes stale after any other request rotates the
+    cookie to secret B, producing 403 "CSRF token from POST incorrect".
     """
 
     def process_request(self, request):
         if hasattr(request, "user") and request.user.is_authenticated:
+            from django.conf import settings
             from django.middleware.csrf import _add_new_csrf_cookie
 
-            # Generates a secret in request.META and marks it for update;
-            # CsrfViewMiddleware.process_response then sets the cookie.
-            _add_new_csrf_cookie(request)
+            # Only set the cookie if it's not already present in the request.
+            existing = request.COOKIES.get(settings.CSRF_COOKIE_NAME)
+            if not existing:
+                _add_new_csrf_cookie(request)
 
 
 class ProjectMiddleware(MiddlewareMixin):
