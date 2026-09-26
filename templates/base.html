@@ -8,6 +8,8 @@
   <meta http-equiv="Expires" content="0">
   <title>{% block title %}SimpleAudit Studio{% endblock %}</title>
   {% load static %}
+  {# SEO head: description, canonical, OG, Twitter, JSON-LD. App pages default to noindex. #}
+  {% include "seo/head.html" with seo_title=page_title seo_description=page_description seo_robots=page_robots|default:"noindex,nofollow" seo_jsonld=page_jsonld og_image_url=og_image_url %}
   <link rel="icon" type="image/svg+xml" sizes="32x32" href="{% static 'favicon-32x32.svg' %}">
   <link rel="icon" type="image/svg+xml" sizes="16x16" href="{% static 'favicon-16x16.svg' %}">
   <script src="https://cdn.tailwindcss.com"></script>
