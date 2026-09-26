@@ -3,7 +3,35 @@ name: CI
 on:
   push:
     branches: [main]
+    paths:
+      - "accounts/**"
+      - "audits/**"
+      - "config/**"
+      - "infra/**"
+      - "model_registry/**"
+      - "scenarios/**"
+      - "simpleaudit_studio/**"
+      - "templates/**"
+      - "static/**"
+      - "manage.py"
+      - "pyproject.toml"
+      - "uv.lock"
+      - ".github/workflows/ci.yml"
   pull_request:
+    paths:
+      - "accounts/**"
+      - "audits/**"
+      - "config/**"
+      - "infra/**"
+      - "model_registry/**"
+      - "scenarios/**"
+      - "simpleaudit_studio/**"
+      - "templates/**"
+      - "static/**"
+      - "manage.py"
+      - "pyproject.toml"
+      - "uv.lock"
+      - ".github/workflows/ci.yml"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
