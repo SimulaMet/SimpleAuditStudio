@@ -59,82 +59,82 @@ function toggleRename() {
       <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span> streaming
     </span>
   </div>
-  <!-- Turn / Role / Rep tracker (hidden until first turn event) -->
+  <!-- Compressed occupancy / distribution view -->
   <style>
-    @keyframes pulse-role {
-      0%, 100% { transform: scale(1); opacity: 1; }
-      50% { transform: scale(1.08); opacity: 0.75; }
-    }
     @keyframes slide-in {
       from { opacity: 0; transform: translateY(-4px); }
       to { opacity: 1; transform: translateY(0); }
     }
     .event-log-entry { animation: slide-in 0.3s ease; }
-    .role-node {
-      transition: all 0.3s ease;
-      border: 1px solid transparent;
-    }
-    .role-node.active-auditor {
-      border-color: rgb(129 140 248);
-      background: rgb(99 102 241 / 0.25);
-      color: rgb(165 180 252);
-      box-shadow: 0 0 12px rgb(99 102 241 / 0.5);
-      animation: pulse-role 1.2s ease-in-out infinite;
-    }
-    .role-node.active-target {
-      border-color: rgb(52 211 153);
-      background: rgb(16 185 129 / 0.25);
-      color: rgb(110 231 183);
-      box-shadow: 0 0 12px rgb(16 185 129 / 0.5);
-      animation: pulse-role 1.2s ease-in-out infinite;
-    }
-    .role-node.active-judge {
-      border-color: rgb(251 191 36);
-      background: rgb(245 158 11 / 0.25);
-      color: rgb(253 230 138);
-      box-shadow: 0 0 12px rgb(245 158 11 / 0.5);
-      animation: pulse-role 1.2s ease-in-out infinite;
-    }
-    .turn-bar-fill { transition: width 0.3s ease, background-color 0.3s ease; }
+    .dist-bar-fill { transition: width 0.4s ease; }
     .rep-dot { transition: all 0.3s ease; }
   </style>
-  <div id="turn-section" class="mb-4 hidden">
-    <!-- Turn counter + progress bar -->
+  <!-- Overall progress -->
+  <div class="mb-4">
     <div class="flex items-center justify-between mb-1">
-      <span id="turn-label" class="text-xs font-medium text-gray-300">Turn —</span>
-      <span id="rep-label" class="text-xs font-medium text-gray-400"></span>
+      <span id="overall-label" class="text-xs font-medium text-gray-300">{{ run.completed_scenarios }} / {{ run.total_scenarios }} scenarios complete</span>
+      <span id="overall-pct" class="text-xs font-bold text-accent">{% if run.total_scenarios %}{{ progress_pct }}{% else %}0{% endif %}%</span>
     </div>
-    <div class="h-1.5 rounded-full bg-surface-overlay overflow-hidden mb-3">
-      <div id="turn-bar" class="turn-bar-fill h-full rounded-full bg-indigo-400" style="width: 0%"></div>
+    <div class="h-2 rounded-full bg-surface-overlay overflow-hidden">
+      <div id="overall-bar" class="dist-bar-fill h-full rounded-full bg-emerald-400" style="width: {% if run.total_scenarios %}{{ progress_pct }}{% else %}0{% endif %}%"></div>
     </div>
-    <!-- Role diagram: Auditor → Target → Judge -->
-    <div class="flex items-center justify-center gap-2 mb-3">
-      <div id="role-auditor" class="role-node px-3 py-1.5 rounded-lg text-[11px] font-semibold bg-surface-overlay text-gray-500">Auditor</div>
-      <svg class="w-4 h-4 text-gray-600 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
-      <div id="role-target" class="role-node px-3 py-1.5 rounded-lg text-[11px] font-semibold bg-surface-overlay text-gray-500">Target</div>
-      <svg class="w-4 h-4 text-gray-600 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
-      <div id="role-judge" class="role-node px-3 py-1.5 rounded-lg text-[11px] font-semibold bg-surface-overlay text-gray-500">Judge</div>
+    <div class="flex items-center gap-3 mt-1.5 text-[11px] text-gray-500">
+      <span><span class="inline-block w-2 h-2 rounded-full bg-emerald-400 mr-1"></span><span id="stat-done">{{ run.completed_scenarios }}</span> done</span>
+      <span><span class="inline-block w-2 h-2 rounded-full bg-blue-400 mr-1"></span><span id="stat-ok">{{ run.successful_scenarios }}</span> pass</span>
+      <span><span class="inline-block w-2 h-2 rounded-full bg-red-400 mr-1"></span><span id="stat-fail">{{ run.failed_scenarios }}</span> fail</span>
+      <span><span class="inline-block w-2 h-2 rounded-full bg-amber-400 mr-1"></span><span id="stat-retry">{{ run.retried_scenarios }}</span> retry</span>
     </div>
-    <!-- Rep tracker dots -->
-    <div id="rep-dots" class="flex items-center justify-center gap-1.5"></div>
   </div>
+  <!-- Repetition tracker -->
+  {% if run.generation_parameters_snapshot.n_repetitions|default:1 > 1 %}
+  <div class="mb-4 flex items-center gap-2">
+    <span class="text-[11px] text-gray-500 uppercase tracking-wide">Reps</span>
+    <div id="rep-dots" class="flex items-center gap-1.5"></div>
+  </div>
+  {% endif %}
   <!-- Stage pipeline -->
   <div id="stage-pipeline" class="flex items-center gap-1 mb-4 overflow-x-auto pb-1">
     {% for stage in stages %}
     <div id="stage-{{ stage }}" class="px-2 py-1 rounded text-[11px] whitespace-nowrap bg-surface-overlay text-gray-500 transition-colors duration-300">{% if stage == "queued" %}Queued{% elif stage == "preparing" %}Preparing{% elif stage == "target_execution" %}Running{% elif stage == "auditing" %}Auditing{% elif stage == "judging" %}Judging{% elif stage == "aggregation" %}Aggregating{% else %}Done{% endif %}</div>
     {% endfor %}
   </div>
-  <!-- Counters -->
-  <div class="grid grid-cols-5 gap-2 text-center">
-    <div><p id="prog-total" class="text-lg font-bold text-gray-200">{{ run.total_scenarios }}</p><p class="text-[10px] text-gray-500 uppercase">Total</p></div>
-    <div><p id="prog-done" class="text-lg font-bold text-emerald-400">{{ run.completed_scenarios }}</p><p class="text-[10px] text-gray-500 uppercase">Done</p></div>
-    <div><p id="prog-ok" class="text-lg font-bold text-blue-400">{{ run.successful_scenarios }}</p><p class="text-[10px] text-gray-500 uppercase">Pass</p></div>
-    <div><p id="prog-fail" class="text-lg font-bold text-red-400">{{ run.failed_scenarios }}</p><p class="text-[10px] text-gray-500 uppercase">Fail</p></div>
-    <div><p id="prog-retry" class="text-lg font-bold text-amber-400">{{ run.retried_scenarios }}</p><p class="text-[10px] text-gray-500 uppercase">Retry</p></div>
+  <!-- Turn / phase distribution -->
+  <div class="mb-4">
+    <p class="text-[11px] text-gray-500 uppercase tracking-wide mb-2">Turn / Phase Distribution</p>
+    <div id="dist-bars" class="space-y-1.5"></div>
   </div>
-  <!-- Event log -->
-  <div id="event-log" class="mt-3 max-h-32 overflow-y-auto space-y-1 text-[11px] font-mono text-gray-500">
-    <p>Waiting for events…</p>
+  <!-- Active role split -->
+  <div class="mb-4">
+    <p class="text-[11px] text-gray-500 uppercase tracking-wide mb-2">Active Now &middot; <span id="active-count">0</span></p>
+    <div class="grid grid-cols-3 gap-2">
+      <div class="bg-surface-overlay rounded-lg p-2 text-center">
+        <p id="role-auditor-count" class="text-sm font-bold text-indigo-300">0</p>
+        <p class="text-[10px] text-gray-500">Auditor</p>
+        <div class="h-1 rounded-full bg-surface-raised mt-1 overflow-hidden"><div id="role-auditor-bar" class="dist-bar-fill h-full rounded-full bg-indigo-400" style="width:0%"></div></div>
+      </div>
+      <div class="bg-surface-overlay rounded-lg p-2 text-center">
+        <p id="role-target-count" class="text-sm font-bold text-emerald-300">0</p>
+        <p class="text-[10px] text-gray-500">Target</p>
+        <div class="h-1 rounded-full bg-surface-raised mt-1 overflow-hidden"><div id="role-target-bar" class="dist-bar-fill h-full rounded-full bg-emerald-400" style="width:0%"></div></div>
+      </div>
+      <div class="bg-surface-overlay rounded-lg p-2 text-center">
+        <p id="role-judge-count" class="text-sm font-bold text-amber-300">0</p>
+        <p class="text-[10px] text-gray-500">Judge</p>
+        <div class="h-1 rounded-full bg-surface-raised mt-1 overflow-hidden"><div id="role-judge-bar" class="dist-bar-fill h-full rounded-full bg-amber-400" style="width:0%"></div></div>
+      </div>
+    </div>
+  </div>
+  <!-- Latest activity sample -->
+  <div class="mb-3">
+    <p class="text-[11px] text-gray-500 uppercase tracking-wide mb-1.5">Latest Activity</p>
+    <div id="latest-activity" class="space-y-1 text-[11px] font-mono text-gray-400">
+      <p class="text-gray-600">Waiting for events&hellip;</p>
+    </div>
+  </div>
+  <!-- Compact footer -->
+  <div class="flex items-center justify-between text-[11px] text-gray-500 border-t border-gray-800 pt-3">
+    <span>Total: <span id="prog-total" class="font-semibold text-gray-300">{{ run.total_scenarios }}</span></span>
+    <span>Last update: <span id="last-update" class="font-semibold text-gray-300">&mdash;</span></span>
   </div>
 </div>
 <script>
@@ -150,9 +150,11 @@ function toggleRename() {
     cancelled: 'bg-gray-800 text-gray-400',
   };
   let currentStage = "{{ run.status }}";
+  const TOTAL = {{ run.total_scenarios }};
+  const MAX_TURNS = {{ run.generation_parameters_snapshot.max_turns|default:5 }};
+  const TOTAL_REPS = {{ run.generation_parameters_snapshot.n_repetitions|default:1 }};
 
   function setStage(stage) {
-    // Terminal states that aren't in the pipeline array: light up all stages.
     if (stage === 'failed' || stage === 'cancelled') {
       stages.forEach(s => {
         const el = document.getElementById('stage-' + s);
@@ -173,25 +175,11 @@ function toggleRename() {
   }
   setStage(currentStage);
 
-  function updateCounter(id, val) {
-    const el = document.getElementById(id);
-    if (el && val !== null && val !== undefined) el.textContent = val;
-  }
-
-  // Live-update the Status card's State row from SSE events. The server-rendered
-  // value is only correct at page load; without this it stays "Queued" until a
-  // manual refresh even though the run has progressed.
   const STATE_LABELS = {
-    queued: 'Queued',
-    preparing: 'Preparing',
-    target_execution: 'Running Scenarios',
-    auditing: 'Auditing',
-    judging: 'Judging',
-    aggregation: 'Aggregating Results',
-    report_generation: 'Generating Report',
-    completed: 'Completed',
-    failed: 'Failed',
-    cancelled: 'Cancelled',
+    queued: 'Queued', preparing: 'Preparing', target_execution: 'Running Scenarios',
+    auditing: 'Auditing', judging: 'Judging', aggregation: 'Aggregating Results',
+    report_generation: 'Generating Report', completed: 'Completed',
+    failed: 'Failed', cancelled: 'Cancelled',
   };
   const STATE_STYLES = {
     completed: 'text-emerald-400 font-medium',
@@ -205,140 +193,195 @@ function toggleRename() {
     el.className = STATE_STYLES[status] || 'text-amber-400 font-medium';
   }
 
-  function logEvent(kind, data) {
-    const log = document.getElementById('event-log');
-    if (!log) return;
-    if (log.querySelector('p')) log.innerHTML = '';
-    const p = document.createElement('p');
-    p.className = 'event-log-entry';
-    const t = new Date().toLocaleTimeString();
-    p.textContent = `[${t}] ${kind}: ${JSON.stringify(data).slice(0, 120)}`;
-    log.prepend(p);
-    while (log.children.length > 50) log.lastChild.remove();
-  }
-
-  // --- Turn / Role / Rep tracking ---
-  const ROLE_COLORS = { auditor: 'bg-indigo-400', target: 'bg-emerald-400', judge: 'bg-amber-400' };
-  let maxTurns = 0, totalReps = 0, currentRep = 0;
-
-  function showTurnSection() {
-    const sec = document.getElementById('turn-section');
-    if (sec) sec.classList.remove('hidden');
-  }
-
-  function renderRepDots() {
-    const wrap = document.getElementById('rep-dots');
-    if (!wrap || !totalReps) return;
-    wrap.innerHTML = '';
-    for (let i = 1; i <= totalReps; i++) {
-      const dot = document.createElement('span');
-      const done = i < currentRep;
-      const active = i === currentRep;
-      dot.className = 'rep-dot inline-flex items-center justify-center w-5 h-5 rounded-full text-[9px] font-bold ' +
-        (done ? 'bg-emerald-900/60 text-emerald-300 border border-emerald-500/50'
-             : active ? 'bg-accent/30 text-accent border border-accent/60'
-                     : 'bg-surface-overlay text-gray-600 border border-gray-700');
-      dot.textContent = done ? '✓' : i;
-      wrap.appendChild(dot);
-    }
-  }
-
-  function setRole(role) {
-    ['auditor', 'target', 'judge'].forEach(r => {
-      const el = document.getElementById('role-' + r);
-      if (!el) return;
-      el.classList.remove('active-auditor', 'active-target', 'active-judge');
-      if (r === role) el.classList.add('active-' + r);
-    });
-    const bar = document.getElementById('turn-bar');
-    if (bar && ROLE_COLORS[role]) bar.className = 'turn-bar-fill h-full rounded-full ' + ROLE_COLORS[role];
-  }
-
-  function clearRole() {
-    ['auditor', 'target', 'judge'].forEach(r => {
-      const el = document.getElementById('role-' + r);
-      if (el) el.classList.remove('active-auditor', 'active-target', 'active-judge');
-    });
-  }
-
-  function handleScenarioTurn(payload) {
-    showTurnSection();
-    const turn = payload.turn || 0;
-    maxTurns = payload.max_turns || maxTurns;
-    if (payload.rep && payload.total_reps) {
-      currentRep = payload.rep;
-      totalReps = payload.total_reps;
-    }
-    const label = document.getElementById('turn-label');
-    if (label) label.textContent = maxTurns ? `Turn ${turn}/${maxTurns}` : `Turn ${turn}`;
-    const repLabel = document.getElementById('rep-label');
-    if (repLabel) repLabel.textContent = totalReps > 1 ? `Rep ${currentRep}/${totalReps}` : '';
-    const bar = document.getElementById('turn-bar');
-    if (bar && maxTurns) bar.style.width = Math.min(100, (turn / maxTurns) * 100) + '%';
-    if (payload.role) setRole(payload.role);
-    renderRepDots();
-  }
-
-  function handleRepStarted(payload) {
-    showTurnSection();
-    currentRep = payload.rep || 1;
-    totalReps = payload.total_reps || totalReps;
-    const repLabel = document.getElementById('rep-label');
-    if (repLabel) repLabel.textContent = totalReps > 1 ? `Rep ${currentRep}/${totalReps}` : '';
-    const label = document.getElementById('turn-label');
-    if (label) label.textContent = maxTurns ? `Turn 0/${maxTurns}` : 'Turn 0';
-    const bar = document.getElementById('turn-bar');
-    if (bar) bar.style.width = '0%';
-    clearRole();
-    renderRepDots();
-  }
-
-  // Counters are seeded from the server's durable state. The SSE stream replays
-  // ALL prior events on connect (after_id=0), so we must not re-count a scenario
-  // whose completion is already reflected in the seed values. Pre-seed the set
-  // with version items that already have a result row, then track any new ones.
-  let done = {{ run.completed_scenarios }}, ok = {{ run.successful_scenarios }}, fail = {{ run.failed_scenarios }};
+  // --- Aggregate state ---
+  const scenarios = new Map();
+  let doneCount = {{ run.completed_scenarios }};
+  let okCount = {{ run.successful_scenarios }};
+  let failCount = {{ run.failed_scenarios }};
   const countedVIs = new Set(JSON.parse('{{ result_version_item_ids_json|escapejs }}'));
-  function countScenario(vi, succeeded) {
-    if (countedVIs.has(vi)) return; // already counted (replay or duplicate)
-    countedVIs.add(vi);
-    done++;
-    if (succeeded) ok++; else fail++;
-    updateCounter('prog-done', done); updateCounter('prog-ok', ok); updateCounter('prog-fail', fail);
+  countedVIs.forEach(vi => scenarios.set(vi, { phase: 'done' }));
+
+  let maxTurnsSeen = MAX_TURNS;
+  let currentRep = 0;
+
+  function touch() {
+    const el = document.getElementById('last-update');
+    if (el) el.textContent = new Date().toLocaleTimeString();
   }
+
+  function getPhaseCounts() {
+    const counts = { queued: 0, running: 0, judging: 0, done: doneCount, failed: 0 };
+    const turnCounts = new Array(maxTurnsSeen + 1).fill(0);
+    const roleCounts = { auditor: 0, target: 0, judge: 0 };
+    let active = 0;
+    scenarios.forEach((s, vi) => {
+      if (s.phase === 'done' || s.phase === 'failed') return;
+      if (s.phase === 'judging') {
+        counts.judging++;
+        active++;
+        roleCounts.judge++;
+      } else if (s.phase === 'running') {
+        counts.running++;
+        active++;
+        if (s.turn >= 0 && s.turn <= maxTurnsSeen) turnCounts[s.turn]++;
+        if (s.role && roleCounts[s.role] !== undefined) roleCounts[s.role]++;
+      } else {
+        counts.queued++;
+      }
+    });
+    return { counts, turnCounts, roleCounts, active };
+  }
+
+  function renderDistribution() {
+    const { counts, turnCounts, roleCounts, active } = getPhaseCounts();
+    const maxVal = Math.max(counts.queued, ...turnCounts, counts.judging, counts.done, 1);
+
+    const distEl = document.getElementById('dist-bars');
+    if (!distEl) return;
+    const rows = [];
+    rows.push({ label: 'Queued', val: counts.queued, color: 'bg-gray-500' });
+    for (let t = 1; t <= maxTurnsSeen; t++) {
+      rows.push({ label: `T${t}`, val: turnCounts[t] || 0, color: 'bg-indigo-400' });
+    }
+    rows.push({ label: 'Judging', val: counts.judging, color: 'bg-amber-400' });
+    rows.push({ label: 'Done', val: counts.done, color: 'bg-emerald-400' });
+
+    distEl.innerHTML = rows.map(r => {
+      const pct = maxVal > 0 ? (r.val / maxVal) * 100 : 0;
+      return `<div class="flex items-center gap-2">
+        <span class="w-14 text-right text-[10px] text-gray-500 shrink-0">${r.label}</span>
+        <div class="flex-1 h-3 bg-surface-overlay rounded overflow-hidden">
+          <div class="dist-bar-fill h-full rounded ${r.color}" style="width:${pct}%"></div>
+        </div>
+        <span class="w-8 text-[10px] text-gray-400 font-mono">${r.val}</span>
+      </div>`;
+    }).join('');
+
+    document.getElementById('active-count').textContent = active;
+    const maxRole = Math.max(roleCounts.auditor, roleCounts.target, roleCounts.judge, 1);
+    [['auditor', 'indigo'], ['target', 'emerald'], ['judge', 'amber']].forEach(([role]) => {
+      const cnt = roleCounts[role];
+      document.getElementById(`role-${role}-count`).textContent = cnt;
+      document.getElementById(`role-${role}-bar`).style.width = (cnt / maxRole * 100) + '%';
+    });
+
+    const pct = TOTAL > 0 ? Math.round(doneCount / TOTAL * 100) : 0;
+    document.getElementById('overall-bar').style.width = pct + '%';
+    document.getElementById('overall-pct').textContent = pct + '%';
+    document.getElementById('overall-label').textContent = `${doneCount} / ${TOTAL} scenarios complete`;
+    document.getElementById('stat-done').textContent = doneCount;
+    document.getElementById('stat-ok').textContent = okCount;
+    document.getElementById('stat-fail').textContent = failCount;
+
+    // Live-update the Status card scenarios row.
+    const scenEl = document.getElementById('run-scenarios');
+    if (scenEl) scenEl.textContent = TOTAL + ' total, ' + doneCount + ' done';
+
+    if (TOTAL_REPS > 1) {
+      const wrap = document.getElementById('rep-dots');
+      if (wrap) {
+        wrap.innerHTML = '';
+        for (let i = 1; i <= TOTAL_REPS; i++) {
+          const dot = document.createElement('span');
+          const isDone = i < currentRep;
+          const isActive = i === currentRep;
+          dot.className = 'rep-dot inline-flex items-center justify-center w-5 h-5 rounded-full text-[9px] font-bold ' +
+            (isDone ? 'bg-emerald-900/60 text-emerald-300 border border-emerald-500/50'
+             : isActive ? 'bg-accent/30 text-accent border border-accent/60'
+                       : 'bg-surface-overlay text-gray-600 border border-gray-700');
+          dot.textContent = isDone ? '\u2713' : i;
+          wrap.appendChild(dot);
+        }
+      }
+    }
+  }
+
+  function renderLatestActivity() {
+    const el = document.getElementById('latest-activity');
+    if (!el) return;
+    const active = [];
+    scenarios.forEach((s, vi) => {
+      if (s.phase === 'running' || s.phase === 'judging') {
+        active.push({ vi, ...s });
+      }
+    });
+    active.sort((a, b) => (b.turn || 0) - (a.turn || 0) || String(b.vi).localeCompare(String(a.vi)));
+    const sample = active.slice(0, 4);
+    if (sample.length === 0) {
+      el.innerHTML = '<p class="text-gray-600">No active scenarios</p>';
+      return;
+    }
+    el.innerHTML = sample.map(s => {
+      const shortVi = String(s.vi).length > 12 ? String(s.vi).slice(0, 10) + '\u2026' : String(s.vi);
+      let status;
+      if (s.phase === 'judging') status = 'Judging';
+      else status = `Turn ${(s.turn || 0) + 1}/${maxTurnsSeen} \u00b7 ${s.role || '?'}`;
+      return `<p class="event-log-entry"><span class="text-gray-300">${shortVi}</span> <span class="text-gray-500">${status}</span></p>`;
+    }).join('');
+    if (active.length > 4) {
+      el.innerHTML += `<p class="text-gray-600">+${active.length - 4} more active</p>`;
+    }
+  }
+
+  function renderAll() {
+    renderDistribution();
+    renderLatestActivity();
+    touch();
+  }
+
+  // --- Event handlers ---
   es.addEventListener('run_stage', e => {
     const d = JSON.parse(e.data);
     if (d.payload && d.payload.stage) {
       setStage(d.payload.stage);
       updateRunState(d.payload.stage);
     }
-    logEvent('stage', d.payload || {});
   });
   es.addEventListener('scenario_attempted', e => {
     const d = JSON.parse(e.data);
-    logEvent('attempt', { vi: d.version_item_id, attempt: (d.payload||{}).attempt });
+    const vi = d.version_item_id;
+    if (!scenarios.has(vi)) scenarios.set(vi, { phase: 'queued' });
+    renderAll();
   });
   es.addEventListener('scenario_turn', e => {
     const d = JSON.parse(e.data);
-    handleScenarioTurn(d.payload || {});
+    const p = d.payload || {};
+    const vi = d.version_item_id;
+    const turn = p.turn || 0;
+    const role = p.role || '';
+    if (p.max_turns) maxTurnsSeen = Math.max(maxTurnsSeen, p.max_turns);
+    if (p.rep) currentRep = p.rep;
+    scenarios.set(vi, { phase: 'running', turn, role, rep: p.rep || 0 });
+    renderAll();
   });
   es.addEventListener('scenario_rep_started', e => {
     const d = JSON.parse(e.data);
-    handleRepStarted(d.payload || {});
+    const p = d.payload || {};
+    if (p.rep) currentRep = p.rep;
+    renderAll();
   });
   es.addEventListener('scenario_completed', e => {
     const d = JSON.parse(e.data);
     const p = d.payload || {};
-    countScenario(d.version_item_id, p.severity !== 'ERROR');
-    clearRole();
-    logEvent('done', { vi: d.version_item_id, severity: p.severity });
+    const vi = d.version_item_id;
+    if (!countedVIs.has(vi)) {
+      countedVIs.add(vi);
+      doneCount++;
+      if (p.severity !== 'ERROR') okCount++; else failCount++;
+    }
+    scenarios.set(vi, { phase: 'done' });
+    renderAll();
   });
   es.addEventListener('scenario_failed', e => {
     const d = JSON.parse(e.data);
-    const p = d.payload || {};
-    countScenario(d.version_item_id, false);
-    clearRole();
-    logEvent('fail', { vi: d.version_item_id, error: p.error });
+    const vi = d.version_item_id;
+    if (!countedVIs.has(vi)) {
+      countedVIs.add(vi);
+      doneCount++;
+      failCount++;
+    }
+    scenarios.set(vi, { phase: 'failed' });
+    renderAll();
   });
   // Track start time for duration calculation on terminal events.
   let runStartedAt = null;
@@ -347,7 +390,7 @@ function toggleRename() {
     runStartedAt = new Date(startedEl.textContent).getTime() || null;
   }
 
-  function updateStatusCard() {
+  function updateStatusCardTerminal() {
     const now = new Date();
     const finishedEl = document.getElementById('run-finished');
     if (finishedEl) finishedEl.textContent = now.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) + ', ' + now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
@@ -360,12 +403,6 @@ function toggleRename() {
       else durEl.textContent = Math.floor(secs / 3600) + ' hr ' + Math.floor((secs % 3600) / 60) + ' min';
       if (durRow) durRow.style.display = '';
     }
-    const scenEl = document.getElementById('run-scenarios');
-    if (scenEl) {
-      const totalEl = document.getElementById('prog-total');
-      const total = totalEl ? parseInt(totalEl.textContent, 10) || done : done;
-      scenEl.textContent = total + ' total, ' + done + ' done';
-    }
   }
 
   ['run_completed','run_failed','run_cancelled'].forEach(term => {
@@ -374,17 +411,20 @@ function toggleRename() {
       const stageMap = { run_completed:'completed', run_failed:'failed', run_cancelled:'cancelled' };
       setStage(stageMap[term] || term);
       updateRunState({ run_completed:'completed', run_failed:'failed', run_cancelled:'cancelled' }[term]);
-      updateStatusCard();
-      logEvent(term, d.payload || {});
+      updateStatusCardTerminal();
       es.close();
       const panel = document.getElementById('progress-panel');
       if (panel) {
         const badge = panel.querySelector('.animate-pulse');
         if (badge) badge.parentElement.innerHTML = '<span class="text-xs text-gray-400">ended</span>';
       }
+      renderAll();
     });
   });
   es.onerror = () => { es.close(); };
+
+  // Initial render
+  renderAll();
 })();
 </script>
 {% endif %}
