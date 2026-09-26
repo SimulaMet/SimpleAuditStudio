@@ -121,7 +121,7 @@ function toggleRename() {
   <!-- Stage pipeline -->
   <div id="stage-pipeline" class="flex items-center gap-1 mb-4 overflow-x-auto pb-1">
     {% for stage in stages %}
-    <div id="stage-{{ stage }}" class="px-2 py-1 rounded text-[11px] whitespace-nowrap bg-surface-overlay text-gray-500 transition-colors duration-300">{{ stage|cut:"_" }}</div>
+    <div id="stage-{{ stage }}" class="px-2 py-1 rounded text-[11px] whitespace-nowrap bg-surface-overlay text-gray-500 transition-colors duration-300">{% if stage == "queued" %}Queued{% elif stage == "preparing" %}Preparing{% elif stage == "target_execution" %}Running{% elif stage == "auditing" %}Auditing{% elif stage == "judging" %}Judging{% elif stage == "aggregation" %}Aggregating{% else %}Done{% endif %}</div>
     {% endfor %}
   </div>
   <!-- Counters -->
@@ -144,9 +144,22 @@ function toggleRename() {
   const url = `/api/projects/${project_id}/audit-runs/${run_id}/events/`;
   const es = new EventSource(url);
   const stages = ["queued","preparing","target_execution","auditing","judging","aggregation","completed"];
+  const STAGE_STYLES = {
+    completed: 'bg-emerald-900/40 text-emerald-300',
+    failed: 'bg-red-900/40 text-red-300',
+    cancelled: 'bg-gray-800 text-gray-400',
+  };
   let currentStage = "{{ run.status }}";
 
   function setStage(stage) {
+    // Terminal states that aren't in the pipeline array: light up all stages.
+    if (stage === 'failed' || stage === 'cancelled') {
+      stages.forEach(s => {
+        const el = document.getElementById('stage-' + s);
+        if (el) el.className = 'px-2 py-1 rounded text-[11px] whitespace-nowrap ' + (STAGE_STYLES[stage] || '');
+      });
+      return;
+    }
     const idx = stages.indexOf(stage);
     if (idx === -1) return;
     currentStage = stage;
@@ -163,6 +176,33 @@ function toggleRename() {
   function updateCounter(id, val) {
     const el = document.getElementById(id);
     if (el && val !== null && val !== undefined) el.textContent = val;
+  }
+
+  // Live-update the Status card's State row from SSE events. The server-rendered
+  // value is only correct at page load; without this it stays "Queued" until a
+  // manual refresh even though the run has progressed.
+  const STATE_LABELS = {
+    queued: 'Queued',
+    preparing: 'Preparing',
+    target_execution: 'Running Scenarios',
+    auditing: 'Auditing',
+    judging: 'Judging',
+    aggregation: 'Aggregating Results',
+    report_generation: 'Generating Report',
+    completed: 'Completed',
+    failed: 'Failed',
+    cancelled: 'Cancelled',
+  };
+  const STATE_STYLES = {
+    completed: 'text-emerald-400 font-medium',
+    failed: 'text-red-400 font-medium',
+    cancelled: 'text-gray-400 font-medium',
+  };
+  function updateRunState(status) {
+    const el = document.getElementById('run-state');
+    if (!el || !status) return;
+    el.textContent = STATE_LABELS[status] || status.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+    el.className = STATE_STYLES[status] || 'text-amber-400 font-medium';
   }
 
   function logEvent(kind, data) {
@@ -268,7 +308,10 @@ function toggleRename() {
   }
   es.addEventListener('run_stage', e => {
     const d = JSON.parse(e.data);
-    if (d.payload && d.payload.stage) setStage(d.payload.stage);
+    if (d.payload && d.payload.stage) {
+      setStage(d.payload.stage);
+      updateRunState(d.payload.stage);
+    }
     logEvent('stage', d.payload || {});
   });
   es.addEventListener('scenario_attempted', e => {
@@ -300,8 +343,9 @@ function toggleRename() {
   ['run_completed','run_failed','run_cancelled'].forEach(term => {
     es.addEventListener(term, e => {
       const d = JSON.parse(e.data);
-      const stageMap = { run_completed:'completed', run_failed:'aggregation', run_cancelled:'aggregation' };
+      const stageMap = { run_completed:'completed', run_failed:'failed', run_cancelled:'cancelled' };
       setStage(stageMap[term] || term);
+      updateRunState({ run_completed:'completed', run_failed:'failed', run_cancelled:'cancelled' }[term]);
       logEvent(term, d.payload || {});
       es.close();
       const panel = document.getElementById('progress-panel');
@@ -322,9 +366,9 @@ function toggleRename() {
     <h2 class="text-sm font-semibold text-gray-300 mb-3">Status</h2>
     <div class="space-y-2 text-sm">
       <div class="flex justify-between"><span class="text-gray-500">State</span>
-        {% if run.status == "completed" %}<span class="text-emerald-400 font-medium">completed</span>
-        {% elif run.status == "failed" %}<span class="text-red-400 font-medium">failed</span>
-        {% else %}<span class="text-amber-400 font-medium">{{ run.get_status_display }}</span>{% endif %}
+        {% if run.status == "completed" %}<span id="run-state" class="text-emerald-400 font-medium">completed</span>
+        {% elif run.status == "failed" %}<span id="run-state" class="text-red-400 font-medium">failed</span>
+        {% else %}<span id="run-state" class="text-amber-400 font-medium">{{ run.get_status_display }}</span>{% endif %}
       </div>
       <div class="flex justify-between"><span class="text-gray-500">Started</span><span>{{ run.started_at|date:"M j, H:i"|default:"—" }}</span></div>
       <div class="flex justify-between"><span class="text-gray-500">Finished</span><span>{{ run.finished_at|date:"M j, H:i"|default:"—" }}</span></div>
