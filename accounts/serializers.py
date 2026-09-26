@@ -114,12 +114,17 @@ class ProfileUpdateSerializer(serializers.Serializer):
         return value
 
     def validate(self, attrs):
+        from accounts.services import has_local_password
+
         user = self.context["user"]
         if "new_password" in attrs and attrs.get("new_password"):
-            if not attrs.get("current_password"):
-                raise serializers.ValidationError({"current_password": "Current password is required."})
-            if not user.check_password(attrs["current_password"]):
-                raise serializers.ValidationError({"current_password": "Current password is incorrect."})
+            # SSO users (and anyone without a local password) have nothing to
+            # verify against, so they set a password directly.
+            if has_local_password(user):
+                if not attrs.get("current_password"):
+                    raise serializers.ValidationError({"current_password": "Current password is required."})
+                if not user.check_password(attrs["current_password"]):
+                    raise serializers.ValidationError({"current_password": "Current password is incorrect."})
             validate_password(attrs["new_password"])
         return attrs
 

@@ -39,6 +39,9 @@
     #sidebar.sidebar-collapsed .p-3.border-t > div {
       justify-content: center;
     }
+    #sidebar.sidebar-collapsed .p-3.border-t > div > a {
+      justify-content: center;
+    }
   </style>
 </head>
 <body class="h-full bg-surface text-gray-200 antialiased">
@@ -76,7 +79,10 @@
           {% empty %}
           <p class="px-3 py-2 text-xs text-gray-500">No workspaces yet.</p>
           {% endfor %}
-          <a href="{% url 'workspaces' %}?new=1" class="block px-3 py-2 text-sm text-gray-400 hover:text-gray-200 hover:bg-surface-overlay border-t border-gray-800">＋ New workspace</a>
+          <div class="border-t border-gray-800">
+            <a href="{% url 'workspaces' %}?new=1" class="block px-3 py-2 text-sm text-gray-400 hover:text-gray-200 hover:bg-surface-overlay">＋ New workspace</a>
+            <a href="{% url 'workspaces' %}" class="block px-3 py-2 text-sm text-gray-400 hover:text-gray-200 hover:bg-surface-overlay">Manage workspaces</a>
+          </div>
         </div>
       </div>
       <a href="{% url 'dashboard' %}" class="flex items-center gap-3 px-3 py-2 rounded-lg text-sm whitespace-nowrap {% if request.path == '/' or request.path == '/dashboard/' %}bg-accent/15 text-accent font-medium{% else %}text-gray-400 hover:text-gray-200 hover:bg-surface-overlay{% endif %}">
@@ -94,12 +100,6 @@
       <a href="{% url 'compare' %}" class="flex items-center gap-3 px-3 py-2 rounded-lg text-sm whitespace-nowrap {% if request.path == '/compare/' %}bg-accent/15 text-accent font-medium{% else %}text-gray-400 hover:text-gray-200 hover:bg-surface-overlay{% endif %}">
         <span class="text-base w-5 text-center">⇄</span><span class="sidebar-label">Compare</span>
       </a>
-      <a href="{% url 'workspaces' %}" class="flex items-center gap-3 px-3 py-2 rounded-lg text-sm whitespace-nowrap {% if request.path == '/workspaces/' %}bg-accent/15 text-accent font-medium{% else %}text-gray-400 hover:text-gray-200 hover:bg-surface-overlay{% endif %}">
-        <span class="text-base w-5 text-center">◫</span><span class="sidebar-label">Workspaces</span>
-      </a>
-      <a href="{% url 'profile' %}" class="flex items-center gap-3 px-3 py-2 rounded-lg text-sm whitespace-nowrap {% if request.path == '/profile/' %}bg-accent/15 text-accent font-medium{% else %}text-gray-400 hover:text-gray-200 hover:bg-surface-overlay{% endif %}">
-        <span class="text-base w-5 text-center">◍</span><span class="sidebar-label">Profile</span>
-      </a>
       {% if is_admin %}
       <a href="{% url 'health' %}" class="flex items-center gap-3 px-3 py-2 rounded-lg text-sm whitespace-nowrap {% if request.path == '/health/' %}bg-accent/15 text-accent font-medium{% else %}text-gray-400 hover:text-gray-200 hover:bg-surface-overlay{% endif %}">
         <span class="text-base w-5 text-center">⚕</span><span class="sidebar-label">Health</span>
@@ -113,9 +113,15 @@
       </a>
       {% endif %}
       <div class="flex items-center gap-2">
-        <div class="w-7 h-7 rounded-full bg-accent/20 flex items-center justify-center text-xs font-bold text-accent shrink-0">{{ user.username|first|upper }}</div>
-        <span class="sidebar-label text-xs text-gray-400 truncate flex-1">{{ user.username }}</span>
-        <a href="{% url 'logout' %}" class="sidebar-label text-xs text-gray-600 hover:text-red-400">⏻</a>
+        <a href="{% url 'profile' %}" class="flex items-center gap-2 flex-1 min-w-0 rounded-lg px-1 py-1 -mx-1 hover:bg-surface-overlay transition-colors" title="Profile">
+          {% if gravatar_url %}
+          <img src="{{ gravatar_url }}" alt="{{ user.username }}" class="w-7 h-7 rounded-full shrink-0" referrerpolicy="no-referrer">
+          {% else %}
+          <div class="w-7 h-7 rounded-full bg-accent/20 flex items-center justify-center text-xs font-bold text-accent shrink-0">{{ user.username|first|upper }}</div>
+          {% endif %}
+          <span class="sidebar-label text-xs text-gray-400 truncate flex-1">{{ user.username }}</span>
+        </a>
+        <a href="{% url 'logout' %}" class="sidebar-label text-xs text-gray-600 hover:text-red-400 shrink-0" title="Sign out">⏻</a>
       </div>
     </div>
   </aside>

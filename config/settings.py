@@ -128,6 +128,7 @@ TEMPLATES = [
                 "django.contrib.auth.context_processors.auth",
                 "django.contrib.messages.context_processors.messages",
                 "infra.context_processors.admin_status",
+                "infra.context_processors.gravatar_url",
                 "infra.context_processors.workspaces",
             ],
         },

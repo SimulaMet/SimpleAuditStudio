@@ -500,7 +500,12 @@ class ProfileView(LoginRequiredMixin, TemplateView):
     template_name = "profile.html"
 
     def get_context_data(self, **kw):
-        kw["profile_user"] = self.request.user
+        from accounts.services import has_local_password
+
+        user = self.request.user
+        kw["profile_user"] = user
+        kw["has_local_password"] = has_local_password(user)
+        kw["is_sso"] = bool(user.workos_user_id)
         kw.setdefault("error", None)
         return super().get_context_data(**kw)
 
@@ -508,6 +513,8 @@ class ProfileView(LoginRequiredMixin, TemplateView):
         from django.contrib.auth import update_session_auth_hash
         from django.contrib.auth.password_validation import validate_password
         from django.core.exceptions import ValidationError as DjangoValidationError
+
+        from accounts.services import has_local_password
 
         user = request.user
         form = request.POST.get("form", "details")
@@ -517,7 +524,11 @@ class ProfileView(LoginRequiredMixin, TemplateView):
             current_password = request.POST.get("current_password") or ""
             new_password = request.POST.get("new_password") or ""
             if new_password:
-                if not current_password or not user.check_password(current_password):
+                # SSO users (and anyone without a local password) have nothing
+                # to verify against, so they set a password directly.
+                if has_local_password(user) and (
+                    not current_password or not user.check_password(current_password)
+                ):
                     error = "Current password is incorrect."
                 else:
                     try:

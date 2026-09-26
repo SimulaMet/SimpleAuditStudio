@@ -75,3 +75,42 @@ class ProfileApiTest(TestCase):
         self.assertEqual(resp.status_code, 200)
         self.user.refresh_from_db()
         self.assertFalse(self.user.is_superuser)
+
+
+class SsoSetPasswordApiTest(TestCase):
+    """WorkOS-provisioned users have no local password; they must be able to
+    set one without supplying a current password."""
+
+    def setUp(self):
+        # Simulate a WorkOS-provisioned account: workos_user_id set, no password.
+        self.user = UserFactory(username="ssojane", email="ssojane@x.com", workos_user_id="wo_123")
+        self.client = Client(SERVER_NAME="localhost")
+
+    def _login_sso(self):
+        # WorkOS login authenticates a user whose password is empty, so the
+        # session hash matches the empty password. force_login reproduces that.
+        self.client.force_login(self.user)
+
+    def test_sso_user_can_set_password_without_current(self):
+        self._login_sso()
+        resp = _patch(self.client, "/api/auth/profile/", {"new_password": "N3w-pass-456"})
+        self.assertEqual(resp.status_code, 200)
+        self.user.refresh_from_db()
+        self.assertTrue(self.user.check_password("N3w-pass-456"))
+
+    def test_sso_user_set_password_validates_strength(self):
+        self._login_sso()
+        resp = _patch(self.client, "/api/auth/profile/", {"new_password": "short"})
+        self.assertEqual(resp.status_code, 400)
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.password, "")  # not set
+
+    def test_local_user_still_requires_current_password(self):
+        # A user who already has a local password must still prove it.
+        self.user.set_password("testpass123")
+        self.user.save()
+        self.client.force_login(self.user)
+        resp = _patch(self.client, "/api/auth/profile/", {"new_password": "N3w-pass-456"})
+        self.assertEqual(resp.status_code, 400)
+        self.user.refresh_from_db()
+        self.assertTrue(self.user.check_password("testpass123"))
