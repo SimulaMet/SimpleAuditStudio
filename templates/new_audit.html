@@ -38,13 +38,13 @@
     </div>
     <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
       <div>
-        <label class="block text-xs font-medium text-gray-500 mb-1 uppercase tracking-wide">Target</label>
+        <label class="block text-xs font-medium text-gray-500 mb-1 uppercase tracking-wide">Target <span id="no-key-target" class="text-yellow-500 normal-case hidden">⚠ no key set</span></label>
         <select name="target_model" required class="w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-accent/50">
           {% for conn in connections %}
             {% if conn.models.all %}
-            <optgroup label="{{ conn.name }}{% if not conn.has_key %} ⚠ no key{% endif %}">
+            <optgroup label="{{ conn.name }}">
               {% for m in conn.models.all %}
-              <option value="{{ m.id }}" {% if clone and clone.target_model_id == m.id %}selected{% endif %}>{{ m.display_name }} ({{ m.model_id }})</option>
+              <option value="{{ m.id }}" data-has-key="{% if m.has_key %}1{% else %}0{% endif %}" {% if clone and clone.target_model_id == m.id %}selected{% endif %}>{{ m.display_name }} ({{ m.model_id }})</option>
               {% endfor %}
             </optgroup>
             {% endif %}
@@ -54,13 +54,13 @@
         </select>
       </div>
       <div>
-        <label class="block text-xs font-medium text-gray-500 mb-1 uppercase tracking-wide">Auditor</label>
+        <label class="block text-xs font-medium text-gray-500 mb-1 uppercase tracking-wide">Auditor <span id="no-key-auditor" class="text-yellow-500 normal-case hidden">⚠ no key set</span></label>
         <select name="auditor_model" required class="w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-accent/50">
           {% for conn in connections %}
             {% if conn.models.all %}
-            <optgroup label="{{ conn.name }}{% if not conn.has_key %} ⚠ no key{% endif %}">
+            <optgroup label="{{ conn.name }}">
               {% for m in conn.models.all %}
-              <option value="{{ m.id }}" {% if clone and clone.auditor_model_id == m.id %}selected{% endif %}>{{ m.display_name }} ({{ m.model_id }})</option>
+              <option value="{{ m.id }}" data-has-key="{% if m.has_key %}1{% else %}0{% endif %}" {% if clone and clone.auditor_model_id == m.id %}selected{% endif %}>{{ m.display_name }} ({{ m.model_id }})</option>
               {% endfor %}
             </optgroup>
             {% endif %}
@@ -70,13 +70,13 @@
         </select>
       </div>
       <div>
-        <label class="block text-xs font-medium text-gray-500 mb-1 uppercase tracking-wide">Judge</label>
+        <label class="block text-xs font-medium text-gray-500 mb-1 uppercase tracking-wide">Judge <span id="no-key-judge" class="text-yellow-500 normal-case hidden">⚠ no key set</span></label>
         <select name="judge_model" required class="w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-accent/50">
           {% for conn in connections %}
             {% if conn.models.all %}
-            <optgroup label="{{ conn.name }}{% if not conn.has_key %} ⚠ no key{% endif %}">
+            <optgroup label="{{ conn.name }}">
               {% for m in conn.models.all %}
-              <option value="{{ m.id }}" {% if clone and clone.judge_model_id == m.id %}selected{% endif %}>{{ m.display_name }} ({{ m.model_id }})</option>
+              <option value="{{ m.id }}" data-has-key="{% if m.has_key %}1{% else %}0{% endif %}" {% if clone and clone.judge_model_id == m.id %}selected{% endif %}>{{ m.display_name }} ({{ m.model_id }})</option>
               {% endfor %}
             </optgroup>
             {% endif %}
@@ -212,9 +212,23 @@ window.addEventListener('focus', function() {
           }
         });
       }
+      updateNoKeyWarnings();
     } catch (e) { /* silent — network error, retry next focus */ }
   }, 800);
 });
+
+// Show "⚠ no key set" next to the label when the selected model's connection has no API key
+function updateNoKeyWarnings() {
+  [['target_model', 'no-key-target'], ['auditor_model', 'no-key-auditor'], ['judge_model', 'no-key-judge']].forEach(([name, warnId]) => {
+    const sel = document.querySelector(`select[name="${name}"]`);
+    const warn = document.getElementById(warnId);
+    if (!sel || !warn) return;
+    const opt = sel.selectedOptions[0];
+    warn.classList.toggle('hidden', !(opt && opt.dataset.hasKey === '0'));
+  });
+}
+document.querySelectorAll('select[name="target_model"], select[name="auditor_model"], select[name="judge_model"]').forEach(s => s.addEventListener('change', updateNoKeyWarnings));
+updateNoKeyWarnings();
 
 // Validate JSON on submit
 document.querySelector('form').addEventListener('submit', function(e) {
