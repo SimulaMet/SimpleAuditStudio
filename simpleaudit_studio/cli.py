@@ -19,6 +19,7 @@ from __future__ import annotations
 import os
 import threading
 import time
+import webbrowser
 
 
 def main() -> None:
@@ -35,6 +36,10 @@ def main() -> None:
     parser.add_argument(
         "--no-mock", action="store_true",
         help="Skip the built-in mock model server (use your own endpoints)",
+    )
+    parser.add_argument(
+        "--no-browser", action="store_true",
+        help="Do not auto-open the web UI in the default browser",
     )
     args = parser.parse_args()
 
@@ -101,6 +106,7 @@ def main() -> None:
     username = os.environ.get("BOOTSTRAP_USERNAME", "studio")
     password = os.environ.get("BOOTSTRAP_PASSWORD", "admin123")
 
+    auto_login_url = f"http://localhost:{port}/auto-login/"
     print("┌─────────────────────────────────────────────────────────┐")
     print("│                                                         │")
     print("│   🚀 SimpleAudit Studio is running!                     │")
@@ -118,6 +124,14 @@ def main() -> None:
     print("└─────────────────────────────────────────────────────────┘")
     print()
 
+    # Open the default browser signed-in (non-fatal; skip with --no-browser).
+    if not args.no_browser:
+        threading.Thread(
+            target=_open_browser_when_ready,
+            args=(auto_login_url,),
+            daemon=True,
+        ).start()
+
     # --- Step 6: Run worker in the MAIN thread (required for signal handlers) ---
     print("🔧 Starting audit worker (main thread)...")
     try:
@@ -131,6 +145,29 @@ def main() -> None:
         finally:
             if mock_server is not None:
                 mock_server.shutdown()
+
+
+def _open_browser_when_ready(url: str, timeout: float = 30.0) -> None:
+    """Wait until the web server answers, then open `url` in the default browser.
+
+    The URL is /auto-login/, which signs the visitor in and redirects to the
+    dashboard. Runs in a daemon thread; any failure just prints a hint.
+    """
+    import requests
+
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            # allow_redirects=False: we only need proof the endpoint exists.
+            if requests.get(url, timeout=2).status_code in (200, 302):
+                break
+        except requests.RequestException:
+            time.sleep(0.5)
+    else:
+        print(f"⚠️  Web UI did not come up within {timeout:.0f}s — open {url} manually.")
+        return
+    if not webbrowser.open(url):
+        print(f"⚠️  Could not open a browser automatically — visit {url} manually.")
 
 
 def _seed_demo_data() -> None:
