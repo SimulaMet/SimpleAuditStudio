@@ -13,7 +13,7 @@ import os
 import urllib.request
 from unittest.mock import patch
 
-from django.test import TestCase
+from django.test import TestCase, tag
 
 
 class TestDemoBootSequence(TestCase):
@@ -92,12 +92,16 @@ class TestDemoBootSequence(TestCase):
 
 
 
+@tag("embedded_hatchet")
 class TestEmbeddedHatchetLifecycle(TestCase):
     """Test the embedded Hatchet start/stop cycle.
 
     These require the sidecar binary and network access. The engine is started
     once for the whole class (setUpClass) and stopped once (tearDownClass), so
     the ~16s cost is paid a single time instead of per-test.
+
+    Tagged 'embedded_hatchet' so CI can exclude them from parallel runs
+    (the sidecar cannot start in multiple subprocesses simultaneously).
     """
 
     @classmethod

@@ -46,5 +46,13 @@ jobs:
         run: uv run python manage.py check
       - name: Migrations from empty database
         run: uv run python manage.py migrate
-      - name: Run tests
-        run: uv run python manage.py test infra
+      - name: Run tests (parallel)
+        run: uv run python manage.py test infra --parallel auto --exclude-tag embedded_hatchet
+      - name: Check if embedded Hatchet files changed
+        id: hatchet-changed
+        run: |
+          CHANGED=$(git diff --name-only origin/main...HEAD -- infra/minimal_config.py infra/worker.py 2>/dev/null || true)
+          if [ -n "$CHANGED" ]; then echo "changed=true" >> "$GITHUB_OUTPUT"; else echo "changed=false" >> "$GITHUB_OUTPUT"; fi
+      - name: Run tests (embedded Hatchet, serial)
+        if: steps.hatchet-changed.outputs.changed == 'true'
+        run: uv run python manage.py test infra.tests.test_minimal_config.TestEmbeddedHatchetLifecycle

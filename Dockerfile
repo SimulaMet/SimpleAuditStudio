@@ -72,6 +72,6 @@ EXPOSE 7860
 HEALTHCHECK --interval=30s --timeout=5s --start-period=90s --retries=5 \
     CMD curl -fsS http://localhost:7860/healthz || exit 1
 
-# The public Space has no API key, so it runs the built-in mock model server.
-# Local `uvx simpleaudit-studio` (no flag) points at OpenAI's real base URL.
-CMD ["python", "-m", "simpleaudit_studio.cli", "--mock"]
+# Model connections point at OpenAI's real base URL (https://api.openai.com/v1).
+# Users add their API key in the UI to run real audits.
+CMD ["python", "-m", "simpleaudit_studio.cli"]
