@@ -1,46 +1,4 @@
 from django.test import TestCase
-from rest_framework.test import APIClient
-
-from accounts.models import Project, ProjectMembership, User
-
-
-class ModelRegistryTests(TestCase):
-    def setUp(self):
-        self.client = APIClient()
-        self.user = User.objects.create_user(username="alice", password="pass12345")
-        self.project = Project.objects.create(name="Research", slug="research")
-        ProjectMembership.objects.create(project=self.project, user=self.user, role=ProjectMembership.Role.AUDITOR)
-        self.client.force_authenticate(user=self.user)
-
-    def test_create_model_endpoint_stores_secret_reference_not_secret_value(self):
-        response = self.client.post(
-            f"/api/projects/{self.project.id}/model-endpoints/create/",
-            {
-                "display_name": "Qwen 3.8 27B",
-                "provider": "simulachat",
-                "base_url": "https://example.invalid/v1",
-                "model_id": "qwen-3.8-27b",
-                "secret_reference": "SIMULACHAT_API_KEY",
-                "default_parameters": {"temperature": 0.7},
-            },
-            format="json",
-        )
-        assert response.status_code == 201, response.content
-        payload = response.json()
-        assert payload["secret_reference"] == "SIMULACHAT_API_KEY"
-        assert "api_key" not in payload
-
-    def test_non_member_cannot_create_model_endpoint(self):
-        outsider = User.objects.create_user(username="bob", password="pass12345")
-        client = APIClient()
-        client.force_authenticate(user=outsider)
-        response = client.post(
-            f"/api/projects/{self.project.id}/model-endpoints/create/",
-            {"display_name": "X", "provider": "p", "base_url": "https://example.invalid/v1", "model_id": "m"},
-            format="json",
-        )
-        assert response.status_code == 403
-        assert response.json()["error"]["code"] == "project_access_denied"
 
 
 class EndpointURLFieldTests(TestCase):

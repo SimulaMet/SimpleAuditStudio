@@ -143,7 +143,7 @@ def seed_default_model_connections(project, user) -> list[str]:
 
     Returns a list of human-readable messages for logging.
     """
-    from model_registry.models import ModelConnection, ModelEndpoint, RegisteredModel
+    from model_registry.models import ModelConnection, RegisteredModel
 
     messages = []
     for conn_name, provider, base_url, models in DEFAULT_MODELS:
@@ -174,18 +174,6 @@ def seed_default_model_connections(project, user) -> list[str]:
                     "default_parameters": {"temperature": 0.7, "max_tokens": 4096},
                 },
             )
-            # Legacy ModelEndpoint rows for AuditRun FK compatibility.
-            _, ep_created = ModelEndpoint.objects.get_or_create(
-                project=project,
-                display_name=display_name,
-                defaults={
-                    "provider": provider,
-                    "base_url": base_url,
-                    "model_id": model_id,
-                    "enabled": True,
-                    "created_by": user,
-                },
-            )
-            if m_created or ep_created:
+            if m_created:
                 messages.append(f"  + {display_name} ({model_id})")
     return messages

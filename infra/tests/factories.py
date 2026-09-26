@@ -10,7 +10,7 @@ from factory.django import DjangoModelFactory
 from accounts.models import Project, ProjectMembership, User
 from audits.events import ScenarioResult
 from audits.models import AuditRun
-from model_registry.models import ModelConnection, ModelEndpoint, RegisteredModel
+from model_registry.models import ModelConnection, RegisteredModel
 from scenarios.models import (
     Scenario,
     ScenarioRevision,
@@ -93,16 +93,6 @@ class ScenarioSetVersionItemFactory(DjangoModelFactory):
     position = factory.Sequence(lambda n: n + 1)
 
 
-class ModelEndpointFactory(DjangoModelFactory):
-    class Meta:
-        model = ModelEndpoint
-    project = factory.SubFactory(ProjectFactory)
-    display_name = factory.Sequence(lambda n: f"Model {n}")
-    provider = "openai"
-    base_url = "http://localhost:9999/v1"
-    model_id = "test-model"
-
-
 class ModelConnectionFactory(DjangoModelFactory):
     class Meta:
         model = ModelConnection
@@ -132,9 +122,9 @@ class AuditRunFactory(DjangoModelFactory):
     name = factory.Sequence(lambda n: f"Audit Run {n}")
     status = AuditRun.Status.COMPLETED
     scenario_set_version = factory.SubFactory(ScenarioSetVersionFactory)
-    target_endpoint = factory.SubFactory(ModelEndpointFactory)
-    auditor_endpoint = factory.SubFactory(ModelEndpointFactory)
-    judge_endpoint = factory.SubFactory(ModelEndpointFactory)
+    target_model = factory.SubFactory(RegisteredModelFactory)
+    auditor_model = factory.SubFactory(RegisteredModelFactory)
+    judge_model = factory.SubFactory(RegisteredModelFactory)
     target_config_snapshot = {"model": "test", "params": {}}
     auditor_config_snapshot = {"model": "test", "params": {}}
     judge_config_snapshot = {"model": "test", "params": {}}

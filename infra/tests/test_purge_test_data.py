@@ -12,7 +12,7 @@ from django.test import TestCase
 from accounts.models import Project, ProjectMembership, User
 from audits.events import AuditEvent, ScenarioResult
 from audits.models import AuditRun
-from model_registry.models import ModelEndpoint
+from model_registry.models import ModelConnection, RegisteredModel
 from scenarios.models import (
     Scenario,
     ScenarioRevision,
@@ -51,28 +51,34 @@ def _make_e2e_artifacts(project):
     )
     ScenarioSetVersionItem.objects.create(version=keep_version, scenario=keep_scenario, revision=keep_rev, position=1)
 
-    # E2E endpoint + non-E2E endpoint
-    e2e_ep = ModelEndpoint.objects.create(
-        project=project, display_name="Mock Model (E2E 1)", provider="openai",
-        base_url="http://mock:8901/v1", model_id="mock-model", secret_reference="",
+    # E2E model + non-E2E model
+    e2e_conn = ModelConnection.objects.create(
+        project=project, name="Mock conn (E2E 1)", provider="openai",
+        base_url="http://mock:8901/v1",
     )
-    keep_ep = ModelEndpoint.objects.create(
-        project=project, display_name="Production Model", provider="openai",
-        base_url="https://real.example/v1", model_id="real", secret_reference="REAL_KEY",
+    e2e_ep = RegisteredModel.objects.create(
+        connection=e2e_conn, project=project, display_name="Mock Model (E2E 1)", model_id="mock-model",
+    )
+    keep_conn = ModelConnection.objects.create(
+        project=project, name="Production conn", provider="openai",
+        base_url="https://real.example/v1", secret_reference="REAL_KEY",
+    )
+    keep_ep = RegisteredModel.objects.create(
+        connection=keep_conn, project=project, display_name="Production Model", model_id="real",
     )
 
     # E2E run + non-E2E run
     e2e_run = AuditRun.objects.create(
         project=project, name="E2E Smoke Run 1", status=AuditRun.Status.COMPLETED,
-        scenario_set_version=e2e_version, target_endpoint=e2e_ep, auditor_endpoint=e2e_ep,
-        judge_endpoint=e2e_ep, total_scenarios=1, created_by=None,
+        scenario_set_version=e2e_version, target_model=e2e_ep, auditor_model=e2e_ep,
+        judge_model=e2e_ep, total_scenarios=1, created_by=None,
         target_config_snapshot={}, auditor_config_snapshot={}, judge_config_snapshot={},
         generation_parameters_snapshot={}, simpleaudit_version="0.1.9", git_commit="abc",
     )
     keep_run = AuditRun.objects.create(
         project=project, name="Important Real Run", status=AuditRun.Status.COMPLETED,
-        scenario_set_version=keep_version, target_endpoint=keep_ep, auditor_endpoint=keep_ep,
-        judge_endpoint=keep_ep, total_scenarios=1, created_by=None,
+        scenario_set_version=keep_version, target_model=keep_ep, auditor_model=keep_ep,
+        judge_model=keep_ep, total_scenarios=1, created_by=None,
         target_config_snapshot={}, auditor_config_snapshot={}, judge_config_snapshot={},
         generation_parameters_snapshot={}, simpleaudit_version="0.1.9", git_commit="abc",
     )
@@ -104,7 +110,7 @@ class PurgeTestDataTest(TestCase):
         # Nothing deleted.
         self.assertEqual(AuditRun.objects.count(), 2)
         self.assertEqual(Scenario.objects.count(), 2)
-        self.assertEqual(ModelEndpoint.objects.count(), 2)
+        self.assertEqual(RegisteredModel.objects.count(), 2)
         self.assertEqual(ScenarioSet.objects.count(), 2)
         self.assertEqual(AuditEvent.objects.count(), 1)
         self.assertEqual(ScenarioResult.objects.count(), 1)
@@ -115,14 +121,14 @@ class PurgeTestDataTest(TestCase):
         # E2E rows gone.
         self.assertFalse(AuditRun.objects.filter(id=self.art["e2e_run"].id).exists())
         self.assertFalse(Scenario.objects.filter(id=self.art["e2e_scenario"].id).exists())
-        self.assertFalse(ModelEndpoint.objects.filter(id=self.art["e2e_ep"].id).exists())
+        self.assertFalse(RegisteredModel.objects.filter(id=self.art["e2e_ep"].id).exists())
         self.assertFalse(ScenarioSet.objects.filter(id=self.art["e2e_set"].id).exists())
         self.assertEqual(AuditEvent.objects.count(), 0)
         self.assertEqual(ScenarioResult.objects.count(), 0)
         # Non-E2E rows survive.
         self.assertTrue(AuditRun.objects.filter(id=self.art["keep_run"].id).exists())
         self.assertTrue(Scenario.objects.filter(id=self.art["keep_scenario"].id).exists())
-        self.assertTrue(ModelEndpoint.objects.filter(id=self.art["keep_ep"].id).exists())
+        self.assertTrue(RegisteredModel.objects.filter(id=self.art["keep_ep"].id).exists())
         self.assertTrue(ScenarioSet.objects.filter(id=self.art["keep_set"].id).exists())
 
     def test_purge_is_idempotent(self):

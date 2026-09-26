@@ -371,17 +371,17 @@ class WorkspaceSwitchTest(TestCase):
         Uses a real Django session (login) because the switch endpoint writes
         to request.session, which force_authenticate does not provide.
         """
-        from infra.tests.factories import AuditRunFactory, ModelEndpointFactory
+        from infra.tests.factories import AuditRunFactory, RegisteredModelFactory
 
         self.user.set_password("testpass123")
         self.user.save()
-        endpoint = ModelEndpointFactory(project=self.w2)
+        model = RegisteredModelFactory(project=self.w2)
         run_w2 = AuditRunFactory(
             project=self.w2,
             name="Only-in-W2",
-            target_endpoint=endpoint,
-            auditor_endpoint=endpoint,
-            judge_endpoint=endpoint,
+            target_model=model,
+            auditor_model=model,
+            judge_model=model,
         )
         run_w1 = AuditRunFactory(project=self.w1, name="Only-in-W1")
 

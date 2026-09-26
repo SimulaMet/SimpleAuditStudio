@@ -13,7 +13,7 @@ from django.db import transaction
 
 from audits.events import AuditEvent, ScenarioResult
 from audits.models import AuditRun
-from model_registry.models import ModelEndpoint
+from model_registry.models import RegisteredModel
 from scenarios.models import (
     Scenario,
     ScenarioSet,
@@ -73,7 +73,7 @@ class Command(BaseCommand):
         results = ScenarioResult.objects.filter(run_id__in=[str(r) for r in run_ids])
 
         # 3. Model endpoints
-        endpoints = ModelEndpoint.objects.filter(display_name__startswith=options["endpoint_prefix"])
+        endpoints = RegisteredModel.objects.filter(display_name__startswith=options["endpoint_prefix"])
         endpoint_ids = list(endpoints.values_list("id", flat=True))
 
         # 4. Scenarios

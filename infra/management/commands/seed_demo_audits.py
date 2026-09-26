@@ -6,7 +6,7 @@ realistic data on first boot.
 
 The fixture references model names that match the defaults created by
 ``seed_platform`` (GPT-4o, GPT-4o Mini). The seed looks up existing
-ModelEndpoint rows by display_name — it does NOT create new models.
+RegisteredModel rows by display_name — it does NOT create new models.
 
 Fixture structure:
 {
@@ -83,10 +83,10 @@ class Command(BaseCommand):
         auditor_name = meta.get("auditor_model", "GPT-4o Mini")
         judge_name = meta.get("judge_model", "GPT-4o Mini")
 
-        from model_registry.models import ModelEndpoint
-        target_ep = ModelEndpoint.objects.filter(project=project, display_name=target_name).first()
-        auditor_ep = ModelEndpoint.objects.filter(project=project, display_name=auditor_name).first()
-        judge_ep = ModelEndpoint.objects.filter(project=project, display_name=judge_name).first()
+        from model_registry.models import RegisteredModel
+        target_ep = RegisteredModel.objects.filter(project=project, display_name=target_name).first()
+        auditor_ep = RegisteredModel.objects.filter(project=project, display_name=auditor_name).first()
+        judge_ep = RegisteredModel.objects.filter(project=project, display_name=judge_name).first()
 
         missing = [n for n, ep in [(target_name, target_ep), (auditor_name, auditor_ep), (judge_name, judge_ep)] if not ep]
         if missing:
@@ -138,12 +138,13 @@ class Command(BaseCommand):
             self.stderr.write(f"  No published version for '{pack}' — skipping.")
             return False
 
-        def _snap(ep):
+        def _snap(m):
+            conn = m.connection
             return {
-                "id": ep.id, "display_name": ep.display_name, "provider": ep.provider,
-                "base_url": ep.base_url, "model_id": ep.model_id, "model_revision": ep.model_revision,
-                "capabilities": ep.capabilities, "default_parameters": ep.default_parameters,
-                "secret_reference": ep.secret_reference, "api_key_direct": "", "enabled": ep.enabled,
+                "id": m.id, "display_name": m.display_name, "provider": conn.provider,
+                "base_url": conn.base_url, "model_id": m.model_id, "model_revision": m.model_revision,
+                "capabilities": m.capabilities, "default_parameters": m.default_parameters,
+                "secret_reference": conn.secret_reference, "api_key_direct": "", "enabled": m.enabled,
             }
 
         provenance = resolve_engine_provenance()
@@ -160,9 +161,9 @@ class Command(BaseCommand):
             name=f"Demo: {label}",
             status=AuditRun.Status.COMPLETED,
             scenario_set_version=version,
-            target_endpoint=target_ep,
-            auditor_endpoint=auditor_ep,
-            judge_endpoint=judge_ep,
+            target_model=target_ep,
+            auditor_model=auditor_ep,
+            judge_model=judge_ep,
             target_config_snapshot=_snap(target_ep),
             auditor_config_snapshot=_snap(auditor_ep),
             judge_config_snapshot=_snap(judge_ep),

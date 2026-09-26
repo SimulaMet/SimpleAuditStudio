@@ -24,7 +24,7 @@ class AuditSSEStreamTest(TestCase):
 
     def _make_run(self):
         from audits.models import AuditRun
-        from model_registry.models import ModelEndpoint
+        from model_registry.models import ModelConnection, RegisteredModel
         from scenarios.models import (
             Scenario,
             ScenarioRevision,
@@ -33,9 +33,10 @@ class AuditSSEStreamTest(TestCase):
         )
 
         # Build minimal immutable inputs directly; SSE only reads events + status.
-        target = ModelEndpoint.objects.create(
-            project=self.project, display_name="t", provider="openai", base_url="http://x", model_id="m"
+        conn = ModelConnection.objects.create(
+            project=self.project, name="c", provider="openai", base_url="http://x"
         )
+        target = RegisteredModel.objects.create(connection=conn, project=self.project, display_name="t", model_id="m")
         # A run needs a scenario_set_version FK; create the minimal chain.
         scenario = Scenario.objects.create(project=self.project, key="k", title="T")
         revision = ScenarioRevision.objects.create(
@@ -54,9 +55,9 @@ class AuditSSEStreamTest(TestCase):
             name="run",
             status=AuditRun.Status.QUEUED,
             scenario_set_version=version,
-            target_endpoint=target,
-            auditor_endpoint=target,
-            judge_endpoint=target,
+            target_model=target,
+            auditor_model=target,
+            judge_model=target,
             target_config_snapshot={},
             auditor_config_snapshot={},
             judge_config_snapshot={},

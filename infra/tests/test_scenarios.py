@@ -147,15 +147,3 @@ class ConflictHandlingTests(TestCase):
         assert second.status_code == 409, second.content
         assert second.json()["error"]["code"] == "conflict"
 
-    def test_duplicate_endpoint_display_name_returns_409(self):
-        body = {
-            "display_name": "Same Name",
-            "provider": "openai",
-            "base_url": "http://mock-model:8901/v1",
-            "model_id": "m",
-        }
-        first = self.client.post(f"/api/projects/{self.project.id}/model-endpoints/create/", body, format="json")
-        assert first.status_code == 201, first.content
-        second = self.client.post(f"/api/projects/{self.project.id}/model-endpoints/create/", body, format="json")
-        assert second.status_code == 409, second.content
-        assert second.json()["error"]["code"] in {"duplicate_display_name", "conflict"}

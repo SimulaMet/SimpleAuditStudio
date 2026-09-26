@@ -151,22 +151,19 @@ Rules:
 
 ## 4. Model registry
 
-### 4.1 `ModelEndpoint`
+### 4.1 `ModelConnection`
 
-A selectable model resource.
+A provider endpoint: one base URL + auth that serves multiple models.
 
 Fields:
 
 - `id`
 - `project_id`
-- `display_name`
+- `name`
 - `provider`
 - `base_url`
-- `model_id`
-- `model_revision`
-- `capabilities` — JSON
-- `default_parameters` — JSON
 - `secret_reference`
+- `api_key_direct`
 - `enabled`
 - `created_by`
 - `created_at`
@@ -174,12 +171,35 @@ Fields:
 
 Rules:
 
-- raw credentials are never stored here
+- unique `(project_id, name)`
+- raw credentials are never exposed via API responses
 - `secret_reference` names a secret in environment/vault/secret manager
-- endpoint changes do not affect existing runs
-- display name is user-facing; `model_id` is provider-specific
+- connection changes do not affect existing runs (snapshots are frozen)
 
-### 4.2 `SecretReference`
+### 4.2 `RegisteredModel`
+
+A specific model available under a connection.
+
+Fields:
+
+- `id`
+- `connection_id`
+- `project_id`
+- `display_name`
+- `model_id`
+- `model_revision`
+- `capabilities` — JSON
+- `default_parameters` — JSON
+- `enabled`
+- `created_at`
+
+Rules:
+
+- unique `(connection_id, model_id)`
+- display name is user-facing; `model_id` is provider-specific
+- inherits auth from its connection
+
+### 4.3 `SecretReference`
 
 Not necessarily a table initially. It is a named indirection:
 
@@ -204,9 +224,9 @@ Fields:
 - `name`
 - `status`
 - `scenario_set_version_id`
-- `target_endpoint_id`
-- `auditor_endpoint_id`
-- `judge_endpoint_id`
+- `target_model_id`
+- `auditor_model_id`
+- `judge_model_id`
 - `target_config_snapshot` — JSON without secrets
 - `auditor_config_snapshot` — JSON without secrets
 - `judge_config_snapshot` — JSON without secrets

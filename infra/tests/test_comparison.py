@@ -5,7 +5,7 @@ from accounts.models import Project, ProjectMembership, User
 from audits.comparison import ComparisonIncompatible, compare_runs
 from audits.events import ScenarioResult
 from audits.models import AuditRun
-from model_registry.models import ModelEndpoint
+from model_registry.models import ModelConnection, RegisteredModel
 from scenarios.models import (
     Scenario,
     ScenarioRevision,
@@ -32,18 +32,21 @@ def _build_project_with_scenarios(project, num_scenarios=2):
     return scenarios, st, ver
 
 
-def _make_endpoint(project, name="Model A"):
-    return ModelEndpoint.objects.create(
-        project=project, display_name=name, provider="openai",
-        base_url="http://mock/v1", model_id="m", secret_reference="",
+def _make_model(project, name="Model A"):
+    conn = ModelConnection.objects.create(
+        project=project, name=f"{name} conn", provider="openai",
+        base_url="http://mock/v1",
+    )
+    return RegisteredModel.objects.create(
+        connection=conn, project=project, display_name=name, model_id=name.lower().replace(" ", "-"),
     )
 
 
 def _make_run(project, version, target, judge, name="Run", status_val=AuditRun.Status.COMPLETED):
     return AuditRun.objects.create(
         project=project, name=name, status=status_val,
-        scenario_set_version=version, target_endpoint=target, auditor_endpoint=judge,
-        judge_endpoint=judge, total_scenarios=version.scenario_count, created_by=None,
+        scenario_set_version=version, target_model=target, auditor_model=judge,
+        judge_model=judge, total_scenarios=version.scenario_count, created_by=None,
         target_config_snapshot={}, auditor_config_snapshot={}, judge_config_snapshot={},
         generation_parameters_snapshot={}, simpleaudit_version="0.1.9", git_commit="abc",
     )
@@ -55,9 +58,9 @@ class ComparisonTest(TestCase):
         self.project = Project.objects.create(name="CMP", slug="cmp")
         ProjectMembership.objects.create(project=self.project, user=self.user, role=ProjectMembership.Role.AUDITOR)
         self.scenarios, self.st, self.ver = _build_project_with_scenarios(self.project, 2)
-        self.ep_a = _make_endpoint(self.project, "Model A")
-        self.ep_b = _make_endpoint(self.project, "Model B")
-        self.judge = _make_endpoint(self.project, "Judge X")
+        self.ep_a = _make_model(self.project, "Model A")
+        self.ep_b = _make_model(self.project, "Model B")
+        self.judge = _make_model(self.project, "Judge X")
 
     def _add_results(self, run, severities):
         for i, sev in enumerate(severities):
@@ -84,7 +87,7 @@ class ComparisonTest(TestCase):
         self.assertEqual(first["runs"][str(r2.id)]["severity"], "pass")
 
     def test_different_judges_warns(self):
-        judge2 = _make_endpoint(self.project, "Judge Y")
+        judge2 = _make_model(self.project, "Judge Y")
         r1 = _make_run(self.project, self.ver, self.ep_a, self.judge, "Run 1")
         r2 = _make_run(self.project, self.ver, self.ep_b, judge2, "Run 2")
         self._add_results(r1, ["pass", "high"])

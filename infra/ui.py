@@ -21,7 +21,6 @@ from audits.comparison import compare_runs
 from audits.events import ScenarioResult
 from audits.models import AuditRun
 from audits.services import create_audit_run, submit_audit_run
-from model_registry.models import ModelEndpoint
 from scenarios.models import (
     Scenario,
     ScenarioRevision,
@@ -353,7 +352,7 @@ class DashboardView(ProjectMixin, ListView):
         from django.db.models import Q
 
         qs = AuditRun.objects.filter(project=self.request.project).select_related(
-            "scenario_set_version__scenario_set", "target_endpoint", "auditor_endpoint", "judge_endpoint"
+            "scenario_set_version__scenario_set", "target_model", "auditor_model", "judge_model"
         )
         # Status filter via ?status=active|completed|failed|cancelled|archived
         status = self.request.GET.get("status", "")
@@ -608,7 +607,7 @@ class NewAuditView(ProjectMixin, TemplateView):
         if clone_id and clone_id.isdigit():
             source = (
                 AuditRun.objects.filter(id=int(clone_id), project=p)
-                .select_related("scenario_set_version", "target_endpoint", "auditor_endpoint", "judge_endpoint")
+                .select_related("scenario_set_version", "target_model", "auditor_model", "judge_model")
                 .first()
             )
             if source:
@@ -616,17 +615,24 @@ class NewAuditView(ProjectMixin, TemplateView):
                 clone = {
                     "scenario_set_id": source.scenario_set_version.scenario_set_id,
                     "scenario_set_version_id": source.scenario_set_version_id,
-                    "target_endpoint_id": source.target_endpoint_id,
-                    "auditor_endpoint_id": source.auditor_endpoint_id,
-                    "judge_endpoint_id": source.judge_endpoint_id,
+                    "target_model_id": source.target_model_id,
+                    "auditor_model_id": source.auditor_model_id,
+                    "judge_model_id": source.judge_model_id,
                     "max_turns": params.get("max_turns", ""),
                     "language": params.get("language", ""),
                     "n_repetitions": params.get("n_repetitions", ""),
                     "generation_json": json.dumps(params, indent=2, sort_keys=True),
                 }
+        from model_registry.models import ModelConnection
+
+        connections = (
+            ModelConnection.objects.filter(project=p)
+            .prefetch_related("models")
+            .order_by("name")
+        )
         kw.update(
             sets=ScenarioSet.objects.filter(project=p),
-            endpoints=ModelEndpoint.objects.filter(project=p).order_by("display_name"),
+            connections=connections,
             clone=clone,
             error=None,
         )
@@ -666,14 +672,16 @@ class NewAuditView(ProjectMixin, TemplateView):
                 except Exception as e:  # noqa: BLE001 - any parse failure is a user error
                     return self.render_to_response(self.get_context_data(error=f"Invalid generation config JSON: {e}"))
 
+            from model_registry.models import RegisteredModel
+
             run = create_audit_run(
                 project=p,
                 user=request.user,
                 name=f"Audit {timezone.now():%Y-%m-%d %H:%M}",
                 scenario_set_version=version,
-                target_endpoint=ModelEndpoint.objects.get(pk=request.POST["target_endpoint"], project=p),
-                auditor_endpoint=ModelEndpoint.objects.get(pk=request.POST["auditor_endpoint"], project=p),
-                judge_endpoint=ModelEndpoint.objects.get(pk=request.POST["judge_endpoint"], project=p),
+                target_model=RegisteredModel.objects.get(pk=request.POST["target_model"], project=p),
+                auditor_model=RegisteredModel.objects.get(pk=request.POST["auditor_model"], project=p),
+                judge_model=RegisteredModel.objects.get(pk=request.POST["judge_model"], project=p),
                 max_turns_override=max_turns_override,
                 language_override=language_override,
                 n_repetitions_override=n_repetitions_override,
@@ -1096,14 +1104,8 @@ class ModelsView(ProjectMixin, TemplateView):
             ).distinct()
         connections = connections.order_by("name")
 
-        # Legacy endpoints (for backward compat display)
-        endpoints = ModelEndpoint.objects.filter(project=p)
-        if q:
-            endpoints = endpoints.filter(Q(display_name__icontains=q) | Q(model_id__icontains=q))
-
         kw.update(
             connections=connections,
-            endpoints=endpoints.order_by("display_name"),
             highlight_id=highlight_id,
             search_query=q,
             error=None,
@@ -1179,48 +1181,7 @@ class ModelsView(ProjectMixin, TemplateView):
             rm = RegisteredModel.objects.filter(pk=request.POST.get("rm_id"), project=p).first()
             if rm:
                 rm.delete()
-
-        # ── Legacy endpoint actions (kept for compat) ───────────────────────
-        elif action == "add_endpoint":
-            if not all(request.POST.get(k) for k in ("display_name", "base_url")):
-                error = "Name and URL are required."
-            else:
-                ModelEndpoint.objects.create(
-                    project=p,
-                    display_name=request.POST["display_name"].strip(),
-                    base_url=request.POST["base_url"].strip(),
-                    model_id=request.POST.get("model_id", "").strip(),
-                    provider=request.POST.get("provider", "openai"),
-                    secret_reference=request.POST.get("secret_reference", "").strip(),
-                    api_key_direct=request.POST.get("api_key_direct", "").strip(),
-                    enabled=True,
-                    created_by=request.user,
-                )
-        elif action == "edit_endpoint":
-            ep = ModelEndpoint.objects.filter(pk=request.POST.get("endpoint_id"), project=p).first()
-            if not ep:
-                error = "Endpoint not found."
-            else:
-                ep.display_name = request.POST.get("display_name", ep.display_name).strip()
-                ep.base_url = request.POST.get("base_url", ep.base_url).strip()
-                ep.model_id = request.POST.get("model_id", ep.model_id).strip()
-                ep.provider = request.POST.get("provider", ep.provider)
-                ep.secret_reference = request.POST.get("secret_reference", "").strip()
-                new_key = request.POST.get("api_key_direct", "").strip()
-                if new_key:
-                    ep.api_key_direct = new_key
-                ep.enabled = request.POST.get("enabled") == "1"
-                ep.save()
         return self.render_to_response(self.get_context_data(error=error))
-
-
-class ModelDeleteView(ProjectMixin, View):
-    def post(self, request, endpoint_id):
-        blocked = _require_writable_project(request)
-        if blocked:
-            return blocked
-        ModelEndpoint.objects.filter(pk=endpoint_id, project=request.project).delete()
-        return redirect("/models/")
 
 
 class ConnectionDeleteView(ProjectMixin, View):
@@ -1318,14 +1279,14 @@ class CompareView(ProjectMixin, TemplateView):
         run_meta = []
         for r in raw["runs"]:
             run_obj = AuditRun.objects.filter(id=r["id"]).select_related(
-                "target_endpoint", "auditor_endpoint", "judge_endpoint",
+                "target_model", "auditor_model", "judge_model",
                 "scenario_set_version__scenario_set"
             ).first()
             run_meta.append({
                 "id": r["id"],
-                "target_endpoint_id": run_obj.target_endpoint_id if run_obj else None,
-                "auditor_endpoint_id": run_obj.auditor_endpoint_id if run_obj else None,
-                "judge_endpoint_id": run_obj.judge_endpoint_id if run_obj else None,
+                "target_model_id": run_obj.target_model_id if run_obj else None,
+                "auditor_model_id": run_obj.auditor_model_id if run_obj else None,
+                "judge_model_id": run_obj.judge_model_id if run_obj else None,
                 "scenario_set_id": run_obj.scenario_set_version.scenario_set_id if run_obj and run_obj.scenario_set_version else None,
             })
         return {
@@ -1381,7 +1342,7 @@ class AuditDetailView(ProjectMixin, DetailView):
     context_object_name = "run"
     pk_url_kwarg = "run_id"
     queryset = AuditRun.objects.select_related(
-        "scenario_set_version__scenario_set", "target_endpoint", "auditor_endpoint", "judge_endpoint"
+        "scenario_set_version__scenario_set", "target_model", "auditor_model", "judge_model"
     )
 
     def get_queryset(self):

@@ -171,13 +171,12 @@ def update_workspace(*, user, project: Project, name: str | None = None, descrip
 def workspace_has_content(project: Project) -> bool:
     """True if the workspace still holds any scenarios, models, or audits."""
     from audits.models import AuditRun
-    from model_registry.models import ModelConnection, ModelEndpoint
+    from model_registry.models import ModelConnection
     from scenarios.models import Scenario, ScenarioSet
 
     return (
         Scenario.objects.filter(project=project).exists()
         or ScenarioSet.objects.filter(project=project).exists()
-        or ModelEndpoint.objects.filter(project=project).exists()
         or ModelConnection.objects.filter(project=project).exists()
         or AuditRun.objects.filter(project=project).exists()
     )
@@ -189,13 +188,12 @@ def delete_workspace(*, user, project: Project) -> None:
     _require_workspace_admin(user, project)
 
     from audits.models import AuditRun
-    from model_registry.models import ModelConnection, ModelEndpoint
+    from model_registry.models import ModelConnection
     from scenarios.models import Scenario, ScenarioSet
 
     blockers = {
         "scenarios": Scenario.objects.filter(project=project).exists(),
         "scenario sets": ScenarioSet.objects.filter(project=project).exists(),
-        "model endpoints": ModelEndpoint.objects.filter(project=project).exists(),
         "model connections": ModelConnection.objects.filter(project=project).exists(),
         "audit runs": AuditRun.objects.filter(project=project).exists(),
     }
@@ -336,7 +334,7 @@ def admin_stats_payload() -> dict:
     from django.db.models import Count
 
     from audits.models import AuditRun
-    from model_registry.models import ModelConnection, ModelEndpoint
+    from model_registry.models import ModelConnection
     from scenarios.models import Scenario, ScenarioSet
 
     projects = list(Project.objects.order_by("name"))
@@ -360,9 +358,6 @@ def admin_stats_payload() -> dict:
     set_counts = dict(
         ScenarioSet.objects.filter(project__in=project_ids).values("project_id").annotate(n=Count("id")).values_list("project_id", "n")
     )
-    endpoint_counts = dict(
-        ModelEndpoint.objects.filter(project__in=project_ids).values("project_id").annotate(n=Count("id")).values_list("project_id", "n")
-    )
     connection_counts = dict(
         ModelConnection.objects.filter(project__in=project_ids).values("project_id").annotate(n=Count("id")).values_list("project_id", "n")
     )
@@ -381,7 +376,6 @@ def admin_stats_payload() -> dict:
                 "audit_failed": run_status_counts.get((project.id, "failed"), 0),
                 "scenario_count": scenario_counts.get(project.id, 0),
                 "scenario_set_count": set_counts.get(project.id, 0),
-                "model_endpoint_count": endpoint_counts.get(project.id, 0),
                 "model_connection_count": connection_counts.get(project.id, 0),
                 "created_at": project.created_at,
             }
@@ -402,7 +396,6 @@ def admin_stats_payload() -> dict:
             ),
             "scenario_count": Scenario.objects.count(),
             "scenario_set_count": ScenarioSet.objects.count(),
-            "model_endpoint_count": ModelEndpoint.objects.count(),
             "model_connection_count": ModelConnection.objects.count(),
         },
         "workspaces": workspaces,

@@ -7,8 +7,8 @@ from accounts.models import User
 from infra.tests.factories import (
     AuditRunFactory,
     MembershipFactory,
-    ModelEndpointFactory,
     ProjectFactory,
+    RegisteredModelFactory,
     ScenarioFactory,
     UserFactory,
 )
@@ -54,8 +54,8 @@ class AdminStatsApiTest(TestCase):
         project = ProjectFactory(name="Acme")
         MembershipFactory(user=admin, project=project, role="admin")
         ScenarioFactory(project=project)
-        endpoint = ModelEndpointFactory(project=project)
-        run = AuditRunFactory(project=project, target_endpoint=endpoint, auditor_endpoint=endpoint, judge_endpoint=endpoint)
+        model = RegisteredModelFactory(project=project)
+        run = AuditRunFactory(project=project, target_model=model, auditor_model=model, judge_model=model)
         run.status = "completed"
         run.save()
         _login(self.client, admin)

@@ -9,7 +9,7 @@ from django.test import TestCase
 from accounts.models import Project, ProjectMembership, User
 from audits.models import AuditRun
 from audits.services import create_audit_run, submit_audit_run
-from model_registry.models import ModelEndpoint
+from model_registry.models import ModelConnection, RegisteredModel
 from scenarios.models import (
     Scenario,
     ScenarioRevision,
@@ -41,18 +41,21 @@ class AuditSubmissionTest(TestCase):
         )
         ScenarioSetVersionItem.objects.create(version=self.version, scenario=scenario, revision=revision, position=1)
 
-        self.target = ModelEndpoint.objects.create(
-            project=self.project, display_name="Target", provider="simulachat",
-            base_url="https://target.invalid/v1", model_id="target-model", secret_reference="TARGET_KEY",
+        self.target_conn = ModelConnection.objects.create(
+            project=self.project, name="T conn", provider="simulachat",
+            base_url="https://target.invalid/v1", secret_reference="TARGET_KEY",
         )
-        self.auditor = ModelEndpoint.objects.create(
-            project=self.project, display_name="Auditor", provider="simulachat",
-            base_url="https://auditor.invalid/v1", model_id="auditor-model", secret_reference="AUDITOR_KEY",
+        self.auditor_conn = ModelConnection.objects.create(
+            project=self.project, name="A conn", provider="simulachat",
+            base_url="https://auditor.invalid/v1", secret_reference="AUDITOR_KEY",
         )
-        self.judge = ModelEndpoint.objects.create(
-            project=self.project, display_name="Judge", provider="simulachat",
-            base_url="https://judge.invalid/v1", model_id="judge-model", secret_reference="JUDGE_KEY",
+        self.judge_conn = ModelConnection.objects.create(
+            project=self.project, name="J conn", provider="simulachat",
+            base_url="https://judge.invalid/v1", secret_reference="JUDGE_KEY",
         )
+        self.target = RegisteredModel.objects.create(connection=self.target_conn, project=self.project, display_name="Target", model_id="target-model")
+        self.auditor = RegisteredModel.objects.create(connection=self.auditor_conn, project=self.project, display_name="Auditor", model_id="auditor-model")
+        self.judge = RegisteredModel.objects.create(connection=self.judge_conn, project=self.project, display_name="Judge", model_id="judge-model")
 
     def _make_run(self) -> AuditRun:
         from unittest import mock
@@ -66,9 +69,9 @@ class AuditSubmissionTest(TestCase):
                 user=self.user,
                 name="Baseline",
                 scenario_set_version=self.version,
-                target_endpoint=self.target,
-                auditor_endpoint=self.auditor,
-                judge_endpoint=self.judge,
+                target_model=self.target,
+                auditor_model=self.auditor,
+                judge_model=self.judge,
             )
 
     def test_submit_without_live_server_keeps_run_queued_and_records_reason(self):

@@ -91,9 +91,9 @@ def test_new_audit_form_populated(page: Page) -> None:
     # Scenario set selector present
     expect(page.locator('select[name="scenario_set"]')).to_be_visible()
     # Model selectors present
-    expect(page.locator('select[name="target_endpoint"]')).to_be_visible()
-    expect(page.locator('select[name="auditor_endpoint"]')).to_be_visible()
-    expect(page.locator('select[name="judge_endpoint"]')).to_be_visible()
+    expect(page.locator('select[name="target_model"]')).to_be_visible()
+    expect(page.locator('select[name="auditor_model"]')).to_be_visible()
+    expect(page.locator('select[name="judge_model"]')).to_be_visible()
     # Submit button present
     expect(page.locator("button[type='submit']")).to_be_visible()
 

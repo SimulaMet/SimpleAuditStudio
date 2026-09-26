@@ -222,9 +222,9 @@ def _seed_demo_data() -> None:
 
 def _update_model_endpoints(mock_url: str) -> None:
     """Point all seeded model connections at the local mock server."""
-    from model_registry.models import ModelEndpoint
+    from model_registry.models import ModelConnection
 
-    ModelEndpoint.objects.filter(enabled=True).update(
+    ModelConnection.objects.filter(enabled=True).update(
         base_url=mock_url,
         api_key_direct="mock-key",
         secret_reference="",

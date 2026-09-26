@@ -9,26 +9,32 @@ from audits.events import append_event
 from audits.models import AuditRun
 from infra.exceptions import StableAPIError
 from infra.simpleaudit_package import resolve_engine_provenance
-from model_registry.models import ModelEndpoint
+from model_registry.models import RegisteredModel
 from scenarios.models import ScenarioSetVersion
 from scenarios.services import require_project_role
 
 logger = logging.getLogger("simpleaudit.audit")
 
 
-def _endpoint_snapshot(endpoint: ModelEndpoint) -> dict:
+def _endpoint_snapshot(model: RegisteredModel) -> dict:
+    """Build the frozen config snapshot from a RegisteredModel + its connection.
+
+    The JSON shape is byte-compatible with what infra/engine.py expects
+    (base_url, provider, model_id, secret_reference, api_key_direct, ...).
+    """
+    conn = model.connection
     return {
-        "id": endpoint.id,
-        "display_name": endpoint.display_name,
-        "provider": endpoint.provider,
-        "base_url": endpoint.base_url,
-        "model_id": endpoint.model_id,
-        "model_revision": endpoint.model_revision,
-        "capabilities": endpoint.capabilities,
-        "default_parameters": endpoint.default_parameters,
-        "secret_reference": endpoint.secret_reference,
-        "api_key_direct": endpoint.api_key_direct,
-        "enabled": endpoint.enabled,
+        "id": model.id,
+        "display_name": model.display_name,
+        "provider": conn.provider,
+        "base_url": conn.base_url,
+        "model_id": model.model_id,
+        "model_revision": model.model_revision,
+        "capabilities": model.capabilities,
+        "default_parameters": model.default_parameters,
+        "secret_reference": conn.secret_reference,
+        "api_key_direct": conn.api_key_direct,
+        "enabled": model.enabled and conn.enabled,
     }
 
 
@@ -60,9 +66,9 @@ def create_audit_run(
     user,
     name: str,
     scenario_set_version: ScenarioSetVersion,
-    target_endpoint: ModelEndpoint,
-    auditor_endpoint: ModelEndpoint,
-    judge_endpoint: ModelEndpoint,
+    target_model: RegisteredModel,
+    auditor_model: RegisteredModel,
+    judge_model: RegisteredModel,
     max_turns_override: int | None = None,
     language_override: str | None = None,
     n_repetitions_override: int | None = None,
@@ -76,9 +82,9 @@ def create_audit_run(
     require_project_role(user, project)
     if scenario_set_version.scenario_set.project_id != project.id:
         raise StableAPIError(detail="Scenario set version belongs to another project.", code="cross_project_input")
-    for endpoint in (target_endpoint, auditor_endpoint, judge_endpoint):
-        if endpoint.project_id != project.id or not endpoint.enabled:
-            raise StableAPIError(detail="Model endpoint is unavailable in this project.", code="endpoint_unavailable")
+    for model in (target_model, auditor_model, judge_model):
+        if model.project_id != project.id or not model.enabled or not model.connection.enabled:
+            raise StableAPIError(detail="Model is unavailable in this project.", code="model_unavailable")
     # Provenance is authoritative: it comes from the installed SimpleAudit
     # package metadata (version) and its PEP 610 direct_url commit (optional).
     # Callers cannot supply their own — that would let a manifest claim an engine
@@ -99,12 +105,12 @@ def create_audit_run(
         name=name.strip(),
         status=AuditRun.Status.QUEUED,
         scenario_set_version=scenario_set_version,
-        target_endpoint=target_endpoint,
-        auditor_endpoint=auditor_endpoint,
-        judge_endpoint=judge_endpoint,
-        target_config_snapshot=_endpoint_snapshot(target_endpoint),
-        auditor_config_snapshot=_endpoint_snapshot(auditor_endpoint),
-        judge_config_snapshot=_endpoint_snapshot(judge_endpoint),
+        target_model=target_model,
+        auditor_model=auditor_model,
+        judge_model=judge_model,
+        target_config_snapshot=_endpoint_snapshot(target_model),
+        auditor_config_snapshot=_endpoint_snapshot(auditor_model),
+        judge_config_snapshot=_endpoint_snapshot(judge_model),
         generation_parameters_snapshot=_generation_parameters(
             max_turns_override=max_turns_override,
             language_override=language_override,

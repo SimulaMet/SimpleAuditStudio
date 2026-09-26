@@ -42,6 +42,6 @@ class AuditRunSerializer(serializers.ModelSerializer):
 class AuditRunCreateSerializer(serializers.Serializer):
     name = serializers.CharField(max_length=250)
     scenario_set_version_id = serializers.IntegerField()
-    target_endpoint_id = serializers.IntegerField()
-    auditor_endpoint_id = serializers.IntegerField()
-    judge_endpoint_id = serializers.IntegerField()
+    target_model_id = serializers.IntegerField()
+    auditor_model_id = serializers.IntegerField()
+    judge_model_id = serializers.IntegerField()

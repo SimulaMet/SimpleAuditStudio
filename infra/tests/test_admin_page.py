@@ -4,8 +4,8 @@ from django.test import Client, TestCase
 from infra.tests.factories import (
     AuditRunFactory,
     MembershipFactory,
-    ModelEndpointFactory,
     ProjectFactory,
+    RegisteredModelFactory,
     ScenarioFactory,
     UserFactory,
 )
@@ -86,12 +86,12 @@ class AdminPageStatsTest(TestCase):
         project = ProjectFactory(name="Acme")
         MembershipFactory(user=self.admin, project=project, role="admin")
         ScenarioFactory(project=project)
-        endpoint = ModelEndpointFactory(project=project)
+        model = RegisteredModelFactory(project=project)
         run = AuditRunFactory(
             project=project,
-            target_endpoint=endpoint,
-            auditor_endpoint=endpoint,
-            judge_endpoint=endpoint,
+            target_model=model,
+            auditor_model=model,
+            judge_model=model,
         )
         run.status = "completed"
         run.save()

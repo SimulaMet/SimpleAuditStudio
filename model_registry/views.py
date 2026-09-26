@@ -1,5 +1,4 @@
 import httpx
-from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
@@ -7,12 +6,7 @@ from rest_framework.response import Response
 from accounts.models import Project
 from accounts.services import ensure_project_access
 from infra.exceptions import StableAPIError
-from model_registry.models import ModelConnection, ModelEndpoint
-from model_registry.serializers import (
-    ModelEndpointCreateSerializer,
-    ModelEndpointSerializer,
-)
-from model_registry.services import create_model_endpoint
+from model_registry.models import ModelConnection
 
 
 def _get_project_or_404(project_id) -> Project:
@@ -25,26 +19,6 @@ def _get_project_or_404(project_id) -> Project:
 def _require_project_access(user, project: Project):
     if not ensure_project_access(user, project):
         raise StableAPIError(detail="Project access denied.", code="project_access_denied", http_status=403)
-
-
-@api_view(["GET"])
-@permission_classes([IsAuthenticated])
-def list_model_endpoints(request, project_id):
-    project = _get_project_or_404(project_id)
-    _require_project_access(request.user, project)
-    endpoints = ModelEndpoint.objects.filter(project=project)
-    return Response(ModelEndpointSerializer(endpoints, many=True).data)
-
-
-@api_view(["POST"])
-@permission_classes([IsAuthenticated])
-def create_model_endpoint_view(request, project_id):
-    project = _get_project_or_404(project_id)
-    _require_project_access(request.user, project)
-    serializer = ModelEndpointCreateSerializer(data=request.data)
-    serializer.is_valid(raise_exception=True)
-    endpoint = create_model_endpoint(project=project, user=request.user, **serializer.validated_data)
-    return Response(ModelEndpointSerializer(endpoint).data, status=status.HTTP_201_CREATED)
 
 
 @api_view(["GET"])

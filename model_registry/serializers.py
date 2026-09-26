@@ -3,8 +3,6 @@ import re
 from django.core.exceptions import ValidationError
 from rest_framework import serializers
 
-from model_registry.models import ModelEndpoint
-
 # Hostname that is either a dotted domain, an IP literal, or a single-label
 # Docker Compose / k8s service name (e.g. "mock-model", "postgres"). DRF's
 # stock URLField rejects single-label hosts, which would make every internal
@@ -62,34 +60,4 @@ class EndpointURLField(serializers.Field):
     def fail(self, key, **kwargs):
         raise ValidationError(self.error_messages.get(key, "Enter a valid URL."), code=key)
 
-
-class ModelEndpointSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = ModelEndpoint
-        fields = (
-            "id",
-            "display_name",
-            "provider",
-            "base_url",
-            "model_id",
-            "model_revision",
-            "capabilities",
-            "default_parameters",
-            "secret_reference",
-            "enabled",
-            "created_at",
-            "updated_at",
-        )
-        read_only_fields = fields
-
-
-class ModelEndpointCreateSerializer(serializers.Serializer):
-    display_name = serializers.CharField(max_length=250)
-    provider = serializers.CharField(max_length=120)
-    base_url = EndpointURLField()
-    model_id = serializers.CharField(max_length=250)
-    model_revision = serializers.CharField(required=False, allow_blank=True, default="")
-    capabilities = serializers.DictField(required=False, default=dict)
-    default_parameters = serializers.DictField(required=False, default=dict)
-    secret_reference = serializers.CharField(required=False, allow_blank=True, default="")
 

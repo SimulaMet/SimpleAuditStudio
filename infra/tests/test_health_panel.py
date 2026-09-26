@@ -9,7 +9,6 @@ from accounts.models import ProjectMembership
 from infra.tests.factories import (
     MembershipFactory,
     ModelConnectionFactory,
-    ModelEndpointFactory,
     ProjectFactory,
     RegisteredModelFactory,
     UserFactory,
@@ -87,10 +86,10 @@ class HealthProbeTest(TestCase):
         _user, project = _make_admin()
         sset = ScenarioSetFactory(project=project)
         version = ScenarioSetVersionFactory(scenario_set=sset, version=1)
-        endpoint = ModelEndpointFactory(project=project)
+        model = RegisteredModelFactory(project=project)
         AuditRunFactory(
             project=project, scenario_set_version=version,
-            target_endpoint=endpoint, auditor_endpoint=endpoint, judge_endpoint=endpoint,
+            target_model=model, auditor_model=model, judge_model=model,
             status=AuditRun.Status.COMPLETED,
         )
         result = _queue_throughput_probe()
