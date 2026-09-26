@@ -1,0 +1,468 @@
+{% extends "base.html" %}
+{% block title %}Admin Settings — SimpleAudit{% endblock %}
+{% block content %}
+<h1 class="text-lg font-semibold text-gray-100 mb-1">Admin Settings</h1>
+<p class="text-sm text-gray-500 mb-5">Platform administration. Stats show aggregate counts only — workspace content is not exposed here.</p>
+
+<!-- Tabs -->
+<div class="flex gap-1 mb-5 border-b border-gray-800">
+  <a href="/admin-settings/" class="px-3 py-2 text-sm rounded-t-lg {% if tab == 'overview' %}bg-accent/15 text-accent font-medium border-b-2 border-accent{% else %}text-gray-400 hover:text-gray-200{% endif %}">Overview</a>
+  <a href="/admin-settings/?tab=workspaces" class="px-3 py-2 text-sm rounded-t-lg {% if tab == 'workspaces' %}bg-accent/15 text-accent font-medium border-b-2 border-accent{% else %}text-gray-400 hover:text-gray-200{% endif %}">Workspaces</a>
+  <a href="/admin-settings/?tab=users" class="px-3 py-2 text-sm rounded-t-lg {% if tab == 'users' %}bg-accent/15 text-accent font-medium border-b-2 border-accent{% else %}text-gray-400 hover:text-gray-200{% endif %}">Users</a>
+</div>
+
+<p id="admin-error" class="hidden mb-4 px-4 py-3 rounded-lg text-sm bg-red-900/30 border border-red-800 text-red-300"></p>
+
+<!-- ─── Overview ─────────────────────────────────────────────────────────── -->
+{% if tab == 'overview' %}
+<div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
+  <div class="bg-surface-raised rounded-xl border border-gray-800 p-4">
+    <span class="text-2xl font-bold text-accent">{{ stats.platform.workspace_count }}</span>
+    <p class="text-xs text-gray-500 mt-1 uppercase tracking-wide">Workspaces <span class="text-gray-600 normal-case">({{ stats.platform.workspace_archived }} archived)</span></p>
+  </div>
+  <div class="bg-surface-raised rounded-xl border border-gray-800 p-4">
+    <span class="text-2xl font-bold text-accent">{{ stats.platform.user_count }}</span>
+    <p class="text-xs text-gray-500 mt-1 uppercase tracking-wide">Users <span class="text-gray-600 normal-case">({{ stats.platform.user_active }} active)</span></p>
+  </div>
+  <div class="bg-surface-raised rounded-xl border border-gray-800 p-4">
+    <span class="text-2xl font-bold text-amber-400">{{ stats.platform.audit_run_total }}</span>
+    <p class="text-xs text-gray-500 mt-1 uppercase tracking-wide">Audit runs <span class="text-gray-600 normal-case">({{ stats.platform.audit_run_active }} active · {{ stats.platform.audit_run_failed }} failed)</span></p>
+  </div>
+  <div class="bg-surface-raised rounded-xl border border-gray-800 p-4">
+    <span class="text-2xl font-bold text-emerald-400">{{ stats.platform.audit_run_completed }}</span>
+    <p class="text-xs text-gray-500 mt-1 uppercase tracking-wide">Completed runs</p>
+  </div>
+  <div class="bg-surface-raised rounded-xl border border-gray-800 p-4">
+    <span class="text-2xl font-bold text-gray-300">{{ stats.platform.scenario_count }}</span>
+    <p class="text-xs text-gray-500 mt-1 uppercase tracking-wide">Scenarios <span class="text-gray-600 normal-case">({{ stats.platform.scenario_set_count }} sets)</span></p>
+  </div>
+  <div class="bg-surface-raised rounded-xl border border-gray-800 p-4">
+    <span class="text-2xl font-bold text-gray-300">{{ stats.platform.model_endpoint_count }}</span>
+    <p class="text-xs text-gray-500 mt-1 uppercase tracking-wide">Model endpoints</p>
+  </div>
+  <div class="bg-surface-raised rounded-xl border border-gray-800 p-4">
+    <span class="text-2xl font-bold text-gray-300">{{ stats.platform.model_connection_count }}</span>
+    <p class="text-xs text-gray-500 mt-1 uppercase tracking-wide">Connections</p>
+  </div>
+</div>
+
+<div class="bg-surface-raised rounded-xl border border-gray-800 p-4">
+  <h2 class="text-sm font-semibold text-gray-300 mb-3">Per-workspace usage</h2>
+  <div class="overflow-x-auto">
+    <table class="w-full text-sm">
+      <thead>
+        <tr class="border-b border-gray-800">
+          <th class="text-left px-3 py-2 text-xs font-medium text-gray-500 uppercase">Workspace</th>
+          <th class="text-left px-3 py-2 text-xs font-medium text-gray-500 uppercase">Status</th>
+          <th class="text-right px-3 py-2 text-xs font-medium text-gray-500 uppercase">Members</th>
+          <th class="text-right px-3 py-2 text-xs font-medium text-gray-500 uppercase">Runs</th>
+          <th class="text-right px-3 py-2 text-xs font-medium text-gray-500 uppercase">Completed</th>
+          <th class="text-right px-3 py-2 text-xs font-medium text-gray-500 uppercase">Failed</th>
+          <th class="text-right px-3 py-2 text-xs font-medium text-gray-500 uppercase">Scenarios</th>
+          <th class="text-right px-3 py-2 text-xs font-medium text-gray-500 uppercase">Endpoints</th>
+          <th class="text-right px-3 py-2 text-xs font-medium text-gray-500 uppercase">Connections</th>
+          <th class="text-left px-3 py-2 text-xs font-medium text-gray-500 uppercase">Created</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for ws in workspaces %}
+        <tr class="border-b border-gray-800/50">
+          <td class="px-3 py-2.5 font-medium text-gray-200">{{ ws.name }}</td>
+          <td class="px-3 py-2.5">
+            {% if ws.archived %}<span class="text-[10px] bg-gray-700/60 text-gray-300 rounded px-1.5 py-0.5">Archived</span>{% else %}<span class="text-[10px] bg-emerald-900/40 text-emerald-300 rounded px-1.5 py-0.5">Active</span>{% endif %}
+          </td>
+          <td class="px-3 py-2.5 text-right text-gray-300">{{ ws.member_count }}</td>
+          <td class="px-3 py-2.5 text-right text-gray-300">{{ ws.audit_run_count }}</td>
+          <td class="px-3 py-2.5 text-right text-emerald-400">{{ ws.audit_completed }}</td>
+          <td class="px-3 py-2.5 text-right text-red-400">{{ ws.audit_failed }}</td>
+          <td class="px-3 py-2.5 text-right text-gray-300">{{ ws.scenario_count }}</td>
+          <td class="px-3 py-2.5 text-right text-gray-300">{{ ws.model_endpoint_count }}</td>
+          <td class="px-3 py-2.5 text-right text-gray-300">{{ ws.model_connection_count }}</td>
+          <td class="px-3 py-2.5 text-gray-500 text-xs">{{ ws.created_at|date:"Y-m-d" }}</td>
+        </tr>
+        {% empty %}
+        <tr><td colspan="10" class="px-3 py-6 text-center text-gray-500 text-sm">No workspaces yet.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+
+<!-- ─── Workspaces ───────────────────────────────────────────────────────── -->
+{% if tab == 'workspaces' %}
+<div class="bg-surface-raised rounded-xl border border-gray-800 p-4 mb-6">
+  <h2 class="text-sm font-semibold text-gray-300 mb-3">All workspaces</h2>
+  <div class="overflow-x-auto">
+    <table class="w-full text-sm">
+      <thead>
+        <tr class="border-b border-gray-800">
+          <th class="text-left px-3 py-2 text-xs font-medium text-gray-500 uppercase">Workspace</th>
+          <th class="text-left px-3 py-2 text-xs font-medium text-gray-500 uppercase">Status</th>
+          <th class="text-right px-3 py-2 text-xs font-medium text-gray-500 uppercase">Members</th>
+          <th class="text-right px-3 py-2 text-xs font-medium text-gray-500 uppercase">Runs</th>
+          <th class="text-right px-3 py-2 text-xs font-medium text-gray-500 uppercase">Scenarios</th>
+          <th class="text-right px-3 py-2 text-xs font-medium text-gray-500 uppercase">Endpoints</th>
+          <th class="text-right px-3 py-2 text-xs font-medium text-gray-500 uppercase">Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for ws in workspaces %}
+        <tr class="border-b border-gray-800/50">
+          <td class="px-3 py-2.5">
+            <span class="font-medium text-gray-200">{{ ws.name }}</span>
+            <span class="text-gray-600 text-xs ml-1">/{{ ws.slug }}</span>
+          </td>
+          <td class="px-3 py-2.5">
+            {% if ws.archived %}<span class="text-[10px] bg-gray-700/60 text-gray-300 rounded px-1.5 py-0.5">Archived</span>{% else %}<span class="text-[10px] bg-emerald-900/40 text-emerald-300 rounded px-1.5 py-0.5">Active</span>{% endif %}
+          </td>
+          <td class="px-3 py-2.5 text-right text-gray-300">{{ ws.member_count }}</td>
+          <td class="px-3 py-2.5 text-right text-gray-300">{{ ws.audit_run_count }}</td>
+          <td class="px-3 py-2.5 text-right text-gray-300">{{ ws.scenario_count }}</td>
+          <td class="px-3 py-2.5 text-right text-gray-300">{{ ws.model_endpoint_count }}</td>
+          <td class="px-3 py-2.5 text-right">
+            <div class="flex justify-end gap-1.5 flex-wrap">
+              <a href="/admin-settings/?tab=workspaces&manage={{ ws.id }}" class="px-2 py-1 rounded-lg text-xs bg-surface-overlay border border-gray-700 text-gray-300 hover:border-accent/40">Members</a>
+              <button type="button" onclick="adminToggleRename({{ ws.id }}, this)" class="px-2 py-1 rounded-lg text-xs bg-surface-overlay border border-gray-700 text-gray-300 hover:border-accent/40">Rename</button>
+              <span data-rename-form="{{ ws.id }}" class="hidden items-center gap-1">
+                <input data-rename-input="{{ ws.id }}" type="text" value="{{ ws.name|escapejs }}" class="px-2 py-1 rounded-lg text-xs bg-surface border border-gray-700 text-gray-200 focus:outline-none focus:border-accent/50 w-32">
+                <button type="button" onclick="adminRenameWorkspace({{ ws.id }}, this)" class="px-2 py-1 rounded-lg text-xs bg-accent/15 border border-accent/30 text-accent hover:bg-accent/25">Save</button>
+                <button type="button" onclick="adminToggleRename({{ ws.id }}, this)" class="px-2 py-1 rounded-lg text-xs bg-surface-overlay border border-gray-700 text-gray-400 hover:border-gray-500">Cancel</button>
+              </span>
+              {% if ws.archived %}
+              <button type="button" onclick="adminUnarchiveWorkspace({{ ws.id }}, '{{ ws.name|escapejs }}', this)" class="px-2 py-1 rounded-lg text-xs bg-surface-overlay border border-gray-700 text-gray-300 hover:border-accent/40">Unarchive</button>
+              {% elif ws.has_content %}
+              <button type="button" onclick="adminArchiveWorkspace({{ ws.id }}, '{{ ws.name|escapejs }}', this)" class="px-2 py-1 rounded-lg text-xs bg-amber-900/30 border border-amber-800/60 text-amber-300 hover:border-amber-600">Archive</button>
+              {% else %}
+              <button type="button" onclick="adminDeleteWorkspace({{ ws.id }}, '{{ ws.name|escapejs }}', this)" class="px-2 py-1 rounded-lg text-xs bg-red-900/30 border border-red-800/60 text-red-300 hover:border-red-600">Delete</button>
+              {% endif %}
+            </div>
+          </td>
+        </tr>
+        {% empty %}
+        <tr><td colspan="7" class="px-3 py-6 text-center text-gray-500 text-sm">No workspaces yet.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+{% if manage_id %}
+<div class="bg-surface-raised rounded-xl border border-gray-800 p-5">
+  <div class="flex items-center justify-between gap-3 flex-wrap mb-4">
+    <h2 class="text-sm font-semibold text-gray-100">Members — workspace #{{ manage_id }}</h2>
+    <a href="/admin-settings/?tab=workspaces" class="text-xs text-gray-500 hover:text-gray-300">Close</a>
+  </div>
+  <div class="flex items-center gap-2 flex-wrap mb-4">
+    <input id="admin-add-username" type="text" placeholder="Username" class="px-3 py-1.5 rounded-lg text-xs bg-surface border border-gray-700 text-gray-200 focus:outline-none focus:border-accent/50 w-40">
+    <select id="admin-add-role" class="px-2 py-1.5 rounded-lg text-xs bg-surface border border-gray-700 text-gray-300 focus:outline-none focus:border-accent/50">
+      <option value="viewer">Viewer</option>
+      <option value="auditor">Auditor</option>
+      <option value="admin">Admin</option>
+    </select>
+    <button type="button" onclick="adminAddMember({{ manage_id }}, this)" class="px-3 py-1.5 rounded-lg text-xs bg-accent/15 border border-accent/30 text-accent hover:bg-accent/25">Add member</button>
+  </div>
+  <table class="w-full text-sm">
+    <thead>
+      <tr class="border-b border-gray-800">
+        <th class="text-left px-3 py-2 text-xs font-medium text-gray-500 uppercase">User</th>
+        <th class="text-left px-3 py-2 text-xs font-medium text-gray-500 uppercase">Email</th>
+        <th class="text-left px-3 py-2 text-xs font-medium text-gray-500 uppercase">Role</th>
+        <th class="text-right px-3 py-2 text-xs font-medium text-gray-500 uppercase">Actions</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for m in managed_members %}
+      <tr class="border-b border-gray-800/50">
+        <td class="px-3 py-2 text-gray-200">{{ m.user.username }}</td>
+        <td class="px-3 py-2 text-gray-400 text-xs">{{ m.user.email }}</td>
+        <td class="px-3 py-2">
+          <select data-member-role="{{ m.user_id }}" class="px-2 py-1 rounded-lg text-xs bg-surface border border-gray-700 text-gray-300 focus:outline-none focus:border-accent/50">
+            <option value="viewer" {% if m.role == 'viewer' %}selected{% endif %}>Viewer</option>
+            <option value="auditor" {% if m.role == 'auditor' %}selected{% endif %}>Auditor</option>
+            <option value="admin" {% if m.role == 'admin' %}selected{% endif %}>Admin</option>
+          </select>
+        </td>
+        <td class="px-3 py-2 text-right">
+          <div class="flex justify-end gap-1.5">
+            <button type="button" onclick="adminSaveMemberRole({{ manage_id }}, {{ m.user_id }}, this)" class="px-2 py-1 rounded-lg text-xs bg-surface-overlay border border-gray-700 text-gray-300 hover:border-accent/40">Save</button>
+            <button type="button" onclick="adminRemoveMember({{ manage_id }}, {{ m.user_id }}, '{{ m.user.username|escapejs }}', this)" class="px-2 py-1 rounded-lg text-xs bg-red-900/30 border border-red-800/60 text-red-300 hover:border-red-600">Remove</button>
+          </div>
+        </td>
+      </tr>
+      {% empty %}
+      <tr><td colspan="4" class="px-3 py-4 text-center text-gray-500 text-sm">No members.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+{% endif %}
+
+<!-- ─── Users ────────────────────────────────────────────────────────────── -->
+{% if tab == 'users' %}
+<div class="bg-surface-raised rounded-xl border border-gray-800 p-5 mb-6">
+  <h2 class="text-sm font-semibold text-gray-300 mb-3">Create user</h2>
+  <div class="flex items-end gap-2 flex-wrap">
+    <div>
+      <label class="block text-xs text-gray-500 mb-1">Username</label>
+      <input id="admin-new-username" type="text" class="px-3 py-1.5 rounded-lg text-xs bg-surface border border-gray-700 text-gray-200 focus:outline-none focus:border-accent/50 w-36">
+    </div>
+    <div>
+      <label class="block text-xs text-gray-500 mb-1">Email</label>
+      <input id="admin-new-email" type="email" class="px-3 py-1.5 rounded-lg text-xs bg-surface border border-gray-700 text-gray-200 focus:outline-none focus:border-accent/50 w-48">
+    </div>
+    <div>
+      <label class="block text-xs text-gray-500 mb-1">Password</label>
+      <input id="admin-new-password" type="password" class="px-3 py-1.5 rounded-lg text-xs bg-surface border border-gray-700 text-gray-200 focus:outline-none focus:border-accent/50 w-36">
+    </div>
+    <button type="button" onclick="adminCreateUser(this)" class="px-3 py-1.5 rounded-lg text-xs bg-accent/15 border border-accent/30 text-accent hover:bg-accent/25">Create</button>
+  </div>
+</div>
+
+<div class="bg-surface-raised rounded-xl border border-gray-800 p-4">
+  <h2 class="text-sm font-semibold text-gray-300 mb-3">All users ({{ users|length }})</h2>
+  <div class="overflow-x-auto">
+    <table class="w-full text-sm">
+      <thead>
+        <tr class="border-b border-gray-800">
+          <th class="text-left px-3 py-2 text-xs font-medium text-gray-500 uppercase">Username</th>
+          <th class="text-left px-3 py-2 text-xs font-medium text-gray-500 uppercase">Name</th>
+          <th class="text-left px-3 py-2 text-xs font-medium text-gray-500 uppercase">Email</th>
+          <th class="text-left px-3 py-2 text-xs font-medium text-gray-500 uppercase">Status</th>
+          <th class="text-left px-3 py-2 text-xs font-medium text-gray-500 uppercase">Role</th>
+          <th class="text-left px-3 py-2 text-xs font-medium text-gray-500 uppercase">Joined</th>
+          <th class="text-right px-3 py-2 text-xs font-medium text-gray-500 uppercase">Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for u in users %}
+        <tr class="border-b border-gray-800/50">
+          <td class="px-3 py-2.5 font-medium text-gray-200">
+            {{ u.username }}
+            {% if u.id == request.user.id %}<span class="text-[10px] text-gray-500">(you)</span>{% endif %}
+          </td>
+          <td class="px-3 py-2.5 text-gray-400 text-xs">{{ u.first_name }} {{ u.last_name }}</td>
+          <td class="px-3 py-2.5 text-gray-400 text-xs">{{ u.email }}</td>
+          <td class="px-3 py-2.5">
+            {% if u.is_active %}<span class="text-[10px] bg-emerald-900/40 text-emerald-300 rounded px-1.5 py-0.5">Active</span>{% else %}<span class="text-[10px] bg-red-900/40 text-red-300 rounded px-1.5 py-0.5">Inactive</span>{% endif %}
+          </td>
+          <td class="px-3 py-2.5">
+            {% if u.is_superuser %}<span class="text-[10px] bg-accent/20 text-accent rounded px-1.5 py-0.5">Super admin</span>{% else %}<span class="text-gray-500 text-xs">User</span>{% endif %}
+          </td>
+          <td class="px-3 py-2.5 text-gray-500 text-xs">{{ u.date_joined|date:"Y-m-d" }}</td>
+          <td class="px-3 py-2.5 text-right">
+            <div class="flex justify-end gap-1.5 flex-wrap">
+              <button type="button" onclick="adminToggleEdit({{ u.id }}, this)" class="px-2 py-1 rounded-lg text-xs bg-surface-overlay border border-gray-700 text-gray-300 hover:border-accent/40">Edit</button>
+              <span data-edit-form="{{ u.id }}" class="hidden items-center gap-1">
+                <input data-edit-first="{{ u.id }}" type="text" placeholder="First" value="{{ u.first_name|escapejs }}" class="px-2 py-1 rounded-lg text-xs bg-surface border border-gray-700 text-gray-200 focus:outline-none focus:border-accent/50 w-20">
+                <input data-edit-last="{{ u.id }}" type="text" placeholder="Last" value="{{ u.last_name|escapejs }}" class="px-2 py-1 rounded-lg text-xs bg-surface border border-gray-700 text-gray-200 focus:outline-none focus:border-accent/50 w-20">
+                <input data-edit-email="{{ u.id }}" type="email" placeholder="Email" value="{{ u.email|escapejs }}" class="px-2 py-1 rounded-lg text-xs bg-surface border border-gray-700 text-gray-200 focus:outline-none focus:border-accent/50 w-40">
+                <button type="button" onclick="adminEditUser({{ u.id }}, this)" class="px-2 py-1 rounded-lg text-xs bg-accent/15 border border-accent/30 text-accent hover:bg-accent/25">Save</button>
+                <button type="button" onclick="adminToggleEdit({{ u.id }}, this)" class="px-2 py-1 rounded-lg text-xs bg-surface-overlay border border-gray-700 text-gray-400 hover:border-gray-500">Cancel</button>
+              </span>
+              <button type="button" onclick="adminToggleResetPw({{ u.id }}, this)" class="px-2 py-1 rounded-lg text-xs bg-surface-overlay border border-gray-700 text-gray-300 hover:border-accent/40">Reset pw</button>
+              <span data-resetpw-form="{{ u.id }}" class="hidden items-center gap-1">
+                <input data-resetpw-input="{{ u.id }}" type="password" placeholder="New password" class="px-2 py-1 rounded-lg text-xs bg-surface border border-gray-700 text-gray-200 focus:outline-none focus:border-accent/50 w-32">
+                <button type="button" onclick="adminResetPassword({{ u.id }}, '{{ u.username|escapejs }}', this)" class="px-2 py-1 rounded-lg text-xs bg-accent/15 border border-accent/30 text-accent hover:bg-accent/25">Save</button>
+                <button type="button" onclick="adminToggleResetPw({{ u.id }}, this)" class="px-2 py-1 rounded-lg text-xs bg-surface-overlay border border-gray-700 text-gray-400 hover:border-gray-500">Cancel</button>
+              </span>
+              {% if u.id != request.user.id %}
+              {% if u.is_superuser %}
+              <button type="button" {% if superuser_count <= 1 %}disabled title="Last super admin"{% endif %} onclick="adminToggleSuperuser({{ u.id }}, false, '{{ u.username|escapejs }}', this)" class="px-2 py-1 rounded-lg text-xs bg-surface-overlay border border-gray-700 text-gray-300 hover:border-accent/40 disabled:opacity-40 disabled:cursor-not-allowed">Demote</button>
+              {% else %}
+              <button type="button" onclick="adminToggleSuperuser({{ u.id }}, true, '{{ u.username|escapejs }}', this)" class="px-2 py-1 rounded-lg text-xs bg-accent/15 border border-accent/30 text-accent hover:bg-accent/25">Make super admin</button>
+              {% endif %}
+              {% if u.is_active %}
+              <button type="button" {% if u.is_superuser and superuser_count <= 1 %}disabled title="Last super admin"{% endif %} onclick="adminSetActive({{ u.id }}, false, '{{ u.username|escapejs }}', this)" class="px-2 py-1 rounded-lg text-xs bg-amber-900/30 border border-amber-800/60 text-amber-300 hover:border-amber-600 disabled:opacity-40 disabled:cursor-not-allowed">Deactivate</button>
+              {% else %}
+              <button type="button" onclick="adminSetActive({{ u.id }}, true, '{{ u.username|escapejs }}', this)" class="px-2 py-1 rounded-lg text-xs bg-emerald-900/30 border border-emerald-800/60 text-emerald-300 hover:border-emerald-600">Activate</button>
+              {% endif %}
+              <button type="button" {% if u.is_superuser and superuser_count <= 1 %}disabled title="Last super admin"{% endif %} onclick="adminDeleteUser({{ u.id }}, '{{ u.username|escapejs }}', this)" class="px-2 py-1 rounded-lg text-xs bg-red-900/30 border border-red-800/60 text-red-300 hover:border-red-600 disabled:opacity-40 disabled:cursor-not-allowed">Delete</button>
+              {% endif %}
+            </div>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+
+<script>
+(function() {
+  function csrfToken() {
+    const m = document.cookie.match(/(?:^|;\s*)csrftoken=([^;]+)/);
+    return m ? m[1] : '';
+  }
+  function showError(msg) {
+    const el = document.getElementById('admin-error');
+    el.textContent = msg;
+    el.classList.remove('hidden');
+    setTimeout(() => el.classList.add('hidden'), 6000);
+  }
+  async function api(url, method, body) {
+    const opts = { method, headers: { 'Content-Type': 'application/json', 'X-CSRFToken': csrfToken() } };
+    if (body !== undefined) opts.body = JSON.stringify(body);
+    const resp = await fetch(url, opts);
+    if (resp.status === 204) return null;
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok) {
+      const msg = data?.error?.message || data?.detail || ('Request failed (' + resp.status + ')');
+      throw new Error(msg);
+    }
+    return data;
+  }
+  function confirmAction(message) {
+    return window.confirm(message);
+  }
+
+  window.adminArchiveWorkspace = async function(id, name, btn) {
+    if (!confirmAction('Archive workspace "' + name + '"? Members keep read-only access; all data is preserved.')) return;
+    btn.disabled = true;
+    try {
+      await api('/api/admin/workspaces/' + id + '/archive/', 'POST');
+      window.location.reload();
+    } catch (e) { showError(e.message); btn.disabled = false; }
+  };
+  window.adminUnarchiveWorkspace = async function(id, name, btn) {
+    if (!confirmAction('Unarchive workspace "' + name + '"? Members regain full access.')) return;
+    btn.disabled = true;
+    try {
+      await api('/api/admin/workspaces/' + id + '/unarchive/', 'POST');
+      window.location.reload();
+    } catch (e) { showError(e.message); btn.disabled = false; }
+  };
+  window.adminDeleteWorkspace = async function(id, name, btn) {
+    if (!confirmAction('Permanently delete workspace "' + name + '"? It is empty; this cannot be undone.')) return;
+    btn.disabled = true;
+    try {
+      await api('/api/projects/' + id + '/', 'DELETE');
+      window.location.reload();
+    } catch (e) { showError(e.message); btn.disabled = false; }
+  };
+  window.adminToggleRename = function(id, btn) {
+    const form = document.querySelector('[data-rename-form="' + id + '"]');
+    form.classList.toggle('hidden');
+    form.classList.toggle('flex');
+    if (!form.classList.contains('hidden')) {
+      const input = document.querySelector('[data-rename-input="' + id + '"]');
+      input.focus();
+      input.select();
+    }
+  };
+  window.adminRenameWorkspace = async function(id, btn) {
+    const input = document.querySelector('[data-rename-input="' + id + '"]');
+    const name = input.value.trim();
+    if (!name) { showError('Workspace name cannot be empty.'); return; }
+    btn.disabled = true;
+    try {
+      await api('/api/projects/' + id + '/', 'PATCH', { name });
+      window.location.reload();
+    } catch (e) { showError(e.message); btn.disabled = false; }
+  };
+  window.adminAddMember = async function(projectId, btn) {
+    const username = document.getElementById('admin-add-username').value.trim();
+    const role = document.getElementById('admin-add-role').value;
+    if (!username) { showError('Enter a username.'); return; }
+    btn.disabled = true;
+    try {
+      await api('/api/projects/' + projectId + '/members/add/', 'POST', { username, role });
+      window.location.reload();
+    } catch (e) { showError(e.message); btn.disabled = false; }
+  };
+  window.adminSaveMemberRole = async function(projectId, userId, btn) {
+    const select = document.querySelector('[data-member-role="' + userId + '"]');
+    btn.disabled = true;
+    try {
+      await api('/api/projects/' + projectId + '/members/' + userId + '/', 'PATCH', { role: select.value });
+      window.location.reload();
+    } catch (e) { showError(e.message); btn.disabled = false; }
+  };
+  window.adminRemoveMember = async function(projectId, userId, username, btn) {
+    if (!confirmAction('Remove ' + username + ' from this workspace?')) return;
+    btn.disabled = true;
+    try {
+      await api('/api/projects/' + projectId + '/members/' + userId + '/', 'DELETE');
+      window.location.reload();
+    } catch (e) { showError(e.message); btn.disabled = false; }
+  };
+  window.adminCreateUser = async function(btn) {
+    const username = document.getElementById('admin-new-username').value.trim();
+    const email = document.getElementById('admin-new-email').value.trim();
+    const password = document.getElementById('admin-new-password').value;
+    if (!username || !password) { showError('Username and password are required.'); return; }
+    btn.disabled = true;
+    try {
+      await api('/api/admin/users/', 'POST', { username, email, password });
+      window.location.reload();
+    } catch (e) { showError(e.message); btn.disabled = false; }
+  };
+  window.adminToggleEdit = function(id, btn) {
+    const form = document.querySelector('[data-edit-form="' + id + '"]');
+    form.classList.toggle('hidden');
+    form.classList.toggle('flex');
+    if (!form.classList.contains('hidden')) {
+      document.querySelector('[data-edit-first="' + id + '"]').focus();
+    }
+  };
+  window.adminEditUser = async function(id, btn) {
+    const first = document.querySelector('[data-edit-first="' + id + '"]').value.trim();
+    const last = document.querySelector('[data-edit-last="' + id + '"]').value.trim();
+    const email = document.querySelector('[data-edit-email="' + id + '"]').value.trim();
+    btn.disabled = true;
+    try {
+      await api('/api/admin/users/' + id + '/', 'PATCH', { first_name: first, last_name: last, email });
+      window.location.reload();
+    } catch (e) { showError(e.message); btn.disabled = false; }
+  };
+  window.adminToggleResetPw = function(id, btn) {
+    const form = document.querySelector('[data-resetpw-form="' + id + '"]');
+    form.classList.toggle('hidden');
+    form.classList.toggle('flex');
+    if (!form.classList.contains('hidden')) {
+      document.querySelector('[data-resetpw-input="' + id + '"]').focus();
+    }
+  };
+  window.adminResetPassword = async function(id, username, btn) {
+    const password = document.querySelector('[data-resetpw-input="' + id + '"]').value;
+    if (!password) { showError('Enter a new password.'); return; }
+    btn.disabled = true;
+    try {
+      await api('/api/admin/users/' + id + '/', 'PATCH', { password });
+      showError('Password reset for ' + username + '.');
+      window.location.reload();
+    } catch (e) { showError(e.message); btn.disabled = false; }
+  };
+  window.adminToggleSuperuser = async function(id, value, username, btn) {
+    const msg = value
+      ? 'Make ' + username + ' a super admin?'
+      : 'Remove super admin from ' + username + '?';
+    if (!confirmAction(msg)) return;
+    btn.disabled = true;
+    try {
+      await api('/api/admin/users/' + id + '/', 'PATCH', { is_superuser: value });
+      window.location.reload();
+    } catch (e) { showError(e.message); btn.disabled = false; }
+  };
+  window.adminSetActive = async function(id, value, username, btn) {
+    const msg = value ? 'Activate ' + username + '?' : 'Deactivate ' + username + '? They will no longer be able to log in.';
+    if (!confirmAction(msg)) return;
+    btn.disabled = true;
+    try {
+      await api('/api/admin/users/' + id + '/', 'PATCH', { is_active: value });
+      window.location.reload();
+    } catch (e) { showError(e.message); btn.disabled = false; }
+  };
+  window.adminDeleteUser = async function(id, username, btn) {
+    if (!confirmAction('Permanently delete user ' + username + '? Their workspace memberships are removed; audit history is preserved.')) return;
+    btn.disabled = true;
+    try {
+      await api('/api/admin/users/' + id + '/', 'DELETE');
+      window.location.reload();
+    } catch (e) { showError(e.message); btn.disabled = false; }
+  };
+})();
+</script>
+{% endblock %}

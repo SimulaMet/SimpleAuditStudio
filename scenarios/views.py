@@ -4,7 +4,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 from accounts.models import Project
-from accounts.services import ensure_project_access
+from accounts.services import ensure_project_access, require_project_writable
 from infra.exceptions import StableAPIError
 from scenarios.models import Scenario, ScenarioRevision, ScenarioSet, ScenarioSetVersion
 from scenarios.serializers import (
@@ -185,6 +185,7 @@ def import_scenarios(request, project_id):
     """
     project = _get_project_or_404(project_id)
     _require_project_access(request.user, project)
+    require_project_writable(request.user, project)
     payload = request.data
     items = payload.get("scenarios", payload) if isinstance(payload, dict) else payload
     if not isinstance(items, list):
