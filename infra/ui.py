@@ -1109,7 +1109,6 @@ class ModelsView(ProjectMixin, TemplateView):
             connections=connections,
             highlight_id=highlight_id,
             search_query=q,
-            error=None,
         )
         return super().get_context_data(**kw)
 
@@ -1181,7 +1180,12 @@ class ModelsView(ProjectMixin, TemplateView):
         elif action == "delete_model":
             rm = RegisteredModel.objects.filter(pk=request.POST.get("rm_id"), project=p).first()
             if rm:
-                rm.delete()
+                try:
+                    rm.delete()
+                except (ProtectedError, RestrictedError):
+                    # AuditRun pins models via RESTRICT FKs; deleting a model
+                    # referenced by an audit run would break the immutable record.
+                    error = f"Cannot delete '{rm.display_name}': it is referenced by audit runs."
         return self.render_to_response(self.get_context_data(error=error))
 
 

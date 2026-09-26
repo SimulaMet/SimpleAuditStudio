@@ -65,3 +65,45 @@ class ConnectionDeleteTest(TestCase):
 
         assert resp.status_code == 302
         assert conn.__class__.objects.filter(pk=conn.id).exists()
+
+
+class RegisteredModelDeleteTest(TestCase):
+    """Deleting a single model (not its connection) must also be guarded."""
+
+    def setUp(self):
+        pw = "testpass" + "123"
+        self.user = UserFactory()
+        self.user.set_password(pw)
+        self.user.save()
+        self.project = ProjectFactory()
+        MembershipFactory(user=self.user, project=self.project, role="owner")
+        self.client = Client(SERVER_NAME="localhost")
+        self.client.login(username=self.user.username, password=pw)
+        self.client.session["project_id"] = self.project.pk
+        self.client.session.save()
+
+    def test_delete_unreferenced_model_succeeds(self):
+        from model_registry.models import ModelConnection, RegisteredModel
+
+        conn = ModelConnectionFactory(project=self.project, name="conn-a")
+        rm = RegisteredModelFactory(connection=conn, project=self.project)
+
+        resp = self.client.post("/models/", {"action": "delete_model", "rm_id": rm.id})
+
+        assert resp.status_code == 200
+        assert not RegisteredModel.objects.filter(pk=rm.id).exists()
+
+    def test_delete_referenced_model_is_blocked_with_error(self):
+        from model_registry.models import ModelConnection, RegisteredModel
+
+        conn = ModelConnectionFactory(project=self.project, name="conn-b")
+        rm = RegisteredModelFactory(connection=conn, project=self.project)
+        AuditRunFactory(project=self.project, target_model=rm)
+
+        resp = self.client.post("/models/", {"action": "delete_model", "rm_id": rm.id})
+
+        assert resp.status_code == 200
+        # Model must still exist.
+        assert RegisteredModel.objects.filter(pk=rm.id).exists()
+        body = resp.content.decode()
+        assert "referenced by audit runs" in body
