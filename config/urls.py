@@ -12,6 +12,7 @@ from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView
 from accounts.views import healthz, readyz
 from infra.health_api import health_panel_api
 from infra.ui import (
+    AdminView,
     AuditArchiveView,
     AuditCancelView,
     AuditDetailView,
@@ -28,6 +29,7 @@ from infra.ui import (
     ModelDeleteView,
     ModelsView,
     NewAuditView,
+    ProfileView,
     RegisterView,
     ScenarioCreateView,
     ScenarioDeleteView,
@@ -109,6 +111,7 @@ urlpatterns = [
     path("api/docs/", SpectacularSwaggerView.as_view(url_name="schema"), name="swagger-ui"),
     path("api/auth/", include("accounts.auth_urls")),
     path("api/projects/", include("accounts.project_urls")),
+    path("api/admin/", include("accounts.admin_urls")),
     path("api/", include("scenarios.urls")),
     path("api/", include("model_registry.urls")),
     path("api/", include("audits.urls")),
@@ -122,6 +125,8 @@ urlpatterns = [
     path("auth/workos/callback/", WorkOSCallbackView.as_view(), name="workos_callback"),
     path("dashboard/", DashboardView.as_view(), name="dashboard"),
     path("workspaces/", WorkspacesView.as_view(), name="workspaces"),
+    path("admin-settings/", AdminView.as_view(), name="admin_settings"),
+    path("profile/", ProfileView.as_view(), name="profile"),
     path("health/", HealthView.as_view(), name="health"),
     path("audits/new/", NewAuditView.as_view(), name="new_audit"),
     path("scenarios/", ScenariosView.as_view(), name="scenarios"),

@@ -15,6 +15,7 @@ from django.utils import timezone
 from django.views.generic import DetailView, ListView, TemplateView, View
 
 from accounts import workos_auth
+from accounts.models import User
 from audits.comparison import compare_runs
 from audits.events import ScenarioResult
 from audits.models import AuditRun
@@ -56,6 +57,34 @@ class AdminRequiredMixin(LoginRequiredMixin):
 
             return HttpResponseForbidden("Admin access required.")
         return super().dispatch(request, *args, **kwargs)
+
+
+class SuperuserRequiredMixin(LoginRequiredMixin):
+    """Restrict a view to superusers only."""
+
+    def dispatch(self, request, *args, **kwargs):
+        if not request.user.is_authenticated:
+            return super().dispatch(request, *args, **kwargs)
+        if not request.user.is_superuser:
+            from django.http import HttpResponseForbidden
+
+            return HttpResponseForbidden("Super admin access required.")
+        return super().dispatch(request, *args, **kwargs)
+
+
+def _require_writable_project(request):
+    """Block mutations on an archived workspace for non-superusers (UI forms).
+
+    Returns a redirect response with an error message when the active project
+    is archived and the user is not a superuser; otherwise returns None so the
+    view proceeds. (Raising the DRF StableAPIError here would 500 in a plain
+    Django view, so we use the messages framework instead.)
+    """
+    project = getattr(request, "project", None)
+    if project is not None and project.archived and not request.user.is_superuser:
+        messages.error(request, "This workspace is archived and read-only.")
+        return redirect(request.META.get("HTTP_REFERER") or "/")
+    return None
 
 
 # ─── Health panel ────────────────────────────────────────────────────────────
@@ -413,6 +442,121 @@ class WorkspacesView(LoginRequiredMixin, TemplateView):
         return super().get_context_data(**kw)
 
 
+# ─── Super admin ─────────────────────────────────────────────────────────────
+
+
+class AdminView(SuperuserRequiredMixin, TemplateView):
+    """Platform administration: aggregate stats, workspace management, user
+    management. Superusers only. Counts only — no workspace content."""
+
+    template_name = "admin.html"
+
+    def get_context_data(self, **kw):
+        from accounts.models import Project, User
+        from accounts.services import admin_stats_payload, workspace_has_content
+
+        tab = self.request.GET.get("tab", "overview")
+        if tab not in ("overview", "workspaces", "users"):
+            tab = "overview"
+
+        stats = admin_stats_payload()
+
+        # Workspaces tab: per-workspace content flag + members for the panel.
+        projects = list(Project.objects.order_by("name"))
+        for ws in stats["workspaces"]:
+            project = next((p for p in projects if p.id == ws["id"]), None)
+            ws["has_content"] = workspace_has_content(project) if project else False
+        manage_id = self.request.GET.get("manage")
+        managed_members = None
+        if tab == "workspaces" and manage_id and manage_id.isdigit():
+            project = next((p for p in projects if p.id == int(manage_id)), None)
+            if project:
+                managed_members = list(
+                    project.memberships.select_related("user").order_by("created_at")
+                )
+
+        # Users tab.
+        users = list(User.objects.order_by("username"))
+        superuser_count = sum(1 for u in users if u.is_superuser)
+
+        kw.update(
+            tab=tab,
+            stats=stats,
+            workspaces=stats["workspaces"],
+            users=users,
+            superuser_count=superuser_count,
+            managed_members=managed_members,
+            manage_id=int(manage_id) if manage_id and manage_id.isdigit() else None,
+        )
+        return super().get_context_data(**kw)
+
+
+# ─── Profile ─────────────────────────────────────────────────────────────────
+
+
+class ProfileView(LoginRequiredMixin, TemplateView):
+    """Self-service profile update for the signed-in user."""
+
+    template_name = "profile.html"
+
+    def get_context_data(self, **kw):
+        kw["profile_user"] = self.request.user
+        kw["error"] = None
+        return super().get_context_data(**kw)
+
+    def post(self, request, *args, **kwargs):
+        from django.contrib.auth import update_session_auth_hash
+        from django.contrib.auth.password_validation import validate_password
+        from django.core.exceptions import ValidationError as DjangoValidationError
+
+        user = request.user
+        form = request.POST.get("form", "details")
+        error = None
+
+        if form == "password":
+            current_password = request.POST.get("current_password") or ""
+            new_password = request.POST.get("new_password") or ""
+            if new_password:
+                if not current_password or not user.check_password(current_password):
+                    error = "Current password is incorrect."
+                else:
+                    try:
+                        validate_password(new_password)
+                    except DjangoValidationError as exc:
+                        error = " ".join(exc.messages)
+            if error:
+                return self.render_to_response(self.get_context_data(error=error))
+            if new_password:
+                user.set_password(new_password)
+                user.save(update_fields=["password"])
+                update_session_auth_hash(request, user)
+            messages.success(request, "Password updated.")
+            return redirect("profile")
+
+        first_name = (request.POST.get("first_name") or "").strip()
+        last_name = (request.POST.get("last_name") or "").strip()
+        email = (request.POST.get("email") or "").strip()
+        username = (request.POST.get("username") or "").strip()
+
+        if not username:
+            error = "Username cannot be empty."
+        elif User.objects.filter(username__iexact=username).exclude(pk=user.pk).exists():
+            error = "Username already exists."
+        elif email and User.objects.filter(email__iexact=email).exclude(pk=user.pk).exists():
+            error = "Email already exists."
+
+        if error:
+            return self.render_to_response(self.get_context_data(error=error))
+
+        user.first_name = first_name
+        user.last_name = last_name
+        user.email = email
+        user.username = username
+        user.save()
+        messages.success(request, "Profile updated.")
+        return redirect("profile")
+
+
 # ─── New Audit ───────────────────────────────────────────────────────────────
 
 class NewAuditView(ProjectMixin, TemplateView):
@@ -451,6 +595,9 @@ class NewAuditView(ProjectMixin, TemplateView):
 
     def post(self, request, *args, **kwargs):
         p = request.project
+        blocked = _require_writable_project(request)
+        if blocked:
+            return blocked
         try:
             clone_version_id = (request.POST.get("scenario_set_version") or "").strip()
             if clone_version_id:
@@ -580,6 +727,9 @@ def _publish_new_version(sset, user, extra_scenario_ids=None):
 
 class ScenarioSetCreateView(ProjectMixin, View):
     def post(self, request):
+        blocked = _require_writable_project(request)
+        if blocked:
+            return blocked
         name = request.POST.get("name", "").strip()
         desc = request.POST.get("description", "").strip()
         if name:
@@ -592,6 +742,9 @@ class ScenarioSetCreateView(ProjectMixin, View):
 
 class ScenarioSetRenameView(ProjectMixin, View):
     def post(self, request, set_id):
+        blocked = _require_writable_project(request)
+        if blocked:
+            return blocked
         sset = ScenarioSet.objects.filter(pk=set_id, project=request.project).first()
         if sset:
             name = request.POST.get("name", "").strip()
@@ -606,6 +759,9 @@ class ScenarioSetRenameView(ProjectMixin, View):
 
 class ScenarioSetDeleteView(ProjectMixin, View):
     def post(self, request, set_id):
+        blocked = _require_writable_project(request)
+        if blocked:
+            return blocked
         sset = ScenarioSet.objects.filter(pk=set_id, project=request.project).first()
         if sset:
             try:
@@ -618,6 +774,9 @@ class ScenarioSetDeleteView(ProjectMixin, View):
 
 class ScenarioCreateView(ProjectMixin, View):
     def post(self, request):
+        blocked = _require_writable_project(request)
+        if blocked:
+            return blocked
         name = request.POST.get("name", "").strip()
         category = request.POST.get("category", "").strip()
         desc = request.POST.get("description", "")
@@ -642,6 +801,9 @@ class ScenarioCreateView(ProjectMixin, View):
 
 class ScenarioEditView(ProjectMixin, View):
     def post(self, request, scenario_id):
+        blocked = _require_writable_project(request)
+        if blocked:
+            return blocked
         scenario = Scenario.objects.filter(pk=scenario_id, project=request.project).first()
         set_id = request.POST.get("set_id", "").strip()
         if scenario:
@@ -676,6 +838,9 @@ class ScenarioEditView(ProjectMixin, View):
 
 class ScenarioDeleteView(ProjectMixin, View):
     def post(self, request, scenario_id):
+        blocked = _require_writable_project(request)
+        if blocked:
+            return blocked
         set_id = request.POST.get("set_id", "").strip()
         scenario = Scenario.objects.filter(pk=scenario_id, project=request.project).first()
         if scenario:
@@ -748,6 +913,9 @@ class ScenarioRevertView(ProjectMixin, View):
         })
 
     def post(self, request, set_id):
+        blocked = _require_writable_project(request)
+        if blocked:
+            return blocked
         sset = ScenarioSet.objects.filter(pk=set_id, project=request.project).first()
         if not sset:
             return redirect("/scenarios/")
@@ -840,6 +1008,9 @@ class ScenarioExportView(ProjectMixin, View):
 
 class ScenarioImportView(ProjectMixin, View):
     def post(self, request, set_id):
+        blocked = _require_writable_project(request)
+        if blocked:
+            return blocked
         sset = ScenarioSet.objects.filter(pk=set_id, project=request.project).first()
         if not sset:
             return JsonResponse({"error": "Not found"}, status=404)
@@ -903,6 +1074,9 @@ class ModelsView(ProjectMixin, TemplateView):
     def post(self, request, *args, **kwargs):
         from model_registry.models import ModelConnection, RegisteredModel
 
+        blocked = _require_writable_project(request)
+        if blocked:
+            return blocked
         p = request.project
         action = request.POST.get("action")
         error = None
@@ -1003,6 +1177,9 @@ class ModelsView(ProjectMixin, TemplateView):
 
 class ModelDeleteView(ProjectMixin, View):
     def post(self, request, endpoint_id):
+        blocked = _require_writable_project(request)
+        if blocked:
+            return blocked
         ModelEndpoint.objects.filter(pk=endpoint_id, project=request.project).delete()
         return redirect("/models/")
 
@@ -1010,6 +1187,10 @@ class ModelDeleteView(ProjectMixin, View):
 class ConnectionDeleteView(ProjectMixin, View):
     def post(self, request, conn_id):
         from model_registry.models import ModelConnection
+
+        blocked = _require_writable_project(request)
+        if blocked:
+            return blocked
         ModelConnection.objects.filter(pk=conn_id, project=request.project).delete()
         return redirect("/models/")
 
@@ -1214,6 +1395,9 @@ class AuditDetailView(ProjectMixin, DetailView):
 
 class AuditCancelView(ProjectMixin, View):
     def post(self, request, run_id):
+        blocked = _require_writable_project(request)
+        if blocked:
+            return blocked
         run = AuditRun.objects.filter(pk=run_id, project=request.project).first()
         if run and run.status not in (AuditRun.Status.COMPLETED, AuditRun.Status.FAILED, AuditRun.Status.CANCELLED):
             run.status = AuditRun.Status.CANCELLED
@@ -1228,6 +1412,9 @@ class AuditArchiveView(ProjectMixin, View):
     the active project are invisible (404)."""
 
     def post(self, request, run_id):
+        blocked = _require_writable_project(request)
+        if blocked:
+            return blocked
         run = AuditRun.objects.filter(pk=run_id, project=request.project).first()
         if run:
             run.archived = not run.archived
@@ -1240,6 +1427,9 @@ class AuditRenameView(ProjectMixin, View):
     affect the frozen reproducibility manifest."""
 
     def post(self, request, run_id):
+        blocked = _require_writable_project(request)
+        if blocked:
+            return blocked
         run = AuditRun.objects.filter(pk=run_id, project=request.project).first()
         if run:
             name = request.POST.get("name", "").strip()

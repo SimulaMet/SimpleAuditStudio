@@ -51,7 +51,7 @@ class WorkspaceItemSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Project
-        fields = ("id", "name", "slug", "description", "is_admin", "created_at", "updated_at")
+        fields = ("id", "name", "slug", "description", "is_admin", "archived", "created_at", "updated_at")
         read_only_fields = fields
 
     def get_is_admin(self, obj) -> bool:
@@ -83,6 +83,84 @@ class MemberAddSerializer(serializers.Serializer):
 
 class MemberRoleSerializer(serializers.Serializer):
     role = serializers.ChoiceField(choices=ProjectMembership.Role.choices)
+
+
+# ─── Profile (self-service) ──────────────────────────────────────────────────
+
+
+class ProfileUpdateSerializer(serializers.Serializer):
+    """Self-service profile update. All fields optional; only provided fields
+    are changed. Password change requires the current password."""
+
+    first_name = serializers.CharField(required=False, allow_blank=True, max_length=150)
+    last_name = serializers.CharField(required=False, allow_blank=True, max_length=150)
+    email = serializers.EmailField(required=False, allow_blank=True)
+    username = serializers.CharField(required=False, max_length=150)
+    current_password = serializers.CharField(required=False, style={"input_type": "password"}, write_only=True)
+    new_password = serializers.CharField(required=False, style={"input_type": "password"}, write_only=True)
+
+    def validate_username(self, value):
+        value = (value or "").strip()
+        if not value:
+            raise serializers.ValidationError("Username cannot be empty.")
+        if User.objects.filter(username__iexact=value).exclude(pk=self.context["user"].pk).exists():
+            raise serializers.ValidationError("Username already exists.")
+        return value
+
+    def validate_email(self, value):
+        value = (value or "").strip()
+        if value and User.objects.filter(email__iexact=value).exclude(pk=self.context["user"].pk).exists():
+            raise serializers.ValidationError("Email already exists.")
+        return value
+
+    def validate(self, attrs):
+        user = self.context["user"]
+        if "new_password" in attrs and attrs.get("new_password"):
+            if not attrs.get("current_password"):
+                raise serializers.ValidationError({"current_password": "Current password is required."})
+            if not user.check_password(attrs["current_password"]):
+                raise serializers.ValidationError({"current_password": "Current password is incorrect."})
+            validate_password(attrs["new_password"])
+        return attrs
+
+    def save(self):
+        user = self.context["user"]
+        attrs = self.validated_data
+        if "first_name" in attrs:
+            user.first_name = attrs["first_name"]
+        if "last_name" in attrs:
+            user.last_name = attrs["last_name"]
+        if "email" in attrs:
+            user.email = attrs["email"]
+        if "username" in attrs:
+            user.username = attrs["username"]
+        user.save()
+        if attrs.get("new_password"):
+            user.set_password(attrs["new_password"])
+            user.save(update_fields=["password"])
+        return user
+
+
+# ─── Super-admin user management ─────────────────────────────────────────────
+
+
+class UserCreateSerializer(serializers.Serializer):
+    username = serializers.CharField(max_length=150)
+    email = serializers.EmailField(required=False, allow_blank=True)
+    password = serializers.CharField(write_only=True, style={"input_type": "password"})
+    first_name = serializers.CharField(required=False, allow_blank=True, default="")
+    last_name = serializers.CharField(required=False, allow_blank=True, default="")
+
+
+class UserAdminUpdateSerializer(serializers.Serializer):
+    """Super-admin edit of any user. All fields optional."""
+
+    first_name = serializers.CharField(required=False, allow_blank=True, max_length=150)
+    last_name = serializers.CharField(required=False, allow_blank=True, max_length=150)
+    email = serializers.EmailField(required=False, allow_blank=True)
+    is_active = serializers.BooleanField(required=False)
+    is_superuser = serializers.BooleanField(required=False)
+    password = serializers.CharField(required=False, write_only=True, style={"input_type": "password"})
 
 
 class ProjectMembershipSerializer(serializers.ModelSerializer):

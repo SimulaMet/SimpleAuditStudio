@@ -13,8 +13,11 @@ from accounts.models import Project, ProjectMembership, User
 from accounts.serializers import (
     MemberAddSerializer,
     MemberRoleSerializer,
+    ProfileUpdateSerializer,
     ProjectMembershipSerializer,
     RegisterSerializer,
+    UserAdminUpdateSerializer,
+    UserCreateSerializer,
     UserSerializer,
     WorkspaceCreateSerializer,
     WorkspaceItemSerializer,
@@ -22,9 +25,16 @@ from accounts.serializers import (
 )
 from accounts.services import (
     DEFAULT_PROJECT_SLUG,
+    admin_create_user,
+    admin_delete_user,
+    admin_stats_payload,
+    admin_update_user,
+    archive_workspace,
     create_workspace,
     delete_workspace,
     ensure_project_access,
+    require_project_writable,
+    unarchive_workspace,
     update_workspace,
 )
 from infra.exceptions import StableAPIError
@@ -76,20 +86,98 @@ def me(request):
     return Response(UserSerializer(request.user).data)
 
 
+@api_view(["PATCH", "PUT"])
+@permission_classes([IsAuthenticated])
+def update_profile(request):
+    """Self-service profile update (name, email, username, password)."""
+    serializer = ProfileUpdateSerializer(data=request.data, context={"user": request.user})
+    serializer.is_valid(raise_exception=True)
+    user = serializer.save()
+    return Response(UserSerializer(user).data)
+
+
+# ─── Super admin ─────────────────────────────────────────────────────────────
+
+
+def _require_superuser_request(request) -> None:
+    if not request.user.is_superuser:
+        raise StableAPIError(detail="Super admin required.", code="super_admin_required", http_status=403)
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def admin_stats(request):
+    _require_superuser_request(request)
+    return Response(admin_stats_payload())
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def admin_archive_workspace(request, project_id):
+    _require_superuser_request(request)
+    project = _get_project_or_404(project_id)
+    project = archive_workspace(user=request.user, project=project)
+    return Response(_serialize_workspaces([project], request)[0])
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def admin_unarchive_workspace(request, project_id):
+    _require_superuser_request(request)
+    project = _get_project_or_404(project_id)
+    project = unarchive_workspace(user=request.user, project=project)
+    return Response(_serialize_workspaces([project], request)[0])
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def admin_create_user_view(request):
+    _require_superuser_request(request)
+    serializer = UserCreateSerializer(data=request.data)
+    serializer.is_valid(raise_exception=True)
+    user = admin_create_user(
+        admin_user=request.user,
+        username=serializer.validated_data["username"],
+        email=serializer.validated_data.get("email", ""),
+        password=serializer.validated_data["password"],
+        first_name=serializer.validated_data.get("first_name", ""),
+        last_name=serializer.validated_data.get("last_name", ""),
+    )
+    return Response(UserSerializer(user).data, status=status.HTTP_201_CREATED)
+
+
+@api_view(["PATCH", "PUT", "DELETE"])
+@permission_classes([IsAuthenticated])
+def admin_update_user_view(request, user_id):
+    _require_superuser_request(request)
+    try:
+        target = User.objects.get(pk=user_id)
+    except User.DoesNotExist:
+        raise StableAPIError(detail="User not found.", code="user_not_found", http_status=404)
+
+    if request.method == "DELETE":
+        admin_delete_user(admin_user=request.user, target=target)
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+    serializer = UserAdminUpdateSerializer(data=request.data)
+    serializer.is_valid(raise_exception=True)
+    target = admin_update_user(admin_user=request.user, target=target, **serializer.validated_data)
+    return Response(UserSerializer(target).data)
+
+
 # ─── Workspaces (a.k.a. Projects) ─────────────────────────────────────────────
 
 
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def list_workspaces(request):
-    if request.user.is_superuser:
-        projects = Project.objects.all()
-    else:
-        from django.db.models import Q
+    # Content access is membership-based for everyone, including superusers.
+    # Superusers see all workspaces in the Admin page instead.
+    from django.db.models import Q
 
-        projects = Project.objects.filter(
-            Q(memberships__user=request.user) | Q(slug=DEFAULT_PROJECT_SLUG)
-        ).distinct()
+    projects = Project.objects.filter(
+        Q(memberships__user=request.user) | Q(slug=DEFAULT_PROJECT_SLUG)
+    ).distinct()
     return Response(_serialize_workspaces(projects, request))
 
 
@@ -106,7 +194,9 @@ def create_workspace_view(request):
 @permission_classes([IsAuthenticated])
 def workspace_detail(request, project_id):
     project = _get_project_or_404(project_id)
-    if not ensure_project_access(request.user, project):
+    # Management endpoint: superusers manage any workspace from the Admin
+    # page; everyone else needs membership (content access is gated).
+    if not request.user.is_superuser and not ensure_project_access(request.user, project):
         raise StableAPIError(detail="Workspace access denied.", code="workspace_access_denied", http_status=403)
 
     if request.method == "DELETE":
@@ -183,6 +273,7 @@ def list_members(request, project_id):
 def add_member(request, project_id):
     project = _get_project_or_404(project_id)
     _require_workspace_admin_request(request, project)
+    require_project_writable(request.user, project)
 
     serializer = MemberAddSerializer(data=request.data)
     serializer.is_valid(raise_exception=True)
@@ -206,6 +297,7 @@ def add_member(request, project_id):
 def update_or_remove_member(request, project_id, user_id):
     project = _get_project_or_404(project_id)
     _require_workspace_admin_request(request, project)
+    require_project_writable(request.user, project)
 
     try:
         target = User.objects.get(pk=user_id)
