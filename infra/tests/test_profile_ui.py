@@ -44,6 +44,13 @@ class ProfilePageTest(TestCase):
         self.assertEqual(resp.status_code, 200)
         self.assertIn("Current password is incorrect.", resp.content.decode())
 
+    def test_blank_new_password_rejected(self):
+        resp = self.client.post("/profile/", {"form": "password", "current_password": "testpass123", "new_password": ""})
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn("Enter a new password.", resp.content.decode())
+        self.user.refresh_from_db()
+        self.assertTrue(self.user.check_password("testpass123"))
+
 
 class SidebarNavTest(TestCase):
     def setUp(self):
