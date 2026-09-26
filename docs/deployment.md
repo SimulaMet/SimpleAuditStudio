@@ -153,7 +153,7 @@ Secrets are injected into worker environment only when needed. Web/API should no
 Startup secret validation:
 
 - refuse to boot in production if required values remain `change-me`
-- refuse to boot if `DJANGO_DEBUG=true` with public allowed hosts
+- wildcard `ALLOWED_HOSTS=*` is permitted for HF Spaces and proxy-based deployments where the platform injects unpredictable hostnames (e.g. `proxy.spaces.internal.huggingface.tech`). This trades strict host validation for deployment flexibility; CSRF_TRUSTED_ORIGINS still enforces origin checks on POST requests.
 - the worker resolves SimpleAudit provenance from installed package metadata at
   startup; a run whose frozen version disagrees with the loaded engine fails with
   `SIMPLEAUDIT_VERSION_MISMATCH` (see `infra/simpleaudit_package.py`)
@@ -166,7 +166,7 @@ Must include placeholders and comments:
 ```env
 DJANGO_SECRET_KEY=change-me
 DJANGO_DEBUG=false
-DJANGO_ALLOWED_HOSTS=localhost,127.0.0.1
+DJANGO_ALLOWED_HOSTS=*
 
 POSTGRES_DB=simpleaudit
 POSTGRES_USER=simpleaudit

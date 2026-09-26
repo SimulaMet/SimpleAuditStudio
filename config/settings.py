@@ -23,7 +23,7 @@ def env_list(name: str, default: str = "") -> list[str]:
 
 SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY", "change-me")
 DEBUG = env_bool("DJANGO_DEBUG", False)
-ALLOWED_HOSTS = env_list("DJANGO_ALLOWED_HOSTS", "localhost,127.0.0.1")
+ALLOWED_HOSTS = env_list("DJANGO_ALLOWED_HOSTS", "*")
 
 
 def _csrf_trusted_origins() -> list[str]:
@@ -42,21 +42,24 @@ def _csrf_trusted_origins() -> list[str]:
     """
     explicit = env_list("DJANGO_CSRF_TRUSTED_ORIGINS")
     derived: list[str] = []
-    for host in ALLOWED_HOSTS:
-        if not host:
-            continue
-        if host.startswith("."):
-            # Wildcard subdomain -> https://*.example.com (Django's expected form)
-            derived.append(f"https://*{host}")
-        elif ":" in host:
-            # Host with an explicit port (e.g. localhost:8000) — use http for
-            # loopback, https otherwise. Strip nothing; Django accepts the port.
-            scheme = "http" if host.split(":")[0] in {"localhost", "127.0.0.1", "0.0.0.0"} else "https"
-            derived.append(f"{scheme}://{host}")
-        elif host in {"localhost", "127.0.0.1", "0.0.0.0"}:
-            derived.append(f"http://{host}")
-        else:
-            derived.append(f"https://{host}")
+    # When ALLOWED_HOSTS is a bare wildcard (*), skip derivation — the fallbacks
+    # below already cover HF Spaces and local dev origins.
+    if "*" not in ALLOWED_HOSTS:
+        for host in ALLOWED_HOSTS:
+            if not host:
+                continue
+            if host.startswith("."):
+                # Wildcard subdomain -> https://*.example.com (Django's expected form)
+                derived.append(f"https://*{host}")
+            elif ":" in host:
+                # Host with an explicit port (e.g. localhost:8000) — use http for
+                # loopback, https otherwise. Strip nothing; Django accepts the port.
+                scheme = "http" if host.split(":")[0] in {"localhost", "127.0.0.1", "0.0.0.0"} else "https"
+                derived.append(f"{scheme}://{host}")
+            elif host in {"localhost", "127.0.0.1", "0.0.0.0"}:
+                derived.append(f"http://{host}")
+            else:
+                derived.append(f"https://{host}")
     # Hardcoded fallbacks for known deployment targets. These guarantee CSRF
     # works on HF Spaces even if the platform injects/overrides DJANGO_ALLOWED_HOSTS
     # before our derivation runs. Local dev origins are always included.

@@ -26,7 +26,7 @@ jobs:
       DJANGO_SETTINGS_MODULE: config.settings
       DJANGO_SECRET_KEY: ci-secret-key
       DJANGO_DEBUG: "false"
-      DJANGO_ALLOWED_HOSTS: localhost,127.0.0.1
+      DJANGO_ALLOWED_HOSTS: "*"
       POSTGRES_DB: simpleaudit_test
       POSTGRES_USER: simpleaudit
       POSTGRES_PASSWORD: simpleaudit
