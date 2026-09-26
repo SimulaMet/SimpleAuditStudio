@@ -68,14 +68,23 @@ class FinalizeInput(BaseModel):
 _CLIENT: Hatchet | None = None
 
 
+# Set when the shared client was built with a placeholder token because no real
+# token was resolvable at import time. Cleared once a real token is resolved and
+# the client rebuilt (see get_client).
+_CLIENT_IS_PLACEHOLDER = False
+
+
 def get_client() -> Hatchet:
     """Return the single shared Hatchet client for this process.
 
     In demo mode, returns the embedded Hatchet client (started by the CLI).
-    Otherwise connects to the external Hatchet server.
+    Otherwise connects to the external Hatchet server. If the client was
+    originally built with a placeholder token (no real token available at
+    import time) and a real token has since become available, rebuilds the
+    client with it so task submission works without a process restart.
     """
-    global _CLIENT
-    if _CLIENT is None:
+    global _CLIENT, _CLIENT_IS_PLACEHOLDER
+    if _CLIENT is None or (_CLIENT_IS_PLACEHOLDER and _resolve_hatchet_token()):
         # Demo mode: reuse the embedded client started by the CLI entry point.
         from infra.minimal_config import get_embedded_client, is_minimal_config
 
@@ -83,6 +92,7 @@ def get_client() -> Hatchet:
             embedded = get_embedded_client()
             if embedded is not None:
                 _CLIENT = embedded
+                _CLIENT_IS_PLACEHOLDER = False
                 return _CLIENT
             raise RuntimeError(
                 "Demo mode active but embedded Hatchet client not started. "
@@ -100,14 +110,55 @@ def get_client() -> Hatchet:
         # the SDK open an insecure channel. TLS/mTLS deployments set
         # HATCHET_TLS_STRATEGY accordingly (cert paths via HATCHET_CLIENT_TLS_*).
         tls_strategy = settings.HATCHET_TLS_STRATEGY or "none"
+        token = _resolve_hatchet_token()
+        if not token:
+            # No live token (e.g. the auth-disabled dev image hasn't written its
+            # token file yet, or no HATCHET_API_KEY is set). Build a client with
+            # a structurally-valid placeholder JWT so module-level task
+            # registration can proceed; the gRPC channels are lazy and only fail
+            # when actually used. get_client() rebuilds the client with a real
+            # token once one becomes available.
+            logger.warning(
+                "No Hatchet token resolved (HATCHET_API_KEY / HATCHET_TOKEN_FILE); "
+                "building client with placeholder token. Task submission will fail "
+                "until a real token is available."
+            )
+            token = _placeholder_jwt(settings.HATCHET_SERVER_URL, settings.HATCHET_GRPC_URL)
+            _CLIENT_IS_PLACEHOLDER = True
+        else:
+            _CLIENT_IS_PLACEHOLDER = False
         config = ClientConfig(
             server_url=settings.HATCHET_SERVER_URL,
             host_port=settings.HATCHET_GRPC_URL,
-            token=_resolve_hatchet_token(),
+            token=token,
             tls_config=ClientTLSConfig(strategy=tls_strategy),
         )
         _CLIENT = Hatchet(config=config)
     return _CLIENT
+
+
+def _placeholder_jwt(server_url: str, grpc_url: str) -> str:
+    """Build a structurally-valid unsigned JWT for placeholder use.
+
+    The SDK validates that the token starts with ``ey`` and parses its claims
+    (``sub``, ``server_url``, ``grpc_broadcast_address``) at construction time.
+    This placeholder satisfies that validation without any real credentials;
+    actual gRPC calls with it will be rejected by the server.
+    """
+    import base64
+    import json
+
+    def _b64(data: bytes) -> str:
+        return base64.urlsafe_b64encode(data).rstrip(b"=").decode()
+
+    header = _b64(json.dumps({"alg": "none", "typ": "JWT"}).encode())
+    payload = _b64(json.dumps({
+        "sub": "placeholder-tenant",
+        "server_url": server_url,
+        "grpc_broadcast_address": grpc_url,
+    }).encode())
+    signature = _b64(b"placeholder")
+    return f"{header}.{payload}.{signature}"
 
 
 def _resolve_hatchet_token() -> str | None:
@@ -146,6 +197,10 @@ def _is_cancelled(run_id: str) -> bool:
         return False
     return run.status == AuditRun.Status.CANCELLED
 
+
+# --- Task implementations ---------------------------------------------
+# Defined before the module-level registration below so the registered tasks
+# can reference these callables directly.
 
 def _scenario_execute_impl(workflow_input: ScenarioInput, ctx: Context) -> dict:
     """Execute one scenario for an audit run.
@@ -505,10 +560,37 @@ def _mark_run_completed(run_id: str) -> None:
     run.save(update_fields=["status", "finished_at"])
 
 
+# --- Module-level task registration ---------------------------------------
+# Tasks are registered once at import time against the shared client. This is
+# required for the single-process (minimal-config) deployment: the web server
+# thread submits runs via `submit_run_workflow`, which needs the same task
+# objects the worker subscribes to. Registering at call time instead would
+# create fresh task objects whose gRPC channels are torn down by the worker's
+# shutdown, breaking submission after any restart.
+_scenario_task = get_client().task(
+    name="audit.scenario_execute",
+    input_validator=ScenarioInput,
+    retries=2,
+    backoff_factor=2.0,
+    execution_timeout="300s",
+)(_scenario_execute_impl)
+# Finalize retries because it may be scheduled before slow scenarios finish;
+# _run_finalize_impl raises until every pinned scenario has a durable result.
+# With backoff_factor=2.0 and the default base delay, 10 retries span several
+# minutes, comfortably covering typical scenario completion times.
+_finalize_task = get_client().task(
+    name="audit.run_finalize",
+    input_validator=FinalizeInput,
+    execution_timeout="60s",
+    retries=10,
+    backoff_factor=2.0,
+)(_run_finalize_impl)
+
+
 def submit_run_workflow(run_id: str, version_item_ids: list[str], *, simpleaudit_version: str | None, git_commit: str | None):
     """Enqueue the per-run audit tasks (one scenario task each + a finalize task).
 
-    Uses the two standalone tasks registered on the worker (``audit.scenario_execute``
+    Uses the two standalone tasks registered at module level (``audit.scenario_execute``
     and ``audit.run_finalize``). Standalone tasks are the reliable primitive here:
     the worker subscribes to a fixed set of action names at startup, so dynamically
     built per-run workflow steps (which would need their own queue subscriptions)
@@ -522,28 +604,12 @@ def submit_run_workflow(run_id: str, version_item_ids: list[str], *, simpleaudit
 
     Returns the finalize task run reference, or raises if the client is unavailable.
     """
-    client = get_client()
-    scenario_task = client.task(
-        name="audit.scenario_execute",
-        input_validator=ScenarioInput,
-        retries=2,
-        backoff_factor=2.0,
-        execution_timeout="300s",
-    )(_scenario_execute_impl)
-    finalize_task = client.task(
-        name="audit.run_finalize",
-        input_validator=FinalizeInput,
-        execution_timeout="60s",
-        retries=10,
-        backoff_factor=2.0,
-    )(_run_finalize_impl)
-
     for vid in version_item_ids:
-        scenario_task.run(
+        _scenario_task.run(
             input=ScenarioInput(run_id=str(run_id), version_item_id=str(vid), attempt=1),
             wait_for_result=False,
         )
-    return finalize_task.run(
+    return _finalize_task.run(
         input=FinalizeInput(
             run_id=str(run_id),
             simpleaudit_version=simpleaudit_version,
@@ -557,38 +623,20 @@ def submit_run_workflow(run_id: str, version_item_ids: list[str], *, simpleaudit
 def build_worker() -> Worker:
     """Build the Hatchet worker bound to the configured pool label.
 
-    Registers the two standalone task handlers (``audit.scenario_execute`` and
-    ``audit.run_finalize``). These are the only actions the worker subscribes to,
-    and they are exactly what ``submit_run_workflow`` enqueues for each audit run
-    (one scenario task per pinned scenario plus a finalize task). Keeping the
+    Subscribes to the two module-level task handlers (``audit.scenario_execute``
+    and ``audit.run_finalize``). These are the only actions the worker subscribes
+    to, and they are exactly what ``submit_run_workflow`` enqueues for each audit
+    run (one scenario task per pinned scenario plus a finalize task). Keeping the
     action set fixed at startup is what makes dispatch reliable — see the note in
     ``submit_run_workflow`` about why dynamic per-run workflows are not used.
     """
     client = get_client()
-    scenario_task = client.task(
-        name="audit.scenario_execute",
-        input_validator=ScenarioInput,
-        retries=2,
-        backoff_factor=2.0,
-        execution_timeout="300s",
-    )(_scenario_execute_impl)
-    # Finalize retries because it may be scheduled before slow scenarios finish;
-    # _run_finalize_impl raises until every pinned scenario has a durable result.
-    # With backoff_factor=2.0 and the default base delay, 10 retries span several
-    # minutes, comfortably covering typical scenario completion times.
-    finalize_task = client.task(
-        name="audit.run_finalize",
-        input_validator=FinalizeInput,
-        execution_timeout="60s",
-        retries=10,
-        backoff_factor=2.0,
-    )(_run_finalize_impl)
     return Worker(
         name=f"simpleaudit-audit-worker-{settings.WORKER_POOL}",
         config=client.config,
         slot_config={"default": 4},
         labels={"pool": settings.WORKER_POOL},
-        workflows=[scenario_task, finalize_task],
+        workflows=[_scenario_task, _finalize_task],
     )
 
 
