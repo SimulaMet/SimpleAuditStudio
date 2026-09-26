@@ -55,8 +55,11 @@ function toggleRename() {
 <div id="progress-panel" class="bg-surface-raised rounded-xl border border-accent/30 p-4 mb-6">
   <div class="flex items-center justify-between mb-3">
     <h2 class="text-sm font-semibold text-accent">Live Progress</h2>
-    <span class="inline-flex items-center gap-1.5 text-xs text-emerald-400">
-      <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span> streaming
+    <span class="inline-flex items-center gap-2 text-xs text-gray-500">
+      <span id="last-update" class="text-gray-400">&mdash;</span>
+      <span class="inline-flex items-center gap-1.5 text-emerald-400">
+        <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span> streaming
+      </span>
     </span>
   </div>
   <!-- Compressed occupancy / distribution view -->
@@ -85,23 +88,23 @@ function toggleRename() {
   <!-- Turn / phase distribution -->
   <div class="mb-4">
     <p class="text-[11px] text-gray-500 uppercase tracking-wide mb-2">Turn / Phase Distribution</p>
-    <div id="dist-bars" class="space-y-1.5"></div>
+    <div id="dist-bars"></div>
     <!-- Overall stats (integrated below bars) -->
     <div class="flex items-center justify-between mt-2 pt-2 border-t border-gray-700/50">
       <span class="text-xs font-medium text-gray-300"><span id="overall-label">{{ run.completed_scenarios }} / {{ run.total_scenarios }}</span> complete · <span id="overall-pct" class="font-bold text-accent">{% if run.total_scenarios %}{{ progress_pct }}{% else %}0{% endif %}%</span></span>
-      <div class="flex items-center gap-3 text-[11px] text-gray-500">
-        <span><span class="inline-block w-2 h-2 rounded-full bg-blue-400 mr-1"></span><span id="stat-ok">{{ run.successful_scenarios }}</span> pass</span>
-        <span><span class="inline-block w-2 h-2 rounded-full bg-red-400 mr-1"></span><span id="stat-fail">{{ run.failed_scenarios }}</span> fail</span>
-        <span><span class="inline-block w-2 h-2 rounded-full bg-amber-400 mr-1"></span><span id="stat-retry">{{ run.retried_scenarios }}</span> retry</span>
+      <div class="flex items-center gap-3 text-[11px] text-gray-400">
+        <span><span class="font-semibold text-gray-200" id="stat-ok">{{ run.successful_scenarios }}</span> pass</span>
+        <span><span class="font-semibold text-red-400" id="stat-fail">{{ run.failed_scenarios }}</span> fail</span>
+        <span><span class="font-semibold text-amber-400" id="stat-retry">{{ run.retried_scenarios }}</span> retry</span>
       </div>
     </div>
   </div>
   <!-- Active role split (inline) -->
-  <div class="mb-4 flex items-center gap-3 text-[11px] text-gray-500">
-    <span class="uppercase tracking-wide">Active Now &middot; <span id="active-count" class="font-bold text-gray-300">0</span></span>
-    <span><span class="inline-block w-2 h-2 rounded-full bg-indigo-400 mr-1"></span><span id="role-auditor-count">0</span> Auditor</span>
-    <span><span class="inline-block w-2 h-2 rounded-full bg-emerald-400 mr-1"></span><span id="role-target-count">0</span> Target</span>
-    <span><span class="inline-block w-2 h-2 rounded-full bg-amber-400 mr-1"></span><span id="role-judge-count">0</span> Judge</span>
+  <div class="mb-4 flex items-center gap-3 text-[11px] text-gray-400">
+    <span class="uppercase tracking-wide text-gray-500">Active Now &middot; <span id="active-count" class="font-bold text-gray-300">0</span></span>
+    <span><span class="font-semibold text-gray-200" id="role-auditor-count">0</span> Auditor</span>
+    <span><span class="font-semibold text-gray-200" id="role-target-count">0</span> Target</span>
+    <span><span class="font-semibold text-gray-200" id="role-judge-count">0</span> Judge</span>
   </div>
   <!-- Latest activity sample -->
   <div class="mb-3">
@@ -109,11 +112,6 @@ function toggleRename() {
     <div id="latest-activity" class="space-y-1 text-[11px] font-mono text-gray-400">
       <p class="text-gray-600">Waiting for events&hellip;</p>
     </div>
-  </div>
-  <!-- Compact footer -->
-  <div class="flex items-center justify-between text-[11px] text-gray-500 border-t border-gray-800 pt-3">
-    <span>Total: <span id="prog-total" class="font-semibold text-gray-300">{{ run.total_scenarios }}</span></span>
-    <span>Last update: <span id="last-update" class="font-semibold text-gray-300">&mdash;</span></span>
   </div>
 </div>
 <script>
@@ -174,9 +172,11 @@ function toggleRename() {
 
   // --- Aggregate state ---
   const scenarios = new Map();
+  const recentEvents = []; // last N state changes for "Latest Activity"
   let doneCount = {{ run.completed_scenarios }};
   let okCount = {{ run.successful_scenarios }};
   let failCount = {{ run.failed_scenarios }};
+  const VI_NAMES = JSON.parse('{{ vi_names_json|escapejs }}');
   const countedVIs = new Set(JSON.parse('{{ result_version_item_ids_json|escapejs }}'));
   countedVIs.forEach(vi => scenarios.set(vi, { phase: 'done' }));
 
@@ -186,7 +186,7 @@ function toggleRename() {
 
   function touch() {
     const el = document.getElementById('last-update');
-    if (el) el.textContent = new Date().toLocaleTimeString();
+    if (el) el.textContent = 'Last updated: ' + new Date().toLocaleTimeString();
   }
 
   function getPhaseCounts() {
@@ -236,11 +236,11 @@ function toggleRename() {
     if (!distEl) return;
     const rows = [];
     const queued = Math.max(0, TOTAL - counts.running - counts.judging - doneCount);
-    rows.push({ label: 'Queue', val: queued, total: queued, color: 'bg-gray-400', twoTone: false });
+    rows.push({ label: 'Queue', val: queued, total: queued, color: 'bg-[rgb(199_210_254)]', twoTone: false });
     for (let t = 1; t <= maxTurnsSeen; t++) {
       const comp = turnCompleted[t-1] || 0;
       const prog = turnInProgress[t-1] || 0;
-      rows.push({ label: `T${t}`, val: comp + prog, total: comp + prog, comp, prog, color: 'bg-indigo-400', lightColor: 'bg-indigo-200', twoTone: true });
+      rows.push({ label: `Turn-${t}`, val: comp + prog, total: comp + prog, comp, prog, color: 'bg-indigo-400', lightColor: 'bg-[rgb(199_210_254)]', twoTone: true });
     }
     // Progress bar: solid = done, light = has been judged but not yet done (includes judging + rep gaps).
     // A scenario stays in the Progress bar once it has been judged at least once.
@@ -250,7 +250,7 @@ function toggleRename() {
       if (s.wasJudged) progressLight++;
     });
     const progressTotal = counts.done + progressLight;
-    rows.push({ label: 'Progress', val: progressTotal, total: progressTotal, comp: counts.done, prog: progressLight, color: 'bg-emerald-400', lightColor: 'bg-amber-400', twoTone: true });
+    rows.push({ label: 'Progress', val: progressTotal, total: progressTotal, comp: counts.done, prog: progressLight, color: 'bg-emerald-400', lightColor: 'bg-[rgb(199_210_254)]', twoTone: true });
 
     distEl.innerHTML = rows.map(r => {
       const pctTotal = (r.total / denom) * 100;
@@ -265,12 +265,15 @@ function toggleRename() {
       } else {
         barHtml = `<div class="h-full ${r.color}" style="width:${pctTotal}%"></div>`;
       }
-      return `<div class="flex items-center gap-2">
-        <span class="w-14 text-right text-[10px] text-gray-500 shrink-0">${r.label}</span>
-        <div class="flex-1 h-3 bg-surface-overlay rounded overflow-hidden">
+      const isTurn = r.label.startsWith('Turn-');
+      const barH = isTurn ? 'h-2' : 'h-2.5';
+      const rowH = isTurn ? 'height:10px' : 'height:14px;margin-bottom:6px';
+      return `<div class="flex items-center gap-1.5" style="${rowH}">
+        <span class="w-12 text-right text-[9px] leading-none text-gray-500 shrink-0">${r.label}</span>
+        <div class="flex-1 ${barH} bg-surface-overlay rounded overflow-hidden">
           ${barHtml}
         </div>
-        <span class="w-12 text-[10px] text-gray-400 font-mono">${r.total}</span>
+        <span class="w-5 text-right text-[9px] leading-none text-gray-400 font-mono">${r.total}</span>
       </div>`;
     }).join('');
 
@@ -314,28 +317,22 @@ function toggleRename() {
   function renderLatestActivity() {
     const el = document.getElementById('latest-activity');
     if (!el) return;
-    const active = [];
-    scenarios.forEach((s, vi) => {
-      if (s.phase === 'running' || s.phase === 'judging') {
-        active.push({ vi, ...s });
-      }
-    });
-    active.sort((a, b) => (b.turn || 0) - (a.turn || 0) || String(b.vi).localeCompare(String(a.vi)));
-    const sample = active.slice(0, 4);
-    if (sample.length === 0) {
-      el.innerHTML = '<p class="text-gray-600">No active scenarios</p>';
+    if (recentEvents.length === 0) {
+      el.innerHTML = '<p class="text-gray-600">Waiting for activity\u2026</p>';
       return;
     }
-    el.innerHTML = sample.map(s => {
-      const shortVi = String(s.vi).length > 12 ? String(s.vi).slice(0, 10) + '\u2026' : String(s.vi);
+    el.innerHTML = recentEvents.slice(0, 4).map(ev => {
+      const name = VI_NAMES[String(ev.vi)] || String(ev.vi);
+      const shortName = name.length > 24 ? name.slice(0, 22) + '\u2026' : name;
       let status;
-      if (s.phase === 'judging') status = 'Judging';
-      else status = `Turn ${(s.turn || 0) + 1}/${maxTurnsSeen} \u00b7 ${s.role || '?'}`;
-      return `<p class="event-log-entry"><span class="text-gray-300">${shortVi}</span> <span class="text-gray-500">${status}</span></p>`;
+      if (ev.phase === 'judging') status = 'Judging';
+      else if (ev.phase === 'done') status = 'Done';
+      else if (ev.phase === 'failed') status = 'Failed';
+      else status = `Turn-${(ev.turn || 0) + 1}/${maxTurnsSeen} \u00b7 ${ev.role || '?'}`;
+      const t = new Date(ev.ts);
+      const time = t.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+      return `<p class="event-log-entry"><span class="text-gray-500">${time}</span> <span class="text-gray-300">${shortName}</span> <span class="text-gray-500">${status}</span></p>`;
     }).join('');
-    if (active.length > 4) {
-      el.innerHTML += `<p class="text-gray-600">+${active.length - 4} more active</p>`;
-    }
   }
 
   function renderAll() {
@@ -372,6 +369,8 @@ function toggleRename() {
     const prev = scenarios.get(vi) || {};
     const wasJudged = prev.wasJudged || (role === 'judge');
     scenarios.set(vi, { phase, turn, role, rep: p.rep || 0, wasJudged });
+    recentEvents.unshift({ vi, phase, turn, role, ts: d.ts ? new Date(d.ts).getTime() : Date.now() });
+    if (recentEvents.length > 4) recentEvents.pop();
     renderAll();
   });
   es.addEventListener('scenario_rep_started', e => {
@@ -390,6 +389,8 @@ function toggleRename() {
       if (p.severity !== 'ERROR') okCount++; else failCount++;
     }
     scenarios.set(vi, { phase: 'done' });
+    recentEvents.unshift({ vi, phase: 'done', turn: maxTurnsSeen - 1, role: '', ts: d.ts ? new Date(d.ts).getTime() : Date.now() });
+    if (recentEvents.length > 4) recentEvents.pop();
     renderAll();
   });
   es.addEventListener('scenario_failed', e => {
@@ -401,6 +402,8 @@ function toggleRename() {
       failCount++;
     }
     scenarios.set(vi, { phase: 'failed' });
+    recentEvents.unshift({ vi, phase: 'failed', turn: 0, role: '', ts: d.ts ? new Date(d.ts).getTime() : Date.now() });
+    if (recentEvents.length > 4) recentEvents.pop();
     renderAll();
   });
   // Track start time for duration calculation on terminal events.

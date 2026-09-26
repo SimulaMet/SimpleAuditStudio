@@ -334,15 +334,41 @@ def _scenario_execute_impl(workflow_input: ScenarioInput, ctx: Context) -> dict:
     _FLUSH_SENTINEL = object()
 
     def _flush_loop() -> None:
-        from django.db import connections
+        from django.db import connections, reset_queries
+        from django.db.utils import OperationalError, InterfaceError
 
+        consecutive_errors = 0
+        max_retries = 5
         try:
             while True:
                 item = _event_queue.get()
                 if item is _FLUSH_SENTINEL:
                     break
                 kind, payload = item
-                append_event(run_id, version_item_id, kind, payload)
+                for attempt in range(max_retries):
+                    try:
+                        append_event(run_id, version_item_id, kind, payload)
+                        consecutive_errors = 0
+                        break
+                    except (OperationalError, InterfaceError) as exc:
+                        consecutive_errors += 1
+                        wait = min(2 ** attempt, 16)
+                        logger.warning(
+                            "Event flush failed (run=%s vi=%s kind=%s attempt %d/%d): %s — retrying in %ds",
+                            run_id, version_item_id, kind, attempt + 1, max_retries, exc, wait,
+                        )
+                        if attempt < max_retries - 1:
+                            _threading.Event().wait(wait)
+                        else:
+                            logger.error(
+                                "Event flush permanently failed after %d attempts (run=%s vi=%s kind=%s): %s",
+                                max_retries, run_id, version_item_id, kind, exc,
+                            )
+                            # Reset the broken connection so next event can reconnect.
+                            try:
+                                connections.close_all()
+                            except Exception:
+                                pass
         finally:
             # This thread got its own thread-local DB connection; release it.
             connections.close_all()
@@ -793,6 +819,67 @@ def _recover_stuck_runs() -> None:
         logger.info("Crash recovery: re-submitted %d stuck run(s)", recovered)
 
 
+def _stuck_run_sweeper(interval: int = 60, stale_minutes: int = 30) -> None:
+    """Periodically mark runs as failed if they've been active with no new events.
+
+    Catches cases where the worker is alive but a run's event thread died or
+    the Hatchet tasks silently stopped making progress. Runs in a non-terminal
+    state whose last event (or creation time) is older than ``stale_minutes``
+    are marked FAILED with a diagnostic message.
+    """
+    import time
+    from datetime import timedelta
+
+    from django.utils import timezone as dj_timezone
+
+    from audits.events import AuditEvent
+    from audits.models import AuditRun
+
+    logger.info("Stuck-run sweeper started (interval=%ds, stale=%dmin)", interval, stale_minutes)
+    while True:
+        time.sleep(interval)
+        try:
+            cutoff = dj_timezone.now() - timedelta(minutes=stale_minutes)
+            active_statuses = [
+                AuditRun.Status.QUEUED,
+                AuditRun.Status.PREPARING,
+                AuditRun.Status.TARGET_EXECUTION,
+                AuditRun.Status.AUDITING,
+                AuditRun.Status.JUDGING,
+                AuditRun.Status.AGGREGATION,
+                AuditRun.Status.REPORT_GENERATION,
+            ]
+            candidates = AuditRun.objects.filter(
+                status__in=active_statuses,
+                archived=False,
+            ).select_related()
+            for run in candidates:
+                # Find the most recent event for this run.
+                last_event = AuditEvent.objects.filter(run_id=run.pk).order_by("-id").first()
+                last_activity = last_event.created_at if last_event else run.updated_at
+                if last_activity and last_activity < cutoff:
+                    minutes_stale = int((dj_timezone.now() - last_activity).total_seconds() // 60)
+                    logger.warning(
+                        "Marking run %s as FAILED: no activity for %d min (status=%s)",
+                        run.pk, minutes_stale, run.status,
+                    )
+                    run.status = AuditRun.Status.FAILED
+                    run.finished_at = dj_timezone.now()
+                    meta = dict(run.runtime_metadata or {})
+                    meta["failure_reason"] = f"Stuck: no progress events for {minutes_stale} min"
+                    run.runtime_metadata = meta
+                    run.save(update_fields=["status", "finished_at", "runtime_metadata"])
+                    # Emit a terminal event so the UI updates.
+                    try:
+                        append_event(run.pk, "_run", "run_failed", {
+                            "error": f"Run stuck with no progress for {minutes_stale} min",
+                        })
+                    except Exception:
+                        pass
+        except Exception as exc:  # noqa: BLE001 - sweeper must never crash
+            logger.warning("Stuck-run sweeper iteration failed: %s", exc)
+
+
 def start_worker(max_startup_retries: int = 30, startup_retry_delay: float = 2.0) -> None:
     """Blocking entrypoint used by ``manage.py run_worker``.
 
@@ -828,6 +915,10 @@ def start_worker(max_startup_retries: int = 30, startup_retry_delay: float = 2.0
         _recover_stuck_runs()
     except Exception as exc:  # noqa: BLE001 - crash recovery must not block worker startup
         logger.warning("Crash recovery skipped: %s", exc)
+
+    # Start periodic stuck-run sweeper (marks runs failed if no events for 30 min).
+    _sweeper = _threading.Thread(target=_stuck_run_sweeper, daemon=True, name="stuck-run-sweeper")
+    _sweeper.start()
 
     print(f"Starting SimpleAudit worker (pool={settings.WORKER_POOL})...", flush=True)
     worker.start()
