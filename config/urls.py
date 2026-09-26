@@ -11,6 +11,7 @@ from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView
 
 from accounts.views import healthz, readyz
 from infra.health_api import health_panel_api
+from infra.seo import LandingView, llms_txt, robots_txt, sitemap_xml
 from infra.ui import (
     AuditArchiveView,
     AuditCancelView,
@@ -90,10 +91,10 @@ def _favicon(request):
     """Serve the favicon at /favicon.ico (browsers auto-request this path).
 
     The real icon is referenced via <link> in base.html, but browsers also probe
-    /favicon.ico by default. Redirecting here avoids a 404 warning in logs and
-    ensures the tab icon loads even for clients that ignore <link> tags.
+    /favicon.ico by default. We redirect to the SVG favicon so the tab icon loads
+    even for clients that ignore <link> tags, avoiding a 404 in logs.
     """
-    return redirect("static-serve", path="favicon-32x32.png")
+    return redirect("static-serve", path="favicon.svg")
 
 
 # --- URL patterns ----------------------------------------------------------
@@ -103,6 +104,10 @@ urlpatterns = [
     path("admin/", admin.site.urls),
     path("healthz", healthz, name="healthz"),
     path("readyz", readyz, name="readyz"),
+    # Technical SEO (public, no auth)
+    path("sitemap.xml", sitemap_xml, name="sitemap"),
+    path("robots.txt", robots_txt, name="robots"),
+    path("llms.txt", llms_txt, name="llms"),
     # API
     path("api/health/", health_panel_api, name="health_panel_api"),
     path("api/schema/", SpectacularAPIView.as_view(), name="schema"),
@@ -112,8 +117,10 @@ urlpatterns = [
     path("api/", include("scenarios.urls")),
     path("api/", include("model_registry.urls")),
     path("api/", include("audits.urls")),
+    # Public landing page (indexable, no auth) — the site's SEO surface
+    path("", LandingView.as_view(), name="landing"),
     # UI (server-rendered CBVs)
-    path("", IndexView.as_view(), name="index"),
+    path("index", IndexView.as_view(), name="index"),
     path("login/", LoginView.as_view(), name="login"),
     path("register/", RegisterView.as_view(), name="register"),
     path("logout/", logout_view, name="logout"),

@@ -1,0 +1,177 @@
+{% extends "public/base_public.html" %}
+{% load static %}
+
+{% block title %}SimpleAudit Studio — Reproducible AI Model Auditing Platform{% endblock %}
+
+{% block body %}
+<div class="min-h-screen bg-gray-950 text-gray-200">
+
+  {# ── Hero ─────────────────────────────────────────────── #}
+  <header class="max-w-4xl mx-auto px-6 pt-20 pb-16 text-center">
+    <a href="/" class="inline-flex items-center gap-3 mb-8 group">
+      <img src="{% static 'logo.png' %}" alt="SimpleAudit Studio logo" width="48" height="48"
+           class="w-12 h-12 rounded-xl object-contain">
+      <span class="text-xl font-bold text-gray-100 group-hover:text-white transition-colors">SimpleAudit Studio</span>
+    </a>
+    <h1 class="text-4xl md:text-5xl font-bold text-white leading-tight tracking-tight">
+      Reproducible <span class="text-accent">AI model auditing</span>, built for trust
+    </h1>
+    <p class="mt-6 text-lg text-gray-400 max-w-2xl mx-auto leading-relaxed">
+      SimpleAudit Studio is a self-hostable platform for running reproducible audits of LLMs and
+      other AI models. Every run freezes its inputs — scenarios, model config, judge profile — so
+      results stay interpretable years later. Built on the SimpleAudit
+      Target&nbsp;→&nbsp;Auditor&nbsp;→&nbsp;Judge engine.
+    </p>
+    <div class="mt-10 flex flex-col sm:flex-row items-center justify-center gap-4">
+      <a href="/login/"
+         class="px-6 py-3 rounded-xl bg-accent hover:bg-accent-hover text-white font-semibold transition-colors shadow-lg">
+        Launch the live demo
+      </a>
+      <a href="https://github.com/SushantGautam/SimpleAuditStudio" target="_blank" rel="noopener"
+         class="px-6 py-3 rounded-xl border border-gray-700 hover:border-accent/50 text-gray-200 font-medium transition-colors">
+        View on GitHub
+      </a>
+    </div>
+    <p class="mt-6 text-xs text-gray-600">
+      Open source · MIT licensed · One command to run: <code class="font-mono text-gray-500">uvx simpleaudit-studio</code>
+    </p>
+  </header>
+
+  {# ── Trust bar ────────────────────────────────────────── #}
+  <section class="border-y border-gray-800/60 bg-surface-raised/40">
+    <div class="max-w-5xl mx-auto px-6 py-6 grid grid-cols-2 md:grid-cols-4 gap-6 text-center">
+      <div><p class="text-2xl font-bold text-white">Frozen</p><p class="text-xs text-gray-500 mt-1">Immutable audit inputs</p></div>
+      <div><p class="text-2xl font-bold text-white">Reproducible</p><p class="text-xs text-gray-500 mt-1">Versioned, comparable runs</p></div>
+      <div><p class="text-2xl font-bold text-white">Self-hosted</p><p class="text-xs text-gray-500 mt-1">Docker Compose, your data</p></div>
+      <div><p class="text-2xl font-bold text-white">Open source</p><p class="text-xs text-gray-500 mt-1">MIT licensed</p></div>
+    </div>
+  </section>
+
+  {# ── Features ─────────────────────────────────────────── #}
+  <section class="max-w-5xl mx-auto px-6 py-20">
+    <h2 class="text-2xl md:text-3xl font-bold text-white text-center">What you can do</h2>
+    <p class="mt-3 text-gray-400 text-center max-w-2xl mx-auto">
+      A complete workflow for evaluating how AI models behave — from scenario design to side-by-side comparison.
+    </p>
+    <div class="mt-12 grid md:grid-cols-3 gap-6">
+      <div class="rounded-2xl border border-gray-800 bg-surface-raised p-6">
+        <div class="text-3xl mb-4">▤</div>
+        <h3 class="text-lg font-semibold text-gray-100">Scenario library</h3>
+        <p class="mt-2 text-sm text-gray-400 leading-relaxed">
+          Design and version test scenarios that probe model behavior. Publish immutable set versions
+          so every audit references exact, frozen content.
+        </p>
+      </div>
+      <div class="rounded-2xl border border-gray-800 bg-surface-raised p-6">
+        <div class="text-3xl mb-4">⬡</div>
+        <h3 class="text-lg font-semibold text-gray-100">Model registry</h3>
+        <p class="mt-2 text-sm text-gray-400 leading-relaxed">
+          Connect any OpenAI-compatible endpoint — Ollama, vLLM, OpenAI, Together, Groq, or your own
+          gateway. Credentials stay out of the database.
+        </p>
+      </div>
+      <div class="rounded-2xl border border-gray-800 bg-surface-raised p-6">
+        <div class="text-3xl mb-4">◉</div>
+        <h3 class="text-lg font-semibold text-gray-100">Live audit runs</h3>
+        <p class="mt-2 text-sm text-gray-400 leading-relaxed">
+          Launch audits and watch durable progress in real time. Runs survive restarts and retry
+          per-scenario without duplicating results.
+        </p>
+      </div>
+      <div class="rounded-2xl border border-gray-800 bg-surface-raised p-6">
+        <div class="text-3xl mb-4">⇄</div>
+        <h3 class="text-lg font-semibold text-gray-100">Compare runs</h3>
+        <p class="mt-2 text-sm text-gray-400 leading-relaxed">
+          Put completed audits side by side across common scenarios to see how models and prompts
+          change outcomes over time.
+        </p>
+      </div>
+      <div class="rounded-2xl border border-gray-800 bg-surface-raised p-6">
+        <div class="text-3xl mb-4">🔒</div>
+        <h3 class="text-lg font-semibold text-gray-100">Frozen provenance</h3>
+        <p class="mt-2 text-sm text-gray-400 leading-relaxed">
+          Each run records the exact engine version and git commit, so historical results remain
+          interpretable and verifiable.
+        </p>
+      </div>
+      <div class="rounded-2xl border border-gray-800 bg-surface-raised p-6">
+        <div class="text-3xl mb-4">📊</div>
+        <h3 class="text-lg font-semibold text-gray-100">Visualizer &amp; export</h3>
+        <p class="mt-2 text-sm text-gray-400 leading-relaxed">
+          Drill into per-scenario results, judge rationales, and transcripts. Export CSV or full JSON
+          for downstream analysis.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  {# ── How it works ─────────────────────────────────────── #}
+  <section class="border-t border-gray-800/60 bg-surface-raised/30">
+    <div class="max-w-5xl mx-auto px-6 py-20">
+      <h2 class="text-2xl md:text-3xl font-bold text-white text-center">How an audit works</h2>
+      <div class="mt-12 grid md:grid-cols-3 gap-8">
+        <div class="text-center">
+          <div class="mx-auto w-12 h-12 rounded-full bg-accent/20 text-accent flex items-center justify-center text-lg font-bold">1</div>
+          <h3 class="mt-4 font-semibold text-gray-100">Target</h3>
+          <p class="mt-2 text-sm text-gray-400">The model under test answers each scenario prompt.</p>
+        </div>
+        <div class="text-center">
+          <div class="mx-auto w-12 h-12 rounded-full bg-accent/20 text-accent flex items-center justify-center text-lg font-bold">2</div>
+          <h3 class="mt-4 font-semibold text-gray-100">Auditor</h3>
+          <p class="mt-2 text-sm text-gray-400">A second model probes and expands the conversation.</p>
+        </div>
+        <div class="text-center">
+          <div class="mx-auto w-12 h-12 rounded-full bg-accent/20 text-accent flex items-center justify-center text-lg font-bold">3</div>
+          <h3 class="mt-4 font-semibold text-gray-100">Judge</h3>
+          <p class="mt-2 text-sm text-gray-400">A third model scores the outcome against expected behavior.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  {# ── CTA ──────────────────────────────────────────────── #}
+  <section class="max-w-3xl mx-auto px-6 py-20 text-center">
+    <h2 class="text-2xl md:text-3xl font-bold text-white">Start auditing in one command</h2>
+    <p class="mt-4 text-gray-400">No Docker, no Postgres, no manual setup for the demo. A mock model server is pre-seeded so you can explore immediately.</p>
+    <div class="mt-8 inline-block rounded-xl border border-gray-800 bg-surface-raised px-6 py-4 font-mono text-sm text-gray-300">
+      $ uvx simpleaudit-studio
+    </div>
+    <div class="mt-8">
+      <a href="/login/" class="px-6 py-3 rounded-xl bg-accent hover:bg-accent-hover text-white font-semibold transition-colors">Try the live demo →</a>
+    </div>
+  </section>
+
+  {# ── Footer (E-E-A-T) ─────────────────────────────────── #}
+  <footer class="border-t border-gray-800/60">
+    <div class="max-w-5xl mx-auto px-6 py-10 grid md:grid-cols-3 gap-8 text-sm">
+      <div>
+        <p class="font-semibold text-gray-200">SimpleAudit Studio</p>
+        <p class="mt-2 text-gray-500 leading-relaxed">
+          A self-hostable platform for reproducible AI model audits, wrapping the SimpleAudit engine.
+        </p>
+      </div>
+      <div>
+        <p class="font-semibold text-gray-200">Project</p>
+        <ul class="mt-2 space-y-1 text-gray-500">
+          <li><a href="https://github.com/SushantGautam/SimpleAuditStudio" target="_blank" rel="noopener" class="hover:text-accent transition-colors">GitHub repository</a></li>
+          <li><a href="https://pypi.org/project/simpleaudit-studio/" target="_blank" rel="noopener" class="hover:text-accent transition-colors">PyPI package</a></li>
+          <li><a href="https://github.com/kelkalot/simpleaudit" target="_blank" rel="noopener" class="hover:text-accent transition-colors">SimpleAudit engine</a></li>
+        </ul>
+      </div>
+      <div>
+        <p class="font-semibold text-gray-200">Get started</p>
+        <ul class="mt-2 space-y-1 text-gray-500">
+          <li><a href="/login/" class="hover:text-accent transition-colors">Live demo</a></li>
+          <li><a href="https://github.com/SushantGautam/SimpleAuditStudio#readme" target="_blank" rel="noopener" class="hover:text-accent transition-colors">Documentation</a></li>
+          <li><a href="https://github.com/SushantGautam/SimpleAuditStudio/issues" target="_blank" rel="noopener" class="hover:text-accent transition-colors">Report an issue</a></li>
+        </ul>
+      </div>
+    </div>
+    <div class="border-t border-gray-800/60">
+      <p class="max-w-5xl mx-auto px-6 py-4 text-xs text-gray-600">
+        © {{ current_year }} SimpleAudit Studio · MIT License
+      </p>
+    </div>
+  </footer>
+</div>
+{% endblock %}

@@ -76,8 +76,15 @@ class HealthView(AdminRequiredMixin, TemplateView):
 # ─── Auth ────────────────────────────────────────────────────────────────────
 
 class IndexView(TemplateView):
+    """Redirect helper kept for backward compatibility with the ``index`` name.
+
+    The public landing page now lives at ``/`` via ``LandingView`` (see
+    ``config/urls.py``). This view simply forwards to it so any existing links
+    or references to the ``index`` URL name keep working.
+    """
+
     def get(self, request, *args, **kwargs):
-        return redirect("dashboard" if request.user.is_authenticated else "login")
+        return redirect("landing")
 
 
 class LoginView(TemplateView):
