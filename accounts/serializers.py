@@ -117,7 +117,9 @@ class ProfileUpdateSerializer(serializers.Serializer):
         from accounts.services import has_local_password
 
         user = self.context["user"]
-        if "new_password" in attrs and attrs.get("new_password"):
+        if "new_password" in attrs:
+            if not attrs.get("new_password"):
+                raise serializers.ValidationError({"new_password": "Enter a new password."})
             # SSO users (and anyone without a local password) have nothing to
             # verify against, so they set a password directly.
             if has_local_password(user):

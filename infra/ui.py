@@ -523,24 +523,24 @@ class ProfileView(LoginRequiredMixin, TemplateView):
         if form == "password":
             current_password = request.POST.get("current_password") or ""
             new_password = request.POST.get("new_password") or ""
-            if new_password:
+            if not new_password:
+                error = "Enter a new password."
+            elif has_local_password(user) and (
+                not current_password or not user.check_password(current_password)
+            ):
                 # SSO users (and anyone without a local password) have nothing
                 # to verify against, so they set a password directly.
-                if has_local_password(user) and (
-                    not current_password or not user.check_password(current_password)
-                ):
-                    error = "Current password is incorrect."
-                else:
-                    try:
-                        validate_password(new_password)
-                    except DjangoValidationError as exc:
-                        error = " ".join(exc.messages)
+                error = "Current password is incorrect."
+            else:
+                try:
+                    validate_password(new_password)
+                except DjangoValidationError as exc:
+                    error = " ".join(exc.messages)
             if error:
                 return self.render_to_response(self.get_context_data(error=error))
-            if new_password:
-                user.set_password(new_password)
-                user.save(update_fields=["password"])
-                update_session_auth_hash(request, user)
+            user.set_password(new_password)
+            user.save(update_fields=["password"])
+            update_session_auth_hash(request, user)
             messages.success(request, "Password updated.")
             return redirect("profile")
 

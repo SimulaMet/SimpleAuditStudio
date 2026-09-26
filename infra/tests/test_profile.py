@@ -69,6 +69,12 @@ class ProfileApiTest(TestCase):
         resp = _patch(self.client, "/api/auth/profile/", {"new_password": "N3w-pass-456"})
         self.assertEqual(resp.status_code, 400)
 
+    def test_password_change_blank_new_rejected(self):
+        resp = _patch(self.client, "/api/auth/profile/", {"current_password": "testpass123", "new_password": ""})
+        self.assertEqual(resp.status_code, 400)
+        self.user.refresh_from_db()
+        self.assertTrue(self.user.check_password("testpass123"))
+
     def test_cannot_change_superuser_flag(self):
         # is_superuser is not a field on the self-service serializer.
         resp = _patch(self.client, "/api/auth/profile/", {"is_superuser": True})
