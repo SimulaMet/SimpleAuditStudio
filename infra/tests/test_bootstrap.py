@@ -50,19 +50,18 @@ class BootstrapTests(TestCase):
         self.assertEqual(memberships.count(), 1)
         self.assertEqual(memberships.first().role, ProjectMembership.Role.ADMIN)
 
-    def test_bootstrap_admin_is_not_superuser(self):
-        """The bootstrap admin must be a normal account (is_staff only), not a
-        Django superuser. Superuser status bypasses all workspace membership
-        checks, making the admin appear as owner of every workspace."""
+    def test_bootstrap_admin_is_superuser(self):
+        """The bootstrap admin is a platform manager (Django superuser) so it
+        can access the Admin Dashboard and manage all workspaces/users."""
         with _safe_env():
             call_command(
                 "bootstrap_platform",
                 username="studio",
                 email="admin@example.local",
-                password="admin-pass-123",
+                password="admin123456789",
                 project_name="Default",
             )
 
         user = User.objects.get(username="studio")
-        self.assertFalse(user.is_superuser)
+        self.assertTrue(user.is_superuser)
         self.assertTrue(user.is_staff)

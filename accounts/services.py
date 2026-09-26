@@ -35,7 +35,7 @@ def bootstrap_admin_and_default_project(
     """Idempotently create the initial admin user and default project."""
     user, created = User.objects.get_or_create(
         username=username,
-        defaults={"email": email, "is_staff": True},
+        defaults={"email": email, "is_staff": True, "is_superuser": True},
     )
     # Always ensure the admin password matches the configured value. This makes
     # the bootstrap idempotent across container restarts where the Postgres data
@@ -50,6 +50,9 @@ def bootstrap_admin_and_default_project(
     if not user.is_staff:
         user.is_staff = True
         user.save(update_fields=["is_staff"])
+    if not user.is_superuser:
+        user.is_superuser = True
+        user.save(update_fields=["is_superuser"])
 
     slug = slugify(project_name) or "default"
     default_description = "Public common workspaces visible to all users, used for demo"
