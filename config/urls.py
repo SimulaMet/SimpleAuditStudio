@@ -48,6 +48,7 @@ from infra.ui import (
     WorkOSLoginView,
     WorkOSVerifyView,
     WorkspacesView,
+    auto_login_view,
     logout_view,
 )
 
@@ -125,6 +126,9 @@ urlpatterns = [
     # UI (server-rendered CBVs)
     path("index", IndexView.as_view(), name="index"),
     path("login/", LoginView.as_view(), name="login"),
+    # Local one-liner demo only (404 unless MINIMAL_CONFIG): the CLI opens this
+    # in the default browser to land the user signed-in on the dashboard.
+    path("auto-login/", auto_login_view, name="auto_login"),
     path("register/", RegisterView.as_view(), name="register"),
     path("logout/", logout_view, name="logout"),
     path("auth/workos/login/", WorkOSLoginView.as_view(), name="workos_login"),

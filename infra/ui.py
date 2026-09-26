@@ -4,6 +4,7 @@ import hashlib
 import io
 import json
 import logging
+import os
 
 from django.contrib import messages
 from django.contrib.auth import login, logout
@@ -173,6 +174,26 @@ class RegisterView(TemplateView):
 def logout_view(request):
     logout(request)
     return redirect("login")
+
+
+def auto_login_view(request):
+    """One-click sign-in for the local one-liner demo (`uvx simpleaudit-studio`).
+
+    The CLI opens this URL in the default browser after startup; it logs the
+    visitor in as the shared bootstrap user and lands them on the dashboard.
+    Only enabled in MINIMAL_CONFIG (local demo) mode — 404 everywhere else.
+    """
+    from django.conf import settings
+    from django.http import Http404
+
+    if not getattr(settings, "MINIMAL_CONFIG", False):
+        raise Http404
+    username = os.environ.get("BOOTSTRAP_USERNAME", "studio")
+    user = User.objects.filter(username=username).first()
+    if user is None:
+        raise Http404
+    login(request, user)
+    return redirect("dashboard")
 
 
 # ─── WorkOS AuthKit ──────────────────────────────────────────────────────────
