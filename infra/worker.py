@@ -577,7 +577,7 @@ _finalize_task = None
 _tasks_client_id: int | None = None
 
 
-def _register_tasks(client: "Hatchet") -> None:
+def _register_tasks(client: Hatchet) -> None:
     """Register (or re-register) both tasks against ``client``."""
     global _scenario_task, _finalize_task, _tasks_client_id
     # Scenario retries on transient failures; finalize retries because it may be
