@@ -376,10 +376,12 @@ def _scenario_execute_impl(workflow_input: ScenarioInput, ctx: Context) -> dict:
 
     _flusher = _threading.Thread(target=_flush_loop, daemon=True)
     _flusher.start()
-    # Mutable holder for the active rep index so _on_turn can stamp each turn
-    # with the correct rep number.
+    # Mutable holder for the active rep index (0-based) so _on_turn can stamp
+    # each turn with the correct rep number. The engine does NOT call
+    # on_rep_started reliably, so we detect rep boundaries via role cycle:
+    # judge → auditor means a new repetition has started.
     current_rep = [0]
-    _last_role = [""]  # track previous role to detect rep boundaries
+    _last_role = [""]
 
     def _on_turn(turn_index: int, max_t: int, role: str) -> None:
         """Queue a per-turn progress event (flushed live by the worker thread).
@@ -406,11 +408,11 @@ def _scenario_execute_impl(workflow_input: ScenarioInput, ctx: Context) -> dict:
         ))
 
     def _on_rep_started(rep_idx: int) -> None:
-        """Track the active rep so turn events carry the right rep number."""
-        current_rep[0] = rep_idx + 1
+        """Fallback: track the active rep if the engine does call this."""
+        current_rep[0] = rep_idx
         _event_queue.put((
             "scenario_rep_started",
-            {"rep": rep_idx + 1, "total_reps": n_reps},
+            {"rep": rep_idx, "total_reps": n_reps},
         ))
 
     def _on_rep_done(rep_idx: int, rep_result: dict) -> None:
