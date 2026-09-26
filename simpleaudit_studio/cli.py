@@ -17,6 +17,7 @@ Usage:
 from __future__ import annotations
 
 import os
+import signal
 import threading
 import time
 import webbrowser
@@ -72,12 +73,15 @@ def main() -> None:
     _seed_demo_data()
     print("✅ Demo data ready.\n")
 
-    # --- Step 3: Start embedded Hatchet ---
+    # --- Step 3: Pre-check port availability ---
+    _check_port_available(args.port)
+
+    # --- Step 4: Start embedded Hatchet ---
     from infra.minimal_config import start_embedded_hatchet, stop_embedded_hatchet
 
     start_embedded_hatchet()
 
-    # --- Step 4: Start mock OpenAI server (unless --no-mock) ---
+    # --- Step 5: Start mock OpenAI server (unless --no-mock) ---
     mock_server = None
     if not args.no_mock:
         from deploy.mock_openai_server import start_mock_server
@@ -92,7 +96,7 @@ def main() -> None:
     else:
         print("⏭️  Skipping mock server (--no-mock). Configure your own model endpoints in the UI.\n")
 
-    # --- Step 5: Start Django web server in a daemon thread ---
+    # --- Step 6: Start Django web server in a daemon thread ---
     port = args.port
     web_thread = threading.Thread(
         target=lambda: call_command("runserver", f"0.0.0.0:{port}", use_reloader=False),
@@ -132,8 +136,16 @@ def main() -> None:
             daemon=True,
         ).start()
 
-    # --- Step 6: Run worker in the MAIN thread (required for signal handlers) ---
+    # --- Step 7: Run worker in the MAIN thread (required for signal handlers) ---
     print("🔧 Starting audit worker (main thread)...")
+
+    # Handle SIGTERM (kill <pid>) the same way as Ctrl+C so the embedded
+    # Postgres + Hatchet sidecar are stopped cleanly instead of orphaned.
+    def _sigterm_handler(signum, frame):
+        raise KeyboardInterrupt
+
+    signal.signal(signal.SIGTERM, _sigterm_handler)
+
     try:
         _run_worker()
     except KeyboardInterrupt:
@@ -145,6 +157,21 @@ def main() -> None:
         finally:
             if mock_server is not None:
                 mock_server.shutdown()
+
+
+def _check_port_available(port: int) -> None:
+    """Exit early with a clear message if the web port is already in use."""
+    import socket
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            s.bind(("0.0.0.0", port))
+        except OSError:
+            print(f"\n✗ Port {port} is already in use.")
+            print("  Is another SimpleAudit Studio instance running?")
+            print(f"  Try a different port: spin --port {port + 1}\n")
+            raise SystemExit(1)
 
 
 def _open_browser_when_ready(url: str, timeout: float = 30.0) -> None:
