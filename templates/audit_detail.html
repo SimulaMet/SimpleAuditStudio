@@ -70,24 +70,36 @@ function toggleRename() {
     }
     .event-log-entry { animation: slide-in 0.3s ease; }
     .dist-bar-fill { transition: width 0.4s ease; }
-    .rep-dot { transition: all 0.3s ease; }
+    @keyframes stripe-move { from { background-position: 0 0; } to { background-position: 24px 0; } }
+    .rep-active {
+      background: repeating-linear-gradient(
+        -45deg,
+        rgb(52 211 153),
+        rgb(52 211 153) 6px,
+        rgb(52 211 153 / 0.5) 6px,
+        rgb(52 211 153 / 0.5) 12px
+      );
+      background-size: 24px 24px;
+      animation: stripe-move 0.8s linear infinite;
+    }
   </style>
   <!-- Overall progress (moved below distribution) -->
-  <!-- Repetition tracker -->
-  <div class="mb-3 flex items-center gap-2">
-    <span class="text-[11px] text-gray-500 uppercase tracking-wide">Repetition</span>
-    <div id="rep-dots" class="flex items-center gap-1.5"></div>
-    <span id="rep-label" class="text-[11px] text-gray-400"></span>
+  <!-- Repetition tracker (full width) -->
+  <div class="mb-3">
+    <div class="flex items-center justify-between mb-1">
+      <span class="text-[11px] text-gray-500 uppercase tracking-wide">Repetition</span>
+      <span id="rep-label" class="text-[11px] text-gray-400"></span>
+    </div>
+    <div id="rep-bar" class="h-3 rounded-full bg-surface-overlay overflow-hidden flex"></div>
   </div>
-  <!-- Stage pipeline -->
-  <div id="stage-pipeline" class="flex items-center gap-1 mb-4 overflow-x-auto pb-1">
-    {% for stage in stages %}
-    <div id="stage-{{ stage }}" class="px-2 py-1 rounded text-[11px] whitespace-nowrap bg-surface-overlay text-gray-500 transition-colors duration-300">{% if stage == "queued" %}Queued{% elif stage == "preparing" %}Preparing{% elif stage == "target_execution" %}Running{% elif stage == "auditing" %}Auditing{% elif stage == "judging" %}Judging{% elif stage == "aggregation" %}Aggregating{% else %}Done{% endif %}</div>
-    {% endfor %}
+  <!-- Stage badge + Progress label on same line -->
+  <div class="flex items-center mb-2">
+    <span class="w-14 shrink-0"><span id="stage-badge" class="px-2 py-0.5 rounded-full text-[10px] font-medium bg-accent/20 text-accent">{{ run.status|title }}</span></span>
+    <p class="flex-1 text-center text-[11px] text-gray-500 uppercase tracking-wide">Progress</p>
+    <span class="w-14 shrink-0"></span>
   </div>
   <!-- Turn / phase distribution -->
   <div class="mb-4">
-    <p class="text-[11px] text-gray-500 uppercase tracking-wide mb-2">Turn / Phase Distribution</p>
     <div id="dist-bars"></div>
     <!-- Overall stats (integrated below bars) -->
     <div class="flex items-center justify-between mt-2 pt-2 border-t border-gray-700/50">
@@ -120,35 +132,20 @@ function toggleRename() {
   const run_id = {{ run.id }};
   const url = `/api/projects/${project_id}/audit-runs/${run_id}/events/`;
   const es = new EventSource(url);
-  const stages = ["queued","preparing","target_execution","auditing","judging","aggregation","completed"];
-  const STAGE_STYLES = {
-    completed: 'bg-emerald-900/40 text-emerald-300',
-    failed: 'bg-red-900/40 text-red-300',
-    cancelled: 'bg-gray-800 text-gray-400',
-  };
   let currentStage = "{{ run.status }}";
   const TOTAL = {{ run.total_scenarios }};
   const MAX_TURNS = {{ run.generation_parameters_snapshot.max_turns|default:5 }};
   const TOTAL_REPS = {{ run.generation_parameters_snapshot.n_repetitions|default:1 }};
 
   function setStage(stage) {
-    if (stage === 'failed' || stage === 'cancelled') {
-      stages.forEach(s => {
-        const el = document.getElementById('stage-' + s);
-        if (el) el.className = 'px-2 py-1 rounded text-[11px] whitespace-nowrap ' + (STAGE_STYLES[stage] || '');
-      });
-      return;
-    }
-    const idx = stages.indexOf(stage);
-    if (idx === -1) return;
     currentStage = stage;
-    stages.forEach((s, i) => {
-      const el = document.getElementById('stage-' + s);
-      if (!el) return;
-      if (i < idx) el.className = 'px-2 py-1 rounded text-[11px] whitespace-nowrap bg-emerald-900/40 text-emerald-300';
-      else if (i === idx) el.className = 'px-2 py-1 rounded text-[11px] whitespace-nowrap bg-accent/30 text-accent font-semibold';
-      else el.className = 'px-2 py-1 rounded text-[11px] whitespace-nowrap bg-surface-overlay text-gray-500';
-    });
+    const badge = document.getElementById('stage-badge');
+    if (!badge) return;
+    const labels = { queued: 'Queued', preparing: 'Preparing', target_execution: 'Running', auditing: 'Auditing', judging: 'Judging', aggregation: 'Aggregating', completed: 'Done', failed: 'Failed', cancelled: 'Cancelled' };
+    badge.textContent = labels[stage] || stage;
+    if (stage === 'failed' || stage === 'cancelled') badge.className = 'ml-2 px-2 py-0.5 rounded-full text-[10px] font-medium bg-red-900/40 text-red-300 align-middle';
+    else if (stage === 'completed') badge.className = 'ml-2 px-2 py-0.5 rounded-full text-[10px] font-medium bg-emerald-900/40 text-emerald-300 align-middle';
+    else badge.className = 'ml-2 px-2 py-0.5 rounded-full text-[10px] font-medium bg-accent/20 text-accent align-middle';
   }
   setStage(currentStage);
 
@@ -307,25 +304,32 @@ function toggleRename() {
     const scenEl = document.getElementById('run-scenarios');
     if (scenEl) scenEl.textContent = TOTAL + ' total, ' + doneCount + ' done';
 
-    // Repetition tracker (always visible)
-    const wrap = document.getElementById('rep-dots');
+    // Repetition segmented bar
+    const bar = document.getElementById('rep-bar');
     const repLabel = document.getElementById('rep-label');
-    if (wrap) {
-      wrap.innerHTML = '';
+    if (bar) {
+      bar.innerHTML = '';
+      const perRep = TOTAL; // scenarios per rep
+      const doneInCurrentRep = Math.max(0, doneCount - (currentRep - 1) * perRep);
+      const pctInCurrentRep = perRep > 0 ? Math.min(100, Math.round(doneInCurrentRep / perRep * 100)) : 0;
       for (let i = 1; i <= totalRepsSeen; i++) {
-        const dot = document.createElement('span');
-        const isDone = i < currentRep;
-        const isActive = i === currentRep;
-        dot.className = 'rep-dot inline-flex items-center justify-center w-5 h-5 rounded-full text-[9px] font-bold ' +
-          (isDone ? 'bg-emerald-900/60 text-emerald-300 border border-emerald-500/50'
-           : isActive ? 'bg-accent/30 text-accent border border-accent/60'
-                     : 'bg-surface-overlay text-gray-600 border border-gray-700');
-        dot.textContent = isDone ? '\u2713' : i;
-        wrap.appendChild(dot);
+        const seg = document.createElement('div');
+        seg.className = 'h-full overflow-hidden transition-all duration-500';
+        seg.style.flex = '1';
+        seg.style.marginRight = i < totalRepsSeen ? '2px' : '0';
+        if (i < currentRep) {
+          seg.style.background = 'rgb(52 211 153)'; // emerald-400
+        } else if (i === currentRep) {
+          const fill = document.createElement('div');
+          fill.className = 'rep-active h-full transition-all duration-500';
+          fill.style.width = pctInCurrentRep + '%';
+          seg.appendChild(fill);
+        }
+        bar.appendChild(seg);
       }
     }
     if (repLabel) {
-      repLabel.textContent = totalRepsSeen > 1 ? `${currentRep || 1} / ${totalRepsSeen}` : '1 / 1';
+      repLabel.textContent = totalRepsSeen > 1 ? `${currentRep || 1} / ${totalRepsSeen}` : '';
     }
   }
 
