@@ -78,10 +78,13 @@ def get_client() -> Hatchet:
     """Return the single shared Hatchet client for this process.
 
     In demo mode, returns the embedded Hatchet client (started by the CLI).
-    Otherwise connects to the external Hatchet server. If the client was
-    originally built with a placeholder token (no real token available at
-    import time) and a real token has since become available, rebuilds the
-    client with it so task submission works without a process restart.
+    In zero-Docker dev_server mode (--embedded), connects to the embedded
+    engine via the HATCHET_EMBEDDED_HANDSHAKE env var set by the parent
+    process — no sidecar restart needed. Otherwise connects to the external
+    Hatchet server. If the client was originally built with a placeholder
+    token (no real token available at import time) and a real token has since
+    become available, rebuilds the client with it so task submission works
+    without a process restart.
     """
     global _CLIENT, _CLIENT_IS_PLACEHOLDER
     if _CLIENT is None or (_CLIENT_IS_PLACEHOLDER and _resolve_hatchet_token()):
@@ -98,6 +101,30 @@ def get_client() -> Hatchet:
                 "Demo mode active but embedded Hatchet client not started. "
                 "Use 'simpleaudit-studio' CLI to launch the full stack."
             )
+
+        # Zero-Docker dev_server mode: the parent process started the embedded
+        # Hatchet engine and exported its handshake (token, gRPC address, API
+        # URL) via HATCHET_EMBEDDED_HANDSHAKE. Build a lightweight client that
+        # connects to the already-running engine — no sidecar restart.
+        handshake_raw = os.environ.get("HATCHET_EMBEDDED_HANDSHAKE")
+        if handshake_raw:
+            from hatchet_sdk.embedded import Handshake as _Handshake
+
+            hs = _Handshake.model_validate_json(handshake_raw)
+            config = ClientConfig(
+                token=hs.token,
+                tenant_id=hs.tenant_id,
+                host_port=hs.grpc_address,
+                server_url=hs.api_url or None,
+                tls_config=ClientTLSConfig(strategy="none"),
+            )
+            _CLIENT = Hatchet(config=config)
+            _CLIENT_IS_PLACEHOLDER = False
+            logger.info(
+                "Connected to embedded Hatchet via handshake (grpc=%s)",
+                hs.grpc_address,
+            )
+            return _CLIENT
 
         # hatchet-sdk ClientConfig field names (verified against the installed
         # SDK): `server_url` is the HTTP API base, `host_port` is the gRPC
@@ -294,16 +321,41 @@ def _scenario_execute_impl(workflow_input: ScenarioInput, ctx: Context) -> dict:
 
     # --- Turn-level progress collection -------------------------------------
     # The engine invokes callbacks from inside asyncio.run(); Django ORM writes
-    # (append_event) cannot happen there. So turn events are collected into a
-    # list during async execution and flushed in sync context afterward.
-    pending_events: list[tuple[str, dict]] = []
+    # (append_event) cannot happen there — Django raises SynchronousOnlyOperation
+    # when a running event loop is present in the thread. So turn events are
+    # pushed onto a thread-safe queue and a dedicated flusher thread appends
+    # them to the durable event log IN REAL TIME. This is what lets the live
+    # progress UI show scenarios mid-turn (turn/role occupancy) instead of only
+    # after the whole scenario has finished.
+    import queue as _queue
+    import threading as _threading
+
+    _event_queue: "_queue.Queue" = _queue.Queue()
+    _FLUSH_SENTINEL = object()
+
+    def _flush_loop() -> None:
+        from django.db import connections
+
+        try:
+            while True:
+                item = _event_queue.get()
+                if item is _FLUSH_SENTINEL:
+                    break
+                kind, payload = item
+                append_event(run_id, version_item_id, kind, payload)
+        finally:
+            # This thread got its own thread-local DB connection; release it.
+            connections.close_all()
+
+    _flusher = _threading.Thread(target=_flush_loop, daemon=True)
+    _flusher.start()
     # Mutable holder for the active rep index so _on_turn can stamp each turn
     # with the correct rep number.
     current_rep = [0]
 
     def _on_turn(turn_index: int, max_t: int, role: str) -> None:
-        """Collect a per-turn progress event (flushed after asyncio.run())."""
-        pending_events.append((
+        """Queue a per-turn progress event (flushed live by the worker thread)."""
+        _event_queue.put((
             "scenario_turn",
             {
                 "turn": turn_index,
@@ -317,7 +369,7 @@ def _scenario_execute_impl(workflow_input: ScenarioInput, ctx: Context) -> dict:
     def _on_rep_started(rep_idx: int) -> None:
         """Track the active rep so turn events carry the right rep number."""
         current_rep[0] = rep_idx + 1
-        pending_events.append((
+        _event_queue.put((
             "scenario_rep_started",
             {"rep": rep_idx + 1, "total_reps": n_reps},
         ))
@@ -328,11 +380,20 @@ def _scenario_execute_impl(workflow_input: ScenarioInput, ctx: Context) -> dict:
             "rep": rep_idx + 1, "total": n_reps, "severity": rep_result.get("severity", ""),
         })
 
-    def _flush_pending_events() -> None:
-        """Flush collected turn/rep-started events (sync context only)."""
-        for kind, payload in pending_events:
-            append_event(run_id, version_item_id, kind, payload)
-        pending_events.clear()
+    _flusher_stopped = [False]
+
+    def _stop_event_flusher() -> None:
+        """Drain the queue and stop the flusher thread (sync context only).
+
+        Joining here guarantees every turn event is durably written BEFORE the
+        caller appends scenario_completed/failed, so SSE replay order is
+        turn events first, terminal event last. Idempotent.
+        """
+        if _flusher_stopped[0]:
+            return
+        _flusher_stopped[0] = True
+        _event_queue.put(_FLUSH_SENTINEL)
+        _flusher.join(timeout=30)
 
     try:
         if n_reps > 1:
@@ -365,10 +426,11 @@ def _scenario_execute_impl(workflow_input: ScenarioInput, ctx: Context) -> dict:
                 on_turn=_on_turn,
             )
             severity = result_payload.get("severity", "")
-        # Flush turn-level events collected during async execution. Safe here:
-        # we're back in sync context after asyncio.run() returned.
-        _flush_pending_events()
+        # Stop the live flusher: drains any remaining turn events and joins the
+        # thread so all turn events are durable before the terminal event below.
+        _stop_event_flusher()
     except EngineError as exc:
+        _stop_event_flusher()
         # A load/config failure is a hard error for this scenario: record it and
         # let Hatchet retry per policy. Do not swallow — the run must reflect it.
         append_event(run_id, version_item_id, "scenario_failed", {"error": str(exc)})
