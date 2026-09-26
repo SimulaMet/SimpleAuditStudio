@@ -501,7 +501,7 @@ class ProfileView(LoginRequiredMixin, TemplateView):
 
     def get_context_data(self, **kw):
         kw["profile_user"] = self.request.user
-        kw["error"] = None
+        kw.setdefault("error", None)
         return super().get_context_data(**kw)
 
     def post(self, request, *args, **kwargs):

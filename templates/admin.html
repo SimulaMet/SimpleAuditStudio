@@ -123,7 +123,12 @@
           <td class="px-3 py-2.5 text-right">
             <div class="flex justify-end gap-1.5 flex-wrap">
               <a href="/admin-settings/?tab=workspaces&manage={{ ws.id }}" class="px-2 py-1 rounded-lg text-xs bg-surface-overlay border border-gray-700 text-gray-300 hover:border-accent/40">Members</a>
-              <button type="button" onclick="adminRenameWorkspace({{ ws.id }}, this)" class="px-2 py-1 rounded-lg text-xs bg-surface-overlay border border-gray-700 text-gray-300 hover:border-accent/40">Rename</button>
+              <button type="button" onclick="adminToggleRename({{ ws.id }}, this)" class="px-2 py-1 rounded-lg text-xs bg-surface-overlay border border-gray-700 text-gray-300 hover:border-accent/40">Rename</button>
+              <span data-rename-form="{{ ws.id }}" class="hidden items-center gap-1">
+                <input data-rename-input="{{ ws.id }}" type="text" value="{{ ws.name|escapejs }}" class="px-2 py-1 rounded-lg text-xs bg-surface border border-gray-700 text-gray-200 focus:outline-none focus:border-accent/50 w-32">
+                <button type="button" onclick="adminRenameWorkspace({{ ws.id }}, this)" class="px-2 py-1 rounded-lg text-xs bg-accent/15 border border-accent/30 text-accent hover:bg-accent/25">Save</button>
+                <button type="button" onclick="adminToggleRename({{ ws.id }}, this)" class="px-2 py-1 rounded-lg text-xs bg-surface-overlay border border-gray-700 text-gray-400 hover:border-gray-500">Cancel</button>
+              </span>
               {% if ws.archived %}
               <button type="button" onclick="adminUnarchiveWorkspace({{ ws.id }}, '{{ ws.name|escapejs }}', this)" class="px-2 py-1 rounded-lg text-xs bg-surface-overlay border border-gray-700 text-gray-300 hover:border-accent/40">Unarchive</button>
               {% elif ws.has_content %}
@@ -248,8 +253,20 @@
           <td class="px-3 py-2.5 text-gray-500 text-xs">{{ u.date_joined|date:"Y-m-d" }}</td>
           <td class="px-3 py-2.5 text-right">
             <div class="flex justify-end gap-1.5 flex-wrap">
-              <button type="button" onclick="adminEditUser({{ u.id }}, this)" class="px-2 py-1 rounded-lg text-xs bg-surface-overlay border border-gray-700 text-gray-300 hover:border-accent/40">Edit</button>
-              <button type="button" onclick="adminResetPassword({{ u.id }}, '{{ u.username|escapejs }}', this)" class="px-2 py-1 rounded-lg text-xs bg-surface-overlay border border-gray-700 text-gray-300 hover:border-accent/40">Reset pw</button>
+              <button type="button" onclick="adminToggleEdit({{ u.id }}, this)" class="px-2 py-1 rounded-lg text-xs bg-surface-overlay border border-gray-700 text-gray-300 hover:border-accent/40">Edit</button>
+              <span data-edit-form="{{ u.id }}" class="hidden items-center gap-1">
+                <input data-edit-first="{{ u.id }}" type="text" placeholder="First" value="{{ u.first_name|escapejs }}" class="px-2 py-1 rounded-lg text-xs bg-surface border border-gray-700 text-gray-200 focus:outline-none focus:border-accent/50 w-20">
+                <input data-edit-last="{{ u.id }}" type="text" placeholder="Last" value="{{ u.last_name|escapejs }}" class="px-2 py-1 rounded-lg text-xs bg-surface border border-gray-700 text-gray-200 focus:outline-none focus:border-accent/50 w-20">
+                <input data-edit-email="{{ u.id }}" type="email" placeholder="Email" value="{{ u.email|escapejs }}" class="px-2 py-1 rounded-lg text-xs bg-surface border border-gray-700 text-gray-200 focus:outline-none focus:border-accent/50 w-40">
+                <button type="button" onclick="adminEditUser({{ u.id }}, this)" class="px-2 py-1 rounded-lg text-xs bg-accent/15 border border-accent/30 text-accent hover:bg-accent/25">Save</button>
+                <button type="button" onclick="adminToggleEdit({{ u.id }}, this)" class="px-2 py-1 rounded-lg text-xs bg-surface-overlay border border-gray-700 text-gray-400 hover:border-gray-500">Cancel</button>
+              </span>
+              <button type="button" onclick="adminToggleResetPw({{ u.id }}, this)" class="px-2 py-1 rounded-lg text-xs bg-surface-overlay border border-gray-700 text-gray-300 hover:border-accent/40">Reset pw</button>
+              <span data-resetpw-form="{{ u.id }}" class="hidden items-center gap-1">
+                <input data-resetpw-input="{{ u.id }}" type="password" placeholder="New password" class="px-2 py-1 rounded-lg text-xs bg-surface border border-gray-700 text-gray-200 focus:outline-none focus:border-accent/50 w-32">
+                <button type="button" onclick="adminResetPassword({{ u.id }}, '{{ u.username|escapejs }}', this)" class="px-2 py-1 rounded-lg text-xs bg-accent/15 border border-accent/30 text-accent hover:bg-accent/25">Save</button>
+                <button type="button" onclick="adminToggleResetPw({{ u.id }}, this)" class="px-2 py-1 rounded-lg text-xs bg-surface-overlay border border-gray-700 text-gray-400 hover:border-gray-500">Cancel</button>
+              </span>
               {% if u.id != request.user.id %}
               {% if u.is_superuser %}
               <button type="button" {% if superuser_count <= 1 %}disabled title="Last super admin"{% endif %} onclick="adminToggleSuperuser({{ u.id }}, false, '{{ u.username|escapejs }}', this)" class="px-2 py-1 rounded-lg text-xs bg-surface-overlay border border-gray-700 text-gray-300 hover:border-accent/40 disabled:opacity-40 disabled:cursor-not-allowed">Demote</button>
@@ -325,12 +342,23 @@
       window.location.reload();
     } catch (e) { showError(e.message); btn.disabled = false; }
   };
+  window.adminToggleRename = function(id, btn) {
+    const form = document.querySelector('[data-rename-form="' + id + '"]');
+    form.classList.toggle('hidden');
+    form.classList.toggle('flex');
+    if (!form.classList.contains('hidden')) {
+      const input = document.querySelector('[data-rename-input="' + id + '"]');
+      input.focus();
+      input.select();
+    }
+  };
   window.adminRenameWorkspace = async function(id, btn) {
-    const name = prompt('New workspace name:');
-    if (name === null || !name.trim()) return;
+    const input = document.querySelector('[data-rename-input="' + id + '"]');
+    const name = input.value.trim();
+    if (!name) { showError('Workspace name cannot be empty.'); return; }
     btn.disabled = true;
     try {
-      await api('/api/projects/' + id + '/', 'PATCH', { name: name.trim() });
+      await api('/api/projects/' + id + '/', 'PATCH', { name });
       window.location.reload();
     } catch (e) { showError(e.message); btn.disabled = false; }
   };
@@ -371,27 +399,40 @@
       window.location.reload();
     } catch (e) { showError(e.message); btn.disabled = false; }
   };
+  window.adminToggleEdit = function(id, btn) {
+    const form = document.querySelector('[data-edit-form="' + id + '"]');
+    form.classList.toggle('hidden');
+    form.classList.toggle('flex');
+    if (!form.classList.contains('hidden')) {
+      document.querySelector('[data-edit-first="' + id + '"]').focus();
+    }
+  };
   window.adminEditUser = async function(id, btn) {
-    const first = prompt('First name:');
-    if (first === null) return;
-    const last = prompt('Last name:');
-    if (last === null) return;
-    const email = prompt('Email:');
-    if (email === null) return;
+    const first = document.querySelector('[data-edit-first="' + id + '"]').value.trim();
+    const last = document.querySelector('[data-edit-last="' + id + '"]').value.trim();
+    const email = document.querySelector('[data-edit-email="' + id + '"]').value.trim();
     btn.disabled = true;
     try {
-      await api('/api/admin/users/' + id + '/', 'PATCH', { first_name: first.trim(), last_name: last.trim(), email: email.trim() });
+      await api('/api/admin/users/' + id + '/', 'PATCH', { first_name: first, last_name: last, email });
       window.location.reload();
     } catch (e) { showError(e.message); btn.disabled = false; }
   };
+  window.adminToggleResetPw = function(id, btn) {
+    const form = document.querySelector('[data-resetpw-form="' + id + '"]');
+    form.classList.toggle('hidden');
+    form.classList.toggle('flex');
+    if (!form.classList.contains('hidden')) {
+      document.querySelector('[data-resetpw-input="' + id + '"]').focus();
+    }
+  };
   window.adminResetPassword = async function(id, username, btn) {
-    const password = prompt('New password for ' + username + ':');
-    if (password === null || !password) return;
+    const password = document.querySelector('[data-resetpw-input="' + id + '"]').value;
+    if (!password) { showError('Enter a new password.'); return; }
     btn.disabled = true;
     try {
       await api('/api/admin/users/' + id + '/', 'PATCH', { password });
       showError('Password reset for ' + username + '.');
-      btn.disabled = false;
+      window.location.reload();
     } catch (e) { showError(e.message); btn.disabled = false; }
   };
   window.adminToggleSuperuser = async function(id, value, username, btn) {
