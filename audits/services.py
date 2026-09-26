@@ -38,6 +38,10 @@ def _endpoint_snapshot(model: RegisteredModel) -> dict:
     }
 
 
+# Keys managed by dedicated form fields — stripped from JSON override to avoid confusion.
+_FORM_MANAGED_KEYS = {"max_turns", "n_repetitions", "language"}
+
+
 def _generation_parameters(
     *,
     max_turns_override: int | None = None,
@@ -46,16 +50,20 @@ def _generation_parameters(
     gen_config_override: dict | None = None,
 ) -> dict:
     params = {}
-    # Explicit form overrides are captured in the frozen manifest.
+    # Raw JSON override provides the base (e.g. cloned generation config),
+    # but strip keys that are managed by dedicated form fields to prevent
+    # silent conflicts and user confusion.
+    if gen_config_override:
+        for k, v in gen_config_override.items():
+            if k not in _FORM_MANAGED_KEYS:
+                params[k] = v
+    # Explicit form fields are authoritative.
     if max_turns_override is not None:
         params["max_turns"] = max_turns_override
     if language_override:
         params["language"] = language_override
     if n_repetitions_override is not None:
         params["n_repetitions"] = n_repetitions_override
-    # Raw JSON override merges last (highest priority).
-    if gen_config_override:
-        params.update(gen_config_override)
     return params
 
 

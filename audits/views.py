@@ -249,7 +249,7 @@ def stream_audit_run_events(request, project_id, run_id):
             events = list_events(run.id, after_id=sent_after)
             for e in events:
                 sent_after = e["id"]
-                data = json.dumps({"kind": e["kind"], "version_item_id": e["version_item_id"], "payload": e["payload"]})
+                data = json.dumps({"kind": e["kind"], "version_item_id": e["version_item_id"], "payload": e["payload"], "ts": e["created_at"]})
                 yield f"id: {e['id']}\nevent: {e['kind']}\ndata: {data}\n\n"
                 if e["kind"] in _TERMINAL_EVENT_KINDS:
                     return

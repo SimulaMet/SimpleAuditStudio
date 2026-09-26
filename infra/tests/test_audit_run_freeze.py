@@ -160,3 +160,63 @@ class AuditRunFreezeTests(TestCase):
         )
         assert response.status_code == 404
         assert response.json()["error"]["code"] == "audit_input_not_found"
+
+
+class GenerationParametersPriorityTests(TestCase):
+    """Explicit form fields must override same keys in gen_config JSON."""
+
+    def test_max_turns_form_wins_over_json(self):
+        from audits.services import _generation_parameters
+
+        params = _generation_parameters(
+            max_turns_override=6,
+            gen_config_override={"max_turns": 4, "language": "English"},
+        )
+        assert params["max_turns"] == 6
+        # language is a form-managed key; stripped from JSON when no form override given
+        assert "language" not in params
+
+    def test_language_form_wins_over_json(self):
+        from audits.services import _generation_parameters
+
+        params = _generation_parameters(
+            language_override="Norwegian",
+            gen_config_override={"language": "English", "max_retries": 3},
+        )
+        assert params["language"] == "Norwegian"
+        assert params["max_retries"] == 3
+
+    def test_n_reps_form_wins_over_json(self):
+        from audits.services import _generation_parameters
+
+        params = _generation_parameters(
+            n_repetitions_override=5,
+            gen_config_override={"n_repetitions": 2},
+        )
+        assert params["n_repetitions"] == 5
+
+    def test_form_managed_keys_stripped_from_json(self):
+        """max_turns/n_repetitions/language in JSON are stripped; only non-form keys pass through."""
+        from audits.services import _generation_parameters
+
+        params = _generation_parameters(
+            gen_config_override={"max_turns": 4, "n_repetitions": 2, "language": "English", "system_prompt": "be nice"},
+        )
+        assert "max_turns" not in params
+        assert "n_repetitions" not in params
+        assert "language" not in params
+        assert params["system_prompt"] == "be nice"
+
+    def test_form_fields_set_when_provided(self):
+        from audits.services import _generation_parameters
+
+        params = _generation_parameters(
+            max_turns_override=6,
+            language_override="Norwegian",
+            n_repetitions_override=3,
+            gen_config_override={"max_turns": 4, "language": "English", "n_repetitions": 2, "max_retries": 5},
+        )
+        assert params["max_turns"] == 6
+        assert params["language"] == "Norwegian"
+        assert params["n_repetitions"] == 3
+        assert params["max_retries"] == 5
