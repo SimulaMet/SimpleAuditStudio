@@ -1387,6 +1387,7 @@ class AuditDetailView(ProjectMixin, DetailView):
                 sev_dist = None
             results.append({
                 "result_id": sr.pk,
+                "version_item_id": sr.version_item_id,
                 "scenario_name": item.scenario.title if item else sr.version_item_id,
                 "scenario_id": item.scenario_id if item else None,
                 "set_id": set_id,
