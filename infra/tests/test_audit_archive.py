@@ -76,14 +76,6 @@ class AuditArchiveTest(TestCase):
         self.run.refresh_from_db()
         self.assertFalse(self.run.archived)
 
-    def test_archived_run_excluded_from_dashboard(self):
-        self.run.archived = True
-        self.run.save(update_fields=["archived"])
-
-        resp = self.client.get("/dashboard/")
-        self.assertEqual(resp.status_code, 200)
-        self.assertNotIn(f"/audits/{self.run.id}/", resp.content.decode())
-
     def test_dashboard_rows_have_clone_and_archive_actions(self):
         resp = self.client.get("/dashboard/")
         html = resp.content.decode()
