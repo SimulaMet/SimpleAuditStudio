@@ -221,12 +221,16 @@ def _seed_demo_data() -> None:
 
 
 def _update_model_endpoints(mock_url: str) -> None:
-    """Point all seeded model connections at the local mock server."""
+    """Point all seeded model connections at the local mock server.
+
+    The mock server ignores auth entirely, so no API key is set — the
+    connection stays keyless (shown as "⚠ no key" in the UI).
+    """
     from model_registry.models import ModelConnection
 
     ModelConnection.objects.filter(enabled=True).update(
         base_url=mock_url,
-        api_key_direct="mock-key",
+        api_key_direct="",
         secret_reference="",
     )
 

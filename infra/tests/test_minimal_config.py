@@ -50,7 +50,7 @@ class TestDemoBootSequence(TestCase):
             stop_mock_server(server)
 
     def test_model_endpoints_updated_to_mock(self):
-        """After pointing endpoints at the mock server, they have api_key_direct set."""
+        """After pointing endpoints at the mock server, they are keyless (no API key)."""
         from django.core.management import call_command
 
         from accounts.services import bootstrap_admin_and_default_project
@@ -66,15 +66,17 @@ class TestDemoBootSequence(TestCase):
         server, port = start_mock_server(port=0)
         try:
             mock_url = f"http://127.0.0.1:{port}/v1"
+            # Mirror cli._update_model_endpoints: repoint at the mock, no key.
             ModelConnection.objects.filter(enabled=True).update(
                 base_url=mock_url,
-                api_key_direct="mock-key",
+                api_key_direct="",
                 secret_reference="",
             )
             conn = ModelConnection.objects.filter(enabled=True).first()
             self.assertIsNotNone(conn)
             self.assertEqual(conn.base_url, mock_url)
-            self.assertEqual(conn.api_key_direct, "mock-key")
+            self.assertEqual(conn.api_key_direct, "")
+            self.assertFalse(conn.has_key)
         finally:
             stop_mock_server(server)
 
