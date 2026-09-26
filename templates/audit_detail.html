@@ -303,28 +303,56 @@ function toggleRename() {
     const scenEl = document.getElementById('run-scenarios');
     if (scenEl) scenEl.textContent = TOTAL + ' total, ' + doneCount + ' done';
 
-    // Repetition segmented bar
+    // Repetition segmented bar (only rebuild when rep count or currentRep changes)
     const bar = document.getElementById('rep-bar');
     const repLabel = document.getElementById('rep-label');
     if (bar) {
-      bar.innerHTML = '';
-      const perRep = TOTAL; // scenarios per rep
-      const doneInCurrentRep = Math.max(0, doneCount - (currentRep - 1) * perRep);
-      const pctInCurrentRep = perRep > 0 ? Math.min(100, Math.round(doneInCurrentRep / perRep * 100)) : 0;
-      for (let i = 1; i <= totalRepsSeen; i++) {
-        const seg = document.createElement('div');
-        seg.className = 'h-full overflow-hidden transition-all duration-500';
-        seg.style.flex = '1';
-        seg.style.marginRight = i < totalRepsSeen ? '2px' : '0';
-        if (i < currentRep) {
-          seg.style.background = 'rgb(52 211 153)'; // emerald-400
-        } else if (i === currentRep) {
-          const fill = document.createElement('div');
-          fill.className = 'rep-active h-full transition-all duration-500';
-          fill.style.width = pctInCurrentRep + '%';
-          seg.appendChild(fill);
+      const childCount = bar.children.length;
+      if (childCount !== totalRepsSeen) {
+        // Structure changed (new rep detected) — full rebuild
+        bar.innerHTML = '';
+        for (let i = 1; i <= totalRepsSeen; i++) {
+          const seg = document.createElement('div');
+          seg.className = 'h-full overflow-hidden transition-all duration-500';
+          seg.style.flex = '1';
+          seg.style.marginRight = i < totalRepsSeen ? '2px' : '0';
+          seg.dataset.repIdx = i;
+          if (i < currentRep) {
+            seg.style.background = 'rgb(52 211 153)';
+          } else if (i === currentRep) {
+            const fill = document.createElement('div');
+            fill.className = 'rep-active h-full transition-all duration-500';
+            fill.style.width = '0%';
+            seg.appendChild(fill);
+          }
+          bar.appendChild(seg);
         }
-        bar.appendChild(seg);
+      }
+      // Update segment states and fill width without rebuilding
+      // Count scenarios that have actually started the current rep (0-based in state)
+      let inCurrentRep = 0;
+      scenarios.forEach((s) => {
+        if (s.phase === 'done' || s.phase === 'failed') return;
+        if ((s.rep || 0) + 1 === currentRep) inCurrentRep++;
+      });
+      const pctInCurrentRep = TOTAL > 0 ? Math.min(100, Math.round(inCurrentRep / TOTAL * 100)) : 0;
+      for (let i = 0; i < bar.children.length; i++) {
+        const seg = bar.children[i];
+        const idx = i + 1;
+        if (idx < currentRep) {
+          seg.style.background = 'rgb(52 211 153)';
+          if (seg.firstChild) seg.innerHTML = '';
+        } else if (idx === currentRep) {
+          seg.style.background = '';
+          let fill = seg.firstChild;
+          if (!fill || !fill.classList.contains('rep-active')) {
+            fill = document.createElement('div');
+            fill.className = 'rep-active h-full transition-all duration-500';
+            seg.innerHTML = '';
+            seg.appendChild(fill);
+          }
+          fill.style.width = pctInCurrentRep + '%';
+        }
       }
     }
     if (repLabel) {
@@ -387,7 +415,7 @@ function toggleRename() {
     const role = p.role || '';
     if (p.max_turns) maxTurnsSeen = Math.max(maxTurnsSeen, p.max_turns);
     if (p.total_reps) totalRepsSeen = Math.max(totalRepsSeen, p.total_reps);
-    if (p.rep) currentRep = p.rep;
+    if (p.rep !== undefined && p.rep !== null) currentRep = p.rep + 1;
     // The judge fires once after all turns; treat it as its own phase.
     const phase = role === 'judge' ? 'judging' : 'running';
     const prev = scenarios.get(vi) || {};
@@ -400,7 +428,8 @@ function toggleRename() {
   es.addEventListener('scenario_rep_started', e => {
     const d = JSON.parse(e.data);
     const p = d.payload || {};
-    if (p.rep) currentRep = p.rep;
+    if (p.rep !== undefined && p.rep !== null) currentRep = p.rep + 1;
+    if (p.total_reps) totalRepsSeen = Math.max(totalRepsSeen, p.total_reps);
     renderAll();
   });
   es.addEventListener('scenario_completed', e => {
