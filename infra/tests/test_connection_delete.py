@@ -83,7 +83,7 @@ class RegisteredModelDeleteTest(TestCase):
         self.client.session.save()
 
     def test_delete_unreferenced_model_succeeds(self):
-        from model_registry.models import ModelConnection, RegisteredModel
+        from model_registry.models import RegisteredModel
 
         conn = ModelConnectionFactory(project=self.project, name="conn-a")
         rm = RegisteredModelFactory(connection=conn, project=self.project)
@@ -94,7 +94,7 @@ class RegisteredModelDeleteTest(TestCase):
         assert not RegisteredModel.objects.filter(pk=rm.id).exists()
 
     def test_delete_referenced_model_is_blocked_with_error(self):
-        from model_registry.models import ModelConnection, RegisteredModel
+        from model_registry.models import RegisteredModel
 
         conn = ModelConnectionFactory(project=self.project, name="conn-b")
         rm = RegisteredModelFactory(connection=conn, project=self.project)

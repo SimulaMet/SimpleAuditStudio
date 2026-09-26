@@ -73,8 +73,8 @@ class Command(BaseCommand):
         # avoids touching infra.worker.get_client() (which is gated on
         # SIMPLEAUDIT_MINIMAL, a settings-load-time flag we can't flip here).
         if options["embedded"] and not options["no_worker"]:
-            from infra.minimal_config import start_embedded_hatchet
             from infra import worker as _worker_mod
+            from infra.minimal_config import start_embedded_hatchet
 
             print("\n📦 Starting embedded Hatchet engine (zero-Docker mode)...")
             _worker_mod._CLIENT = start_embedded_hatchet()

@@ -18,8 +18,8 @@ from __future__ import annotations
 
 import os
 
-from django.core.management.base import BaseCommand, CommandError
 from django.core.management import call_command
+from django.core.management.base import BaseCommand, CommandError
 
 
 class Command(BaseCommand):
@@ -60,7 +60,7 @@ class Command(BaseCommand):
             call_command("seed_platform", verbosity=1)
 
         self.stdout.write(self.style.SUCCESS(
-            "\nSetup complete. Start the server with:\n"
+            f"\nSetup complete. Start the server with:\n"
             "    uv run manage.py runserver\n"
-            "Then open http://localhost:8000 (login: %s / your password)." % options["username"]
+            f"Then open http://localhost:8000 (login: {options['username']} / your password)."
         ))
