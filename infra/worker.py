@@ -160,6 +160,15 @@ def _scenario_execute_impl(workflow_input: ScenarioInput, ctx: Context) -> dict:
     version_item_id = workflow_input.version_item_id
     attempt = workflow_input.attempt
 
+    # Graceful no-op if the run row was deleted (e.g. purged) while its
+    # Hatchet tasks were still pending. Matches the pattern in
+    # _run_finalize_impl and _is_cancelled.
+    try:
+        AuditRun.objects.get(pk=int(run_id))
+    except (AuditRun.DoesNotExist, ValueError):
+        logger.warning("Scenario task for missing run %s — skipping", run_id)
+        return {"status": "missing"}
+
     # Optional fault injection for recovery tests: fail the first N EXECUTIONS.
     # Hatchet retries re-run the task with the SAME input (the `attempt` field
     # does NOT increment), so count executions via durable events, not `attempt`.
@@ -587,10 +596,11 @@ def _recover_stuck_runs() -> None:
     """Re-submit audit runs that were left in-flight when the worker died.
 
     Called once at worker startup, before the task loop begins. Finds runs in a
-    non-terminal state (queued/running) whose scenario tasks are no longer
-    active in Hatchet (because the previous worker process was killed) and
-    re-enqueues them. This is safe because scenario tasks are idempotent:
-    already-completed scenarios skip instantly via the durable result check.
+    non-terminal state (queued through report_generation) whose scenario tasks
+    are no longer active in Hatchet (because the previous worker process was
+    killed) and re-enqueues them. This is safe because scenario tasks are
+    idempotent: already-completed scenarios skip instantly via the durable
+    result check.
 
     Only recovers runs that have been stuck for more than a short grace period
     to avoid racing with a concurrent healthy worker.
@@ -602,7 +612,15 @@ def _recover_stuck_runs() -> None:
 
     grace = dj_timezone.now() - __import__("datetime").timedelta(seconds=30)
     stuck = AuditRun.objects.filter(
-        status__in=["queued", "running"],
+        status__in=[
+            AuditRun.Status.QUEUED,
+            AuditRun.Status.PREPARING,
+            AuditRun.Status.TARGET_EXECUTION,
+            AuditRun.Status.AUDITING,
+            AuditRun.Status.JUDGING,
+            AuditRun.Status.AGGREGATION,
+            AuditRun.Status.REPORT_GENERATION,
+        ],
         updated_at__lt=grace,
         archived=False,
     )
