@@ -9,9 +9,10 @@ Equivalent to running, in parallel:
     uv run manage.py runserver                 # web/API server
     uv run manage.py run_worker --pool cpu     # audit execution worker
 
-The web server runs in a daemon thread; the worker runs in the main thread
-(required so its signal handlers receive Ctrl+C). Press Ctrl+C once to stop
-both cleanly.
+The web server runs in a child process (with auto-reload on by default, like
+`manage.py runserver`); the worker runs in the main thread (required so its
+signal handlers receive Ctrl+C). Press Ctrl+C once to stop both cleanly.
+Pass --no-reload to disable auto-reload (web server then runs in a thread).
 
 Unlike the `uvx simpleaudit-studio` CLI (which embeds its own Hatchet + SQLite
 + mock model for the end-user demo), this command uses your real `.env` config —
@@ -53,6 +54,10 @@ class Command(BaseCommand):
                  "First run downloads ~53MB and takes ~15s; afterwards it's fast. "
                  "Pair with SIMPLEAUDIT_LOCAL_SQLITE=1 for a fully self-contained setup.",
         )
+        parser.add_argument(
+            "--no-reload", action="store_true",
+            help="Disable the web server's auto-reloader (enabled by default).",
+        )
 
     def handle(self, *args, **options):
         # Zero-Docker mode implies SQLite for the domain DB too. SIMPLEAUDIT_LOCAL_SQLITE
@@ -80,15 +85,29 @@ class Command(BaseCommand):
             _worker_mod._CLIENT = start_embedded_hatchet()
             print("✅ Embedded Hatchet ready — no external Postgres/Hatchet needed.\n")
 
-        # --- Web server in a daemon thread ---
-        addr = f"0.0.0.0:{options['port']}"
-        self.stdout.write(self.style.NOTICE(f"Starting web server at http://localhost:{options['port']} ..."))
-        web_thread = threading.Thread(
-            target=lambda: call_command("runserver", addr, use_reloader=False),
-            daemon=True,
-        )
-        web_thread.start()
-        time.sleep(1)  # give the web server a moment to bind
+        # --- Web server in a separate process ---
+        # Auto-reload is on by default (like `manage.py runserver`). Django's
+        # reloader installs signal handlers, which only work in a process's main
+        # thread — so we can't run it in a thread here. Instead we spawn a child
+        # process that runs `runserver` normally; this process keeps the worker
+        # in its main thread (required for the worker's Ctrl+C handling).
+        if not options["no_reload"]:
+            import subprocess
+
+            cmd = [sys.executable, sys.argv[0], "runserver", f"0.0.0.0:{options['port']}"]
+            self.stdout.write(self.style.NOTICE(f"Starting web server at http://localhost:{options['port']} (auto-reload on) ..."))
+            web_proc = subprocess.Popen(cmd)
+            time.sleep(2)  # give the reloader + server a moment to bind
+        else:
+            addr = f"0.0.0.0:{options['port']}"
+            self.stdout.write(self.style.NOTICE(f"Starting web server at http://localhost:{options['port']} (auto-reload off) ..."))
+            web_proc = None
+            web_thread = threading.Thread(
+                target=lambda: call_command("runserver", addr, use_reloader=False),
+                daemon=True,
+            )
+            web_thread.start()
+            time.sleep(1)  # give the web server a moment to bind
 
         username = os.environ.get("BOOTSTRAP_USERNAME", "studio")
         self.stdout.write(self.style.SUCCESS(
@@ -99,11 +118,16 @@ class Command(BaseCommand):
         ))
 
         if options["no_worker"]:
-            # Block forever on the main thread so the daemon web thread keeps living.
+            # Block forever on the main thread; stop the web server child (if any)
+            # or let the daemon web thread die with us on Ctrl+C.
             try:
                 threading.Event().wait()
             except KeyboardInterrupt:
                 pass
+            finally:
+                if web_proc is not None:
+                    web_proc.terminate()
+                    web_proc.wait(timeout=5)
             return
 
         # --- Worker in the MAIN thread (required for signal handlers) ---
@@ -114,3 +138,7 @@ class Command(BaseCommand):
             start_worker(max_startup_retries=60, startup_retry_delay=2.0)
         except KeyboardInterrupt:
             self.stdout.write(self.style.WARNING("\nShutting down..."))
+        finally:
+            if web_proc is not None:
+                web_proc.terminate()
+                web_proc.wait(timeout=5)
