@@ -13,6 +13,17 @@ from infra.exceptions import StableAPIError
 User = get_user_model()
 
 
+def has_local_password(user) -> bool:
+    """True when the user has a usable local password hash.
+
+    WorkOS-provisioned accounts are created with an empty password, so they
+    cannot authenticate via username + password until one is set. Django's
+    ``has_usable_password()`` returns True for those (empty string is treated
+    as "usable"), so we check the hash directly.
+    """
+    return bool(user.password) and user.has_usable_password()
+
+
 @transaction.atomic
 def bootstrap_admin_and_default_project(
     *,

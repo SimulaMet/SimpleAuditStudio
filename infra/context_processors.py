@@ -1,5 +1,21 @@
 """Template context processors for the server-rendered UI."""
 
+import hashlib
+
+
+def gravatar_url(request):
+    """Expose the current user's Gravatar URL to templates.
+
+    The avatar is derived from the user's email (MD5 hash), so no storage or
+    upload is needed. Returns ``None`` for anonymous users or users without
+    an email, letting templates fall back to initials.
+    """
+    user = getattr(request, "user", None)
+    if user is None or not user.is_authenticated or not user.email:
+        return {"gravatar_url": None}
+    email = user.email.strip().lower()
+    md5_hash = hashlib.md5(email.encode("utf-8")).hexdigest()
+    return {"gravatar_url": f"https://www.gravatar.com/avatar/{md5_hash}?d=identicon&s=128"}
 
 
 def admin_status(request):
