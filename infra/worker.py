@@ -379,9 +379,22 @@ def _scenario_execute_impl(workflow_input: ScenarioInput, ctx: Context) -> dict:
     # Mutable holder for the active rep index so _on_turn can stamp each turn
     # with the correct rep number.
     current_rep = [0]
+    _last_turn_idx = [-1]  # track previous turn to detect rep boundaries
 
     def _on_turn(turn_index: int, max_t: int, role: str) -> None:
-        """Queue a per-turn progress event (flushed live by the worker thread)."""
+        """Queue a per-turn progress event (flushed live by the worker thread).
+
+        Detects rep boundaries: when turn_index resets to 0 after being > 0,
+        a new repetition has started. Updates current_rep and emits
+        scenario_rep_started so the UI can track which rep is active.
+        """
+        if turn_index == 0 and _last_turn_idx[0] > 0:
+            current_rep[0] += 1
+            _event_queue.put((
+                "scenario_rep_started",
+                {"rep": current_rep[0], "total_reps": n_reps},
+            ))
+        _last_turn_idx[0] = turn_index
         _event_queue.put((
             "scenario_turn",
             {

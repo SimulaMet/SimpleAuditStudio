@@ -222,10 +222,9 @@ function toggleRename() {
       if (s.phase === 'running') {
         counts.running++;
         active++;
-        const rep = s.rep || 1;
         const curTurn = s.turn || 0;
         for (let t = 0; t < maxTurnsSeen; t++) {
-          if (rep > 1 || curTurn > t) {
+          if (curTurn > t) {
             turnCompleted[t]++;
           } else if (curTurn === t) {
             turnInProgress[t]++;
@@ -361,11 +360,17 @@ function toggleRename() {
   }
 
   // --- Event handlers ---
+  const STAGE_ORDER = ['queued','preparing','target_execution','auditing','judging','aggregation','completed'];
   es.addEventListener('run_stage', e => {
     const d = JSON.parse(e.data);
     if (d.payload && d.payload.stage) {
-      setStage(d.payload.stage);
-      updateRunState(d.payload.stage);
+      // Only advance forward, never regress (handles out-of-order SSE replay)
+      const newIdx = STAGE_ORDER.indexOf(d.payload.stage);
+      const curIdx = STAGE_ORDER.indexOf(currentStage);
+      if (newIdx > curIdx || d.payload.stage === 'failed' || d.payload.stage === 'cancelled') {
+        setStage(d.payload.stage);
+        updateRunState(d.payload.stage);
+      }
     }
   });
   es.addEventListener('scenario_attempted', e => {
