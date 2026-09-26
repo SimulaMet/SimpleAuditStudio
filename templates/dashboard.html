@@ -81,7 +81,7 @@
         <tr class="border-b border-gray-800/50 hover:bg-surface-overlay/50 cursor-pointer" onclick="location='/audits/{{ run.id }}/'">
           <td class="px-3 py-2.5 font-medium text-gray-200">#{{ run.id }}</td>
           <td class="px-3 py-2.5 text-gray-300 max-w-[16rem] truncate" title="{{ run.name }}">{{ run.name }}</td>
-          <td class="px-3 py-2.5"><a href="/scenarios/?set={{ run.scenario_set_version.scenario_set_id }}" onclick="event.stopPropagation()" class="text-gray-300 hover:text-accent transition-colors">{{ run.scenario_set_version.scenario_set.name|default:"—" }}</a></td>
+          <td class="px-3 py-2.5 text-gray-300">{{ run.scenario_set_version.scenario_set.name|default:"—" }}</td>
           <td class="px-3 py-2.5 text-gray-400 text-xs">{{ run.target_model.display_name|default:"—" }}</td>
           <td class="px-3 py-2.5 text-gray-400 text-xs">{{ run.auditor_model.display_name|default:"—" }}</td>
           <td class="px-3 py-2.5 text-gray-400 text-xs">{{ run.judge_model.display_name|default:"—" }}</td>

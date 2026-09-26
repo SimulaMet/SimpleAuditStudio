@@ -613,6 +613,10 @@ class NewAuditView(ProjectMixin, TemplateView):
             )
             if source:
                 params = source.generation_parameters_snapshot or {}
+                # Strip form-managed keys from the JSON so they don't appear
+                # in the Advanced textarea (they're pre-filled in their own fields).
+                _FORM_KEYS = {"max_turns", "n_repetitions", "language"}
+                gen_params = {k: v for k, v in params.items() if k not in _FORM_KEYS}
                 clone = {
                     "scenario_set_id": source.scenario_set_version.scenario_set_id,
                     "scenario_set_version_id": source.scenario_set_version_id,
@@ -622,7 +626,7 @@ class NewAuditView(ProjectMixin, TemplateView):
                     "max_turns": params.get("max_turns", ""),
                     "language": params.get("language", ""),
                     "n_repetitions": params.get("n_repetitions", ""),
-                    "generation_json": json.dumps(params, indent=2, sort_keys=True),
+                    "generation_json": json.dumps(gen_params, indent=2, sort_keys=True) if gen_params else "",
                 }
         from model_registry.models import ModelConnection
 
@@ -664,12 +668,12 @@ class NewAuditView(ProjectMixin, TemplateView):
             # Parse optional generation config JSON override
             gen_config_override = None
             gen_json_raw = (request.POST.get("gen_config_json") or "").strip()
-            if gen_json_raw:
+            if gen_json_raw and gen_json_raw != "{}":
                 try:
                     parsed = json.loads(gen_json_raw)
                     if not isinstance(parsed, dict):
                         raise TypeError("Must be a JSON object")
-                    gen_config_override = parsed
+                    gen_config_override = parsed or None
                 except Exception as e:  # noqa: BLE001 - any parse failure is a user error
                     return self.render_to_response(self.get_context_data(error=f"Invalid generation config JSON: {e}"))
 
@@ -1404,6 +1408,9 @@ class AuditDetailView(ProjectMixin, DetailView):
         # Django's template engine has no built-in `map`/`json` filters.
         ctx["result_version_item_ids_json"] = json.dumps(
             [r["version_item_id"] for r in results]
+        )
+        ctx["vi_names_json"] = json.dumps(
+            {str(vi.pk): vi.scenario.title for vi in items.values()}
         )
         ctx["set_id"] = set_id
         ctx["progress_pct"] = (run.completed_scenarios * 100 // run.total_scenarios) if run.total_scenarios else 0

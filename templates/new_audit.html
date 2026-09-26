@@ -149,8 +149,8 @@
         <code class="text-gray-400">judge_kwargs</code> (e.g. <code class="text-gray-400">{"timeout": 120}</code>).
         <br><strong>Other:</strong> <code class="text-gray-400">max_retries</code>, <code class="text-gray-400">retry_backoff</code>,
         <code class="text-gray-400">system_prompt</code>, <code class="text-gray-400">probe_prompt</code>,
-        <code class="text-gray-400">judge_prompt</code>, <code class="text-gray-400">max_turns</code>,
-        <code class="text-gray-400">language</code>.
+        <code class="text-gray-400">judge_prompt</code>.
+        <br><span class="text-gray-500">Note: <code>max_turns</code>, <code>n_repetitions</code>, and <code>language</code> are managed by the form fields above and will be ignored in this JSON.</span>
       </p>
       <textarea name="gen_config_json" rows="5" placeholder='{"target_params": {"temperature": 0.7, "max_tokens": 2048}}'
                 class="w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-accent/50 resize-y">{{ clone.generation_json|default:'' }}</textarea>
@@ -230,15 +230,29 @@ function updateNoKeyWarnings() {
 document.querySelectorAll('select[name="target_model"], select[name="auditor_model"], select[name="judge_model"]').forEach(s => s.addEventListener('change', updateNoKeyWarnings));
 updateNoKeyWarnings();
 
-// Validate JSON on submit
+// Strip form-managed keys from the JSON textarea on page load (for old runs)
+(function() {
+  const ta = document.querySelector('[name="gen_config_json"]');
+  if (!ta || !ta.value.trim()) return;
+  try {
+    const obj = JSON.parse(ta.value);
+    delete obj.max_turns; delete obj.n_repetitions; delete obj.language;
+    ta.value = Object.keys(obj).length ? JSON.stringify(obj, null, 2) : '';
+  } catch (_) { /* leave as-is if not valid JSON yet */ }
+})();
+
+// Validate JSON on submit (tolerates Python-style single-quoted dicts)
 document.querySelector('form').addEventListener('submit', function(e) {
   const ta = this.querySelector('[name="gen_config_json"]');
   const errEl = document.getElementById('gen-config-error');
   if (ta && ta.value.trim()) {
-    try { JSON.parse(ta.value); }
+    let raw = ta.value.trim();
+    // Auto-fix common Python-dict → JSON issues: single quotes, True/False/None
+    let fixed = raw.replace(/'/g, '"').replace(/\bTrue\b/g, 'true').replace(/\bFalse\b/g, 'false').replace(/\bNone\b/g, 'null');
+    try { JSON.parse(fixed); ta.value = fixed; }
     catch (err) {
       e.preventDefault();
-      errEl.textContent = 'Invalid JSON: ' + err.message;
+      errEl.textContent = 'Invalid JSON: ' + err.message + ' (use double quotes for keys/values)';
       errEl.classList.remove('hidden');
       return;
     }
