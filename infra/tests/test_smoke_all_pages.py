@@ -104,6 +104,34 @@ class AllPagesSmokeTest(TestCase):
         self._ok(f"/audits/{self.run.id}/", "Audit detail (single)")
         self._ok(f"/audits/{self.run_repeated.id}/", "Audit detail (repeated)")
 
+    def test_audit_detail_live_state_updates_from_sse(self):
+        """The Status card's State row must be live-updated from SSE events.
+
+        Regression: the State row was rendered once server-side and never
+        touched by the SSE handlers, so it stayed "Queued" until a manual
+        page refresh even though the run had progressed to completed.
+        """
+        from audits.models import AuditRun
+
+        active = AuditRunFactory(
+            project=self.project,
+            scenario_set_version=self.run.scenario_set_version,
+            target_model=self.run.target_model,
+            auditor_model=self.run.auditor_model,
+            judge_model=self.run.judge_model,
+            status=AuditRun.Status.QUEUED,
+            total_scenarios=1,
+            completed_scenarios=0,
+        )
+        resp = self.client.get(f"/audits/{active.id}/")
+        html = resp.content.decode()
+        # Live state element exists for non-terminal runs...
+        self.assertIn('id="run-state"', html)
+        # ...and is seeded with the current (queued) status.
+        self.assertIn("Queued", html.split('id="run-state"', 1)[1][:200])
+        # The SSE script updates it on terminal events.
+        self.assertIn("updateRunState", html)
+
     def test_audit_exports(self):
         self._ok(f"/audits/{self.run.id}/export/?format=json", "Export JSON")
         self._ok(f"/audits/{self.run.id}/export/?format=csv", "Export CSV")
