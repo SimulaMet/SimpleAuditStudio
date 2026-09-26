@@ -37,5 +37,8 @@ docker-data/
 *.log
 logs/
 
+# Runtime artifacts
+app.pid
+
 # Data artifacts (prototype)
 data/
