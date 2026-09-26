@@ -561,30 +561,58 @@ def _mark_run_completed(run_id: str) -> None:
 
 
 # --- Module-level task registration ---------------------------------------
-# Tasks are registered once at import time against the shared client. This is
-# required for the single-process (minimal-config) deployment: the web server
-# thread submits runs via `submit_run_workflow`, which needs the same task
-# objects the worker subscribes to. Registering at call time instead would
-# create fresh task objects whose gRPC channels are torn down by the worker's
-# shutdown, breaking submission after any restart.
-_scenario_task = get_client().task(
-    name="audit.scenario_execute",
-    input_validator=ScenarioInput,
-    retries=2,
-    backoff_factor=2.0,
-    execution_timeout="300s",
-)(_scenario_execute_impl)
-# Finalize retries because it may be scheduled before slow scenarios finish;
-# _run_finalize_impl raises until every pinned scenario has a durable result.
-# With backoff_factor=2.0 and the default base delay, 10 retries span several
-# minutes, comfortably covering typical scenario completion times.
-_finalize_task = get_client().task(
-    name="audit.run_finalize",
-    input_validator=FinalizeInput,
-    execution_timeout="60s",
-    retries=10,
-    backoff_factor=2.0,
-)(_run_finalize_impl)
+# Tasks are registered against the shared client. This is required for the
+# single-process (minimal-config) deployment: the web server thread submits runs
+# via `submit_run_workflow`, which needs the same task objects the worker
+# subscribes to.
+#
+# The client can change AFTER import — most notably in `dev_server --embedded`,
+# where the embedded Hatchet engine is started *after* this module is imported
+# (so the initial registration binds to the external `hatchet-server` config).
+# `_ensure_tasks_registered` therefore re-registers both tasks whenever the
+# active client differs from the one they were built against, so submission and
+# crash recovery always target the latest available Hatchet.
+_scenario_task = None
+_finalize_task = None
+_tasks_client_id: int | None = None
+
+
+def _register_tasks(client: "Hatchet") -> None:
+    """Register (or re-register) both tasks against ``client``."""
+    global _scenario_task, _finalize_task, _tasks_client_id
+    # Scenario retries on transient failures; finalize retries because it may be
+    # scheduled before slow scenarios finish (_run_finalize_impl raises until
+    # every pinned scenario has a durable result). backoff_factor=2.0 with 10
+    # retries spans several minutes, covering typical scenario completion times.
+    _scenario_task = client.task(
+        name="audit.scenario_execute",
+        input_validator=ScenarioInput,
+        retries=2,
+        backoff_factor=2.0,
+        execution_timeout="300s",
+    )(_scenario_execute_impl)
+    _finalize_task = client.task(
+        name="audit.run_finalize",
+        input_validator=FinalizeInput,
+        execution_timeout="60s",
+        retries=10,
+        backoff_factor=2.0,
+    )(_run_finalize_impl)
+    _tasks_client_id = id(client)
+
+
+def _ensure_tasks_registered() -> None:
+    """Ensure tasks are registered against the *current* shared client.
+
+    Re-registers if the active client changed since the last registration (e.g.
+    the embedded engine was started after import), or if not yet registered.
+    """
+    client = get_client()
+    if _scenario_task is None or _tasks_client_id != id(client):
+        _register_tasks(client)
+
+
+_ensure_tasks_registered()
 
 
 def submit_run_workflow(run_id: str, version_item_ids: list[str], *, simpleaudit_version: str | None, git_commit: str | None):
@@ -604,6 +632,10 @@ def submit_run_workflow(run_id: str, version_item_ids: list[str], *, simpleaudit
 
     Returns the finalize task run reference, or raises if the client is unavailable.
     """
+    # Re-register tasks against the current client if it changed since import
+    # (e.g. embedded engine started after this module loaded). Without this,
+    # submission would target a stale client and fail with DNS/RPC errors.
+    _ensure_tasks_registered()
     for vid in version_item_ids:
         _scenario_task.run(
             input=ScenarioInput(run_id=str(run_id), version_item_id=str(vid), attempt=1),
@@ -631,6 +663,8 @@ def build_worker() -> Worker:
     ``submit_run_workflow`` about why dynamic per-run workflows are not used.
     """
     client = get_client()
+    # Ensure the task objects reflect this client (re-register if it changed).
+    _ensure_tasks_registered()
     return Worker(
         name=f"simpleaudit-audit-worker-{settings.WORKER_POOL}",
         config=client.config,

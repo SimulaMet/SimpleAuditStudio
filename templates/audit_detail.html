@@ -253,7 +253,19 @@ function toggleRename() {
     renderRepDots();
   }
 
+  // Counters are seeded from the server's durable state. The SSE stream replays
+  // ALL prior events on connect (after_id=0), so we must not re-count a scenario
+  // whose completion is already reflected in the seed values. Pre-seed the set
+  // with version items that already have a result row, then track any new ones.
   let done = {{ run.completed_scenarios }}, ok = {{ run.successful_scenarios }}, fail = {{ run.failed_scenarios }};
+  const countedVIs = new Set({{ results|map(attribute="version_item_id")|list|json }});
+  function countScenario(vi, succeeded) {
+    if (countedVIs.has(vi)) return; // already counted (replay or duplicate)
+    countedVIs.add(vi);
+    done++;
+    if (succeeded) ok++; else fail++;
+    updateCounter('prog-done', done); updateCounter('prog-ok', ok); updateCounter('prog-fail', fail);
+  }
   es.addEventListener('run_stage', e => {
     const d = JSON.parse(e.data);
     if (d.payload && d.payload.stage) setStage(d.payload.stage);
@@ -274,16 +286,14 @@ function toggleRename() {
   es.addEventListener('scenario_completed', e => {
     const d = JSON.parse(e.data);
     const p = d.payload || {};
-    done++; if (p.severity !== 'ERROR') ok++; else fail++;
-    updateCounter('prog-done', done); updateCounter('prog-ok', ok); updateCounter('prog-fail', fail);
+    countScenario(d.version_item_id, p.severity !== 'ERROR');
     clearRole();
     logEvent('done', { vi: d.version_item_id, severity: p.severity });
   });
   es.addEventListener('scenario_failed', e => {
     const d = JSON.parse(e.data);
     const p = d.payload || {};
-    done++; fail++;
-    updateCounter('prog-done', done); updateCounter('prog-fail', fail);
+    countScenario(d.version_item_id, false);
     clearRole();
     logEvent('fail', { vi: d.version_item_id, error: p.error });
   });
