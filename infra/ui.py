@@ -1399,6 +1399,12 @@ class AuditDetailView(ProjectMixin, DetailView):
                 "n_reps": n_reps if (n_reps > 1 and "reps" in r) else None,
             })
         ctx["results"] = results
+        # Version item ids that already have a result row; the detail page seeds
+        # its SSE dedupe set from this. Pre-serialized to a JSON array because
+        # Django's template engine has no built-in `map`/`json` filters.
+        ctx["result_version_item_ids_json"] = json.dumps(
+            [r["version_item_id"] for r in results]
+        )
         ctx["set_id"] = set_id
         ctx["stages"] = ["queued", "preparing", "target_execution", "auditing", "judging", "aggregation", "completed"]
         if run.started_at and run.finished_at:

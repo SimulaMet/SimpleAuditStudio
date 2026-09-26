@@ -258,7 +258,7 @@ function toggleRename() {
   // whose completion is already reflected in the seed values. Pre-seed the set
   // with version items that already have a result row, then track any new ones.
   let done = {{ run.completed_scenarios }}, ok = {{ run.successful_scenarios }}, fail = {{ run.failed_scenarios }};
-  const countedVIs = new Set({{ results|map(attribute="version_item_id")|list|json }});
+  const countedVIs = new Set(JSON.parse('{{ result_version_item_ids_json|escapejs }}'));
   function countScenario(vi, succeeded) {
     if (countedVIs.has(vi)) return; // already counted (replay or duplicate)
     countedVIs.add(vi);
