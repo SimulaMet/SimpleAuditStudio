@@ -178,8 +178,17 @@ function toggleRename() {
   countedVIs.forEach(vi => scenarios.set(vi, { phase: 'done' }));
 
   let maxTurnsSeen = MAX_TURNS;
-  let currentRep = 0;
   let totalRepsSeen = TOTAL_REPS;
+  // Derived on each render: the highest rep any scenario has reached (1-based).
+  function getMaxRep() {
+    let m = 1;
+    scenarios.forEach((s) => {
+      if (s.phase === 'done' || s.phase === 'failed') return;
+      const r = (s.rep || 0) + 1;
+      if (r > m) m = r;
+    });
+    return Math.min(m, totalRepsSeen);
+  }
 
   function timeAgo(ts) {
     const s = Math.floor((Date.now() - ts) / 1000);
@@ -202,10 +211,9 @@ function toggleRename() {
   setInterval(() => { if (es.readyState === EventSource.OPEN) touch(); }, 5000);
 
   function getPhaseCounts() {
-    // Per-rep counts: show progress within the CURRENT rep only.
-    // A scenario's effective rep = max(last seen rep, judgedRep + 1).
-    // If effective rep < currentRep → already done with this rep (exclude).
-    // If effective rep >= currentRep → actively in this rep (count it).
+    // Show ALL active scenarios regardless of which rep they're in.
+    // Each scenario contributes to the bars based on its current phase.
+    // The rep bar separately tracks per-rep completion.
     const counts = { queued: 0, running: 0, judging: 0, done: doneCount };
     const turnCompleted = new Array(maxTurnsSeen + 1).fill(0);
     const turnInProgress = new Array(maxTurnsSeen + 1).fill(0);
@@ -213,16 +221,6 @@ function toggleRename() {
     let active = 0;
     scenarios.forEach((s, vi) => {
       if (s.phase === 'done' || s.phase === 'failed') return;
-      // Determine which rep this scenario is actually in
-      const seenRep = s.rep || 0;
-      const nextRepAfterJudge = (s.judgedRep !== undefined && s.judgedRep >= 0) ? s.judgedRep + 1 : -1;
-      const effRep = Math.max(seenRep, nextRepAfterJudge);
-      // If scenario hasn't reached the current rep yet, it's queued for this rep
-      if (effRep + 1 < currentRep) {
-        counts.queued++;
-        return;
-      }
-      // Scenario is in the current rep (or beyond — treat as in current rep)
       if (s.phase === 'judging') {
         counts.judging++;
         active++;
@@ -250,6 +248,8 @@ function toggleRename() {
   }
 
   function renderDistribution() {
+    try {
+    const maxRep = getMaxRep();
     const { counts, turnCompleted, turnInProgress, roleCounts, active } = getPhaseCounts();
     // Two-tone bars: solid = completed that turn, light = currently in that turn.
     const denom = TOTAL > 0 ? TOTAL : 1;
@@ -264,14 +264,14 @@ function toggleRename() {
       const prog = turnInProgress[t-1] || 0;
       rows.push({ label: `Turn-${t}`, val: comp + prog, total: comp + prog, comp, prog, color: 'bg-indigo-400', lightColor: 'bg-[rgb(199_210_254)]', twoTone: true });
     }
-    // Progress bar (per-rep): solid = judging now, light = already judged in THIS rep.
+    // Progress bar: solid = done, light = has been judged at least once (any rep).
     let progressLight = 0;
     scenarios.forEach((s, vi) => {
       if (s.phase === 'done' || s.phase === 'failed') return;
-      if (s.judgedRep !== undefined && s.judgedRep + 1 === currentRep) progressLight++;
+      if (s.judgedRep !== undefined && s.judgedRep >= 0) progressLight++;
     });
-    const progressTotal = counts.judging + progressLight;
-    rows.push({ label: 'Progress', val: progressTotal, total: progressTotal, comp: counts.judging, prog: progressLight, color: 'bg-emerald-400', lightColor: 'bg-[rgb(199_210_254)]', twoTone: true });
+    const progressTotal = doneCount + progressLight;
+    rows.push({ label: 'Progress', val: progressTotal, total: progressTotal, comp: doneCount, prog: progressLight, color: 'bg-emerald-400', lightColor: 'bg-[rgb(199_210_254)]', twoTone: true });
 
     distEl.innerHTML = rows.map(r => {
       const pctTotal = (r.total / denom) * 100;
@@ -303,15 +303,10 @@ function toggleRename() {
       document.getElementById(`role-${role}-count`).textContent = roleCounts[role];
     });
 
-    // Per-rep completion: scenarios judged IN the current rep (exact match, 0-based)
-    let doneThisRep = 0;
-    scenarios.forEach((s, vi) => {
-      if (s.phase === 'done' || s.phase === 'failed') { doneThisRep++; return; }
-      if (s.judgedRep !== undefined && s.judgedRep + 1 === currentRep) doneThisRep++;
-    });
-    const repPct = TOTAL > 0 ? Math.round(doneThisRep / TOTAL * 100) : 0;
-    document.getElementById('overall-pct').textContent = repPct + '%';
-    document.getElementById('overall-label').textContent = `${doneThisRep} / ${TOTAL}`;
+    // Overall completion: use doneCount (scenarios that finished ALL reps)
+    const overallPct = TOTAL > 0 ? Math.round(doneCount / TOTAL * 100) : 0;
+    document.getElementById('overall-pct').textContent = overallPct + '%';
+    document.getElementById('overall-label').textContent = `${doneCount} / ${TOTAL}`;
     document.getElementById('stat-ok').textContent = okCount;
     document.getElementById('stat-fail').textContent = failCount;
 
@@ -319,13 +314,14 @@ function toggleRename() {
     const scenEl = document.getElementById('run-scenarios');
     if (scenEl) scenEl.textContent = TOTAL + ' total, ' + doneCount + ' done';
 
-    // Repetition segmented bar (only rebuild when rep count or currentRep changes)
+    // Repetition segmented bar: show which reps are complete/in-progress.
+    // A rep is "complete" when ALL scenarios have passed it (judgedRep >= rep).
+    // The active rep is the one where some scenarios are still working.
     const bar = document.getElementById('rep-bar');
     const repLabel = document.getElementById('rep-label');
     if (bar) {
       const childCount = bar.children.length;
       if (childCount !== totalRepsSeen) {
-        // Structure changed (new rep detected) — full rebuild
         bar.innerHTML = '';
         for (let i = 1; i <= totalRepsSeen; i++) {
           const seg = document.createElement('div');
@@ -333,32 +329,30 @@ function toggleRename() {
           seg.style.flex = '1';
           seg.style.marginRight = i < totalRepsSeen ? '2px' : '0';
           seg.dataset.repIdx = i;
-          if (i < currentRep) {
-            seg.style.background = 'rgb(52 211 153)';
-          } else if (i === currentRep) {
-            const fill = document.createElement('div');
-            fill.className = 'rep-active h-full transition-all duration-500';
-            fill.style.width = '0%';
-            seg.appendChild(fill);
-          }
           bar.appendChild(seg);
         }
       }
-      // Update segment states and fill width without rebuilding
-      // Count scenarios that have actually started the current rep (0-based in state)
-      let inCurrentRep = 0;
-      scenarios.forEach((s) => {
-        if (s.phase === 'done' || s.phase === 'failed') return;
-        if ((s.rep || 0) + 1 === currentRep) inCurrentRep++;
-      });
-      const pctInCurrentRep = TOTAL > 0 ? Math.min(100, Math.round(inCurrentRep / TOTAL * 100)) : 0;
+      // For each rep segment: solid green if all scenarios passed it,
+      // animated stripes if any scenario is currently in it.
       for (let i = 0; i < bar.children.length; i++) {
         const seg = bar.children[i];
-        const idx = i + 1;
-        if (idx < currentRep) {
+        const repNum = i + 1; // 1-based
+        // Count how many non-done scenarios have completed this rep
+        let passedThisRep = 0;
+        let inThisRep = 0;
+        scenarios.forEach((s) => {
+          if (s.phase === 'done' || s.phase === 'failed') { passedThisRep++; return; }
+          const sRep = s.rep || 0;
+          const jr = (s.judgedRep !== undefined && s.judgedRep >= 0) ? s.judgedRep : -1;
+          if (jr >= repNum - 1) passedThisRep++;
+          else if (sRep + 1 === repNum) inThisRep++;
+        });
+        if (passedThisRep >= TOTAL) {
+          // All scenarios done with this rep
           seg.style.background = 'rgb(52 211 153)';
           if (seg.firstChild) seg.innerHTML = '';
-        } else if (idx === currentRep) {
+        } else if (inThisRep > 0 || repNum === maxRep) {
+          // Active rep: show fill based on how many scenarios are in/past it
           seg.style.background = '';
           let fill = seg.firstChild;
           if (!fill || !fill.classList.contains('rep-active')) {
@@ -367,13 +361,19 @@ function toggleRename() {
             seg.innerHTML = '';
             seg.appendChild(fill);
           }
-          fill.style.width = pctInCurrentRep + '%';
+          const pct = TOTAL > 0 ? Math.min(100, Math.round(passedThisRep / TOTAL * 100)) : 0;
+          fill.style.width = pct + '%';
+        } else {
+          // Future rep: empty
+          seg.style.background = '';
+          if (seg.firstChild) seg.innerHTML = '';
         }
       }
     }
     if (repLabel) {
-      repLabel.textContent = totalRepsSeen > 1 ? `${currentRep || 1} / ${totalRepsSeen}` : '';
+      repLabel.textContent = totalRepsSeen > 1 ? `${maxRep} / ${totalRepsSeen}` : '';
     }
+    } catch (err) { console.error('[renderDistribution]', err); }
   }
 
   function renderLatestActivity() {
@@ -431,7 +431,6 @@ function toggleRename() {
     const role = p.role || '';
     if (p.max_turns) maxTurnsSeen = Math.max(maxTurnsSeen, p.max_turns);
     if (p.total_reps) totalRepsSeen = Math.max(totalRepsSeen, p.total_reps);
-    if (p.rep !== undefined && p.rep !== null) currentRep = p.rep + 1;
     // The judge fires once after all turns; treat it as its own phase.
     const phase = role === 'judge' ? 'judging' : 'running';
     const prev = scenarios.get(vi) || {};
@@ -444,7 +443,6 @@ function toggleRename() {
   es.addEventListener('scenario_rep_started', e => {
     const d = JSON.parse(e.data);
     const p = d.payload || {};
-    if (p.rep !== undefined && p.rep !== null) currentRep = p.rep + 1;
     if (p.total_reps) totalRepsSeen = Math.max(totalRepsSeen, p.total_reps);
     renderAll();
   });
