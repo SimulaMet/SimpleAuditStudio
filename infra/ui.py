@@ -8,6 +8,7 @@ import os
 
 from django.contrib import messages
 from django.contrib.auth import login, logout
+from django.db.models import ProtectedError, RestrictedError
 from django.contrib.auth.forms import AuthenticationForm
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.http import HttpResponse, JsonResponse
@@ -1191,7 +1192,20 @@ class ConnectionDeleteView(ProjectMixin, View):
         blocked = _require_writable_project(request)
         if blocked:
             return blocked
-        ModelConnection.objects.filter(pk=conn_id, project=request.project).delete()
+        conn = ModelConnection.objects.filter(pk=conn_id, project=request.project).first()
+        if conn:
+            try:
+                conn.delete()
+                messages.success(request, f"Connection '{conn.name}' deleted.")
+            except (ProtectedError, RestrictedError):
+                # AuditRun.target_model / auditor_model / judge_model are RESTRICT FKs
+                # to RegisteredModel; deleting a connection whose models are pinned by
+                # audit runs would break the immutable experiment record. Django raises
+                # RestrictedError for RESTRICT and ProtectedError for PROTECT.
+                messages.error(
+                    request,
+                    "Cannot delete: this connection's models are referenced by audit runs.",
+                )
         return redirect("/models/")
 
 
