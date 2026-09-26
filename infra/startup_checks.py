@@ -22,12 +22,9 @@ def validate_startup_environment(bootstrap_password: str | None = None) -> list[
     """
     errors = []
     local_sqlite = _local_sqlite_mode()
-    debug = os.environ.get("DJANGO_DEBUG", "false").strip().lower() in {"1", "true", "yes", "on"}
-    allowed_hosts = {host.strip() for host in os.environ.get("DJANGO_ALLOWED_HOSTS", "").split(",") if host.strip()}
-    public_host_indicators = {"*", "0.0.0.0"}
-
-    if not debug and allowed_hosts & public_host_indicators:
-        errors.append("DJANGO_ALLOWED_HOSTS contains public wildcard hosts while DJANGO_DEBUG=false.")
+    # Wildcard ALLOWED_HOSTS is intentionally permitted for HF Spaces and other
+    # proxy-based deployments where the platform injects unpredictable hostnames.
+    # The security trade-off is documented in docs/deployment.md.
 
     if not local_sqlite:
         secret_key = os.environ.get("DJANGO_SECRET_KEY", "")
