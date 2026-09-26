@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import logging
 import os
+import threading as _threading
 
 from django.conf import settings
 from django.db import transaction
