@@ -23,7 +23,7 @@ class _Base(TestCase):
 
     def _make_run(self):
         from audits.models import AuditRun
-        from model_registry.models import ModelEndpoint
+        from model_registry.models import ModelConnection, RegisteredModel
         from scenarios.models import (
             Scenario,
             ScenarioRevision,
@@ -32,9 +32,10 @@ class _Base(TestCase):
             ScenarioSetVersionItem,
         )
 
-        target = ModelEndpoint.objects.create(
-            project=self.project, display_name="t", provider="openai", base_url="http://x", model_id="m"
+        conn = ModelConnection.objects.create(
+            project=self.project, name="c", provider="openai", base_url="http://x"
         )
+        target = RegisteredModel.objects.create(connection=conn, project=self.project, display_name="t", model_id="m")
         scenario = Scenario.objects.create(project=self.project, key="k", title="T")
         revision = ScenarioRevision.objects.create(scenario=scenario, revision=1, description="d", content_hash="h")
         sset = ScenarioSet.objects.create(project=self.project, name="S")
@@ -46,9 +47,9 @@ class _Base(TestCase):
             name="run",
             status=AuditRun.Status.QUEUED,
             scenario_set_version=version,
-            target_endpoint=target,
-            auditor_endpoint=target,
-            judge_endpoint=target,
+            target_model=target,
+            auditor_model=target,
+            judge_model=target,
             target_config_snapshot={},
             auditor_config_snapshot={},
             judge_config_snapshot={},

@@ -109,7 +109,7 @@ Workers must execute exclusively from the frozen snapshots stored on `AuditRun`:
 - `generation_parameters_snapshot`
 - pinned `ScenarioSetVersion` and its items
 
-Reading live `ModelEndpoint` or mutable scenario data during execution is a
+Reading live model registry rows or mutable scenario data during execution is a
 defect. The only runtime resolution allowed is secret reference
 to credential material inside the worker environment.
 
@@ -186,7 +186,8 @@ Hatchet/workflow state is execution state, not the authoritative SimpleAudit dat
 - `ScenarioRevision`
 - `ScenarioSet`
 - `ScenarioSetVersion`
-- `ModelEndpoint`
+- `ModelConnection`
+- `RegisteredModel`
 - `AuditRun`
 - `AuditRunScenario`
 - `AuditEvent`

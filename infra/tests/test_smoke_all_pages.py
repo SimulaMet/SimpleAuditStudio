@@ -11,8 +11,8 @@ from django.test import Client, TestCase
 from infra.tests.factories import (
     AuditRunFactory,
     MembershipFactory,
-    ModelEndpointFactory,
     ProjectFactory,
+    RegisteredModelFactory,
     RepeatedScenarioResultFactory,
     ScenarioFactory,
     ScenarioResultFactory,
@@ -45,13 +45,13 @@ class AllPagesSmokeTest(TestCase):
         self.scenario_set = sset
 
         # Single-rep run
-        endpoint = ModelEndpointFactory(project=self.project)
+        model = RegisteredModelFactory(project=self.project)
         self.run = AuditRunFactory(
             project=self.project,
             scenario_set_version=v2,
-            target_endpoint=endpoint,
-            auditor_endpoint=endpoint,
-            judge_endpoint=endpoint,
+            target_model=model,
+            auditor_model=model,
+            judge_model=model,
         )
         self.result = ScenarioResultFactory(run_id=self.run.pk, version_item_id=str(item_v2.pk))
 
@@ -59,9 +59,9 @@ class AllPagesSmokeTest(TestCase):
         self.run_repeated = AuditRunFactory(
             project=self.project,
             scenario_set_version=v2,
-            target_endpoint=endpoint,
-            auditor_endpoint=endpoint,
-            judge_endpoint=endpoint,
+            target_model=model,
+            auditor_model=model,
+            judge_model=model,
         )
         self.result_repeated = RepeatedScenarioResultFactory(run_id=self.run_repeated.pk, version_item_id=str(item_v2.pk))
 

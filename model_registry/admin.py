@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from .models import ModelConnection, ModelEndpoint, RegisteredModel
+from .models import ModelConnection, RegisteredModel
 
 
 @admin.register(ModelConnection)
@@ -14,12 +14,5 @@ class ModelConnectionAdmin(admin.ModelAdmin):
 class RegisteredModelAdmin(admin.ModelAdmin):
     list_display = ("display_name", "model_id", "connection", "enabled", "created_at")
     list_filter = ("enabled", "connection__project")
-    search_fields = ("display_name", "model_id")
-
-
-@admin.register(ModelEndpoint)
-class ModelEndpointAdmin(admin.ModelAdmin):
-    list_display = ("display_name", "provider", "model_id", "enabled", "project", "created_at")
-    list_filter = ("provider", "enabled", "project")
     search_fields = ("display_name", "model_id")
 

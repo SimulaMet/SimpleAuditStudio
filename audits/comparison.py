@@ -31,7 +31,7 @@ def compare_runs(project, run_ids: list[int]) -> dict:
       - results: per-scenario comparison across runs
     """
     runs = list(AuditRun.objects.filter(id__in=run_ids, project=project).select_related(
-        "scenario_set_version", "target_endpoint", "judge_endpoint", "auditor_endpoint"
+        "scenario_set_version", "target_model", "judge_model", "auditor_model"
     ))
     if len(runs) != len(run_ids):
         missing = set(run_ids) - {r.id for r in runs}
@@ -46,15 +46,15 @@ def compare_runs(project, run_ids: list[int]) -> dict:
         warnings.append(f"Scenario set versions differ: {', '.join('v'+str(v) for v in vnums)}. Results may not be directly comparable.")
 
     # Check: same judge?
-    judge_ids = {r.judge_endpoint_id for r in runs}
+    judge_ids = {r.judge_model_id for r in runs}
     if len(judge_ids) > 1:
-        judge_names = sorted({r.judge_endpoint.display_name for r in runs})
+        judge_names = sorted({r.judge_model.display_name for r in runs})
         warnings.append(f"Different judge models used: {', '.join(judge_names)}. Judge effects can dominate model effects — interpret with caution.")
 
     # Check: same auditor?
-    auditor_ids = {r.auditor_endpoint_id for r in runs}
+    auditor_ids = {r.auditor_model_id for r in runs}
     if len(auditor_ids) > 1:
-        auditor_names = sorted({r.auditor_endpoint.display_name for r in runs})
+        auditor_names = sorted({r.auditor_model.display_name for r in runs})
         warnings.append(f"Different auditor models used: {', '.join(auditor_names)}.")
 
     # Check: same SimpleAudit version?
@@ -119,7 +119,7 @@ def compare_runs(project, run_ids: list[int]) -> dict:
             r = run_results.get(run.id, {}).get(key)
             entry["runs"][str(run.id)] = {
                 "name": run.name,
-                "target": run.target_endpoint.display_name if run.target_endpoint else None,
+                "target": run.target_model.display_name if run.target_model else None,
                 **(r or {"status": "missing", "severity": None}),
             }
         results.append(entry)
@@ -127,9 +127,9 @@ def compare_runs(project, run_ids: list[int]) -> dict:
     # Build inputs comparison: key parameters that differ between runs
     input_rows = []
     param_defs = [
-        ("Target model", lambda r: r.target_endpoint.display_name if r.target_endpoint else "—"),
-        ("Auditor model", lambda r: r.auditor_endpoint.display_name if r.auditor_endpoint else "—"),
-        ("Judge model", lambda r: r.judge_endpoint.display_name if r.judge_endpoint else "—"),
+        ("Target model", lambda r: r.target_model.display_name if r.target_model else "—"),
+        ("Auditor model", lambda r: r.auditor_model.display_name if r.auditor_model else "—"),
+        ("Judge model", lambda r: r.judge_model.display_name if r.judge_model else "—"),
         ("Scenario set version", lambda r: f"{r.scenario_set_version.scenario_set.name} (v{r.scenario_set_version.version})" if r.scenario_set_version else "—"),
         ("SimpleAudit version", lambda r: f"{r.simpleaudit_version} ({r.git_commit[:8]}…)" if r.simpleaudit_version and r.git_commit else (r.simpleaudit_version or "—")),
         ("Temperature (target)", lambda r: (r.generation_parameters_snapshot or {}).get("temperature_target", "—")),
@@ -151,12 +151,12 @@ def compare_runs(project, run_ids: list[int]) -> dict:
         for r in runs:
             text = getter(r)
             url = None
-            if label == "Target model" and r.target_endpoint_id:
-                url = f"/models/?highlight={r.target_endpoint_id}"
-            elif label == "Auditor model" and r.auditor_endpoint_id:
-                url = f"/models/?highlight={r.auditor_endpoint_id}"
-            elif label == "Judge model" and r.judge_endpoint_id:
-                url = f"/models/?highlight={r.judge_endpoint_id}"
+            if label == "Target model" and r.target_model_id:
+                url = f"/models/?highlight={r.target_model.connection_id}"
+            elif label == "Auditor model" and r.auditor_model_id:
+                url = f"/models/?highlight={r.auditor_model.connection_id}"
+            elif label == "Judge model" and r.judge_model_id:
+                url = f"/models/?highlight={r.judge_model.connection_id}"
             elif label == "Scenario set version" and r.scenario_set_version:
                 url = f"/scenarios/?set={r.scenario_set_version.scenario_set_id}"
             cells.append(_cell(text, url))
@@ -171,8 +171,8 @@ def compare_runs(project, run_ids: list[int]) -> dict:
                 "id": r.id,
                 "name": r.name,
                 "status": r.status,
-                "target": r.target_endpoint.display_name if r.target_endpoint else None,
-                "judge": r.judge_endpoint.display_name if r.judge_endpoint else None,
+                "target": r.target_model.display_name if r.target_model else None,
+                "judge": r.judge_model.display_name if r.judge_model else None,
                 "scenario_set_version": f"v{r.scenario_set_version.version}" if r.scenario_set_version else None,
                 "total_scenarios": r.total_scenarios,
                 "successful_scenarios": r.successful_scenarios,

@@ -4,7 +4,7 @@ from django.test import TestCase
 
 from accounts.models import Project, ProjectMembership, User
 from audits.models import AuditRun
-from model_registry.models import ModelEndpoint
+from model_registry.models import ModelConnection, RegisteredModel
 from scenarios.models import (
     Scenario,
     ScenarioRevision,
@@ -46,16 +46,16 @@ class AuditCloneTests(TestCase):
             revision=revision,
             position=1,
         )
-        self.target = self._endpoint("Target")
-        self.auditor = self._endpoint("Auditor")
-        self.judge = self._endpoint("Judge")
+        self.target = self._model("Target")
+        self.auditor = self._model("Auditor")
+        self.judge = self._model("Judge")
         self.run = AuditRun.objects.create(
             project=self.project,
             name="Original audit",
             scenario_set_version=self.version,
-            target_endpoint=self.target,
-            auditor_endpoint=self.auditor,
-            judge_endpoint=self.judge,
+            target_model=self.target,
+            auditor_model=self.auditor,
+            judge_model=self.judge,
             target_config_snapshot={"model_id": "target"},
             auditor_config_snapshot={"model_id": "auditor"},
             judge_config_snapshot={"model_id": "judge"},
@@ -70,12 +70,17 @@ class AuditCloneTests(TestCase):
         )
         self.client.force_login(self.user)
 
-    def _endpoint(self, name):
-        return ModelEndpoint.objects.create(
+    def _model(self, name):
+        conn = ModelConnection.objects.create(
             project=self.project,
-            display_name=name,
+            name=f"{name} conn",
             provider="test",
             base_url=f"https://{name.lower()}.invalid/v1",
+        )
+        return RegisteredModel.objects.create(
+            connection=conn,
+            project=self.project,
+            display_name=name,
             model_id=name.lower(),
         )
 

@@ -44,14 +44,14 @@ class AuditRenameTest(TestCase):
     def test_rename_preserves_other_fields(self):
         original_status = self.run.status
         original_set_version = self.run.scenario_set_version_id
-        original_target = self.run.target_endpoint_id
+        original_target = self.run.target_model_id
 
         self.client.post(f"/audits/{self.run.id}/rename/", {"name": "Changed"})
         self.run.refresh_from_db()
 
         self.assertEqual(self.run.status, original_status)
         self.assertEqual(self.run.scenario_set_version_id, original_set_version)
-        self.assertEqual(self.run.target_endpoint_id, original_target)
+        self.assertEqual(self.run.target_model_id, original_target)
 
     def test_rename_rejects_empty_name(self):
         resp = self.client.post(f"/audits/{self.run.id}/rename/", {"name": ""})

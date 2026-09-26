@@ -37,10 +37,6 @@
     <p class="text-xs text-gray-500 mt-1 uppercase tracking-wide">Scenarios <span class="text-gray-600 normal-case">({{ stats.platform.scenario_set_count }} sets)</span></p>
   </div>
   <div class="bg-surface-raised rounded-xl border border-gray-800 p-4">
-    <span class="text-2xl font-bold text-gray-300">{{ stats.platform.model_endpoint_count }}</span>
-    <p class="text-xs text-gray-500 mt-1 uppercase tracking-wide">Model endpoints</p>
-  </div>
-  <div class="bg-surface-raised rounded-xl border border-gray-800 p-4">
     <span class="text-2xl font-bold text-gray-300">{{ stats.platform.model_connection_count }}</span>
     <p class="text-xs text-gray-500 mt-1 uppercase tracking-wide">Connections</p>
   </div>
@@ -59,7 +55,6 @@
           <th class="text-right px-3 py-2 text-xs font-medium text-gray-500 uppercase">Completed</th>
           <th class="text-right px-3 py-2 text-xs font-medium text-gray-500 uppercase">Failed</th>
           <th class="text-right px-3 py-2 text-xs font-medium text-gray-500 uppercase">Scenarios</th>
-          <th class="text-right px-3 py-2 text-xs font-medium text-gray-500 uppercase">Endpoints</th>
           <th class="text-right px-3 py-2 text-xs font-medium text-gray-500 uppercase">Connections</th>
           <th class="text-left px-3 py-2 text-xs font-medium text-gray-500 uppercase">Created</th>
         </tr>
@@ -76,12 +71,11 @@
           <td class="px-3 py-2.5 text-right text-emerald-400">{{ ws.audit_completed }}</td>
           <td class="px-3 py-2.5 text-right text-red-400">{{ ws.audit_failed }}</td>
           <td class="px-3 py-2.5 text-right text-gray-300">{{ ws.scenario_count }}</td>
-          <td class="px-3 py-2.5 text-right text-gray-300">{{ ws.model_endpoint_count }}</td>
           <td class="px-3 py-2.5 text-right text-gray-300">{{ ws.model_connection_count }}</td>
           <td class="px-3 py-2.5 text-gray-500 text-xs">{{ ws.created_at|date:"Y-m-d" }}</td>
         </tr>
         {% empty %}
-        <tr><td colspan="10" class="px-3 py-6 text-center text-gray-500 text-sm">No workspaces yet.</td></tr>
+        <tr><td colspan="9" class="px-3 py-6 text-center text-gray-500 text-sm">No workspaces yet.</td></tr>
         {% endfor %}
       </tbody>
     </table>
@@ -102,7 +96,6 @@
           <th class="text-right px-3 py-2 text-xs font-medium text-gray-500 uppercase">Members</th>
           <th class="text-right px-3 py-2 text-xs font-medium text-gray-500 uppercase">Runs</th>
           <th class="text-right px-3 py-2 text-xs font-medium text-gray-500 uppercase">Scenarios</th>
-          <th class="text-right px-3 py-2 text-xs font-medium text-gray-500 uppercase">Endpoints</th>
           <th class="text-right px-3 py-2 text-xs font-medium text-gray-500 uppercase">Actions</th>
         </tr>
       </thead>
@@ -119,7 +112,6 @@
           <td class="px-3 py-2.5 text-right text-gray-300">{{ ws.member_count }}</td>
           <td class="px-3 py-2.5 text-right text-gray-300">{{ ws.audit_run_count }}</td>
           <td class="px-3 py-2.5 text-right text-gray-300">{{ ws.scenario_count }}</td>
-          <td class="px-3 py-2.5 text-right text-gray-300">{{ ws.model_endpoint_count }}</td>
           <td class="px-3 py-2.5 text-right">
             <div class="flex justify-end gap-1.5 flex-wrap">
               <a href="/admin-settings/?tab=workspaces&manage={{ ws.id }}" class="px-2 py-1 rounded-lg text-xs bg-surface-overlay border border-gray-700 text-gray-300 hover:border-accent/40">Members</a>
@@ -140,7 +132,7 @@
           </td>
         </tr>
         {% empty %}
-        <tr><td colspan="7" class="px-3 py-6 text-center text-gray-500 text-sm">No workspaces yet.</td></tr>
+        <tr><td colspan="6" class="px-3 py-6 text-center text-gray-500 text-sm">No workspaces yet.</td></tr>
         {% endfor %}
       </tbody>
     </table>

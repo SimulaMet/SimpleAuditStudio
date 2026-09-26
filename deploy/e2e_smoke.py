@@ -103,23 +103,17 @@ def main():
     pid = project["id"]
     print(f"project id={pid} name={project['name']}")
 
-    # 3. Model endpoint -> mock (no secret; mock ignores auth)
-    step("MODEL ENDPOINT (mock)")
-    st, ep = c.post(
-        f"/api/projects/{pid}/model-endpoints/create/",
-        {
-            "display_name": f"Mock Model (E2E {suffix})",
-            "provider": "openai",
-            "base_url": "http://mock-model:8901/v1",
-            "model_id": "mock-model",
-            "capabilities": {},
-            "default_parameters": {},
-            "secret_reference": "",
-        },
+    # 3. Model connection + model -> mock (no secret; mock ignores auth)
+    step("MODEL CONNECTION + MODEL (mock)")
+    from model_registry.models import ModelConnection, RegisteredModel
+    conn = ModelConnection.objects.create(
+        project_id=pid, name=f"Mock conn (E2E {suffix})", provider="openai",
+        base_url="http://mock-model:8901/v1",
     )
-    assert st == 201, f"create endpoint: {st} {ep}"
-    eid = ep["id"]
-    print(f"endpoint id={eid}")
+    eid = RegisteredModel.objects.create(
+        connection=conn, project_id=pid, display_name=f"Mock Model (E2E {suffix})", model_id="mock-model",
+    ).id
+    print(f"model id={eid}")
 
     # 4. Scenario
     step("SCENARIO")
@@ -156,9 +150,9 @@ def main():
         {
             "name": f"E2E Smoke Run {suffix}",
             "scenario_set_version_id": version_id,
-            "target_endpoint_id": eid,
-            "auditor_endpoint_id": eid,
-            "judge_endpoint_id": eid,
+            "target_model_id": eid,
+            "auditor_model_id": eid,
+            "judge_model_id": eid,
         },
     )
     assert st == 201, f"submit run: {st} {run}"

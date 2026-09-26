@@ -17,7 +17,7 @@ from audits.serializers import AuditRunCreateSerializer, AuditRunSerializer
 from audits.services import create_audit_run, submit_audit_run
 from infra.exceptions import StableAPIError
 from infra.middleware import set_correlation_context
-from model_registry.models import ModelEndpoint
+from model_registry.models import RegisteredModel
 from scenarios.models import ScenarioSetVersion
 
 logger = logging.getLogger("simpleaudit.audit")
@@ -56,7 +56,7 @@ def get_audit_run(request, project_id, run_id):
     project = _get_project_or_404(project_id)
     _require_project_access(request.user, project)
     queryset = AuditRun.objects.filter(id=run_id, project=project).select_related(
-        "scenario_set_version", "target_endpoint", "auditor_endpoint", "judge_endpoint"
+        "scenario_set_version", "target_model", "auditor_model", "judge_model"
     )
     try:
         run = queryset.get()
@@ -117,10 +117,10 @@ def create_audit_run_view(request, project_id):
 
     try:
         scenario_set_version = ScenarioSetVersion.objects.get(id=data["scenario_set_version_id"], scenario_set__project=project)
-        target_endpoint = ModelEndpoint.objects.get(id=data["target_endpoint_id"], project=project)
-        auditor_endpoint = ModelEndpoint.objects.get(id=data["auditor_endpoint_id"], project=project)
-        judge_endpoint = ModelEndpoint.objects.get(id=data["judge_endpoint_id"], project=project)
-    except (ScenarioSetVersion.DoesNotExist, ModelEndpoint.DoesNotExist) as exc:
+        target_model = RegisteredModel.objects.get(id=data["target_model_id"], project=project)
+        auditor_model = RegisteredModel.objects.get(id=data["auditor_model_id"], project=project)
+        judge_model = RegisteredModel.objects.get(id=data["judge_model_id"], project=project)
+    except (ScenarioSetVersion.DoesNotExist, RegisteredModel.DoesNotExist) as exc:
         raise StableAPIError(detail="Audit input not found in project.", code="audit_input_not_found", http_status=404) from exc
 
     run = create_audit_run(
@@ -128,9 +128,9 @@ def create_audit_run_view(request, project_id):
         user=request.user,
         name=data["name"],
         scenario_set_version=scenario_set_version,
-        target_endpoint=target_endpoint,
-        auditor_endpoint=auditor_endpoint,
-        judge_endpoint=judge_endpoint,
+        target_model=target_model,
+        auditor_model=auditor_model,
+        judge_model=judge_model,
     )
 
     # Enqueue durable work. This is best-effort: if the job system is unavailable

@@ -3,7 +3,7 @@ from rest_framework.test import APIClient
 
 from accounts.models import Project, ProjectMembership, User
 from audits.models import AuditRun
-from model_registry.models import ModelEndpoint
+from model_registry.models import ModelConnection, RegisteredModel
 from scenarios.models import Scenario, ScenarioRevision, ScenarioSet, ScenarioSetVersion
 
 
@@ -31,29 +31,29 @@ class AuditRunFreezeTests(TestCase):
 
         ScenarioSetVersionItem.objects.create(version=self.version, scenario=scenario, revision=revision, position=1)
 
-        self.target = ModelEndpoint.objects.create(
-            project=self.project,
-            display_name="Target",
-            provider="simulachat",
-            base_url="https://target.invalid/v1",
-            model_id="target-model",
-            secret_reference="TARGET_KEY",
+        self.target_conn = ModelConnection.objects.create(
+            project=self.project, name="Target conn", provider="simulachat",
+            base_url="https://target.invalid/v1", secret_reference="TARGET_KEY",
         )
-        self.auditor = ModelEndpoint.objects.create(
-            project=self.project,
-            display_name="Auditor",
-            provider="simulachat",
-            base_url="https://auditor.invalid/v1",
-            model_id="auditor-model",
-            secret_reference="AUDITOR_KEY",
+        self.auditor_conn = ModelConnection.objects.create(
+            project=self.project, name="Auditor conn", provider="simulachat",
+            base_url="https://auditor.invalid/v1", secret_reference="AUDITOR_KEY",
         )
-        self.judge = ModelEndpoint.objects.create(
-            project=self.project,
-            display_name="Judge",
-            provider="simulachat",
-            base_url="https://judge.invalid/v1",
-            model_id="judge-model",
-            secret_reference="JUDGE_KEY",
+        self.judge_conn = ModelConnection.objects.create(
+            project=self.project, name="Judge conn", provider="simulachat",
+            base_url="https://judge.invalid/v1", secret_reference="JUDGE_KEY",
+        )
+        self.target = RegisteredModel.objects.create(
+            connection=self.target_conn, project=self.project,
+            display_name="Target", model_id="target-model",
+        )
+        self.auditor = RegisteredModel.objects.create(
+            connection=self.auditor_conn, project=self.project,
+            display_name="Auditor", model_id="auditor-model",
+        )
+        self.judge = RegisteredModel.objects.create(
+            connection=self.judge_conn, project=self.project,
+            display_name="Judge", model_id="judge-model",
         )
 
     def test_create_audit_run_freezes_inputs_and_stamps_metadata_provenance(self):
@@ -70,9 +70,9 @@ class AuditRunFreezeTests(TestCase):
                 {
                     "name": "Baseline audit",
                     "scenario_set_version_id": self.version.id,
-                    "target_endpoint_id": self.target.id,
-                    "auditor_endpoint_id": self.auditor.id,
-                    "judge_endpoint_id": self.judge.id,
+                    "target_model_id": self.target.id,
+                    "auditor_model_id": self.auditor.id,
+                    "judge_model_id": self.judge.id,
                 },
                 format="json",
             )
@@ -107,9 +107,9 @@ class AuditRunFreezeTests(TestCase):
                 {
                     "name": "Registry install run",
                     "scenario_set_version_id": self.version.id,
-                    "target_endpoint_id": self.target.id,
-                    "auditor_endpoint_id": self.auditor.id,
-                    "judge_endpoint_id": self.judge.id,
+                    "target_model_id": self.target.id,
+                    "auditor_model_id": self.auditor.id,
+                    "judge_model_id": self.judge.id,
                 },
                 format="json",
             )
@@ -131,9 +131,9 @@ class AuditRunFreezeTests(TestCase):
                 {
                     "name": "No engine",
                     "scenario_set_version_id": self.version.id,
-                    "target_endpoint_id": self.target.id,
-                    "auditor_endpoint_id": self.auditor.id,
-                    "judge_endpoint_id": self.judge.id,
+                    "target_model_id": self.target.id,
+                    "auditor_model_id": self.auditor.id,
+                    "judge_model_id": self.judge.id,
                 },
                 format="json",
             )
@@ -150,9 +150,9 @@ class AuditRunFreezeTests(TestCase):
             {
                 "name": "Cross project",
                 "scenario_set_version_id": other_version.id,
-                "target_endpoint_id": self.target.id,
-                "auditor_endpoint_id": self.auditor.id,
-                "judge_endpoint_id": self.judge.id,
+                "target_model_id": self.target.id,
+                "auditor_model_id": self.auditor.id,
+                "judge_model_id": self.judge.id,
                 "simpleaudit_version": "0.1.0",
                 "git_commit": "deadbeef",
             },

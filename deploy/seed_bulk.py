@@ -26,7 +26,6 @@ django.setup()
 from accounts.models import Project, User
 from audits.events import ScenarioResult, append_event
 from audits.models import AuditRun
-from model_registry.models import ModelEndpoint
 from scenarios.models import (
     Scenario,
     ScenarioRevision,
@@ -141,26 +140,28 @@ def main():
     project = Project.objects.get(id=1)
     admin = User.objects.get(username="studio")
 
-    # ─── 1. Model Endpoints (15) ───────────────────────────────────────────────
-    print(f"Model endpoints before: {ModelEndpoint.objects.count()}")
-    existing_endpoints = set(ModelEndpoint.objects.values_list("display_name", flat=True))
+    # ─── 1. Model Connections + Models (15) ────────────────────────────────────
+    from model_registry.models import ModelConnection, RegisteredModel
+    print(f"Models before: {RegisteredModel.objects.count()}")
+    existing_models = set(RegisteredModel.objects.values_list("display_name", flat=True))
     for name, provider, url, model_id in MODEL_NAMES:
-        if name not in existing_endpoints:
-            ModelEndpoint.objects.create(
+        if name not in existing_models:
+            conn, _ = ModelConnection.objects.get_or_create(
+                project=project, base_url=url, provider=provider,
+                defaults={"name": f"{provider} ({url})", "created_by": admin},
+            )
+            RegisteredModel.objects.create(
+                connection=conn,
                 project=project,
                 display_name=name,
-                provider=provider,
-                base_url=url,
                 model_id=model_id,
                 model_revision=f"rev-{random.randint(1, 5)}",
                 capabilities={"max_context": random.choice([8192, 32768, 131072, 200000])},
                 default_parameters={"temperature": round(random.uniform(0.1, 1.0), 2)},
-                secret_reference="vault://models/" + model_id,
                 enabled=random.random() > 0.1,
-                created_by=admin,
             )
-    endpoints = list(ModelEndpoint.objects.all())
-    print(f"Model endpoints after: {ModelEndpoint.objects.count()}")
+    endpoints = list(RegisteredModel.objects.all())
+    print(f"Models after: {RegisteredModel.objects.count()}")
 
     # ─── 3. Scenarios (2000) ───────────────────────────────────────────────────
     print(f"Scenarios before: {Scenario.objects.count()}")
@@ -323,9 +324,9 @@ def main():
             name=f"Audit Run #{i+1:04d} — {vs.scenario_set.name[:30]}",
             status=status,
             scenario_set_version=vs,
-            target_endpoint=target,
-            auditor_endpoint=auditor,
-            judge_endpoint=judge,
+            target_model=target,
+            auditor_model=auditor,
+            judge_model=judge,
             target_config_snapshot={"model": target.model_id, "params": {"temp": 0.7}},
             auditor_config_snapshot={"model": auditor.model_id, "params": {"temp": 0.2}},
             judge_config_snapshot={"model": judge.model_id, "params": {"temp": 0.0}},
@@ -402,7 +403,7 @@ def main():
     print(f"  Scenario Sets:       {ScenarioSet.objects.count()}")
     print(f"  Set Versions:        {ScenarioSetVersion.objects.count()}")
     print(f"  Set Version Items:   {ScenarioSetVersionItem.objects.count()}")
-    print(f"  Model Endpoints:     {ModelEndpoint.objects.count()}")
+    print(f"  Models:            {RegisteredModel.objects.count()}")
     print(f"  Audit Runs:          {AuditRun.objects.count()}")
     print(f"  Scenario Results:    {ScenarioResult.objects.count()}")
     print(f"  Audit Events:        {AuditEvent.objects.count()}")

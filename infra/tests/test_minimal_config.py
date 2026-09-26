@@ -24,7 +24,7 @@ class TestDemoBootSequence(TestCase):
         from django.core.management import call_command
 
         from accounts.services import bootstrap_admin_and_default_project
-        from model_registry.models import ModelEndpoint
+        from model_registry.models import ModelConnection
 
         user, project = bootstrap_admin_and_default_project(
             username="studio",
@@ -36,7 +36,7 @@ class TestDemoBootSequence(TestCase):
         self.assertEqual(project.name, "Demo Project")
 
         call_command("seed_platform", project=project.id, verbosity=0)
-        self.assertGreater(ModelEndpoint.objects.filter(enabled=True).count(), 0)
+        self.assertGreater(ModelConnection.objects.filter(enabled=True).count(), 0)
 
     def test_mock_server_start_stop(self):
         """Mock OpenAI server starts on a random port and responds to healthz."""
@@ -55,7 +55,7 @@ class TestDemoBootSequence(TestCase):
 
         from accounts.services import bootstrap_admin_and_default_project
         from deploy.mock_openai_server import start_mock_server, stop_mock_server
-        from model_registry.models import ModelEndpoint
+        from model_registry.models import ModelConnection
 
         _, project = bootstrap_admin_and_default_project(
             username="studio", email="admin@localhost", password="admin12345",
@@ -66,12 +66,12 @@ class TestDemoBootSequence(TestCase):
         server, port = start_mock_server(port=0)
         try:
             mock_url = f"http://127.0.0.1:{port}/v1"
-            ModelEndpoint.objects.filter(enabled=True).update(
+            ModelConnection.objects.filter(enabled=True).update(
                 base_url=mock_url,
                 api_key_direct="mock-key",
                 secret_reference="",
             )
-            conn = ModelEndpoint.objects.filter(enabled=True).first()
+            conn = ModelConnection.objects.filter(enabled=True).first()
             self.assertIsNotNone(conn)
             self.assertEqual(conn.base_url, mock_url)
             self.assertEqual(conn.api_key_direct, "mock-key")

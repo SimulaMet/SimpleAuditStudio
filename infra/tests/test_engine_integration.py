@@ -15,7 +15,7 @@ from django.test import TestCase
 from accounts.models import Project, ProjectMembership, User
 from audits.events import get_result
 from audits.models import AuditRun
-from model_registry.models import ModelEndpoint
+from model_registry.models import ModelConnection, RegisteredModel
 from scenarios.models import (
     Scenario,
     ScenarioRevision,
@@ -39,21 +39,24 @@ def _build_run(user, project):
     sset = ScenarioSet.objects.create(project=project, name="Safety")
     version = ScenarioSetVersion.objects.create(scenario_set=sset, version=1, scenario_count=1, content_hash="sha256:set")
     item = ScenarioSetVersionItem.objects.create(version=version, scenario=scenario, revision=revision, position=1)
-    target = ModelEndpoint.objects.create(
-        project=project, display_name="Target", provider="simulachat",
-        base_url="https://t.invalid/v1", model_id="t-model", secret_reference="TARGET_KEY",
+    target_conn = ModelConnection.objects.create(
+        project=project, name="T conn", provider="simulachat",
+        base_url="https://t.invalid/v1", secret_reference="TARGET_KEY",
     )
-    auditor = ModelEndpoint.objects.create(
-        project=project, display_name="Auditor", provider="simulachat",
-        base_url="https://a.invalid/v1", model_id="a-model", secret_reference="AUDITOR_KEY",
+    auditor_conn = ModelConnection.objects.create(
+        project=project, name="A conn", provider="simulachat",
+        base_url="https://a.invalid/v1", secret_reference="AUDITOR_KEY",
     )
-    judge = ModelEndpoint.objects.create(
-        project=project, display_name="Judge", provider="simulachat",
-        base_url="https://j.invalid/v1", model_id="j-model", secret_reference="JUDGE_KEY",
+    judge_conn = ModelConnection.objects.create(
+        project=project, name="J conn", provider="simulachat",
+        base_url="https://j.invalid/v1", secret_reference="JUDGE_KEY",
     )
+    target = RegisteredModel.objects.create(connection=target_conn, project=project, display_name="Target", model_id="t-model")
+    auditor = RegisteredModel.objects.create(connection=auditor_conn, project=project, display_name="Auditor", model_id="a-model")
+    judge = RegisteredModel.objects.create(connection=judge_conn, project=project, display_name="Judge", model_id="j-model")
     run = AuditRun.objects.create(
         project=project, name="run", status=AuditRun.Status.QUEUED,
-        scenario_set_version=version, target_endpoint=target, auditor_endpoint=auditor, judge_endpoint=judge,
+        scenario_set_version=version, target_model=target, auditor_model=auditor, judge_model=judge,
         target_config_snapshot={"model_id": "t-model", "provider": "simulachat", "base_url": "https://t.invalid/v1",
                                 "secret_reference": "TARGET_KEY", "default_parameters": {}},
         auditor_config_snapshot={"model_id": "a-model", "provider": "simulachat", "base_url": "https://a.invalid/v1",

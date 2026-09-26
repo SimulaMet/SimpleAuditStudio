@@ -57,22 +57,28 @@ class APIE2ETest(APITestCase):
         assert resp.status_code == 201, f"Publish version failed: {resp.status_code} {resp.content}"
         version_id = resp.json()["id"]
 
-        # 6. Create model endpoints
-        ep_data = {"display_name": "Test Model", "provider": "openai", "base_url": "http://mock/v1", "model_id": "m", "secret_reference": ""}
-        resp = self.client.post(f"/api/projects/{self.pid}/model-endpoints/create/", ep_data, format="json")
-        assert resp.status_code == 201, f"Endpoint create failed: {resp.status_code} {resp.content}"
-        target_id = resp.json()["id"]
-
-        resp = self.client.post(f"/api/projects/{self.pid}/model-endpoints/create/", {**ep_data, "display_name": "Judge Model"}, format="json")
-        judge_id = resp.json()["id"]
+        # 6. Create model connections + models
+        from model_registry.models import ModelConnection, RegisteredModel
+        target_conn = ModelConnection.objects.create(
+            project_id=self.pid, name="Target conn", provider="openai", base_url="http://mock/v1",
+        )
+        target_id = RegisteredModel.objects.create(
+            connection=target_conn, project_id=self.pid, display_name="Test Model", model_id="m",
+        ).id
+        judge_conn = ModelConnection.objects.create(
+            project_id=self.pid, name="Judge conn", provider="openai", base_url="http://mock/v1",
+        )
+        judge_id = RegisteredModel.objects.create(
+            connection=judge_conn, project_id=self.pid, display_name="Judge Model", model_id="j",
+        ).id
 
         # 7. Submit audit run
         resp = self.client.post(f"/api/projects/{self.pid}/audit-runs/create/", {
             "name": "E2E Lifecycle Run",
             "scenario_set_version_id": version_id,
-            "target_endpoint_id": target_id,
-            "auditor_endpoint_id": target_id,
-            "judge_endpoint_id": judge_id,
+            "target_model_id": target_id,
+            "auditor_model_id": target_id,
+            "judge_model_id": judge_id,
         }, format="json")
         assert resp.status_code == 201, f"Run create failed: {resp.status_code} {resp.content}"
         run_data = resp.json()
@@ -128,9 +134,9 @@ class APIE2ETest(APITestCase):
         resp = self.client.post(f"/api/projects/{self.pid}/audit-runs/create/", {
             "name": "E2E Compare Run",
             "scenario_set_version_id": version_id,
-            "target_endpoint_id": target_id,
-            "auditor_endpoint_id": target_id,
-            "judge_endpoint_id": judge_id,
+            "target_model_id": target_id,
+            "auditor_model_id": target_id,
+            "judge_model_id": judge_id,
         }, format="json")
         assert resp.status_code == 201
         run2_id = resp.json()["id"]
@@ -178,14 +184,16 @@ class APIE2ETest(APITestCase):
         set_id = resp.json()["id"]
         resp = self.client.post(f"/api/projects/{self.pid}/scenario-sets/{set_id}/publish/", {"scenario_ids": [sid]}, format="json")
         ver_id = resp.json()["id"]
-        # Endpoints
-        ep = {"display_name": "T", "provider": "openai", "base_url": "http://m/v1", "model_id": "m", "secret_reference": ""}
-        r1 = self.client.post(f"/api/projects/{self.pid}/model-endpoints/create/", ep, format="json").json()
-        r2 = self.client.post(f"/api/projects/{self.pid}/model-endpoints/create/", {**ep, "display_name": "J"}, format="json").json()
+        # Models
+        from model_registry.models import ModelConnection, RegisteredModel
+        c1 = ModelConnection.objects.create(project_id=self.pid, name="C1", provider="openai", base_url="http://m/v1")
+        c2 = ModelConnection.objects.create(project_id=self.pid, name="C2", provider="openai", base_url="http://m/v1")
+        r1 = {"id": RegisteredModel.objects.create(connection=c1, project_id=self.pid, display_name="T", model_id="m").id}
+        r2 = {"id": RegisteredModel.objects.create(connection=c2, project_id=self.pid, display_name="J", model_id="j").id}
         # Run
         resp = self.client.post(f"/api/projects/{self.pid}/audit-runs/create/", {
             "name": name, "scenario_set_version_id": ver_id,
-            "target_endpoint_id": r1["id"], "auditor_endpoint_id": r1["id"], "judge_endpoint_id": r2["id"],
+            "target_model_id": r1["id"], "auditor_model_id": r1["id"], "judge_model_id": r2["id"],
         }, format="json")
         assert resp.status_code == 201
         return resp.json()["id"]

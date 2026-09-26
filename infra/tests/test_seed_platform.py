@@ -6,7 +6,7 @@ from django.core.management import call_command
 from django.test import TestCase
 
 from accounts.models import Project, ProjectMembership, User
-from model_registry.models import ModelConnection, ModelEndpoint, RegisteredModel
+from model_registry.models import ModelConnection, RegisteredModel
 from scenarios.models import Scenario, ScenarioSet, ScenarioSetVersion
 
 
@@ -102,10 +102,7 @@ class SeedPlatformTests(TestCase):
         self.assertIn("gpt-4o", model_ids)
         self.assertIn("gpt-4o-mini", model_ids)
 
-        # Legacy ModelEndpoint rows exist for AuditRun FK compatibility.
-        self.assertGreaterEqual(
-            ModelEndpoint.objects.filter(project=self.project).count(), 2
-        )
+
 
     def test_seed_skips_packs_flag(self):
         self._run_seed(skip_packs=True)
