@@ -4,6 +4,33 @@
 {% block title %}SimpleAudit Studio — Reproducible AI Model Auditing Platform{% endblock %}
 
 {% block body %}
+<style>
+  @keyframes glow-pulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(108, 140, 255, 0.4); }
+    50% { box-shadow: 0 0 20px 4px rgba(108, 140, 255, 0.6); }
+  }
+  .glow-pulse { animation: glow-pulse 2s ease-in-out infinite; }
+
+  @keyframes shimmer-sweep {
+    0% { transform: translateX(-150%) skewX(-20deg); }
+    60%, 100% { transform: translateX(250%) skewX(-20deg); }
+  }
+  .shimmer-btn::after {
+    content: "";
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 40%;
+    height: 100%;
+    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.35), transparent);
+    animation: shimmer-sweep 3s ease-in-out infinite;
+    pointer-events: none;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .glow-pulse, .shimmer-btn::after { animation: none; }
+  }
+</style>
 <div class="min-h-screen bg-gray-950 text-gray-200 flex flex-col">
 
   {# ── Hero ─────────────────────────────────────────────── #}
@@ -22,7 +49,7 @@
     </p>
     <div class="mt-10 flex flex-col sm:flex-row items-center justify-center gap-4">
       <a href="/login/"
-         class="px-6 py-3 rounded-xl bg-accent hover:bg-accent-hover text-white font-semibold transition-colors shadow-lg">
+         class="glow-pulse shimmer-btn relative overflow-hidden px-6 py-3 rounded-xl bg-accent hover:bg-accent-hover text-white font-semibold transition-colors shadow-lg">
         Get started
       </a>
       <a href="https://github.com/SushantGautam/SimpleAuditStudio" target="_blank" rel="noopener"
