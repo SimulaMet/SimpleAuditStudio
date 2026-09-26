@@ -202,16 +202,27 @@ function toggleRename() {
   setInterval(() => { if (es.readyState === EventSource.OPEN) touch(); }, 5000);
 
   function getPhaseCounts() {
+    // Per-rep counts: show progress within the CURRENT rep only.
+    // A scenario's effective rep = max(last seen rep, judgedRep + 1).
+    // If effective rep < currentRep → already done with this rep (exclude).
+    // If effective rep >= currentRep → actively in this rep (count it).
     const counts = { queued: 0, running: 0, judging: 0, done: doneCount };
     const turnCompleted = new Array(maxTurnsSeen + 1).fill(0);
     const turnInProgress = new Array(maxTurnsSeen + 1).fill(0);
     const roleCounts = { auditor: 0, target: 0, judge: 0 };
     let active = 0;
     scenarios.forEach((s, vi) => {
-      if (s.phase === 'done' || s.phase === 'failed') {
-        for (let t = 0; t < maxTurnsSeen; t++) turnCompleted[t]++;
+      if (s.phase === 'done' || s.phase === 'failed') return;
+      // Determine which rep this scenario is actually in
+      const seenRep = s.rep || 0;
+      const nextRepAfterJudge = (s.judgedRep !== undefined && s.judgedRep >= 0) ? s.judgedRep + 1 : -1;
+      const effRep = Math.max(seenRep, nextRepAfterJudge);
+      // If scenario hasn't reached the current rep yet, it's queued for this rep
+      if (effRep + 1 < currentRep) {
+        counts.queued++;
         return;
       }
+      // Scenario is in the current rep (or beyond — treat as in current rep)
       if (s.phase === 'judging') {
         counts.judging++;
         active++;
@@ -253,15 +264,14 @@ function toggleRename() {
       const prog = turnInProgress[t-1] || 0;
       rows.push({ label: `Turn-${t}`, val: comp + prog, total: comp + prog, comp, prog, color: 'bg-indigo-400', lightColor: 'bg-[rgb(199_210_254)]', twoTone: true });
     }
-    // Progress bar: solid = done, light = has been judged but not yet done (includes judging + rep gaps).
-    // A scenario stays in the Progress bar once it has been judged at least once.
+    // Progress bar (per-rep): solid = judging now, light = already judged in THIS rep.
     let progressLight = 0;
     scenarios.forEach((s, vi) => {
       if (s.phase === 'done' || s.phase === 'failed') return;
-      if (s.wasJudged) progressLight++;
+      if (s.judgedRep !== undefined && s.judgedRep + 1 === currentRep) progressLight++;
     });
-    const progressTotal = counts.done + progressLight;
-    rows.push({ label: 'Progress', val: progressTotal, total: progressTotal, comp: counts.done, prog: progressLight, color: 'bg-emerald-400', lightColor: 'bg-[rgb(199_210_254)]', twoTone: true });
+    const progressTotal = counts.judging + progressLight;
+    rows.push({ label: 'Progress', val: progressTotal, total: progressTotal, comp: counts.judging, prog: progressLight, color: 'bg-emerald-400', lightColor: 'bg-[rgb(199_210_254)]', twoTone: true });
 
     distEl.innerHTML = rows.map(r => {
       const pctTotal = (r.total / denom) * 100;
@@ -293,9 +303,15 @@ function toggleRename() {
       document.getElementById(`role-${role}-count`).textContent = roleCounts[role];
     });
 
-    const pct = TOTAL > 0 ? Math.round(doneCount / TOTAL * 100) : 0;
-    document.getElementById('overall-pct').textContent = pct + '%';
-    document.getElementById('overall-label').textContent = `${doneCount} / ${TOTAL}`;
+    // Per-rep completion: scenarios judged IN the current rep (exact match, 0-based)
+    let doneThisRep = 0;
+    scenarios.forEach((s, vi) => {
+      if (s.phase === 'done' || s.phase === 'failed') { doneThisRep++; return; }
+      if (s.judgedRep !== undefined && s.judgedRep + 1 === currentRep) doneThisRep++;
+    });
+    const repPct = TOTAL > 0 ? Math.round(doneThisRep / TOTAL * 100) : 0;
+    document.getElementById('overall-pct').textContent = repPct + '%';
+    document.getElementById('overall-label').textContent = `${doneThisRep} / ${TOTAL}`;
     document.getElementById('stat-ok').textContent = okCount;
     document.getElementById('stat-fail').textContent = failCount;
 
@@ -419,8 +435,8 @@ function toggleRename() {
     // The judge fires once after all turns; treat it as its own phase.
     const phase = role === 'judge' ? 'judging' : 'running';
     const prev = scenarios.get(vi) || {};
-    const wasJudged = prev.wasJudged || (role === 'judge');
-    scenarios.set(vi, { phase, turn, role, rep: p.rep || 0, wasJudged });
+    const judgedRep = role === 'judge' ? (p.rep || 0) : (prev.judgedRep !== undefined ? prev.judgedRep : -1);
+    scenarios.set(vi, { phase, turn, role, rep: p.rep || 0, judgedRep });
     recentEvents.unshift({ vi, phase, turn, role, ts: d.ts ? new Date(d.ts).getTime() : Date.now() });
     if (recentEvents.length > 4) recentEvents.pop();
     renderAll();
