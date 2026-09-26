@@ -25,30 +25,12 @@ jobs:
 
   test:
     runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: postgres:16.4-alpine
-        env:
-          POSTGRES_DB: simpleaudit_test
-          POSTGRES_USER: simpleaudit
-          POSTGRES_PASSWORD: simpleaudit
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U simpleaudit -d simpleaudit_test"
-          --health-interval 5s
-          --health-timeout 3s
-          --health-retries 20
     env:
       DJANGO_SETTINGS_MODULE: config.settings
       DJANGO_SECRET_KEY: ci-secret-key
       DJANGO_DEBUG: "false"
       DJANGO_ALLOWED_HOSTS: "*"
-      POSTGRES_DB: simpleaudit_test
-      POSTGRES_USER: simpleaudit
-      POSTGRES_PASSWORD: simpleaudit
-      POSTGRES_HOST: localhost
-      POSTGRES_PORT: "5432"
+      SIMPLEAUDIT_LOCAL_SQLITE: "1"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -56,7 +38,7 @@ jobs:
           python-version: "3.12"
       - uses: astral-sh/setup-uv@v7
       - name: Install dependencies
-        run: uv sync --frozen --extra dev --extra postgres
+        run: uv sync --frozen --extra dev
       - name: Run tests (parallel)
         run: uv run python manage.py test infra --parallel auto --exclude-tag embedded_hatchet
       - name: Check if embedded Hatchet files changed
