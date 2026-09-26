@@ -24,6 +24,7 @@ simpleaudit-dependency.yaml
 .idea/
 *.swp
 .DS_Store
+copilot-instructions.md
 
 # Test/coverage
 .coverage
