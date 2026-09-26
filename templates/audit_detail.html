@@ -340,12 +340,41 @@ function toggleRename() {
     clearRole();
     logEvent('fail', { vi: d.version_item_id, error: p.error });
   });
+  // Track start time for duration calculation on terminal events.
+  let runStartedAt = null;
+  const startedEl = document.getElementById('run-started');
+  if (startedEl && startedEl.textContent !== '—') {
+    runStartedAt = new Date(startedEl.textContent).getTime() || null;
+  }
+
+  function updateStatusCard() {
+    const now = new Date();
+    const finishedEl = document.getElementById('run-finished');
+    if (finishedEl) finishedEl.textContent = now.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) + ', ' + now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
+    const durRow = document.getElementById('run-duration-row');
+    const durEl = document.getElementById('run-duration');
+    if (durEl && runStartedAt) {
+      const secs = Math.round((now.getTime() - runStartedAt) / 1000);
+      if (secs < 60) durEl.textContent = secs + ' sec';
+      else if (secs < 3600) durEl.textContent = Math.floor(secs / 60) + ' min';
+      else durEl.textContent = Math.floor(secs / 3600) + ' hr ' + Math.floor((secs % 3600) / 60) + ' min';
+      if (durRow) durRow.style.display = '';
+    }
+    const scenEl = document.getElementById('run-scenarios');
+    if (scenEl) {
+      const totalEl = document.getElementById('prog-total');
+      const total = totalEl ? parseInt(totalEl.textContent, 10) || done : done;
+      scenEl.textContent = total + ' total, ' + done + ' done';
+    }
+  }
+
   ['run_completed','run_failed','run_cancelled'].forEach(term => {
     es.addEventListener(term, e => {
       const d = JSON.parse(e.data);
       const stageMap = { run_completed:'completed', run_failed:'failed', run_cancelled:'cancelled' };
       setStage(stageMap[term] || term);
       updateRunState({ run_completed:'completed', run_failed:'failed', run_cancelled:'cancelled' }[term]);
+      updateStatusCard();
       logEvent(term, d.payload || {});
       es.close();
       const panel = document.getElementById('progress-panel');
@@ -370,10 +399,10 @@ function toggleRename() {
         {% elif run.status == "failed" %}<span id="run-state" class="text-red-400 font-medium">failed</span>
         {% else %}<span id="run-state" class="text-amber-400 font-medium">{{ run.get_status_display }}</span>{% endif %}
       </div>
-      <div class="flex justify-between"><span class="text-gray-500">Started</span><span>{{ run.started_at|date:"M j, H:i"|default:"—" }}</span></div>
-      <div class="flex justify-between"><span class="text-gray-500">Finished</span><span>{{ run.finished_at|date:"M j, H:i"|default:"—" }}</span></div>
-      {% if duration %}<div class="flex justify-between"><span class="text-gray-500">Duration</span><span>{{ duration }}</span></div>{% endif %}
-      <div class="flex justify-between"><span class="text-gray-500">Scenarios</span><span>{{ run.total_scenarios }} total, {{ run.completed_scenarios }} done</span></div>
+      <div class="flex justify-between"><span class="text-gray-500">Started</span><span id="run-started">{{ run.started_at|date:"M j, H:i"|default:"—" }}</span></div>
+      <div class="flex justify-between"><span class="text-gray-500">Finished</span><span id="run-finished">{{ run.finished_at|date:"M j, H:i"|default:"—" }}</span></div>
+      {% if duration %}<div class="flex justify-between" id="run-duration-row"><span class="text-gray-500">Duration</span><span id="run-duration">{{ duration }}</span></div>{% else %}<div class="flex justify-between" id="run-duration-row" style="display:none"><span class="text-gray-500">Duration</span><span id="run-duration"></span></div>{% endif %}
+      <div class="flex justify-between"><span class="text-gray-500">Scenarios</span><span id="run-scenarios">{{ run.total_scenarios }} total, {{ run.completed_scenarios }} done</span></div>
     </div>
   </div>
 
