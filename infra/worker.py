@@ -596,16 +596,16 @@ def _run_finalize_impl(workflow_input: FinalizeInput, ctx: Context) -> dict:
         return {"status": current.status.value if hasattr(current.status, "value") else str(current.status)}
 
     # Ordering guarantee: wait until every pinned scenario has a result row.
-    # Poll briefly before raising so Hatchet's retry backoff isn't the only
-    # mechanism covering tail latency of slow scenarios.
+    # Poll for up to 5 minutes before giving up — this covers slow scenarios
+    # and post-restart recovery without depending solely on Hatchet retries.
     import time as _time
 
     done = _count_results(run_id)
     total = workflow_input.total_scenarios or current.total_scenarios or 0
     if total and done < total:
-        deadline = _time.monotonic() + 30.0
+        deadline = _time.monotonic() + 300.0  # 5 min max wait
         while done < total and _time.monotonic() < deadline:
-            _time.sleep(2.0)
+            _time.sleep(5.0)
             done = _count_results(run_id)
         if done < total:
             append_event(run_id, "_run", "finalize_waiting", {"done": done, "total": total})
@@ -853,7 +853,26 @@ def _stuck_run_sweeper(interval: int = 60, stale_minutes: int = 30) -> None:
                 status__in=active_statuses,
                 archived=False,
             ).select_related()
+            from audits.events import ScenarioResult
+
             for run in candidates:
+                # Check if all scenarios actually completed but status wasn't updated.
+                result_count = ScenarioResult.objects.filter(run_id=run.pk).count()
+                if run.total_scenarios and result_count >= run.total_scenarios:
+                    logger.info(
+                        "Force-completing run %s: all %d/%d results present but status=%s",
+                        run.pk, result_count, run.total_scenarios, run.status,
+                    )
+                    run.status = AuditRun.Status.COMPLETED
+                    run.completed_scenarios = result_count
+                    run.finished_at = dj_timezone.now()
+                    run.save(update_fields=["status", "completed_scenarios", "finished_at"])
+                    try:
+                        append_event(run.pk, "_run", "run_completed", {"scenarios": result_count, "recovered": True})
+                    except Exception:
+                        pass
+                    continue
+
                 # Find the most recent event for this run.
                 last_event = AuditEvent.objects.filter(run_id=run.pk).order_by("-id").first()
                 last_activity = last_event.created_at if last_event else run.updated_at
