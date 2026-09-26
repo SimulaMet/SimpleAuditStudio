@@ -19,6 +19,7 @@
       <span class="text-base">▣</span>
       <span class="font-medium text-gray-100 truncate">{{ card.project.name }}</span>
       {% if card.is_current %}<span class="text-[10px] bg-accent/20 text-accent rounded px-1.5 py-0.5 shrink-0">Current</span>{% endif %}
+      {% if card.project.archived %}<span class="text-[10px] bg-gray-700/60 text-gray-300 rounded px-1.5 py-0.5 shrink-0" title="Archived — read-only">Archived</span>{% endif %}
     </div>
     <p class="text-xs text-gray-500 mb-3 h-8 overflow-hidden">{% if card.project.description %}{{ card.project.description }}{% else %}<em>No description</em>{% endif %}</p>
     <p class="text-xs text-gray-500 mb-3">{{ card.member_count }} member{{ card.member_count|pluralize }}</p>

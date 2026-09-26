@@ -82,6 +82,23 @@ class AllPagesSmokeTest(TestCase):
         self._ok("/scenarios/", "Scenario Library")
         self._ok("/models/", "Models")
         self._ok("/workspaces/", "Workspaces")
+        self._ok("/profile/", "Profile")
+
+    def test_admin_settings_requires_superuser(self):
+        # Non-superuser gets 403, not a server error.
+        resp = self.client.get("/admin-settings/")
+        self.assertEqual(resp.status_code, 403)
+
+    def test_admin_settings_pages(self):
+        self.user.is_superuser = True
+        self.user.is_staff = True
+        self.user.save()
+        creds = {"username": self.user.username, "password": "testpass123"}
+        self.client.login(**creds)
+        self._ok("/admin-settings/", "Admin Overview")
+        self._ok("/admin-settings/?tab=workspaces", "Admin Workspaces")
+        self._ok("/admin-settings/?tab=users", "Admin Users")
+        self._ok(f"/admin-settings/?tab=workspaces&manage={self.project.id}", "Admin Members panel")
 
     def test_audit_detail(self):
         self._ok(f"/audits/{self.run.id}/", "Audit detail (single)")

@@ -10,7 +10,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 from accounts.models import Project
-from accounts.services import ensure_project_access
+from accounts.services import ensure_project_access, require_project_writable
 from audits.events import ScenarioResult, list_events
 from audits.models import AuditRun
 from audits.serializers import AuditRunCreateSerializer, AuditRunSerializer
@@ -153,6 +153,7 @@ def cancel_audit_run(request, project_id, run_id):
     set_correlation_context(audit_run_id=run_id)
     project = _get_project_or_404(project_id)
     _require_project_access(request.user, project)
+    require_project_writable(request.user, project)
     queryset = AuditRun.objects.filter(id=run_id, project=project)
     try:
         run = queryset.get()

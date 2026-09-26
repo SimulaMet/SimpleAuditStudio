@@ -134,14 +134,26 @@ class WorkspaceListCreateTest(TestCase):
         self.assertTrue(items["Alpha"]["is_admin"])
         self.assertFalse(items["Beta"]["is_admin"])
 
-    def test_superuser_list_marks_all_admin(self):
+    def test_superuser_list_marks_member_workspaces_admin(self):
+        # Content access is membership-based: a superuser sees only the
+        # workspaces they are a member of (plus Default), each marked admin.
+        admin = _superuser()
+        one = ProjectFactory(name="One")
+        ProjectFactory(name="Two")
+        MembershipFactory(user=admin, project=one, role="admin")
+        self.client.force_authenticate(admin)
+        resp = self.client.get("/api/projects/")
+        items = resp.json()
+        self.assertEqual([item["name"] for item in items], ["One"])
+        self.assertTrue(all(item["is_admin"] for item in items))
+
+    def test_superuser_not_a_member_sees_no_workspaces(self):
         admin = _superuser()
         ProjectFactory(name="One")
         ProjectFactory(name="Two")
         self.client.force_authenticate(admin)
         resp = self.client.get("/api/projects/")
-        self.assertEqual(len(resp.json()), 2)
-        self.assertTrue(all(item["is_admin"] for item in resp.json()))
+        self.assertEqual(resp.json(), [])
 
 
 class WorkspaceUpdateDeleteTest(TestCase):

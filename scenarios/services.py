@@ -3,7 +3,7 @@ from django.db import transaction
 from django.utils.text import slugify
 
 from accounts.models import Project, ProjectMembership
-from accounts.services import ensure_project_access
+from accounts.services import ensure_project_access, require_project_writable
 from infra.exceptions import StableAPIError
 from infra.hashing import scenario_revision_hash, scenario_set_version_hash
 from scenarios.models import (
@@ -20,6 +20,8 @@ def require_project_role(user, project: Project, *roles):
         raise StableAPIError(detail="Authentication required.", code="authentication_required", http_status=401)
     if user.is_superuser:
         return
+    # Archived workspaces are read-only for non-superusers.
+    require_project_writable(user, project)
     if not ensure_project_access(user, project):
         raise StableAPIError(detail="Project access denied.", code="project_access_denied", http_status=403)
     if roles and not ProjectMembership.objects.filter(project=project, user=user, role__in=list(roles)).exists():

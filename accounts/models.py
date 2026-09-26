@@ -45,6 +45,9 @@ class Project(models.Model):
     name = models.CharField(max_length=200, unique=True)
     slug = models.SlugField(max_length=200, unique=True)
     description = models.TextField(blank=True)
+    # Soft-hide a workspace that still contains data. Members keep read access;
+    # all mutations are blocked for non-superusers. Never deletes data.
+    archived = models.BooleanField(default=False, db_index=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
