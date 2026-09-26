@@ -49,12 +49,11 @@ class TestDemoBootSequence(TestCase):
         finally:
             stop_mock_server(server)
 
-    def test_model_endpoints_updated_to_mock(self):
-        """After pointing endpoints at the mock server, they are keyless (no API key)."""
+    def test_model_endpoints_point_at_openai_after_seed(self):
+        """After seeding, model connections point at OpenAI's real base URL."""
         from django.core.management import call_command
 
         from accounts.services import bootstrap_admin_and_default_project
-        from deploy.mock_openai_server import start_mock_server, stop_mock_server
         from model_registry.models import ModelConnection
 
         _, project = bootstrap_admin_and_default_project(
@@ -63,31 +62,57 @@ class TestDemoBootSequence(TestCase):
         )
         call_command("seed_platform", project=project.id, verbosity=0)
 
-        server, port = start_mock_server(port=0)
-        try:
-            mock_url = f"http://127.0.0.1:{port}/v1"
-            # Mirror cli._update_model_endpoints: repoint at the mock, no key.
-            ModelConnection.objects.filter(enabled=True).update(
-                base_url=mock_url,
-                api_key_direct="",
-                secret_reference="",
-            )
-            conn = ModelConnection.objects.filter(enabled=True).first()
-            self.assertIsNotNone(conn)
-            self.assertEqual(conn.base_url, mock_url)
-            self.assertEqual(conn.api_key_direct, "")
-            self.assertFalse(conn.has_key)
-        finally:
-            stop_mock_server(server)
+        conn = ModelConnection.objects.filter(enabled=True).first()
+        self.assertIsNotNone(conn)
+        self.assertEqual(conn.base_url, "https://api.openai.com/v1")
+
+    def test_restore_real_model_endpoints_repairs_mock(self):
+        """A connection left pointing at the local mock is repaired to OpenAI."""
+        from django.core.management import call_command
+
+        from accounts.services import bootstrap_admin_and_default_project
+        from model_registry.models import ModelConnection
+        from simpleaudit_studio.cli import _restore_real_model_endpoints
+
+        _, project = bootstrap_admin_and_default_project(
+            username="studio", email="admin@localhost", password="admin12345",
+            project_name="Demo Project",
+        )
+        call_command("seed_platform", project=project.id, verbosity=0)
+
+        # Simulate an earlier version that left the connection at the mock.
+        ModelConnection.objects.filter(enabled=True).update(
+            base_url="http://127.0.0.1:49615/v1",
+        )
+        _restore_real_model_endpoints()
+
+        conn = ModelConnection.objects.filter(enabled=True).first()
+        self.assertIsNotNone(conn)
+        self.assertEqual(conn.base_url, "https://api.openai.com/v1")
 
 
 
 class TestEmbeddedHatchetLifecycle(TestCase):
     """Test the embedded Hatchet start/stop cycle.
 
-    These require the sidecar binary and network access. They will be slow
-    (~15s first run) but verify the full lifecycle works.
+    These require the sidecar binary and network access. The engine is started
+    once for the whole class (setUpClass) and stopped once (tearDownClass), so
+    the ~16s cost is paid a single time instead of per-test.
     """
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        from infra.minimal_config import start_embedded_hatchet
+
+        cls._hatchet_client = start_embedded_hatchet()
+
+    @classmethod
+    def tearDownClass(cls):
+        from infra.minimal_config import stop_embedded_hatchet
+
+        stop_embedded_hatchet()
+        super().tearDownClass()
 
     def test_data_dir_is_persistent(self):
         """The embedded Postgres data dir is a fixed location, not a temp dir."""
@@ -113,24 +138,18 @@ class TestEmbeddedHatchetLifecycle(TestCase):
         shutil.rmtree("/tmp/custom-pg-dir-test", ignore_errors=True)
 
     def test_start_and_stop(self):
-        from infra.minimal_config import start_embedded_hatchet, stop_embedded_hatchet
-
-        client = start_embedded_hatchet()
-        self.assertIsNotNone(client)
-        stop_embedded_hatchet()
+        """The shared client started in setUpClass is live and usable."""
+        self.assertIsNotNone(self._hatchet_client)
 
     def test_get_client_returns_embedded(self):
-        from infra.minimal_config import start_embedded_hatchet, stop_embedded_hatchet
-
+        """In minimal config, worker.get_client() returns the embedded client."""
         with patch.dict(os.environ, {"SIMPLEAUDIT_MINIMAL": "1"}):
-            client = start_embedded_hatchet()
+            import infra.worker as w
+            from infra.worker import get_client
+
+            w._CLIENT = None
             try:
-                import infra.worker as w
-                from infra.worker import get_client
-                w._CLIENT = None
                 c = get_client()
-                self.assertIs(c, client)
+                self.assertIs(c, self._hatchet_client)
             finally:
-                stop_embedded_hatchet()
-                import infra.worker as w
                 w._CLIENT = None

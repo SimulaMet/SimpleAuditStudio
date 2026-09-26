@@ -4,13 +4,13 @@ Boots the full SimpleAudit Studio stack in a single process (minimal config):
   1. Django setup + migrate (SQLite)
   2. Bootstrap admin user + seed scenario packs + model connections
   3. Start embedded Hatchet engine (sidecar binary + embedded Postgres)
-  4. Start mock OpenAI server (unless --no-mock)
+  4. Point model connections at OpenAI's real base URL (or --mock for the built-in mock)
   5. Run Django web server in a daemon thread
   6. Run audit worker in the main thread
 
 Usage:
-  uvx simpleaudit-studio              # full stack with mock models
-  uvx simpleaudit-studio --no-mock    # skip mock server (use your own endpoints)
+  uvx simpleaudit-studio              # full stack; models point at OpenAI (add your key in the UI)
+  uvx simpleaudit-studio --mock       # use the built-in mock model server (zero-setup demo)
   uvx simpleaudit-studio --port 9000  # custom port
 """
 
@@ -35,8 +35,8 @@ def main() -> None:
         help="Web server port (default: 8000)",
     )
     parser.add_argument(
-        "--no-mock", action="store_true",
-        help="Skip the built-in mock model server (use your own endpoints)",
+        "--mock", action="store_true",
+        help="Use the built-in mock model server (zero-setup demo; results are simulated)",
     )
     parser.add_argument(
         "--no-browser", action="store_true",
@@ -81,9 +81,11 @@ def main() -> None:
 
     start_embedded_hatchet()
 
-    # --- Step 5: Start mock OpenAI server (unless --no-mock) ---
+    # --- Step 5: Configure model endpoints ---
+    # Default: point at OpenAI's real base URL so future runs target OpenAI.
+    # --mock: start the built-in mock server and point at it (zero-setup demo).
     mock_server = None
-    if not args.no_mock:
+    if args.mock:
         from deploy.mock_openai_server import start_mock_server
 
         mock_server, mock_port = start_mock_server(port=0)
@@ -92,9 +94,12 @@ def main() -> None:
 
         # Point seeded model connections at the live mock server
         _update_model_endpoints(mock_url)
-        print("✅ Model endpoints configured.\n")
+        print("✅ Model endpoints configured (mock).\n")
     else:
-        print("⏭️  Skipping mock server (--no-mock). Configure your own model endpoints in the UI.\n")
+        # Repair any connection an earlier version left pointing at the mock,
+        # then make sure all connections point at OpenAI's real base URL.
+        _restore_real_model_endpoints()
+        print("✅ Model endpoints point at OpenAI (add your API key in the UI).\n")
 
     # --- Step 6: Start Django web server in a daemon thread ---
     port = args.port
@@ -119,10 +124,10 @@ def main() -> None:
     print(f"│   Login:      {username} / {password:<20s}│")
     print(f"│   API Docs:   http://localhost:{port}/api/schema/       │")
     print("│                                                         │")
-    if not args.no_mock:
-        print("│   Models:     Built-in mock (swap for real in UI)      │")
+    if args.mock:
+        print("│   Models:     Built-in mock (simulated results)        │")
     else:
-        print("│   Models:     Configure your own endpoints in the UI    │")
+        print("│   Models:     OpenAI (add your API key in the UI)       │")
     print("│                                                         │")
     print("│   Press Ctrl+C to stop.                                 │")
     print("└─────────────────────────────────────────────────────────┘")
@@ -233,6 +238,26 @@ def _update_model_endpoints(mock_url: str) -> None:
         api_key_direct="",
         secret_reference="",
     )
+
+
+def _restore_real_model_endpoints() -> None:
+    """Make sure model connections point at OpenAI's real base URL.
+
+    Seeding already creates the default connection at https://api.openai.com/v1.
+    This repairs any connection an earlier version left pointing at the local
+    mock server (http://127.0.0.1:PORT/v1) so future runs target OpenAI.
+    User-configured custom endpoints (non-local hosts) are left untouched.
+    """
+    from model_registry.models import ModelConnection
+
+    OPENAI_BASE_URL = "https://api.openai.com/v1"
+    for conn in ModelConnection.objects.filter(enabled=True):
+        # Extract hostname (strip scheme, path, and port)
+        netloc = (conn.base_url or "").split("//", 1)[-1].split("/", 1)[0]
+        host = netloc.rsplit(":", 1)[0] if ":" in netloc else netloc
+        if host in ("127.0.0.1", "localhost", "0.0.0.0"):
+            conn.base_url = OPENAI_BASE_URL
+            conn.save(update_fields=["base_url"])
 
 
 def _run_worker() -> None:
