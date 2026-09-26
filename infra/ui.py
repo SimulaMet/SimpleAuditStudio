@@ -1406,6 +1406,7 @@ class AuditDetailView(ProjectMixin, DetailView):
             [r["version_item_id"] for r in results]
         )
         ctx["set_id"] = set_id
+        ctx["progress_pct"] = (run.completed_scenarios * 100 // run.total_scenarios) if run.total_scenarios else 0
         ctx["stages"] = ["queued", "preparing", "target_execution", "auditing", "judging", "aggregation", "completed"]
         if run.started_at and run.finished_at:
             total = int((run.finished_at - run.started_at).total_seconds())
