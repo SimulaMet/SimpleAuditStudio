@@ -184,10 +184,25 @@ function toggleRename() {
   let currentRep = 0;
   let totalRepsSeen = TOTAL_REPS;
 
+  function timeAgo(ts) {
+    const s = Math.floor((Date.now() - ts) / 1000);
+    if (s < 5) return 'just now';
+    if (s < 60) return s + 's ago';
+    const m = Math.floor(s / 60);
+    if (m < 60) return m + 'm ago';
+    const h = Math.floor(m / 60);
+    return h + 'h ago';
+  }
+
+  let lastEventTs = Date.now();
+
   function touch() {
     const el = document.getElementById('last-update');
-    if (el) el.textContent = 'Last updated: ' + new Date().toLocaleTimeString();
+    if (el) el.textContent = 'Last updated: ' + timeAgo(lastEventTs);
   }
+
+  // Refresh "time ago" labels every 5s while streaming.
+  setInterval(() => { if (es.readyState === EventSource.OPEN) touch(); }, 5000);
 
   function getPhaseCounts() {
     const counts = { queued: 0, running: 0, judging: 0, done: doneCount };
@@ -329,13 +344,13 @@ function toggleRename() {
       else if (ev.phase === 'done') status = 'Done';
       else if (ev.phase === 'failed') status = 'Failed';
       else status = `Turn-${(ev.turn || 0) + 1}/${maxTurnsSeen} \u00b7 ${ev.role || '?'}`;
-      const t = new Date(ev.ts);
-      const time = t.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
-      return `<p class="event-log-entry"><span class="text-gray-500">${time}</span> <span class="text-gray-300">${shortName}</span> <span class="text-gray-500">${status}</span></p>`;
+      const time = timeAgo(ev.ts);
+      return `<p class="event-log-entry"><span class="text-gray-600">${time}</span> <span class="text-gray-300">${shortName}</span> <span class="text-gray-500">${status}</span></p>`;
     }).join('');
   }
 
   function renderAll() {
+    lastEventTs = Date.now(); // "Last updated" = when we received the event
     renderDistribution();
     renderLatestActivity();
     touch();
