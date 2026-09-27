@@ -19,13 +19,10 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import threading
 import time
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-
-JUDGE_JSON_RE = re.compile(r"\{.*\}", re.DOTALL)
 
 
 def _extract_last_user_text(messages):

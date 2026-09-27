@@ -67,24 +67,43 @@ def parse_design(post, project) -> dict:
     Raises DesignError with a user-facing message.
     """
     from model_registry.models import RegisteredModel
-    from scenarios.models import ScenarioSet
+    from scenarios.models import ScenarioSet, ScenarioSetVersion
 
+    # Scenario versions: explicit version ids ("scenario_version", several may
+    # belong to one set to compare versions), "latest:<set id>" (always latest:
+    # unpinned, so repeating runs follow new versions) and/or set ids
+    # ("scenario_set", shorthand for the set's current latest, pinned).
+    raw = [v for v in post.getlist("scenario_version") if v]
+    follow_set_ids = [v.split(":", 1)[1] for v in raw if v.startswith("latest:")]
+    version_ids = [v for v in raw if not v.startswith("latest:")]
     set_ids = [s for s in post.getlist("scenario_set") if s]
-    if not set_ids:
+    if not version_ids and not set_ids and not follow_set_ids:
         raise DesignError("Pick at least one scenario set.")
-    pinned = (post.get("scenario_set_version") or "").strip()
-    versions = []
-    for sset in ScenarioSet.objects.filter(project=project, pk__in=set_ids).order_by("name"):
-        version = None
-        if pinned:
-            # Clone pins the source run's exact version of its set.
-            version = sset.versions.filter(pk=pinned).first()
-        version = version or sset.versions.order_by("-version").first()
-        if version is None:
-            raise DesignError(f"Scenario set '{sset.name}' has no published version yet.")
-        versions.append(version)
-    if len(versions) != len(set(set_ids)):
+    chosen = list(
+        ScenarioSetVersion.objects.filter(pk__in=version_ids, scenario_set__project=project).select_related("scenario_set")
+    )
+    if len(chosen) != len(set(version_ids)):
+        raise DesignError("A selected scenario set version is not in this workspace.")
+    sets = list(ScenarioSet.objects.filter(project=project, pk__in=set_ids))
+    if len(sets) != len(set(set_ids)):
         raise DesignError("A selected scenario set is not in this workspace.")
+    for sset in sets:
+        latest = sset.versions.select_related("scenario_set").order_by("-version").first()
+        if latest is None:
+            raise DesignError(f"Scenario set '{sset.name}' has no published version yet.")
+        chosen.append(latest)
+    for sset in ScenarioSet.objects.filter(project=project, pk__in=follow_set_ids):
+        latest = sset.versions.select_related("scenario_set").order_by("-version").first()
+        if latest is None:
+            raise DesignError(f"Scenario set '{sset.name}' has no published version yet.")
+        latest.follow_latest = True  # distinct instance: runs today's latest, monitors unpinned
+        chosen.append(latest)
+    if len({s for s in follow_set_ids}) != sum(1 for v in chosen if is_follow(v)):
+        raise DesignError("A selected scenario set is not in this workspace.")
+    versions = sorted(
+        {(v.pk, is_follow(v)): v for v in chosen}.values(),
+        key=lambda v: (v.scenario_set.name, is_follow(v), v.version),
+    )
 
     models = {}
     for role in _MODEL_ROLES:
@@ -133,6 +152,11 @@ def parse_design(post, project) -> dict:
     }
 
 
+def is_follow(version) -> bool:
+    """Whether this scenario set version was picked as "Always latest"."""
+    return bool(getattr(version, "follow_latest", False))
+
+
 def varied_factors(design: dict) -> list[str]:
     return [key for key in DESIGN_AXES if len(design[key]) > 1]
 
@@ -164,6 +188,8 @@ def factor_value_label(key: str, value) -> str:
     if value is None:
         return "default"
     if key == "scenario_set":
+        if is_follow(value):
+            return f"{value.scenario_set.name} (always latest, now v{value.version})"
         return f"{value.scenario_set.name} v{value.version}"
     if key in _MODEL_ROLES:
         return value.display_name
@@ -220,7 +246,7 @@ def factors_from_runs(runs: list[dict]) -> list[str]:
     """
     def value(run, key):
         if key == "scenario_set":
-            return run["version"].pk
+            return (run["version"].pk, is_follow(run["version"]))
         if key in _MODEL_ROLES:
             return run[key].pk
         if key == "params":
@@ -234,6 +260,7 @@ def spec_to_row(spec: dict) -> str:
     """Serialise the non-editable part of a spec for the review form."""
     return json.dumps({
         "v": spec["scenario_set"].pk,
+        "f": 1 if is_follow(spec["scenario_set"]) else 0,
         "t": spec["target"].pk,
         "a": spec["auditor"].pk,
         "j": spec["judge"].pk,

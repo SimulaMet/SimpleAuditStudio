@@ -2,14 +2,7 @@
 {% block title %}Sign in — SimpleAudit Studio{% endblock %}
 {% block auth_content %}
 <div class="w-full max-w-md">
-    <div class="text-center mb-8">
-      {% load static %}
-      <a href="/" class="block group">
-        <img src="{% static 'logo.png' %}" alt="SimpleAudit" class="w-20 h-20 mx-auto mb-4">
-        <h1 class="text-3xl font-bold text-gray-100 group-hover:text-white transition-colors">SimpleAudit Studio</h1>
-      </a>
-      <p class="text-sm text-gray-500 mt-2">Reproducible AI Model Auditing</p>
-    </div>
+    {% include "partials/auth_header.html" %}
 
     {# ── Primary: WorkOS email code (shown only when configured) ── #}
     {% if workos_enabled %}

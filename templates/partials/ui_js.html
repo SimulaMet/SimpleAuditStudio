@@ -1,0 +1,21 @@
+<script>
+// Shared page helpers, loaded in <head> so every page script can use them.
+window.esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+window.csrfToken = () => (document.cookie.match(/(?:^|;\s*)csrftoken=([^;]+)/) || [])[1] || '';
+// JSON request with CSRF. Resolves to the parsed body; throws Error(message) on HTTP or network failure.
+window.apiFetch = async (url, { method = 'POST', body } = {}) => {
+  const resp = await fetch(url, {
+    method, credentials: 'same-origin',
+    headers: { 'Content-Type': 'application/json', 'X-CSRFToken': csrfToken() },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  const data = await resp.json().catch(() => ({}));
+  if (!resp.ok) throw new Error(data?.error?.message || data?.error || data?.detail || `Request failed (${resp.status})`);
+  return data;
+};
+// <form data-confirm="Delete this?"> asks before submitting.
+document.addEventListener('submit', e => {
+  const msg = e.target.dataset && e.target.dataset.confirm;
+  if (msg && !confirm(msg)) e.preventDefault();
+}, true);
+</script>

@@ -3,7 +3,7 @@ Target / auditor / judge pickers where each role takes one or more models
 (New Experiment). Context: connections, sel.target/auditor/judge (id strings).
 Field names match the single-select partial so one-run posts look the same.
 {% endcomment %}
-<div class="bg-surface-raised rounded-xl border border-gray-800 p-4">
+<div class="bg-surface-raised rounded-xl border border-gray-800 p-4 h-full">
   <div class="flex items-center justify-between mb-1">
     <h3 class="text-sm font-semibold text-gray-300">Models</h3>
     <a href="{% url 'models' %}" target="_blank" class="text-xs text-accent hover:text-accent-hover hover:underline">＋ New</a>
@@ -20,7 +20,7 @@ Field names match the single-select partial so one-run posts look the same.
       <p class="text-[11px] text-gray-600 mb-1.5">{{ hint }}</p>
       <input type="search" data-filter placeholder="Search {{ label|lower }} models…" aria-label="Search {{ label|lower }} models"
              class="w-full mb-1.5 px-2.5 py-1.5 rounded-lg bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-2 focus:ring-accent/50">
-      <div data-filter-list class="max-h-56 overflow-y-auto rounded-lg border border-gray-800 bg-surface-overlay/40 divide-y divide-gray-800/60">
+      <div data-filter-list class="h-60 overflow-y-auto rounded-lg border border-gray-800 bg-surface-overlay/40 divide-y divide-gray-800/60">
         {% for conn in connections %}
           {% if conn.models.all %}
           <p data-filter-group="{{ conn.pk }}" class="px-2.5 pt-2 pb-1 text-[10px] uppercase tracking-wide text-gray-600">{{ conn.name }}</p>

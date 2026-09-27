@@ -389,12 +389,11 @@ class WorkspaceSwitchTest(TestCase):
         client.login(username=self.user.username, password="testpass123")
         resp = client.post("/api/projects/switch/", {"project_id": self.w2.id}, format="json")
         self.assertEqual(resp.status_code, 200)
-        resp = client.get("/")
+        resp = client.get("/runs/data/")
         self.assertEqual(resp.status_code, 200)
-        # The dashboard table shows run IDs (not names); assert on the W2 run's
-        # detail link and confirm the W1 run is absent.
-        self.assertIn(f"/runs/{run_w2.id}/", resp.content.decode())
-        self.assertNotIn(f"/runs/{run_w1.id}/", resp.content.decode())
+        ids = [row["id"] for row in resp.json()["data"]]
+        self.assertIn(run_w2.id, ids)
+        self.assertNotIn(run_w1.id, ids)
 
 
 class LegacyProjectApiTest(TestCase):

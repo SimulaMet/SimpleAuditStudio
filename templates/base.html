@@ -7,6 +7,7 @@
   <meta http-equiv="Pragma" content="no-cache">
   <meta http-equiv="Expires" content="0">
   <title>{% block title %}SimpleAudit Studio{% endblock %}</title>
+  {% block head %}{% endblock %}
   {% load static %}
   {# SEO head: description, canonical, OG, Twitter, JSON-LD. App pages default to noindex. #}
   {% include "seo/head.html" with seo_title=page_title seo_description=page_description seo_robots=page_robots|default:"noindex,nofollow" seo_jsonld=page_jsonld og_image_url=og_image_url %}
@@ -27,6 +28,8 @@
   </script>
   <script src="https://unpkg.com/htmx.org@2.0.6"></script>
   <style>
+    /* Viewers and archived workspaces: hide edit controls (the server blocks them too). */
+    [data-readonly] [data-write] { display: none !important; }
     /* Center icons in the collapsed (mini) sidebar so there's no empty strip on the right */
     #sidebar.sidebar-collapsed nav a,
     #sidebar.sidebar-collapsed #workspace-switcher-btn {
@@ -45,8 +48,9 @@
       justify-content: center;
     }
   </style>
+{% include "partials/ui_js.html" %}
 </head>
-<body class="h-full bg-surface text-gray-200 antialiased">
+<body class="h-full bg-surface text-gray-200 antialiased"{% if user.is_authenticated and not can_write %} data-readonly{% endif %}>
 {% if user.is_authenticated %}
 <div class="flex h-screen overflow-hidden">
   <!-- Sidebar -->
@@ -57,7 +61,7 @@
              onerror="this.onerror=null;this.src='https://raw.githubusercontent.com/SushantGautam/SimpleAuditStudio/main/static/logo.svg'">
         <span class="sidebar-label ml-2 text-sm font-semibold text-gray-300 whitespace-nowrap group-hover:text-gray-100 transition-colors">SimpleAudit Studio</span>
       </a>
-      <button id="sidebar-toggle" class="ml-auto p-1.5 -m-1.5 text-gray-400 hover:text-gray-200 text-base leading-none" title="Toggle sidebar">⟨</button>
+      <button id="sidebar-toggle" class="ml-auto p-1.5 -m-1.5 text-gray-400 hover:text-gray-200 text-base leading-none" title="Toggle sidebar" aria-label="Toggle sidebar">⟨</button>
     </div>
     <nav class="flex-1 py-3 space-y-0.5 px-2">
       <!-- Workspace switcher -->
@@ -129,7 +133,7 @@
           {% endif %}
           <span class="sidebar-label text-xs text-gray-400 truncate flex-1">{{ user.username }}</span>
         </a>
-        <a href="{% url 'logout' %}" class="sidebar-label text-xs text-gray-600 hover:text-red-400 shrink-0" title="Sign out">⏻</a>
+        <a href="{% url 'logout' %}" class="sidebar-label text-xs text-gray-600 hover:text-red-400 shrink-0" title="Sign out" aria-label="Sign out">⏻</a>
       </div>
     </div>
   </aside>
@@ -149,18 +153,7 @@
       {% endif %}
       {% block content %}{% endblock %}
       </div>
-      <footer class="shrink-0 py-2 px-2 border-t border-gray-800 flex items-center justify-center gap-3 text-xs mt-4">
-        <a href="https://github.com/SushantGautam/SimpleAuditStudio" target="_blank" rel="noopener"
-           class="flex items-center gap-1.5 text-gray-500 hover:text-accent transition-colors duration-200 max-w-full">
-          <svg class="w-4 h-4 shrink-0" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>
-          <span class="truncate">SimpleAuditStudio</span>
-        </a>
-        <span class="text-gray-700 select-none">·</span>
-        <a href="https://github.com/SushantGautam/SimpleAuditStudio/issues" target="_blank" rel="noopener"
-           class="text-gray-500 hover:text-accent transition-colors duration-200">
-          Report issue or suggest change?
-        </a>
-      </footer>
+      {% include "partials/footer.html" with footer_class="py-2 px-2 mt-4" %}
     </main>
   </div>
 </div>
@@ -169,21 +162,11 @@
   <div class="flex-1 flex items-center justify-center p-6">
     {% block auth_content %}{% endblock %}
   </div>
-  <footer class="shrink-0 py-3 border-t border-gray-800 flex items-center justify-center gap-3 text-xs px-4 md:px-6">
-    <a href="https://github.com/SushantGautam/SimpleAuditStudio" target="_blank" rel="noopener"
-       class="flex items-center gap-1.5 text-gray-500 hover:text-accent transition-colors duration-200">
-      <svg class="w-4 h-4" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>
-      <span>SimpleAuditStudio</span>
-    </a>
-    <span class="text-gray-700 select-none">·</span>
-    <a href="https://github.com/SushantGautam/SimpleAuditStudio/issues" target="_blank" rel="noopener"
-       class="text-gray-500 hover:text-accent transition-colors duration-200">
-      Report issue or suggest change?
-    </a>
-  </footer>
+  {% include "partials/footer.html" with footer_class="py-3 px-4 md:px-6" %}
 </div>
 {% endif %}
 {% include "partials/local_time_js.html" %}
+{% include "partials/tooltips.html" %}
 <script>
 // Workspace switcher: toggle dropdown, POST /api/projects/switch/, reload.
 (function() {
@@ -191,11 +174,6 @@
   if (!wrap) return;
   const btn = document.getElementById('workspace-switcher-btn');
   const dd = document.getElementById('workspace-dropdown');
-
-  function csrfToken() {
-    const m = document.cookie.match(/(?:^|;\s*)csrftoken=([^;]+)/);
-    return m ? m[1] : '';
-  }
 
   btn.addEventListener('click', (e) => {
     e.stopPropagation();
@@ -212,19 +190,10 @@
     row.addEventListener('click', async () => {
       const id = row.dataset.workspaceId;
       try {
-        const resp = await fetch('/api/projects/switch/', {
-          method: 'POST',
-          headers: {'Content-Type': 'application/json', 'X-CSRFToken': csrfToken()},
-          body: JSON.stringify({project_id: Number(id)}),
-        });
-        if (!resp.ok) {
-          const data = await resp.json().catch(() => ({}));
-          alert(data?.error?.message || 'Could not switch workspace.');
-          return;
-        }
+        await apiFetch('/api/projects/switch/', { body: { project_id: Number(id) } });
         window.location.reload();
-      } catch {
-        alert('Network error while switching workspace.');
+      } catch (err) {
+        alert(err.message || 'Could not switch workspace.');
       }
     });
   });

@@ -60,10 +60,6 @@ class RegisteredModel(models.Model):
         return f"{self.display_name} [{self.connection.name}]"
 
     @property
-    def full_label(self) -> str:
-        return f"{self.display_name} ({self.connection.name})"
-
-    @property
     def has_key(self) -> bool:
         """Whether the parent connection has an API key configured."""
         return self.connection.has_key

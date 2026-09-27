@@ -66,18 +66,31 @@ class LoginCSRFTests(TestCase):
     def setUp(self):
         self.user = User.objects.create_user(username="demo", password="pass")
 
-    @override_settings(DEMO_MODE=True)
-    def test_login_from_hf_space_embed_origin(self):
-        client = Client()
-        # GET first so the CSRF cookie is issued for the app origin.
+    def test_demo_mode_trusts_huggingface_origin(self):
+        import os
+        from unittest import mock
+
+        from config.settings import _csrf_trusted_origins
+
+        with mock.patch.dict(os.environ, {"DEMO_MODE": "true"}):
+            demo_origins = _csrf_trusted_origins()
+        with mock.patch.dict(os.environ, {"DEMO_MODE": "false"}):
+            normal_origins = _csrf_trusted_origins()
+        self.assertIn("https://huggingface.co", demo_origins)
+        self.assertNotIn("https://huggingface.co", normal_origins)
+
+        # With those origins, a CSRF-checked login POST from the embed succeeds.
+        client = Client(enforce_csrf_checks=True)
         client.get("/login/")
-        response = client.post(
-            "/login/",
-            {"username": "demo", "password": "pass"},
-            HTTP_ORIGIN="https://huggingface.co",
-        )
+        with override_settings(CSRF_TRUSTED_ORIGINS=demo_origins):
+            response = client.post(
+                "/login/",
+                {"username": "demo", "password": "pass", "csrfmiddlewaretoken": client.cookies["csrftoken"].value},
+                HTTP_ORIGIN="https://huggingface.co",
+                HTTP_HOST="example.hf.space",
+                secure=True,
+            )
         self.assertEqual(response.status_code, 302)
-        self.assertEqual(response.url, "/")
 
     def test_demo_mode_uses_cross_site_cookie_policy(self):
         # In demo mode (DEMO_MODE=true in env at settings load time) cookies

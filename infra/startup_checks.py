@@ -17,7 +17,7 @@ def validate_startup_environment(bootstrap_password: str | None = None) -> list[
     caller if needed.
 
     In the opt-in local SQLite test mode (SIMPLEAUDIT_LOCAL_SQLITE) the
-    Postgres/MinIO infrastructure checks are skipped because those services do
+    Postgres checks are skipped because those services do
     not exist locally; the canonical deployment still enforces them.
     """
     errors = []
@@ -35,14 +35,6 @@ def validate_startup_environment(bootstrap_password: str | None = None) -> list[
         postgres_password = os.environ.get("POSTGRES_PASSWORD", "")
         if postgres_password in {"", "change-me"}:
             errors.append("POSTGRES_PASSWORD must be set and must not be change-me.")
-
-        # MinIO is optional — only validate keys if the endpoint is configured
-        minio_endpoint = os.environ.get("MINIO_ENDPOINT", "")
-        if minio_endpoint:
-            minio_access_key = os.environ.get("MINIO_ACCESS_KEY", "")
-            minio_secret_key = os.environ.get("MINIO_SECRET_KEY", "")
-            if minio_access_key in {"", "change-me"} or minio_secret_key in {"", "change-me"}:
-                errors.append("MINIO_ACCESS_KEY and MINIO_SECRET_KEY must be set when MINIO_ENDPOINT is configured.")
 
     effective_bootstrap_password = bootstrap_password if bootstrap_password is not None else os.environ.get("BOOTSTRAP_PASSWORD", "")
     if effective_bootstrap_password in {"", "change-me"}:

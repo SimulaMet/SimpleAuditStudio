@@ -762,12 +762,6 @@ def _run_finalize_impl(workflow_input: FinalizeInput, ctx: Context) -> dict:
     return {"status": status, "scenarios": done}
 
 
-def _count_results(run_id: str) -> int:
-    from audits.events import count_results
-
-    return count_results(run_id)
-
-
 def _mark_run_failed(run_id: str, code: str) -> None:
     from audits.models import AuditRun
 
@@ -779,18 +773,6 @@ def _mark_run_failed(run_id: str, code: str) -> None:
     run.error_code = code
     run.finished_at = timezone.now()
     run.save(update_fields=["status", "error_code", "finished_at"])
-
-
-def _mark_run_completed(run_id: str) -> None:
-    from audits.models import AuditRun
-
-    try:
-        run = AuditRun.objects.get(pk=int(run_id))
-    except (AuditRun.DoesNotExist, ValueError):
-        return
-    run.status = AuditRun.Status.COMPLETED
-    run.finished_at = timezone.now()
-    run.save(update_fields=["status", "finished_at"])
 
 
 # --- Module-level task registration ---------------------------------------

@@ -6,24 +6,22 @@ from django.contrib import admin
 from django.http import Http404
 from django.shortcuts import redirect
 from django.urls import include, path
-from django.views.generic import RedirectView
 from django.views.static import serve as _static_serve
 from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView
 
 from accounts.views import healthz, readyz
 from infra.health_api import health_panel_api
+from infra.runs_table import PreferenceView, RunsBulkView, RunsDataView, RunsExportView
 from infra.seo import LandingView, llms_txt, robots_txt, sitemap_xml
 from infra.ui import (
     AdminView,
     CompareView,
     ConnectionDeleteView,
-    DashboardExportView,
     DashboardView,
     DiscoverModelsView,
     ExperimentDetailView,
     ExperimentsView,
     HealthView,
-    IndexView,
     LoginView,
     ModelsView,
     MonitorActionView,
@@ -50,7 +48,6 @@ from infra.ui import (
     ScenarioSetDeleteView,
     ScenarioSetRenameView,
     ScenariosView,
-    WorkOSCallbackView,
     WorkOSLoginView,
     WorkOSVerifyView,
     WorkspacesView,
@@ -143,7 +140,6 @@ urlpatterns = [
     path("", home_view, name="dashboard"),
     path("landing/", LandingView.as_view(always_show=True), name="landing_page"),
     # UI (server-rendered CBVs)
-    path("index", IndexView.as_view(), name="index"),
     path("login/", LoginView.as_view(), name="login"),
     # Local one-liner demo only (404 unless MINIMAL_CONFIG): the CLI opens this
     # in the default browser to land the user signed-in on the dashboard.
@@ -152,9 +148,6 @@ urlpatterns = [
     path("logout/", logout_view, name="logout"),
     path("auth/workos/login/", WorkOSLoginView.as_view(), name="workos_login"),
     path("auth/workos/verify/", WorkOSVerifyView.as_view(), name="workos_verify"),
-    path("auth/workos/callback/", WorkOSCallbackView.as_view(), name="workos_callback"),
-    # Old dashboard URL: kept only as a redirect for bookmarks (query preserved).
-    path("dashboard/", RedirectView.as_view(url="/", query_string=True, permanent=True)),
     path("workspaces/", WorkspacesView.as_view(), name="workspaces"),
     path("admin-settings/", AdminView.as_view(), name="admin_settings"),
     path("profile/", ProfileView.as_view(), name="profile"),
@@ -191,5 +184,8 @@ urlpatterns = [
     path("runs/<int:run_id>/results/<int:result_id>/", RunResultView.as_view(), name="run_result"),
     path("runs/<int:run_id>/export/", RunExportView.as_view(), name="run_export"),
     path("runs/<int:run_id>/results-fragment/", RunResultsFragmentView.as_view(), name="run_results_fragment"),
-    path("export.csv", DashboardExportView.as_view(), name="dashboard_export"),
+    path("runs/data/", RunsDataView.as_view(), name="runs_data"),
+    path("runs/bulk/", RunsBulkView.as_view(), name="runs_bulk"),
+    path("runs/export.csv", RunsExportView.as_view(), name="runs_export"),
+    path("me/preferences/", PreferenceView.as_view(), name="preferences"),
 ]

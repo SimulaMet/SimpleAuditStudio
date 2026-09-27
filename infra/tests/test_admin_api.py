@@ -1,5 +1,4 @@
 """Tests for the Super Admin REST API (stats, user CRUD, archive)."""
-import json
 
 from django.test import Client, TestCase
 
@@ -12,28 +11,7 @@ from infra.tests.factories import (
     ScenarioFactory,
     UserFactory,
 )
-
-
-def _login(client, user, pw="testpass123"):
-    creds = {"username": user.username, "password": pw}
-    client.login(**creds)
-
-
-def _superuser():
-    user = UserFactory()
-    user.is_superuser = True
-    user.is_staff = True
-    user.set_password("testpass123")
-    user.save()
-    return user
-
-
-def _post(client, url, payload):
-    return client.post(url, data=json.dumps(payload), content_type="application/json")
-
-
-def _patch(client, url, payload):
-    return client.patch(url, data=json.dumps(payload), content_type="application/json")
+from infra.tests.utils import login, patch_json, post_json, superuser
 
 
 class AdminStatsApiTest(TestCase):
@@ -44,13 +22,13 @@ class AdminStatsApiTest(TestCase):
         user = UserFactory()
         user.set_password("testpass123")
         user.save()
-        _login(self.client, user)
+        login(self.client, user)
         resp = self.client.get("/api/admin/stats/")
         self.assertEqual(resp.status_code, 403)
         self.assertEqual(resp.json()["error"]["code"], "super_admin_required")
 
     def test_counts_only_no_content(self):
-        admin = _superuser()
+        admin = superuser()
         project = ProjectFactory(name="Acme")
         MembershipFactory(user=admin, project=project, role="admin")
         ScenarioFactory(project=project)
@@ -58,7 +36,7 @@ class AdminStatsApiTest(TestCase):
         run = AuditRunFactory(project=project, target_model=model, auditor_model=model, judge_model=model)
         run.status = "completed"
         run.save()
-        _login(self.client, admin)
+        login(self.client, admin)
         resp = self.client.get("/api/admin/stats/")
         self.assertEqual(resp.status_code, 200)
         data = resp.json()
@@ -76,43 +54,43 @@ class AdminStatsApiTest(TestCase):
 
 class AdminUserCrudApiTest(TestCase):
     def setUp(self):
-        self.admin = _superuser()
+        self.admin = superuser()
         self.client = Client(SERVER_NAME="localhost")
-        _login(self.client, self.admin)
+        login(self.client, self.admin)
 
     def test_create_user(self):
-        resp = _post(self.client, "/api/admin/users/", {"username": "newbie", "email": "newbie@test.com", "password": "Str0ng-pass-123"})
+        resp = post_json(self.client, "/api/admin/users/", {"username": "newbie", "email": "newbie@test.com", "password": "Str0ng-pass-123"})
         self.assertEqual(resp.status_code, 201)
         self.assertEqual(resp.json()["username"], "newbie")
 
     def test_create_user_username_taken(self):
         UserFactory(username="taken")
-        resp = _post(self.client, "/api/admin/users/", {"username": "taken", "password": "Str0ng-pass-123"})
+        resp = post_json(self.client, "/api/admin/users/", {"username": "taken", "password": "Str0ng-pass-123"})
         self.assertEqual(resp.status_code, 409)
         self.assertEqual(resp.json()["error"]["code"], "username_taken")
 
     def test_create_user_email_taken(self):
         UserFactory(username="other", email="dup@test.com")
-        resp = _post(self.client, "/api/admin/users/", {"username": "newbie", "email": "dup@test.com", "password": "Str0ng-pass-123"})
+        resp = post_json(self.client, "/api/admin/users/", {"username": "newbie", "email": "dup@test.com", "password": "Str0ng-pass-123"})
         self.assertEqual(resp.status_code, 409)
         self.assertEqual(resp.json()["error"]["code"], "email_taken")
 
     def test_update_user_email(self):
         target = UserFactory(username="jane", email="jane@old.com")
-        resp = _patch(self.client, f"/api/admin/users/{target.id}/", {"email": "jane@new.com"})
+        resp = patch_json(self.client, f"/api/admin/users/{target.id}/", {"email": "jane@new.com"})
         self.assertEqual(resp.status_code, 200)
         target.refresh_from_db()
         self.assertEqual(target.email, "jane@new.com")
 
     def test_deactivate_user(self):
         target = UserFactory(username="jane")
-        resp = _patch(self.client, f"/api/admin/users/{target.id}/", {"is_active": False})
+        resp = patch_json(self.client, f"/api/admin/users/{target.id}/", {"is_active": False})
         self.assertEqual(resp.status_code, 200)
         target.refresh_from_db()
         self.assertFalse(target.is_active)
 
     def test_demote_self_forbidden(self):
-        resp = _patch(self.client, f"/api/admin/users/{self.admin.id}/", {"is_superuser": False})
+        resp = patch_json(self.client, f"/api/admin/users/{self.admin.id}/", {"is_superuser": False})
         self.assertEqual(resp.status_code, 409)
         self.assertEqual(resp.json()["error"]["code"], "cannot_demote_self")
 
@@ -125,7 +103,7 @@ class AdminUserCrudApiTest(TestCase):
         other = UserFactory(username="boss2")
         other.is_superuser = True
         other.save()
-        resp = _patch(self.client, f"/api/admin/users/{other.id}/", {"is_superuser": False})
+        resp = patch_json(self.client, f"/api/admin/users/{other.id}/", {"is_superuser": False})
         self.assertEqual(resp.status_code, 200)
         other.refresh_from_db()
         self.assertFalse(other.is_superuser)
@@ -144,9 +122,9 @@ class AdminUserCrudApiTest(TestCase):
 
 class AdminArchiveApiTest(TestCase):
     def setUp(self):
-        self.admin = _superuser()
+        self.admin = superuser()
         self.client = Client(SERVER_NAME="localhost")
-        _login(self.client, self.admin)
+        login(self.client, self.admin)
 
     def test_archive_and_unarchive(self):
         project = ProjectFactory(name="Acme")
@@ -167,7 +145,7 @@ class AdminArchiveApiTest(TestCase):
         user.save()
         project = ProjectFactory(name="Acme")
         MembershipFactory(user=user, project=project, role="admin")
-        _login(self.client, user)
+        login(self.client, user)
         resp = self.client.post(f"/api/admin/workspaces/{project.id}/archive/")
         self.assertEqual(resp.status_code, 403)
         self.assertEqual(resp.json()["error"]["code"], "super_admin_required")

@@ -40,7 +40,7 @@ class AuditTimingDisplayTest(TestCase):
         self.assertEqual(resp.status_code, 200)
         html = resp.content.decode()
         self.assertIn("Duration", html)
-        self.assertIn("12 min", html)
+        self.assertIn("12m 0s", html)
 
     def test_no_duration_when_started_missing(self):
         run = AuditRunFactory(project=self.project, status=AuditRun.Status.COMPLETED)

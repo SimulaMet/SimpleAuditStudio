@@ -22,6 +22,9 @@ class AuditRun(models.Model):
         FAILED = "failed", "Failed"
         CANCELLED = "cancelled", "Cancelled"
 
+    # Runs in these states are finished; every other status means queued or running.
+    TERMINAL_STATUSES = (Status.COMPLETED, Status.FAILED, Status.CANCELLED)
+
     project = models.ForeignKey("accounts.Project", on_delete=models.CASCADE, related_name="audit_runs")
     name = models.CharField(max_length=250)
     status = models.CharField(max_length=30, choices=Status.choices, default=Status.QUEUED)
@@ -71,8 +74,12 @@ class AuditRun(models.Model):
         return f"{self.name} ({self.status})"
 
     @property
+    def is_active(self) -> bool:
+        return self.status not in self.TERMINAL_STATUSES
+
+    @property
     def duration_display(self) -> str:
-        """Human-readable wall-clock duration, e.g. '2 minutes' or '1 hour 3 minutes'."""
+        """Wall-clock duration, e.g. '45s', '12m 3s' or '1h 4m' (empty until finished)."""
         if not (self.started_at and self.finished_at):
             return ""
         seconds = int((self.finished_at - self.started_at).total_seconds())

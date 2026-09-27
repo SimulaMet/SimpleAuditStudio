@@ -26,7 +26,7 @@
   </div>
   <div class="bg-surface-raised rounded-xl border border-gray-800 p-4">
     <span class="text-2xl font-bold text-amber-400">{{ stats.platform.audit_run_total }}</span>
-    <p class="text-xs text-gray-500 mt-1 uppercase tracking-wide">Audit runs <span class="text-gray-600 normal-case">({{ stats.platform.audit_run_active }} active · {{ stats.platform.audit_run_failed }} failed)</span></p>
+    <p class="text-xs text-gray-500 mt-1 uppercase tracking-wide">Runs <span class="text-gray-600 normal-case">({{ stats.platform.audit_run_active }} active · {{ stats.platform.audit_run_failed }} failed)</span></p>
   </div>
   <div class="bg-surface-raised rounded-xl border border-gray-800 p-4">
     <span class="text-2xl font-bold text-emerald-400">{{ stats.platform.audit_run_completed }}</span>
@@ -117,7 +117,7 @@
               <a href="/admin-settings/?tab=workspaces&manage={{ ws.id }}" class="px-2 py-1 rounded-lg text-xs bg-surface-overlay border border-gray-700 text-gray-300 hover:border-accent/40">Members</a>
               <button type="button" onclick="adminToggleRename({{ ws.id }}, this)" class="px-2 py-1 rounded-lg text-xs bg-surface-overlay border border-gray-700 text-gray-300 hover:border-accent/40">Rename</button>
               <span data-rename-form="{{ ws.id }}" class="hidden items-center gap-1">
-                <input data-rename-input="{{ ws.id }}" type="text" value="{{ ws.name|escapejs }}" class="px-2 py-1 rounded-lg text-xs bg-surface border border-gray-700 text-gray-200 focus:outline-none focus:border-accent/50 w-32">
+                <input data-rename-input="{{ ws.id }}" type="text" value="{{ ws.name }}" class="px-2 py-1 rounded-lg text-xs bg-surface border border-gray-700 text-gray-200 focus:outline-none focus:border-accent/50 w-32">
                 <button type="button" onclick="adminRenameWorkspace({{ ws.id }}, this)" class="px-2 py-1 rounded-lg text-xs bg-accent/15 border border-accent/30 text-accent hover:bg-accent/25">Save</button>
                 <button type="button" onclick="adminToggleRename({{ ws.id }}, this)" class="px-2 py-1 rounded-lg text-xs bg-surface-overlay border border-gray-700 text-gray-400 hover:border-gray-500">Cancel</button>
               </span>
@@ -247,9 +247,9 @@
             <div class="flex justify-end gap-1.5 flex-wrap">
               <button type="button" onclick="adminToggleEdit({{ u.id }}, this)" class="px-2 py-1 rounded-lg text-xs bg-surface-overlay border border-gray-700 text-gray-300 hover:border-accent/40">Edit</button>
               <span data-edit-form="{{ u.id }}" class="hidden items-center gap-1">
-                <input data-edit-first="{{ u.id }}" type="text" placeholder="First" value="{{ u.first_name|escapejs }}" class="px-2 py-1 rounded-lg text-xs bg-surface border border-gray-700 text-gray-200 focus:outline-none focus:border-accent/50 w-20">
-                <input data-edit-last="{{ u.id }}" type="text" placeholder="Last" value="{{ u.last_name|escapejs }}" class="px-2 py-1 rounded-lg text-xs bg-surface border border-gray-700 text-gray-200 focus:outline-none focus:border-accent/50 w-20">
-                <input data-edit-email="{{ u.id }}" type="email" placeholder="Email" value="{{ u.email|escapejs }}" class="px-2 py-1 rounded-lg text-xs bg-surface border border-gray-700 text-gray-200 focus:outline-none focus:border-accent/50 w-40">
+                <input data-edit-first="{{ u.id }}" type="text" placeholder="First" value="{{ u.first_name }}" class="px-2 py-1 rounded-lg text-xs bg-surface border border-gray-700 text-gray-200 focus:outline-none focus:border-accent/50 w-20">
+                <input data-edit-last="{{ u.id }}" type="text" placeholder="Last" value="{{ u.last_name }}" class="px-2 py-1 rounded-lg text-xs bg-surface border border-gray-700 text-gray-200 focus:outline-none focus:border-accent/50 w-20">
+                <input data-edit-email="{{ u.id }}" type="email" placeholder="Email" value="{{ u.email }}" class="px-2 py-1 rounded-lg text-xs bg-surface border border-gray-700 text-gray-200 focus:outline-none focus:border-accent/50 w-40">
                 <button type="button" onclick="adminEditUser({{ u.id }}, this)" class="px-2 py-1 rounded-lg text-xs bg-accent/15 border border-accent/30 text-accent hover:bg-accent/25">Save</button>
                 <button type="button" onclick="adminToggleEdit({{ u.id }}, this)" class="px-2 py-1 rounded-lg text-xs bg-surface-overlay border border-gray-700 text-gray-400 hover:border-gray-500">Cancel</button>
               </span>
@@ -284,28 +284,13 @@
 
 <script>
 (function() {
-  function csrfToken() {
-    const m = document.cookie.match(/(?:^|;\s*)csrftoken=([^;]+)/);
-    return m ? m[1] : '';
-  }
   function showError(msg) {
     const el = document.getElementById('admin-error');
     el.textContent = msg;
     el.classList.remove('hidden');
     setTimeout(() => el.classList.add('hidden'), 6000);
   }
-  async function api(url, method, body) {
-    const opts = { method, headers: { 'Content-Type': 'application/json', 'X-CSRFToken': csrfToken() } };
-    if (body !== undefined) opts.body = JSON.stringify(body);
-    const resp = await fetch(url, opts);
-    if (resp.status === 204) return null;
-    const data = await resp.json().catch(() => ({}));
-    if (!resp.ok) {
-      const msg = data?.error?.message || data?.detail || ('Request failed (' + resp.status + ')');
-      throw new Error(msg);
-    }
-    return data;
-  }
+  const api = (url, method, body) => apiFetch(url, { method, body });
   function confirmAction(message) {
     return window.confirm(message);
   }
@@ -448,7 +433,7 @@
     } catch (e) { showError(e.message); btn.disabled = false; }
   };
   window.adminDeleteUser = async function(id, username, btn) {
-    if (!confirmAction('Permanently delete user ' + username + '? Their workspace memberships are removed; audit history is preserved.')) return;
+    if (!confirmAction('Permanently delete user ' + username + '? Their workspace memberships are removed; run history is preserved.')) return;
     btn.disabled = true;
     try {
       await api('/api/admin/users/' + id + '/', 'DELETE');

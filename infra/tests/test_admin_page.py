@@ -9,20 +9,7 @@ from infra.tests.factories import (
     ScenarioFactory,
     UserFactory,
 )
-
-
-def _login(client, user, pw="testpass123"):
-    creds = {"username": user.username, "password": pw}
-    client.login(**creds)
-
-
-def _superuser():
-    user = UserFactory()
-    user.is_superuser = True
-    user.is_staff = True
-    user.set_password("testpass123")
-    user.save()
-    return user
+from infra.tests.utils import login, superuser
 
 
 class AdminPageAccessTest(TestCase):
@@ -38,39 +25,39 @@ class AdminPageAccessTest(TestCase):
         user = UserFactory()
         user.set_password("testpass123")
         user.save()
-        _login(self.client, user)
+        login(self.client, user)
         resp = self.client.get("/admin-settings/")
         self.assertEqual(resp.status_code, 403)
 
     def test_superuser_sees_overview(self):
-        admin = _superuser()
-        _login(self.client, admin)
+        admin = superuser()
+        login(self.client, admin)
         resp = self.client.get("/admin-settings/")
         self.assertEqual(resp.status_code, 200)
         self.assertContains(resp, "Admin Settings")
         self.assertContains(resp, "Per-workspace usage")
 
     def test_superuser_workspaces_tab(self):
-        admin = _superuser()
+        admin = superuser()
         project = ProjectFactory(name="Acme")
         MembershipFactory(user=admin, project=project, role="admin")
-        _login(self.client, admin)
+        login(self.client, admin)
         resp = self.client.get("/admin-settings/?tab=workspaces")
         self.assertEqual(resp.status_code, 200)
         self.assertContains(resp, "Acme")
 
     def test_superuser_users_tab_lists_users(self):
-        admin = _superuser()
+        admin = superuser()
         UserFactory(username="jane")
-        _login(self.client, admin)
+        login(self.client, admin)
         resp = self.client.get("/admin-settings/?tab=users")
         self.assertEqual(resp.status_code, 200)
         self.assertContains(resp, "jane")
         self.assertContains(resp, "Super admin")
 
     def test_invalid_tab_falls_back_to_overview(self):
-        admin = _superuser()
-        _login(self.client, admin)
+        admin = superuser()
+        login(self.client, admin)
         resp = self.client.get("/admin-settings/?tab=bogus")
         self.assertEqual(resp.status_code, 200)
         self.assertContains(resp, "Per-workspace usage")
@@ -78,9 +65,9 @@ class AdminPageAccessTest(TestCase):
 
 class AdminPageStatsTest(TestCase):
     def setUp(self):
-        self.admin = _superuser()
+        self.admin = superuser()
         self.client = Client(SERVER_NAME="localhost")
-        _login(self.client, self.admin)
+        login(self.client, self.admin)
 
     def test_counts_reflect_data(self):
         project = ProjectFactory(name="Acme")

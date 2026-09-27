@@ -1,384 +1,87 @@
 # SimpleAudit Studio — Architecture
 
-Status: current  
-Date: 2026-09-22
+Status: current (matches the code)  
+Date: 2026-09-28
 
-## 1. Goals
+SimpleAudit Studio is a web platform around the [SimpleAudit](https://pypi.org/project/simpleaudit/)
+engine: it stores versioned scenarios and model connections, runs audits as
+durable background jobs, and records every run as a frozen, reproducible
+experiment. See [domain-model.md](domain-model.md) for the data model and
+[deployment.md](deployment.md) for how to run it.
 
-The production platform must be:
-
-- self-hostable with Docker Compose
-- durable across web/API and worker restarts
-- safe for long-running audit jobs
-- observable end to end
-- reproducible at the audit level
-- maintainable by multiple developers
-- simple enough that one host can run the full system
-
-It must wrap the existing SimpleAudit engine rather than reimplement its scientific pipeline.
-
-## 2. Non-goals
-
-Do not introduce unless measured requirements demand it:
-
-- Kubernetes
-- Kafka
-- Elasticsearch
-- ClickHouse
-- lakeFS
-- service mesh
-- microservice decomposition of every domain object
-- custom queue implementation when a mature workflow system fits
-
-## 3. High-level topology
+## 1. Components
 
 ```mermaid
-flowchart TD
-    Browser[Browser UI] --> Web[Django Web/API]
-    Web --> PG[(PostgreSQL)]
-    Web --> Obj[(S3/MinIO Object Storage)]
-    Web --> WF[Workflow/Queue System]
-    WF --> CPU[CPU Workers]
-    WF --> APIWorkers[External API Workers]
-    CPU --> SA[SimpleAudit Engine]
-    APIWorkers --> SA
-    SA --> Obj
-    SA --> PG
-    Web --> OTEL[OpenTelemetry Collector]
-    SA --> OTEL
-    OTEL --> LF[Langfuse or compatible backend]
-    Browser --> Viz[Existing SimpleAudit Visualizer]
-    Viz --> Obj
+flowchart LR
+    Browser -->|HTML, htmx, fetch| Web[Django web<br/>UI + DRF API]
+    Web --> DB[(PostgreSQL<br/>or SQLite)]
+    Web -->|submit workflow| Hatchet[Hatchet<br/>durable queue]
+    Hatchet --> Worker[Worker<br/>infra/worker.py]
+    Worker -->|Target → Auditor → Judge| Engine[SimpleAudit engine<br/>infra/engine.py]
+    Engine --> Models[OpenAI-compatible<br/>model servers]
+    Worker --> DB
 ```
 
-### Component responsibilities
-
-| Component | Responsibility | Must not do |
+| Component | Code | Role |
 |---|---|---|
-| Django Web/API | authentication, authorization, forms, REST/SSE, validation, orchestration commands | execute long LLM audits in-process |
-| PostgreSQL | authoritative state for scenarios, models, runs, metrics, events, users | store raw secrets or large artifacts inline |
-| Workflow/queue | durable job scheduling, retries, cancellation, concurrency, worker pools | own SimpleAudit domain truth |
-| Workers | execute SimpleAudit target→auditor→judge pipeline | expose public HTTP endpoints |
-| Object storage | raw transcripts, result JSON, reports, exports | be queried as primary relational source |
-| Observability | traces, logs, metrics, LLM call visibility | replace PostgreSQL audit records |
-| Visualizer | deep exploration of saved results | mutate audit state |
-
-## 4. Execution model
-
-### 4.1 Audit lifecycle
-
-An `AuditRun` is a durable aggregate. Its lifecycle is:
-
-```text
-queued
-  -> preparing
-  -> target_execution
-  -> auditing
-  -> judging
-  -> aggregation
-  -> report_generation
-  -> completed | failed | cancelled
-```
-
-The exact stage names may be refined, but progress must be structured state plus counters, not only a percentage.
-
-### 4.2 Job decomposition
-
-Recommended initial decomposition:
-
-1. `audit.run` — top-level workflow for one `AuditRun`.
-2. `scenario.execute` — child task per scenario or small batch.
-3. `artifact.persist` — upload raw outputs and write result rows.
-4. `metrics.aggregate` — compute summary metrics after all scenario tasks finish.
-
-This gives:
-
-- per-scenario retry
-- parallelism within a run
-- cancellation at run or scenario level
-- progress counters from completed child tasks
-- recovery after worker death
-
-Execution rule:
-
-Workers must execute exclusively from the frozen snapshots stored on `AuditRun`:
-
-- `target_config_snapshot`
-- `auditor_config_snapshot`
-- `judge_config_snapshot`
-- `generation_parameters_snapshot`
-- pinned `ScenarioSetVersion` and its items
-
-Reading live model registry rows or mutable scenario data during execution is a
-defect. The only runtime resolution allowed is secret reference
-to credential material inside the worker environment.
-
-### 4.3 Worker pools
-
-Workers register labels/capabilities:
-
-- `cpu`
-- `external-api`
-- `local-inference`
-
-Jobs request required capabilities. The web server never needs direct model access.
-
-Concurrency limits are configured per pool:
-
-- global max concurrent audits
-- per-run max concurrent scenarios
-- per-model endpoint rate limit where known
-
-### 4.4 Idempotency
-
-Every task receives an idempotency key derived from:
-
-- `audit_run_id`
-- `scenario_set_version_item_id`
-- attempt number
-- task type
-
-Retries must not duplicate final result rows. Final writes use unique constraints and upsert semantics keyed by immutable input identity.
-
-## 5. Data ownership
-
-PostgreSQL is the source of truth for:
-
-- users and roles
-- organizations/projects if enabled
-- scenarios and revisions
-- scenario sets and versions
-- model registry entries
-- audit runs
-- frozen configuration snapshots
-- per-scenario results
-- metrics
-- durable progress events
-- comparison definitions
-- audit log entries
-
-Object storage holds:
-
-- full SimpleAudit result JSON
-- raw conversation transcripts
-- judge rationales if large
-- exported reports
-- imported scenario files
-- debug bundles
-
-Hatchet/workflow state is execution state, not the authoritative SimpleAudit database. Langfuse is observability, not the authoritative result store.
-
-## 6. API boundaries
-
-### 6.1 Public API principles
-
-- REST for commands and reads
-- SSE for live progress
-- OpenAPI generated from serializers/views
-- business logic in services, not views
-- all mutations authorized
-- all IDs opaque or scoped to project
-- no raw secrets in responses
-
-### 6.2 Core resources
-
-- `Scenario`
-- `ScenarioRevision`
-- `ScenarioSet`
-- `ScenarioSetVersion`
-- `ModelConnection`
-- `RegisteredModel`
-- `AuditRun`
-- `AuditRunScenario`
-- `AuditEvent`
-- `Comparison`
-- `Artifact`
-
-### 6.3 Event stream
-
-`GET /api/projects/{project_id}/audit-runs/{id}/events/` streams durable events from PostgreSQL-backed event table or workflow event bridge.
-
-Events include:
-
-- sequence number
-- run ID
-- stage
-- counters
-- message
-- timestamp
-- trace ID
-
-SSE reconnect uses `Last-Event-ID`; missing events are replayed from durable storage.
-
-## 7. Failure handling
-
-### 7.1 Transient failures
-
-Retry with exponential backoff and jitter for:
-
-- network errors
-- provider 429/5xx
-- temporary inference timeouts
-- object storage transient errors
-
-Retry policy is stored in the run manifest.
-
-### 7.2 Permanent failures
-
-Fail fast for:
-
-- invalid credentials
-- model not found
-- schema/validation errors
-- unsupported provider
-- disk/object storage permission errors
-
-The run stores a stable error code and human-readable explanation.
-
-### 7.3 Worker death
-
-If a worker dies:
-
-- workflow marks task failed/timed out
-- retry policy applies
-- run remains visible
-- partial results are marked incomplete
-- user can cancel the original run or create a retry run with identical frozen inputs
-
-Retry always creates a new `AuditRun`. The original run remains terminal and
-unchanged.
-
-### 7.4 Cancellation
-
-Cancellation is durable and cooperative:
-
-- queued run: mark `cancelled` before workflow start
-- running run: update durable `AuditRun.status` and request workflow cancellation
-- worker checks durable run state between scenario batches and before each LLM call where feasible
-- in-flight HTTP calls may be aborted if client supports it
-- final status becomes `cancelled`
-
-The cancellation flag must not exist only in web-process memory. A web restart
-must not lose an in-progress cancellation.
-
-## 8. Security architecture
-
-- Django authentication with password hashing
-- role-based permissions
-- CSRF protection for browser sessions
-- CORS restricted to configured origins
-- secret references resolved only inside worker process
-- signed URLs for artifact access where needed
-- SSRF protections for model endpoint registration
-- strict output encoding for HTML
-- dependency pinning and supply-chain review
-- audit logging for admin actions
-
-## 9. Observability architecture
-
-Correlation identifiers:
-
-- `request_id`
-- `user_id`
-- `project_id`
-- `audit_run_id`
-- `workflow_run_id`
-- `task_id`
-- `scenario_revision_id`
-- `trace_id`
-- `span_id`
-
-Traces cover:
-
-- API request
-- run creation
-- workflow submission
-- worker pickup
-- target call
-- auditor call
-- judge call
-- artifact upload
-- result persistence
-- metric aggregation
-
-Metrics:
-
-- queue depth
-- worker saturation
-- task duration by stage
-- LLM latency by role
-- token usage by role
-- retry counts
-- failure codes
-- artifact size
-- DB query latency
-
-Logs:
-
-- structured JSON
-- no secrets
-- include correlation IDs
-- redact prompts/transcripts by default
-
-## 10. Deployment architecture
-
-Canonical single-host deployment:
-
-```text
-docker compose
-├── postgres
-├── minio
-├── hatchet-server
-├── hatchet-worker
-├── web
-└── collector            # optional
-```
-
-Remote workers join by pointing at the same:
-
-- PostgreSQL
-- object storage
-- workflow server
-- observability endpoint
-
-Migrations run in web container startup behind a migration job or command. Automatic data mutation during normal web startup should be limited to schema migrations and safe bootstrapping.
-
-## 11. Compatibility with current prototype
-
-Current prototype provides useful reference behavior:
-
-- domain naming
-- scenario versioning concept
-- reproducibility manifest idea
-- comparison warning concept
-- SSE endpoint shape
-
-Current prototype must not become production because it uses:
-
-- SQLite
-- in-process queue
-- process-local SSE subscribers
-- local file artifacts
-- no authentication
-- no durable event history
-- no multi-worker capability
-
-The production status model replaces the prototype’s coarse
-`queued|running|completed|failed|cancelled` model. Production uses the staged
-lifecycle in §4.1. `AuditRun.status` is the coarse lifecycle state;
-`AuditEvent.stage` and event payloads provide fine-grained progress for UI and
-diagnostics. The UI should render detailed progress from durable events, while
-API consumers may rely on `status` for terminal/coarse state.
-
-## 12. Architectural risks
-
-| Risk | Mitigation |
+| Web UI | `infra/ui.py`, `infra/runs_table.py`, `templates/` | Server-rendered Django views. Tailwind (CDN), htmx, Tabulator on the dashboard. Shared JS helpers in `templates/partials/ui_js.html`. |
+| REST API | `*/views.py`, `*/urls.py` under `/api/` | DRF, session or token auth. OpenAPI at `/api/schema/`, docs at `/api/docs/`. |
+| Worker | `infra/worker.py`, `manage.py run_worker` | Hatchet tasks `audit.scenario_execute` (one per scenario) and `audit.run_finalize`. Labelled with `WORKER_POOL` (`cpu` by default). |
+| Engine adapter | `infra/engine.py` | Builds SimpleAudit clients from the run's frozen config snapshots and executes one scenario (with repetitions). |
+| Sweeper | `infra/worker.py` (`_stuck_run_sweeper`) | Runs every 60 s inside the worker: finalizes finished runs, resumes stuck ones, and ticks due monitors (`audits.monitors.run_due_monitors`). |
+| Health | `infra/health.py`, `/health/`, `/api/health/` | Probes web, database, Hatchet, worker, engine and model servers, plus host resources. Admins only. |
+
+## 2. Run lifecycle
+
+1. **Launch.** New Experiment (`/experiments/new/`) expands the design into runs,
+   shows a review step, then creates each `AuditRun` with frozen snapshots
+   (`audits/services.create_audit_run`). Runs of one design share an `Experiment`.
+2. **Submit.** Each scenario of the pinned `ScenarioSetVersion` becomes a Hatchet
+   task (`submit_audit_run`).
+3. **Execute.** The worker runs the engine per scenario and writes `AuditEvent`
+   rows (progress) and one `ScenarioResult` per scenario. Cancellation is a
+   durable flag checked between repetitions.
+4. **Finalize.** When every scenario has a result, the run is marked
+   completed or failed, inline or by the sweeper.
+5. **Watch.** The run page streams events over SSE
+   (`/api/projects/<id>/audit-runs/<id>/events/`), with a polling
+   fallback, and refreshes the results list while the run is active.
+
+Monitors repeat one run setup on an interval or cron schedule. Each tick is an
+ordinary run, so the drift chart is a series of reproducible experiments.
+
+## 3. Runtime modes
+
+| Mode | Database | Hatchet | Used by |
+|---|---|---|---|
+| Production (Compose) | PostgreSQL | `hatchet-server` container | `docker-compose.yml` |
+| Local dev | SQLite (`SIMPLEAUDIT_LOCAL_SQLITE=1`) | embedded (`dev_server --embedded`) | contributors |
+| Demo (single container) | SQLite (`SIMPLEAUDIT_MINIMAL=1`) | embedded, started in-process (`infra/minimal_config.py`) | HF Space, `uvx simpleaudit-studio` |
+
+Embedded Hatchet uses the Hatchet SDK's sidecar with its own PostgreSQL
+data directory (`~/.simpleaudit-studio/embedded-pg`, override with
+`SIMPLEAUDIT_EMBEDDED_PG_DIR`). The Django database stays SQLite.
+
+## 4. Main URLs
+
+| Path | Page |
 |---|---|
-| Workflow vendor mismatch | ADR compares Hatchet vs alternatives against concrete requirements |
-| Long-running LLM jobs time out | per-task timeout, checkpointing, retry, cancellation |
-| Progress lost on reconnect | durable event table + Last-Event-ID replay |
-| Scenario edits corrupt history | immutable revision/version tables + DB constraints |
-| Secrets leak into manifests | snapshot stores references only; worker resolves at execution |
-| Comparison misleads users | explicit validity warnings and intersection mode |
-| SimpleAudit semantics drift | domain agent owns compatibility tests against existing engine |
-| Overengineering | keep one app, Postgres, one workflow system, object storage |
+| `/` | Dashboard: stat cards, interactive runs grid (`/runs/data/`, `/runs/bulk/`, `/runs/export.csv`) |
+| `/experiments/new/` | Design → review → launch; Repeat creates monitors |
+| `/experiments/`, `/experiments/<id>/` | Experiments and their pass-rate pivot |
+| `/monitors/`, `/monitors/<id>/` | Monitors and drift charts |
+| `/runs/<id>/`, `/runs/<id>/results/<rid>/` | Run detail (live) and per-scenario result |
+| `/compare/?runs=a,b` | Side-by-side comparison of completed runs |
+| `/scenarios/`, `/models/` | Scenario library and model registry |
+| `/workspaces/`, `/admin-settings/`, `/profile/`, `/health/` | Workspaces, super-admin settings, profile, system health |
+| `/healthz`, `/readyz` | Liveness and readiness probes |
+
+## 5. Security model
+
+- Everything is scoped to the active workspace (`request.project`, set by
+  `infra/middleware.py`).
+- Roles: viewer (read), auditor (write), admin (write + members). UI forms and
+  the API enforce the same rule (`infra.ui.write_block_reason`,
+  `scenarios.services.require_project_role`).
+- API keys stay on the server: pages send only a connection id, and the server
+  resolves the key (`model_registry.services.connection_api_key`).

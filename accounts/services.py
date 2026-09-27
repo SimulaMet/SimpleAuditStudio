@@ -392,7 +392,7 @@ def admin_stats_payload() -> dict:
             "audit_run_completed": run_status_totals.get("completed", 0),
             "audit_run_failed": run_status_totals.get("failed", 0),
             "audit_run_active": sum(
-                n for status, n in run_status_totals.items() if status not in ("completed", "failed", "cancelled")
+                n for status, n in run_status_totals.items() if status not in AuditRun.TERMINAL_STATUSES
             ),
             "scenario_count": Scenario.objects.count(),
             "scenario_set_count": ScenarioSet.objects.count(),
@@ -400,3 +400,12 @@ def admin_stats_payload() -> dict:
         },
         "workspaces": workspaces,
     }
+
+
+def is_any_project_admin(user) -> bool:
+    """Superuser, or ADMIN in at least one workspace (gates system-wide pages like Health)."""
+    if not user or not user.is_authenticated:
+        return False
+    if user.is_superuser:
+        return True
+    return ProjectMembership.objects.filter(user=user, role=ProjectMembership.Role.ADMIN).exists()

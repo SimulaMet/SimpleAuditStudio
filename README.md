@@ -48,7 +48,7 @@ The pre-seeded connections point at a built-in mock server. To run real audits, 
 | Together AI | `https://api.together.xyz/v1` | Many open models |
 | Groq | `https://api.groq.com/openai/v1` | Fast inference |
 
-Set the API key in the connection form (leave blank for local servers that don't require auth), then launch an audit from the Scenario Library.
+Set the API key in the connection form (leave blank for local servers that don't require auth), then start a run from **New Experiment**.
 
 ## 🛠️ Local Development
 
@@ -65,7 +65,7 @@ cd SimpleAuditStudio
 cp .env.local.example .env          # minimal local config (SQLite + mock models)
 
 uv sync --extra dev --extra postgres   # create .venv + install all deps
-uv run manage.py setup_local           # migrate + create admin (studio/admin123) + seed data
+uv run manage.py setup_local           # migrate + create admin (studio / BOOTSTRAP_PASSWORD from .env) + seed data
 ```
 
 `setup_local` chains the three idempotent first-run steps (migrate → bootstrap admin → seed scenario packs & model connections) into one command. Re-run it any time — it skips what already exists.
@@ -95,22 +95,22 @@ cp .env.example .env
 docker compose up -d
 ```
 
-Services: Web UI (:8000), PostgreSQL, Hatchet queue (:8888), Worker. Optional profiles: `--profile storage` (MinIO), `--profile mock` (mock model API).
+Services: Web UI (:8000), PostgreSQL, Hatchet queue (:8888), Worker. Optional profile: `--profile mock` (mock model API).
 
 See [docs/deployment.md](docs/deployment.md) for production hardening, backups, and upgrades.
 
 ## ✨ What You Can Do
 
-- Browse the scenario library and create new audit scenarios
-- Register model endpoints (OpenAI-compatible APIs)
-- Launch audits and watch live progress
-- Compare results across runs
-- Explore the visualizer for detailed analysis
+- Build versioned scenario sets and register OpenAI-compatible models
+- Run experiments across models, scenario versions and settings, with a review step before launch
+- Watch runs live, including per-repetition results
+- Monitor models for drift on a schedule (interval or cron)
+- Filter, customise and compare runs on an interactive dashboard
 
 ## 🏗️ Architecture
 
 ```
-Browser → Django/Gunicorn (:7860)
+Browser → Django (gunicorn :8000 in Compose; runserver :7860 in the HF Space / uvx demo)
               ↓
          PostgreSQL 16 (domain + queue DBs)
               ↓
@@ -129,11 +129,3 @@ Browser → Django/Gunicorn (:7860)
 ## 🤝 Contributing
 
 Architecture decisions are documented in [docs/architecture.md](docs/architecture.md).
-
-
-
-
-
-
-
-
