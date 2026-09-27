@@ -158,7 +158,7 @@
     </div>
   </details>
 
-  <button type="submit" class="w-full px-4 py-2.5 rounded-lg bg-accent text-white text-sm font-medium hover:bg-accent-hover transition-colors">
+  <button type="submit" id="launch-audit-btn" class="w-full px-4 py-2.5 rounded-lg bg-accent text-white text-sm font-medium hover:bg-accent-hover transition-colors disabled:opacity-60 disabled:cursor-not-allowed disabled:hover:bg-accent">
     Launch Audit
   </button>
 </form>
@@ -241,7 +241,9 @@ updateNoKeyWarnings();
   } catch (_) { /* leave as-is if not valid JSON yet */ }
 })();
 
-// Validate JSON on submit (tolerates Python-style single-quoted dicts)
+// Validate JSON on submit (tolerates Python-style single-quoted dicts) and
+// disable the button while the form is in flight to prevent duplicate submissions.
+const launchBtn = document.getElementById('launch-audit-btn');
 document.querySelector('form').addEventListener('submit', function(e) {
   const ta = this.querySelector('[name="gen_config_json"]');
   const errEl = document.getElementById('gen-config-error');
@@ -258,6 +260,8 @@ document.querySelector('form').addEventListener('submit', function(e) {
     }
   }
   errEl.classList.add('hidden');
+  launchBtn.disabled = true;
+  launchBtn.textContent = 'Launching…';
 });
 </script>
 {% endblock %}
