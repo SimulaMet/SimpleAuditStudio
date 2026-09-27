@@ -32,7 +32,7 @@ class AllPagesSmokeTest(TestCase):
         self.user.set_password("testpass123")
         self.user.save()
         self.project = ProjectFactory()
-        MembershipFactory(user=self.user, project=self.project, role="owner")
+        MembershipFactory(user=self.user, project=self.project, role="admin")
 
         # Scenario set with 2 versions (needed for diff view)
         sset = ScenarioSetFactory(project=self.project)

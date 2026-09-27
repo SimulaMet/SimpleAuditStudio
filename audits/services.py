@@ -4,7 +4,7 @@ import logging
 from django.db import transaction
 from django.utils import timezone
 
-from accounts.models import Project
+from accounts.models import Project, ProjectMembership
 from audits.events import append_event
 from audits.models import AuditRun
 from infra.exceptions import StableAPIError
@@ -81,13 +81,15 @@ def create_audit_run(
     language_override: str | None = None,
     n_repetitions_override: int | None = None,
     gen_config_override: dict | None = None,
+    schedule=None,
 ) -> AuditRun:
     """Create a queued AuditRun with immutable execution inputs.
 
     This does not enqueue work yet. The durable job system integration will add
     workflow submission after the Phase 4 spike validates the selected system.
     """
-    require_project_role(user, project)
+    # Launching spends the workspace's API keys: viewers may not.
+    require_project_role(user, project, ProjectMembership.Role.ADMIN, ProjectMembership.Role.AUDITOR)
     if scenario_set_version.scenario_set.project_id != project.id:
         raise StableAPIError(detail="Scenario set version belongs to another project.", code="cross_project_input")
     for model in (target_model, auditor_model, judge_model):
@@ -131,6 +133,7 @@ def create_audit_run(
         queued_at=now,
         total_scenarios=scenario_set_version.scenario_count,
         created_by=user,
+        schedule=schedule,
     )
 
 

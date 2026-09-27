@@ -93,6 +93,9 @@
       <a href="{% url 'new_audit' %}" class="flex items-center gap-3 px-3 py-2 rounded-lg text-sm whitespace-nowrap {% if request.path == '/audits/new/' %}bg-accent/15 text-accent font-medium{% else %}text-gray-400 hover:text-gray-200 hover:bg-surface-overlay{% endif %}">
         <span class="text-base w-5 text-center">＋</span><span class="sidebar-label">New Audit</span>
       </a>
+      <a href="{% url 'schedules' %}" class="flex items-center gap-3 px-3 py-2 rounded-lg text-sm whitespace-nowrap {% if request.path|slice:':11' == '/schedules/' %}bg-accent/15 text-accent font-medium{% else %}text-gray-400 hover:text-gray-200 hover:bg-surface-overlay{% endif %}">
+        <span class="text-base w-5 text-center">↻</span><span class="sidebar-label">Schedules</span>
+      </a>
       <a href="{% url 'scenarios' %}" class="flex items-center gap-3 px-3 py-2 rounded-lg text-sm whitespace-nowrap {% if request.path == '/scenarios/' %}bg-accent/15 text-accent font-medium{% else %}text-gray-400 hover:text-gray-200 hover:bg-surface-overlay{% endif %}">
         <span class="text-base w-5 text-center">▤</span><span class="sidebar-label">Scenarios</span>
       </a>
