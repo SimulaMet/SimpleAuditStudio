@@ -48,9 +48,9 @@
       verifiable years later. Built on the Target&nbsp;→&nbsp;Auditor&nbsp;→&nbsp;Judge engine.
     </p>
     <div class="mt-10 flex flex-col sm:flex-row items-center justify-center gap-4">
-      <a href="/login/"
+      <a href="{% if user.is_authenticated %}/{% else %}/login/{% endif %}"
          class="glow-pulse shimmer-btn relative overflow-hidden px-6 py-3 rounded-xl bg-accent hover:bg-accent-hover text-white font-semibold transition-colors shadow-lg">
-        Get started
+        {% if user.is_authenticated %}Open dashboard{% else %}Get started{% endif %}
       </a>
       <a href="https://github.com/SushantGautam/SimpleAuditStudio" target="_blank" rel="noopener"
          class="px-6 py-3 rounded-xl border border-gray-700 hover:border-accent/50 text-gray-200 font-medium transition-colors">

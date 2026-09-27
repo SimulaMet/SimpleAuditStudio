@@ -31,7 +31,7 @@ class WorkspacesPageTest(TestCase):
 
     def test_sidebar_switcher_shows_current_workspace(self):
         # Default active project = first membership (Alpha Team by name order)
-        resp = self.client.get("/dashboard/")
+        resp = self.client.get("/")
         self.assertEqual(resp.status_code, 200)
         content = resp.content.decode()
         self.assertIn('id="workspace-switcher"', content)

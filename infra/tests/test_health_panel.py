@@ -176,10 +176,10 @@ class HealthPageRenderTest(TestCase):
     def test_sidebar_shows_health_link_only_for_admin(self):
         admin_user, _ = _make_admin()
         self.client.force_login(admin_user)
-        admin_page = self.client.get("/dashboard/").content.decode()
+        admin_page = self.client.get("/").content.decode()
         self.assertIn('href="/health/"', admin_page)
 
         nonadmin_user, _ = _make_nonadmin()
         self.client.force_login(nonadmin_user)
-        nonadmin_page = self.client.get("/dashboard/").content.decode()
+        nonadmin_page = self.client.get("/").content.decode()
         self.assertNotIn('href="/health/"', nonadmin_page)

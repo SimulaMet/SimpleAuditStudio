@@ -70,7 +70,7 @@ def test_navigation_all_views(page: Page) -> None:
     """All sidebar nav links navigate to the correct page."""
     login(page)
     views = [
-        ("/dashboard/", "Dashboard"),
+        ("/", "Dashboard"),
         ("/audits/new/", "New Audit"),
         ("/scenarios/", "Scenario"),
         ("/models/", "Model"),
@@ -123,7 +123,7 @@ def test_models_view_no_profiles(page: Page) -> None:
 def test_audit_detail_clone_button(page: Page) -> None:
     """Audit detail page shows Clone Audit button (if runs exist)."""
     login(page)
-    page.goto(f"{BASE_URL}/dashboard/")
+    page.goto(f"{BASE_URL}/")
     page.wait_for_timeout(500)
     # Find first audit run link
     rows = page.locator("table tbody tr")
@@ -141,7 +141,7 @@ def test_audit_detail_clone_button(page: Page) -> None:
 def test_clone_prefills_form(page: Page) -> None:
     """Clone Audit pre-fills the New Audit form with original values."""
     login(page)
-    page.goto(f"{BASE_URL}/dashboard/")
+    page.goto(f"{BASE_URL}/")
     page.wait_for_timeout(500)
     rows = page.locator("table tbody tr")
     count = rows.count()
