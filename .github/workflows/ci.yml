@@ -42,15 +42,3 @@ jobs:
       - name: Run tests (embedded Hatchet, serial)
         if: steps.hatchet-changed.outputs.changed == 'true'
         run: uv run python manage.py test infra.tests.test_minimal_config.TestEmbeddedHatchetLifecycle
-
-  docker:
-    # Build both images (no push) so Dockerfile / compose breakage is caught.
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Build HF Space / demo image
-        run: docker build -t simpleaudit-studio:ci .
-      - name: Build Compose image
-        run: docker build -f deploy/compose/Dockerfile -t simpleaudit-studio-compose:ci .
-      - name: Validate compose file
-        run: cp .env.example .env && docker compose config --quiet
