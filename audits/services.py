@@ -81,7 +81,8 @@ def create_audit_run(
     language_override: str | None = None,
     n_repetitions_override: int | None = None,
     gen_config_override: dict | None = None,
-    schedule=None,
+    monitor=None,
+    experiment=None,
 ) -> AuditRun:
     """Create a queued AuditRun with immutable execution inputs.
 
@@ -133,7 +134,8 @@ def create_audit_run(
         queued_at=now,
         total_scenarios=scenario_set_version.scenario_count,
         created_by=user,
-        schedule=schedule,
+        monitor=monitor,
+        experiment=experiment,
     )
 
 

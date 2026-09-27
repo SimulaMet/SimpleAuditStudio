@@ -1,0 +1,339 @@
+{% extends "base.html" %}
+{% block title %}New Experiment — SimpleAudit{% endblock %}
+{% block content %}
+<h1 class="text-lg font-semibold text-gray-100 mb-1">New Experiment</h1>
+<p class="text-sm text-gray-500 mb-6 max-w-4xl">
+  Pick one value per input for a single run, or several to compare them: every combination becomes a run.
+  You review the runs before anything is launched.
+</p>
+
+{% if error %}
+<div class="mb-4 text-sm text-red-300 bg-red-900/30 rounded-lg px-4 py-2 max-w-4xl">{{ error }}</div>
+{% endif %}
+{% if not can_launch %}
+<div class="mb-4 text-sm text-yellow-300 bg-yellow-900/20 rounded-lg px-4 py-2 max-w-4xl">
+  You have view-only access to this workspace. Launching runs needs the admin or auditor role, because runs spend the workspace's API keys.
+  Ask a workspace admin, or <a href="{% url 'workspaces' %}?new=1" class="underline">create your own workspace</a>.
+</div>
+{% endif %}
+
+<form method="post" id="design-form" class="space-y-4 max-w-4xl">
+  {% csrf_token %}
+  <input type="hidden" name="action" value="design">
+
+  <div id="picker-sections" class="space-y-4">
+  <div class="bg-surface-raised rounded-xl border border-gray-800 p-4">
+    <div class="flex items-center justify-between mb-1">
+      <h3 class="text-sm font-semibold text-gray-300">Scenario sets</h3>
+      <a href="{% url 'scenarios' %}" target="_blank" class="text-xs text-accent hover:text-accent-hover hover:underline">＋ New</a>
+    </div>
+    <p class="text-xs text-gray-500 mb-3">Each selected set gets its own runs, using its latest published version.</p>
+    {% if sets %}
+    <fieldset data-axis="scenario_set">
+    <div class="flex items-center gap-2 mb-2">
+      <input type="search" data-filter placeholder="Search scenario sets…" aria-label="Search scenario sets"
+             class="flex-1 px-2.5 py-1.5 rounded-lg bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-2 focus:ring-accent/50">
+      <span class="text-[10px] text-gray-500 shrink-0" data-axis-count></span>
+    </div>
+    <div data-filter-list class="grid grid-cols-1 sm:grid-cols-2 gap-1.5 max-h-72 overflow-y-auto">
+      {% for s in sets %}
+      <label data-filter-item class="flex items-start gap-2 px-2.5 py-2 rounded-lg border border-gray-800 bg-surface-overlay/40 text-sm cursor-pointer hover:bg-surface-overlay">
+        <input type="checkbox" name="scenario_set" value="{{ s.id }}" class="mt-0.5" {% if s.id|stringformat:"d" in sel.sets %}checked{% endif %}>
+        <span class="min-w-0">
+          <span class="text-gray-200 block truncate">{{ s.name }}</span>
+          <span class="text-[11px] text-gray-500">
+            {% if sel.pinned_version and s.id|stringformat:"d" in sel.sets and clone.scenario_set_id == s.id %}pinned to the cloned run's version{% else %}v{{ s.versions.count }} · latest{% endif %}
+          </span>
+        </span>
+      </label>
+      {% endfor %}
+      <p data-filter-empty class="hidden px-2.5 py-2 text-xs text-gray-500">No matches.</p>
+    </div>
+    </fieldset>
+    {% else %}
+    <p class="text-xs text-gray-500">No sets yet? <a href="{% url 'scenarios' %}" target="_blank" class="text-accent hover:underline">Create a scenario set →</a></p>
+    {% endif %}
+  </div>
+
+  {% include "partials/audit_models_multi.html" %}
+  </div>
+
+  {% if sel.pinned_version %}<input type="hidden" name="scenario_set_version" value="{{ sel.pinned_version }}">{% endif %}
+
+  {% include "partials/audit_hyperparameters.html" with multi=True %}
+
+  <!-- Schedule: run once, or repeat (creates monitors) -->
+  <div class="bg-surface-raised rounded-xl border border-gray-800 p-4" id="schedule-card">
+    <h3 class="text-sm font-semibold text-gray-300 mb-1">Schedule</h3>
+    <p class="text-xs text-gray-500 mb-3">Run once, or repeat on a schedule to track changes over time. Repeating runs appear under Monitors.</p>
+    <input type="hidden" name="clone_from" value="{{ rep.clone_from }}">
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+      <div>
+        <label for="repeat-picker" class="block text-xs font-medium text-gray-500 mb-1 uppercase tracking-wide">Repeat</label>
+        <select name="repeat" id="repeat-picker" class="w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-accent/50">
+          {% for value, label in repeat_choices %}<option value="{{ value }}" {% if rep.repeat == value %}selected{% endif %}>{{ label }}</option>{% endfor %}
+        </select>
+      </div>
+      <div data-repeat-only>
+        <label for="timezone-picker" class="block text-xs font-medium text-gray-500 mb-1 uppercase tracking-wide">Timezone</label>
+        <select name="timezone" id="timezone-picker" data-chosen="{{ rep.timezone }}" class="w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-accent/50">
+          {% for tz in timezones %}<option value="{{ tz }}" {% if rep.timezone == tz %}selected{% endif %}>{{ tz }}</option>{% endfor %}
+        </select>
+        <p class="mt-1 text-xs text-gray-600">Times below are read in this zone. Defaults to yours.</p>
+      </div>
+      <div data-cron-only class="md:col-span-2">
+        <label for="cron-input" class="block text-xs font-medium text-gray-500 mb-1 uppercase tracking-wide">Cron expression</label>
+        <input id="cron-input" type="text" name="cron_expression" value="{{ rep.cron_expression }}" placeholder="0 6 * * 1" spellcheck="false" autocomplete="off"
+               class="w-full md:w-80 px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-accent/50">
+        <p class="mt-1 text-xs text-gray-600">
+          minute hour day-of-month month day-of-week. Examples: <code class="text-gray-400">0 6 * * 1</code> (Mondays 06:00),
+          <code class="text-gray-400">30 2 * * *</code> (daily 02:30), <code class="text-gray-400">0 */12 * * *</code> (every 12 hours).
+          If a run is still going when the next one is due, that one is skipped.
+        </p>
+      </div>
+      <fieldset data-repeat-only class="md:col-span-2">
+        <legend class="block text-xs font-medium text-gray-500 mb-1.5 uppercase tracking-wide">Start</legend>
+        <div class="space-y-1.5 text-sm text-gray-300">
+          <label class="flex items-start gap-2"><input type="radio" name="start" value="now" class="mt-1" {% if rep.start != "at" and rep.start != "baseline" %}checked{% endif %}>
+            <span>Now <span class="block text-xs text-gray-500">Run immediately, then repeat. The first runs become the baseline.</span></span></label>
+          {% if source_run %}
+          <label class="flex items-start gap-2"><input type="radio" name="start" value="baseline" class="mt-1" {% if rep.start == "baseline" %}checked{% endif %}>
+            <span>Use run #{{ source_run.id }} as the first point <span class="block text-xs text-gray-500">No new run now; repeats start at the next scheduled time. Only if settings still match that run.</span></span></label>
+          {% endif %}
+          <label class="flex items-start gap-2"><input type="radio" name="start" value="at" class="mt-1" {% if rep.start == "at" %}checked{% endif %}>
+            <span class="flex-1">At a specific time <span class="block text-xs text-gray-500">Nothing runs now.</span>
+              <input type="datetime-local" name="first_run_at" value="{{ rep.first_run_at }}" aria-label="First run time"
+                     class="mt-1 px-3 py-1.5 rounded-lg bg-surface-overlay border border-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-accent/50">
+            </span></label>
+        </div>
+      </fieldset>
+    </div>
+  </div>
+
+  <!-- Sticky summary: how many runs this design makes -->
+  <div class="sticky bottom-0 z-10 pb-4 pt-2 bg-gradient-to-t from-surface via-surface/90 to-transparent">
+    <div class="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-gray-700 bg-surface-raised px-4 py-3 shadow-lg">
+      <p class="text-sm text-gray-300 min-w-0" id="design-summary" aria-live="polite">—</p>
+      <button type="submit" id="launch-audit-btn" data-busy-label="Working…" {% if not can_launch %}disabled title="Admin or auditor role required"{% endif %}
+              class="shrink-0 px-4 py-2 rounded-lg bg-accent text-white text-sm font-medium hover:bg-accent-hover transition-colors disabled:opacity-60 disabled:cursor-not-allowed disabled:hover:bg-accent">
+        Launch run
+      </button>
+    </div>
+  </div>
+</form>
+
+<script>
+(function() {
+  const form = document.getElementById('design-form');
+  const btn = document.getElementById('launch-audit-btn');
+  const summary = document.getElementById('design-summary');
+  const canLaunch = {{ can_launch|yesno:"true,false" }};
+  const MAX_RUNS = {{ max_runs }};
+  const AXES = [['scenario_set', 'scenario set'], ['target_model', 'target'], ['auditor_model', 'auditor'], ['judge_model', 'judge']];
+
+  function listCount(name) {
+    const el = form.querySelector(`[name="${name}"]`);
+    const parts = (el ? el.value : '').split(',').map(s => s.trim()).filter(Boolean);
+    return Math.max(new Set(parts).size, 1);
+  }
+
+  function update() {
+    let runs = 1;
+    const missing = [];
+    const compared = [];
+    AXES.forEach(([name, label]) => {
+      const n = form.querySelectorAll(`input[name="${name}"]:checked`).length;
+      const counter = form.querySelector(`[data-axis="${name}"] [data-axis-count]`);
+      if (counter) counter.textContent = n > 1 ? n + ' selected' : '';
+      if (!n) missing.push(label);
+      if (n > 1) compared.push(n + ' ' + label + 's');
+      runs *= Math.max(n, 1);
+    });
+    [['max_turns', 'max-turn values'], ['language', 'languages']].forEach(([name, label]) => {
+      const n = listCount(name);
+      if (n > 1) compared.push(n + ' ' + label);
+      runs *= n;
+    });
+    const repeatSel = document.getElementById('repeat-picker');
+    const repeating = repeatSel && repeatSel.value !== 'once';
+    const repeatText = repeating ? repeatSel.selectedOptions[0].textContent.replace('…', '').toLowerCase() : '';
+    const startVal = (form.querySelector('input[name="start"]:checked') || {}).value || 'now';
+    let text, label, ok = true;
+    if (missing.length) {
+      ok = false;
+      text = 'Pick at least one ' + missing.join(', ') + '.';
+      label = runs > 1 ? `Review ${runs} runs →` : 'Launch run';
+    } else if (runs > MAX_RUNS) {
+      ok = false;
+      text = `<span class="text-red-300">${runs} runs: over the limit of ${MAX_RUNS}.</span> Pick fewer values.`;
+      label = `Too many runs`;
+    } else if (runs === 1) {
+      text = '1 run';
+      label = !repeating ? 'Launch run' : (startVal === 'now' ? 'Launch run + monitor' : 'Create monitor');
+    } else {
+      text = `<strong class="text-gray-100">${runs} runs</strong> · comparing ${compared.join(' × ')}`;
+      label = `Review ${runs} runs →`;
+    }
+    if (repeating && ok) text += ` · <span class="text-accent">repeats ${repeatText}</span>`;
+    summary.innerHTML = text;
+    btn.textContent = label;
+    btn.dataset.busyLabel = runs === 1 ? 'Working…' : 'Preparing review…';
+
+    // Schedule card: reveal details only when repeating.
+    form.querySelectorAll('[data-repeat-only]').forEach(el => el.classList.toggle('hidden', !repeating));
+    form.querySelectorAll('[data-cron-only]').forEach(el => {
+      el.classList.toggle('hidden', !(repeating && repeatSel.value === 'cron'));
+      el.querySelector('input').required = repeating && repeatSel.value === 'cron';
+    });
+    btn.disabled = !canLaunch || !ok;
+  }
+
+  form.addEventListener('change', update);
+  form.addEventListener('input', e => { if (e.target.matches('[data-axis-list]')) update(); });
+
+  // --- Search in pickers: filter items live, hide empty connection groups. ---
+  function initFilters(root) {
+    root.querySelectorAll('[data-filter]').forEach(input => {
+      const scope = input.closest('fieldset');
+      const apply = () => {
+        const q = input.value.trim().toLowerCase();
+        let shown = 0;
+        scope.querySelectorAll('[data-filter-item]').forEach(item => {
+          const hit = !q || item.textContent.toLowerCase().includes(q);
+          item.classList.toggle('hidden', !hit);
+          if (hit) shown++;
+        });
+        scope.querySelectorAll('[data-filter-group]').forEach(g => {
+          const any = scope.querySelector(`[data-filter-item][data-group="${g.dataset.filterGroup}"]:not(.hidden)`);
+          g.classList.toggle('hidden', !any);
+        });
+        const empty = scope.querySelector('[data-filter-empty]');
+        if (empty) empty.classList.toggle('hidden', shown > 0);
+      };
+      input.addEventListener('input', apply);
+      // Enter in a search box must not submit the form.
+      input.addEventListener('keydown', e => { if (e.key === 'Enter') e.preventDefault(); });
+    });
+  }
+  initFilters(form);
+
+  // --- Chip inputs (max turns, language): several values, one hidden field. ---
+  function initChips(wrap) {
+    const box = wrap.querySelector('[data-chip-box]');
+    const input = wrap.querySelector('[data-chip-input]');
+    const hidden = wrap.querySelector('input[type="hidden"]');
+    const error = wrap.querySelector('[data-chip-error]');
+    const sugg = wrap.querySelector('[data-chip-suggestions]');
+    const isInt = wrap.dataset.kind === 'int';
+    let values = hidden.value.split(',').map(v => v.trim()).filter(Boolean);
+
+    function commit() {
+      hidden.value = values.join(', ');
+      box.querySelectorAll('[data-chip]').forEach(c => c.remove());
+      values.forEach((v, i) => {
+        const chip = document.createElement('span');
+        chip.dataset.chip = '';
+        chip.className = 'inline-flex items-center gap-1 pl-2 pr-1 py-0.5 rounded-md bg-accent/15 text-accent text-xs';
+        chip.innerHTML = '<span></span><button type="button" class="px-1 rounded hover:bg-accent/25" aria-label="Remove">×</button>';
+        chip.firstChild.textContent = v;
+        // Re-render after the click finishes: removing the clicked node mid-event
+        // breaks htmx's document-level click listener.
+        chip.lastChild.addEventListener('click', e => { e.stopPropagation(); values.splice(i, 1); setTimeout(commit); });
+        box.insertBefore(chip, input);
+      });
+      input.placeholder = values.length ? 'Add another…' : input.dataset.placeholder;
+      if (sugg) {
+        sugg.innerHTML = '';
+        sugg.dataset.chipSuggestions.split(',').filter(v => !values.includes(v)).forEach(v => {
+          const b = document.createElement('button');
+          b.type = 'button';
+          b.className = 'px-1.5 py-0.5 rounded text-[11px] text-gray-400 bg-surface-overlay hover:text-accent';
+          b.textContent = '+ ' + v;
+          b.addEventListener('click', () => setTimeout(() => add(v)));
+          sugg.appendChild(b);
+        });
+      }
+      hidden.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+
+    function add(raw) {
+      const parts = String(raw).split(',').map(v => v.trim()).filter(Boolean);
+      for (const v of parts) {
+        if (isInt && !(/^\d+$/.test(v) && +v >= 1 && +v <= 50)) {
+          error.textContent = `“${v}” is not a whole number from 1 to 50.`;
+          error.classList.remove('hidden');
+          return false;
+        }
+        if (!values.includes(v)) values.push(v);
+      }
+      error.classList.add('hidden');
+      commit();
+      return true;
+    }
+
+    input.dataset.placeholder = input.placeholder;
+    input.addEventListener('keydown', e => {
+      if ((e.key === 'Enter' || e.key === ',' || e.key === 'Tab') && input.value.trim()) {
+        if (e.key !== 'Tab') e.preventDefault();
+        if (add(input.value)) input.value = '';
+      } else if (e.key === 'Enter') {
+        e.preventDefault();
+      } else if (e.key === 'Backspace' && !input.value && values.length) {
+        values.pop();
+        commit();
+      }
+    });
+    input.addEventListener('blur', () => { if (input.value.trim() && add(input.value)) input.value = ''; });
+    box.addEventListener('click', () => input.focus());
+    // Typed but not yet added when the form is submitted: include it.
+    form.addEventListener('submit', e => {
+      if (input.value.trim() && !add(input.value)) { e.preventDefault(); e.stopImmediatePropagation(); input.focus(); }
+      else input.value = '';
+    });
+    commit();
+  }
+  form.querySelectorAll('[data-chips]').forEach(initChips);
+
+  // A cloned run pins its exact scenario set version; drop the pin if that set is unticked.
+  const pin = form.querySelector('[name="scenario_set_version"]');
+  const pinnedSet = "{{ clone.scenario_set_id|default:'' }}";
+  form.addEventListener('change', e => {
+    if (pin && e.target.name === 'scenario_set' && e.target.value === pinnedSet && !e.target.checked) pin.remove();
+  });
+
+  // Returning from another tab (e.g. after adding a model): refresh the pickers, keeping ticks.
+  let focusTimer = null;
+  window.addEventListener('focus', () => {
+    clearTimeout(focusTimer);
+    focusTimer = setTimeout(async () => {
+      const target = document.getElementById('picker-sections');
+      if (!target) return;
+      const ticked = new Set([...target.querySelectorAll('input:checked')].map(i => i.name + '=' + i.value));
+      try {
+        const resp = await fetch('{% url "new_experiment" %}', { credentials: 'same-origin' });
+        if (!resp.ok) return;
+        const fresh = new DOMParser().parseFromString(await resp.text(), 'text/html').getElementById('picker-sections');
+        if (!fresh) return;
+        fresh.querySelectorAll('input[type="checkbox"]').forEach(i => { i.checked = ticked.has(i.name + '=' + i.value); });
+        target.replaceWith(fresh);
+        initFilters(fresh);
+        update();
+      } catch (e) { /* offline: keep the current pickers */ }
+    }, 800);
+  });
+
+  // Timezone defaults to the browser's own (unless re-showing a POST).
+  const tzPicker = document.getElementById('timezone-picker');
+  if (tzPicker && !tzPicker.dataset.chosen) {
+    const local = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    if (local && tzPicker.querySelector(`option[value="${local}"]`)) tzPicker.value = local;
+  }
+  // Picking a start time selects "At a specific time".
+  const at = form.querySelector('input[name="first_run_at"]');
+  if (at) at.addEventListener('focus', () => { form.querySelector('input[name="start"][value="at"]').checked = true; update(); });
+
+  update();
+})();
+</script>
+{% include "partials/audit_form_js.html" %}
+{% endblock %}

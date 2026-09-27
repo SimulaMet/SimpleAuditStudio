@@ -393,8 +393,8 @@ class WorkspaceSwitchTest(TestCase):
         self.assertEqual(resp.status_code, 200)
         # The dashboard table shows run IDs (not names); assert on the W2 run's
         # detail link and confirm the W1 run is absent.
-        self.assertIn(f"/audits/{run_w2.id}/", resp.content.decode())
-        self.assertNotIn(f"/audits/{run_w1.id}/", resp.content.decode())
+        self.assertIn(f"/runs/{run_w2.id}/", resp.content.decode())
+        self.assertNotIn(f"/runs/{run_w1.id}/", resp.content.decode())
 
 
 class LegacyProjectApiTest(TestCase):

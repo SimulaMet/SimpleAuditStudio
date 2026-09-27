@@ -1,10 +1,10 @@
-"""Recurring audits (AuditSchedule) and drift statistics over their runs.
+"""Recurring audits (Monitor) and drift statistics over their runs.
 
-The tick is DB-driven: ``run_due_schedules`` is called every sweeper pass by the
-worker (and by ``manage.py run_schedules`` for an external cron). It claims due
-schedules with ``select_for_update(skip_locked=True)`` so concurrent workers
+The tick is DB-driven: ``run_due_monitors`` is called every sweeper pass by the
+worker (and by ``manage.py run_monitors`` for an external cron). It claims due
+monitors with ``select_for_update(skip_locked=True)`` so concurrent workers
 never launch the same tick twice, creates an ordinary frozen AuditRun per due
-schedule, and submits it outside the claim transaction (same rule as the UI:
+monitor, and submits it outside the claim transaction (same rule as the UI:
 a downed job system must not roll back a frozen experiment record).
 """
 from __future__ import annotations
@@ -17,18 +17,18 @@ from django.db import transaction
 from django.utils import timezone
 
 from audits.events import ScenarioResult
-from audits.models import AuditRun, AuditSchedule
+from audits.models import AuditRun, Monitor
 
-logger = logging.getLogger("simpleaudit.schedule")
+logger = logging.getLogger("simpleaudit.monitor")
 
 _TERMINAL = {AuditRun.Status.COMPLETED, AuditRun.Status.FAILED, AuditRun.Status.CANCELLED}
 _FORM_KEYS = ("max_turns", "language", "n_repetitions")
 
-# Schedules spend the workspace's API keys unattended, so they are capped.
-MAX_SCHEDULES_PER_PROJECT = 10
-# Bounds for fixed-interval schedules. Cron expressions have no minimum gap:
+# Monitors spend the workspace's API keys unattended, so they are capped.
+MAX_MONITORS_PER_PROJECT = 50
+# Bounds for fixed-interval monitors. Cron expressions have no minimum gap:
 # a tick is skipped while the previous run is still active, so runs of one
-# schedule never overlap however often the expression fires.
+# monitor never overlap however often the expression fires.
 MIN_INTERVAL_HOURS = 6
 MAX_INTERVAL_HOURS = 24 * 90
 
@@ -40,8 +40,8 @@ Z_CRIT = 1.96
 
 # ─── Permissions ─────────────────────────────────────────────────────────────
 # View: any member. Create: admin or auditor. Run now / pause / delete: admin,
-# or the auditor who created the schedule. Each tick re-checks that the creator
-# still holds admin/auditor; if not, the schedule pauses itself.
+# or the auditor who created the monitor. Each tick re-checks that the creator
+# still holds admin/auditor; if not, the monitor pauses itself.
 
 def _write_roles():
     from accounts.models import ProjectMembership
@@ -62,29 +62,29 @@ def _role(user, project) -> str | None:
 
 
 def has_write_role(user, project) -> bool:
-    """Admin or auditor (or superuser): may launch audits and create schedules."""
+    """Admin or auditor (or superuser): may launch audits and create monitors."""
     if user and user.is_authenticated and user.is_superuser:
         return True
     return _role(user, project) in _write_roles()
 
 
-def can_manage_schedule(user, schedule: AuditSchedule) -> bool:
+def can_manage_monitor(user, monitor: Monitor) -> bool:
     from accounts.models import ProjectMembership
 
     if user and user.is_authenticated and user.is_superuser:
         return True
-    role = _role(user, schedule.project)
+    role = _role(user, monitor.project)
     if role == ProjectMembership.Role.ADMIN:
         return True
-    return role == ProjectMembership.Role.AUDITOR and schedule.created_by_id == user.id
+    return role == ProjectMembership.Role.AUDITOR and monitor.created_by_id == user.id
 
 
-def owner_authorized(schedule: AuditSchedule) -> bool:
-    """Whether the creator may still launch runs for this schedule."""
-    owner = schedule.created_by
+def owner_authorized(monitor: Monitor) -> bool:
+    """Whether the creator may still launch runs for this monitor."""
+    owner = monitor.created_by
     if owner is None or not owner.is_active:
         return False
-    return has_write_role(owner, schedule.project)
+    return has_write_role(owner, monitor.project)
 
 
 def zone(name: str):
@@ -128,15 +128,15 @@ def validate_cron(expr: str, now=None, tz: str = "UTC") -> str:
     return expr
 
 
-def next_after(schedule: AuditSchedule, now):
+def next_after(monitor: Monitor, now):
     """Next tick strictly after ``now`` for either timing rule."""
-    if schedule.cron_expression:
-        return cron_next(schedule.cron_expression, now, schedule.timezone)
-    return advance(schedule.next_run_at, schedule.interval_hours, now)
+    if monitor.cron_expression:
+        return cron_next(monitor.cron_expression, now, monitor.timezone)
+    return advance(monitor.next_run_at, monitor.interval_hours, now)
 
 
 def advance(next_run_at, interval_hours: int, now):
-    """Next tick strictly after ``now``, on the schedule's grid.
+    """Next tick strictly after ``now``, on the monitor's grid.
 
     Missed ticks (worker down for a week) are skipped rather than replayed, so a
     recovering worker launches one run, not a burst of stale ones.
@@ -148,47 +148,179 @@ def advance(next_run_at, interval_hours: int, now):
     return next_run_at + missed * step
 
 
-def resolve_version(schedule: AuditSchedule):
-    if schedule.scenario_set_version_id:
-        return schedule.scenario_set_version
-    return schedule.scenario_set.versions.order_by("-version").first()
+def resolve_version(monitor: Monitor):
+    if monitor.scenario_set_version_id:
+        return monitor.scenario_set_version
+    return monitor.scenario_set.versions.order_by("-version").first()
 
 
-def launch_schedule(schedule: AuditSchedule, *, now=None) -> AuditRun:
-    """Create (not submit) one frozen AuditRun for ``schedule``."""
+def launch_monitor(monitor: Monitor, *, now=None) -> AuditRun:
+    """Create (not submit) one frozen AuditRun for ``monitor``."""
     from audits.services import create_audit_run
 
     now = now or timezone.now()
-    version = resolve_version(schedule)
+    version = resolve_version(monitor)
     if version is None:
         raise ValueError("Scenario set has no published version.")
-    if schedule.created_by is None:
-        raise ValueError("Schedule owner no longer exists; recreate the schedule.")
-    params = dict(schedule.generation_parameters or {})
+    if monitor.created_by is None:
+        raise ValueError("Monitor owner no longer exists; recreate the monitor.")
+    params = dict(monitor.generation_parameters or {})
     overrides = {k: params.pop(k, None) for k in _FORM_KEYS}
     return create_audit_run(
-        project=schedule.project,
-        user=schedule.created_by,
-        name=f"{schedule.name} · {now:%Y-%m-%d %H:%M}",
+        project=monitor.project,
+        user=monitor.created_by,
+        name=f"{monitor.name} · {now:%Y-%m-%d %H:%M}",
         scenario_set_version=version,
-        target_model=schedule.target_model,
-        auditor_model=schedule.auditor_model,
-        judge_model=schedule.judge_model,
+        target_model=monitor.target_model,
+        auditor_model=monitor.auditor_model,
+        judge_model=monitor.judge_model,
         max_turns_override=overrides["max_turns"],
         language_override=overrides["language"],
         n_repetitions_override=overrides["n_repetitions"],
         gen_config_override=params or None,
-        schedule=schedule,
+        monitor=monitor,
+        experiment=monitor.experiment,
     )
 
 
-def run_due_schedules(now=None) -> list[int]:
-    """Launch every enabled schedule whose ``next_run_at`` has passed.
+# ─── Creating monitors (from New Experiment's "Repeat") ──────────────────────
+
+# Repeat choices offered on New Experiment: (value, label). "once" = no monitor.
+REPEAT_CHOICES = [
+    ("once", "Once"),
+    ("6", "Every 6 hours"),
+    ("24", "Daily"),
+    ("72", "Every 3 days"),
+    ("168", "Weekly"),
+    ("336", "Every 2 weeks"),
+    ("cron", "Custom (cron expression)…"),
+]
+START_CHOICES = ("now", "at", "baseline")
+
+
+def parse_repeat(post, now=None) -> dict | None:
+    """Validate New Experiment's Repeat fields. None means "Once".
+
+    start: "now" (run immediately, then repeat), "at" (first run at a chosen
+    time, nothing runs now) or "baseline" (use an existing run as the first
+    point, repeat from the next tick). Raises ValueError with a user message.
+    """
+    from datetime import datetime
+
+    choice = (post.get("repeat") or "once").strip()
+    if choice == "once":
+        return None
+    now = now or timezone.now()
+    tz_name = (post.get("timezone") or "UTC").strip()
+    tz = zone(tz_name)
+    cron_expression, interval_hours = "", 0
+    if choice == "cron":
+        cron_expression = validate_cron(post.get("cron_expression") or "", tz=tz_name)
+    else:
+        try:
+            interval_hours = int(choice)
+        except ValueError as exc:
+            raise ValueError("Pick how often to repeat.") from exc
+        if not MIN_INTERVAL_HOURS <= interval_hours <= MAX_INTERVAL_HOURS:
+            raise ValueError(f"Repeat interval must be between {MIN_INTERVAL_HOURS} hours and 90 days.")
+    start = (post.get("start") or "now").strip()
+    if start not in START_CHOICES:
+        start = "now"
+    if start == "at":
+        raw = (post.get("first_run_at") or "").strip()
+        if not raw:
+            raise ValueError("Pick when the first run should start, or choose “Now”.")
+        at = timezone.make_aware(datetime.fromisoformat(raw), tz)
+        if at <= now:
+            raise ValueError("The first run time is in the past.")
+        first = cron_next(cron_expression, at - timedelta(minutes=1), tz_name) if cron_expression else at
+    elif cron_expression:
+        first = cron_next(cron_expression, now, tz_name)
+    else:
+        first = now + timedelta(hours=interval_hours)
+    return {
+        "choice": choice,
+        "interval_hours": interval_hours,
+        "cron_expression": cron_expression,
+        "timezone": tz_name,
+        "start": start,
+        "first_run_at": first,
+        "baseline_run": (post.get("clone_from") or "").strip() if start == "baseline" else "",
+    }
+
+
+def repeat_label(repeat: dict | None) -> str:
+    if not repeat:
+        return "once"
+    if repeat["cron_expression"]:
+        return f"cron {repeat['cron_expression']} ({repeat['timezone']})"
+    return Monitor(interval_hours=repeat["interval_hours"]).interval_display
+
+
+def run_matches_monitor(run: AuditRun, monitor: Monitor) -> bool:
+    """Whether ``run`` is the same experiment setup the monitor will repeat."""
+    version = resolve_version(monitor)
+    return (
+        version is not None
+        and run.scenario_set_version_id == version.id
+        and run.target_model_id == monitor.target_model_id
+        and run.auditor_model_id == monitor.auditor_model_id
+        and run.judge_model_id == monitor.judge_model_id
+        and (run.generation_parameters_snapshot or {}) == (monitor.generation_parameters or {})
+    )
+
+
+def create_monitor(*, project, user, name: str, run: dict, repeat: dict, experiment=None, first_point=None) -> Monitor:
+    """A monitor repeating one run setup (``run``: the launch dict used for runs).
+
+    ``first_point``: an already-launched run of the same setup; it becomes the
+    first point of the drift series (and blocks the next tick while active).
+    """
+    from accounts.models import ProjectMembership
+    from audits.services import _generation_parameters
+    from scenarios.services import require_project_role
+
+    # Monitors spend the workspace's keys unattended: same rule as launching.
+    require_project_role(user, project, ProjectMembership.Role.ADMIN, ProjectMembership.Role.AUDITOR)
+    if Monitor.objects.filter(project=project).count() >= MAX_MONITORS_PER_PROJECT:
+        raise ValueError(
+            f"This workspace already has {MAX_MONITORS_PER_PROJECT} monitors (the limit). Delete some first."
+        )
+    monitor = Monitor.objects.create(
+        project=project,
+        name=name[:250],
+        scenario_set=run["version"].scenario_set,
+        scenario_set_version=run["version"],  # always pinned: keeps the series comparable
+        target_model=run["target"],
+        auditor_model=run["auditor"],
+        judge_model=run["judge"],
+        generation_parameters=_generation_parameters(
+            max_turns_override=run["max_turns"],
+            language_override=run["language"],
+            n_repetitions_override=run["n_repetitions"],
+            gen_config_override=run["gen_config"],
+        ),
+        interval_hours=repeat["interval_hours"],
+        cron_expression=repeat["cron_expression"],
+        timezone=repeat["timezone"],
+        next_run_at=repeat["first_run_at"],
+        experiment=experiment,
+        created_by=user,
+    )
+    if first_point is not None and run_matches_monitor(first_point, monitor):
+        AuditRun.objects.filter(pk=first_point.pk).update(monitor=monitor)
+        monitor.last_run = first_point
+        monitor.save(update_fields=["last_run"])
+    return monitor
+
+
+def run_due_monitors(now=None) -> list[int]:
+    """Launch every enabled monitor whose ``next_run_at`` has passed.
 
     Returns the ids of the runs created. A tick whose previous run is still in
     flight is skipped (never overlap runs of one series); a tick that fails to
     create its run records ``last_error`` and still advances, so one broken
-    schedule cannot wedge the loop. A schedule whose creator lost the
+    monitor cannot wedge the loop. A monitor whose creator lost the
     admin/auditor role is paused instead of launched.
     """
     from audits.services import submit_audit_run
@@ -197,36 +329,36 @@ def run_due_schedules(now=None) -> list[int]:
     created: list[AuditRun] = []
     with transaction.atomic():
         due = (
-            AuditSchedule.objects.select_for_update(skip_locked=True)
+            Monitor.objects.select_for_update(skip_locked=True)
             .filter(enabled=True, next_run_at__lte=now)
             .select_related("last_run", "project", "created_by")
             .order_by("next_run_at")
         )
-        for schedule in due:
-            schedule.next_run_at = next_after(schedule, now)
-            schedule.last_tick_at = now
-            last = schedule.last_run
-            if not owner_authorized(schedule):
-                schedule.enabled = False
-                who = schedule.created_by.username if schedule.created_by else "deleted user"
-                schedule.last_error = (
+        for monitor in due:
+            monitor.next_run_at = next_after(monitor, now)
+            monitor.last_tick_at = now
+            last = monitor.last_run
+            if not owner_authorized(monitor):
+                monitor.enabled = False
+                who = monitor.created_by.username if monitor.created_by else "deleted user"
+                monitor.last_error = (
                     f"Paused {now:%Y-%m-%d %H:%M}: owner {who} no longer has admin or auditor role "
-                    "in this workspace. Recreate the schedule under an authorized user."
+                    "in this workspace. Recreate the monitor under an authorized user."
                 )
-                logger.warning("Schedule %s paused: owner lost write role", schedule.pk)
+                logger.warning("Monitor %s paused: owner lost write role", monitor.pk)
             elif last is not None and last.status not in _TERMINAL:
-                schedule.last_error = f"Skipped {now:%Y-%m-%d %H:%M}: run #{last.id} still {last.status}."
+                monitor.last_error = f"Skipped {now:%Y-%m-%d %H:%M}: run #{last.id} still {last.status}."
             else:
                 try:
-                    run = launch_schedule(schedule, now=now)
-                except Exception as exc:  # noqa: BLE001 - recorded on the schedule, loop continues
-                    schedule.last_error = f"{now:%Y-%m-%d %H:%M}: {exc}"
-                    logger.warning("Schedule %s tick failed: %s", schedule.pk, exc)
+                    run = launch_monitor(monitor, now=now)
+                except Exception as exc:  # noqa: BLE001 - recorded on the monitor, loop continues
+                    monitor.last_error = f"{now:%Y-%m-%d %H:%M}: {exc}"
+                    logger.warning("Monitor %s tick failed: %s", monitor.pk, exc)
                 else:
-                    schedule.last_run = run
-                    schedule.last_error = ""
+                    monitor.last_run = run
+                    monitor.last_error = ""
                     created.append(run)
-            schedule.save(
+            monitor.save(
                 update_fields=["enabled", "next_run_at", "last_tick_at", "last_run", "last_error", "updated_at"]
             )
 
@@ -236,7 +368,7 @@ def run_due_schedules(now=None) -> list[int]:
         except Exception as exc:  # noqa: BLE001 - run stays queued; the sweeper retries submission
             logger.warning("Scheduled run %s not submitted: %s", run.pk, exc)
     if created:
-        logger.info("Schedules launched %d run(s): %s", len(created), [r.pk for r in created])
+        logger.info("Monitors launched %d run(s): %s", len(created), [r.pk for r in created])
     return [r.pk for r in created]
 
 
@@ -298,15 +430,15 @@ def two_proportion_z(k1: int, n1: int, k2: int, n2: int) -> float | None:
     return (k2 / n2 - k1 / n1) / se
 
 
-def drift_series(schedule: AuditSchedule) -> list[dict]:
-    """Chronological points for the schedule's runs with CI and change flags.
+def drift_series(monitor: Monitor) -> list[dict]:
+    """Chronological points for the monitor's runs with CI and change flags.
 
     Each completed run is tested against the pooled previous ``BASELINE_WINDOW``
     completed runs on the same scenario set version; ``change`` is
     "drop"/"rise" when |z| >= 1.96, else "".
     """
     runs = list(
-        schedule.runs.filter(archived=False)
+        monitor.runs.filter(archived=False)
         .select_related("scenario_set_version")
         .order_by("created_at")
     )

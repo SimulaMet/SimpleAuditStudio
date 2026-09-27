@@ -980,7 +980,7 @@ def _sweep_once(stale_minutes: int = RESUME_STALE_MINUTES) -> None:
 
 
 def _stuck_run_sweeper(interval: int = 60, stale_minutes: int = RESUME_STALE_MINUTES) -> None:
-    """Background loop around ``_sweep_once`` and the schedule tick; never crashes."""
+    """Background loop around ``_sweep_once`` and the monitor tick; never crashes."""
     import time
 
     logger.info("Run sweeper started (interval=%ds, resume after %dmin idle)", interval, stale_minutes)
@@ -991,11 +991,11 @@ def _stuck_run_sweeper(interval: int = 60, stale_minutes: int = RESUME_STALE_MIN
         except Exception as exc:  # noqa: BLE001 - sweeper must never crash
             logger.warning("Run sweeper iteration failed: %s", exc)
         try:
-            from audits.scheduling import run_due_schedules
+            from audits.monitors import run_due_monitors
 
-            run_due_schedules()
+            run_due_monitors()
         except Exception as exc:  # noqa: BLE001 - sweeper must never crash
-            logger.warning("Schedule tick failed: %s", exc)
+            logger.warning("Monitor tick failed: %s", exc)
 
 
 def start_worker(max_startup_retries: int = 30, startup_retry_delay: float = 2.0) -> None:

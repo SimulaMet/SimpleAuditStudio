@@ -51,9 +51,13 @@ class AuditRun(models.Model):
     # Soft-hide from the dashboard/queue. Never deletes data; the frozen
     # manifest and results stay fully accessible via the detail page.
     archived = models.BooleanField(default=False, db_index=True)
-    # Set when the run was launched by a recurring AuditSchedule (drift series).
-    schedule = models.ForeignKey(
-        "audits.AuditSchedule", on_delete=models.SET_NULL, null=True, blank=True, related_name="runs"
+    # Set when the run was launched by a recurring Monitor (drift series).
+    monitor = models.ForeignKey(
+        "audits.Monitor", on_delete=models.SET_NULL, null=True, blank=True, related_name="runs"
+    )
+    # Set when the run was launched as one cell of an Experiment grid.
+    experiment = models.ForeignKey(
+        "audits.Experiment", on_delete=models.SET_NULL, null=True, blank=True, related_name="runs"
     )
     created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -81,25 +85,25 @@ class AuditRun(models.Model):
         return f"{hours}h {mins}m"
 
 
-class AuditSchedule(models.Model):
+class Monitor(models.Model):
     """A recurring audit: the same frozen experiment re-run on a fixed interval.
 
-    Each tick creates an ordinary AuditRun (linked back via ``AuditRun.schedule``)
+    Each tick creates an ordinary AuditRun (linked back via ``AuditRun.monitor``)
     so every point in the drift series is a fully reproducible experiment record.
     Pin the scenario set version, auditor and judge to keep the series comparable;
     ``scenario_set_version`` left empty means "latest published version at tick".
     """
 
-    project = models.ForeignKey("accounts.Project", on_delete=models.CASCADE, related_name="audit_schedules")
+    project = models.ForeignKey("accounts.Project", on_delete=models.CASCADE, related_name="monitors")
     name = models.CharField(max_length=250)
     enabled = models.BooleanField(default=True)
-    scenario_set = models.ForeignKey("scenarios.ScenarioSet", on_delete=models.CASCADE, related_name="audit_schedules")
+    scenario_set = models.ForeignKey("scenarios.ScenarioSet", on_delete=models.CASCADE, related_name="monitors")
     scenario_set_version = models.ForeignKey(
-        "scenarios.ScenarioSetVersion", on_delete=models.RESTRICT, null=True, blank=True, related_name="audit_schedules"
+        "scenarios.ScenarioSetVersion", on_delete=models.RESTRICT, null=True, blank=True, related_name="monitors"
     )
-    target_model = models.ForeignKey("model_registry.RegisteredModel", on_delete=models.RESTRICT, related_name="target_audit_schedules")
-    auditor_model = models.ForeignKey("model_registry.RegisteredModel", on_delete=models.RESTRICT, related_name="auditor_audit_schedules")
-    judge_model = models.ForeignKey("model_registry.RegisteredModel", on_delete=models.RESTRICT, related_name="judge_audit_schedules")
+    target_model = models.ForeignKey("model_registry.RegisteredModel", on_delete=models.RESTRICT, related_name="target_monitors")
+    auditor_model = models.ForeignKey("model_registry.RegisteredModel", on_delete=models.RESTRICT, related_name="auditor_monitors")
+    judge_model = models.ForeignKey("model_registry.RegisteredModel", on_delete=models.RESTRICT, related_name="judge_monitors")
     # Same shape as AuditRun.generation_parameters_snapshot; copied into each run.
     generation_parameters = models.JSONField(default=dict, blank=True)
     interval_hours = models.PositiveIntegerField(default=168)
@@ -112,6 +116,11 @@ class AuditSchedule(models.Model):
     timezone = models.CharField(max_length=64, default="UTC")
     next_run_at = models.DateTimeField(db_index=True)
     last_run = models.ForeignKey("audits.AuditRun", on_delete=models.SET_NULL, null=True, blank=True, related_name="+")
+    # Set when the monitor repeats one run setup of an Experiment; its runs then
+    # also join that experiment, so the experiment page can chart them over time.
+    experiment = models.ForeignKey(
+        "audits.Experiment", on_delete=models.SET_NULL, null=True, blank=True, related_name="monitors"
+    )
     last_tick_at = models.DateTimeField(null=True, blank=True)
     last_error = models.TextField(blank=True)
     created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True)
@@ -119,7 +128,7 @@ class AuditSchedule(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
-        db_table = "core_audit_schedule"
+        db_table = "core_monitor"
         ordering = ["name"]
 
     def __str__(self) -> str:
@@ -137,3 +146,26 @@ class AuditSchedule(models.Model):
             n = h // 24
             return "daily" if n == 1 else f"every {n} days"
         return "hourly" if h == 1 else f"every {h} hours"
+
+
+class Experiment(models.Model):
+    """A group of runs launched together from one design.
+
+    ``factors`` lists the inputs that vary across the runs (e.g. ["target",
+    "max_turns"]); every other input is the same in all of them. See
+    audits.experiments for the design, expansion and results logic.
+    """
+
+    project = models.ForeignKey("accounts.Project", on_delete=models.CASCADE, related_name="experiments")
+    name = models.CharField(max_length=250)
+    factors = models.JSONField(default=list, blank=True)
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "core_experiment"
+        ordering = ["-created_at"]
+
+    def __str__(self) -> str:
+        return self.name

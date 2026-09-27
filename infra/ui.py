@@ -13,7 +13,7 @@ from django.contrib.auth.forms import AuthenticationForm
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.db.models import ProtectedError, RestrictedError
 from django.http import HttpResponse, HttpResponseForbidden, JsonResponse
-from django.shortcuts import get_object_or_404, redirect
+from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
 from django.views.generic import DetailView, ListView, TemplateView, View
 
@@ -632,317 +632,527 @@ def _clone_from_run(source: AuditRun) -> dict:
     }
 
 
-class NewAuditView(ProjectMixin, TemplateView):
-    template_name = "new_audit.html"
+def _design_selection(post=None, clone=None) -> dict:
+    """What the design form should show as selected: from a POST, a cloned run, or empty."""
+    if post is not None:
+        return {
+            "sets": post.getlist("scenario_set"),
+            "target": post.getlist("target_model"),
+            "auditor": post.getlist("auditor_model"),
+            "judge": post.getlist("judge_model"),
+            "pinned_version": post.get("scenario_set_version", ""),
+        }
+    if clone:
+        return {
+            "sets": [str(clone["scenario_set_id"])],
+            "target": [str(clone["target_model_id"])],
+            "auditor": [str(clone["auditor_model_id"])],
+            "judge": [str(clone["judge_model_id"])],
+            "pinned_version": str(clone["scenario_set_version_id"]),
+        }
+    return {"sets": [], "target": [], "auditor": [], "judge": [], "pinned_version": ""}
+
+
+def ex_repeat(repeat: dict) -> str:
+    from audits.monitors import repeat_label
+
+    return repeat_label(repeat)
+
+
+def ex_label(spec: dict) -> str:
+    """'Health v2' style label of a spec's scenario set version (monitor names)."""
+    from audits.experiments import factor_value_label
+
+    return factor_value_label("scenario_set", spec["scenario_set"])
+
+
+def _design_from_review(post):
+    """The original design, carried through the review screen as design__<field>."""
+    from django.http import QueryDict
+
+    design = QueryDict(mutable=True)
+    for key, values in post.lists():
+        if key.startswith("design__"):
+            design.setlist(key[len("design__"):], values)
+    return design
+
+
+def _settings_prefill(post) -> dict:
+    """Re-fill the settings block (same shape as a clone) from a POST."""
+    return {
+        "max_turns": post.get("max_turns", ""),
+        "language": post.get("language", ""),
+        "n_repetitions": post.get("n_repetitions", ""),
+        "generation_json": post.get("gen_config_json", ""),
+    }
+
+
+class NewExperimentView(ProjectMixin, TemplateView):
+    """New Experiment: design (every input takes one or more values) → review → launch.
+
+    A design that expands to one run launches it straight away. "Repeat" (other
+    than Once) also creates one Monitor per run setup.
+    """
+
+    template_name = "experiment_new.html"
 
     def get_context_data(self, **kw):
+        from audits.experiments import MAX_RUNS_PER_EXPERIMENT
+        from audits.monitors import has_write_role
+        from model_registry.models import ModelConnection
+
         p = self.request.project
         source = _run_from_query(self.request, "clone_from")
         clone = _clone_from_run(source) if source else None
-        from model_registry.models import ModelConnection
-
-        connections = (
-            ModelConnection.objects.filter(project=p)
-            .prefetch_related("models")
-            .order_by("name")
-        )
-        from audits.scheduling import has_write_role
-
         kw.setdefault("error", None)
+        kw.setdefault("clone", clone)
+        kw.setdefault("sel", _design_selection(clone=clone))
+        sel = kw["sel"]
+        # Repeat prefill: a POST being re-shown, else ?repeat= (e.g. "Monitor for drift").
+        from audits.monitors import REPEAT_CHOICES
+
+        get = self.request.GET
+        kw.setdefault("rep", {
+            "repeat": get.get("repeat", "once"),
+            "timezone": "",
+            "cron_expression": "",
+            "start": "baseline" if source and get.get("repeat") else "now",
+            "first_run_at": "",
+            "clone_from": str(source.id) if source else "",
+        })
         kw.update(
-            sets=ScenarioSet.objects.filter(project=p),
-            connections=connections,
-            clone=clone,
+            sets=ScenarioSet.objects.filter(project=p).prefetch_related("versions"),
+            connections=ModelConnection.objects.filter(project=p).prefetch_related("models").order_by("name"),
+            model_roles=[
+                ("target", "Target", "The model under test.", sel["target"]),
+                ("auditor", "Auditor", "Plays the user and probes the target.", sel["auditor"]),
+                ("judge", "Judge", "Grades each conversation.", sel["judge"]),
+            ],
+            max_runs=MAX_RUNS_PER_EXPERIMENT,
+            repeat_choices=REPEAT_CHOICES,
+            timezones=_timezone_choices(),
+            source_run=source,
             # Same rule as launching a run: admin or auditor (superusers too).
             can_launch=has_write_role(self.request.user, p),
         )
         return super().get_context_data(**kw)
 
+    def _redesign(self, post, error=None):
+        rep = {k: post.get(k, "") for k in ("repeat", "timezone", "cron_expression", "start", "first_run_at", "clone_from")}
+        rep["repeat"] = rep["repeat"] or "once"
+        source = None
+        if rep["clone_from"].isdigit():
+            source = AuditRun.objects.filter(pk=int(rep["clone_from"]), project=self.request.project).first()
+        return self.render_to_response(self.get_context_data(
+            error=error, sel=_design_selection(post=post), clone=_settings_prefill(post), rep=rep,
+            source_run=source,
+        ))
+
     def post(self, request, *args, **kwargs):
-        p = request.project
+        from audits import experiments as ex
+
         blocked = _require_writable_project(request)
         if blocked:
             return blocked
+        action = request.POST.get("action", "design")
+        if action == "edit":
+            return self._redesign(_design_from_review(request.POST))
+        if action == "launch":
+            return self._launch(request)
+        from audits.monitors import parse_repeat
+
         try:
-            clone_version_id = (request.POST.get("scenario_set_version") or "").strip()
-            if clone_version_id:
-                version = ScenarioSetVersion.objects.get(id=clone_version_id, scenario_set__project=p)
-            else:
-                sset = ScenarioSet.objects.get(pk=request.POST["scenario_set"], project=p)
-                version = sset.versions.order_by("-version").first()
-                if not version:
-                    raise ValueError("No published version for this set.")
+            design = ex.parse_design(request.POST, request.project)
+            specs = ex.expand(design)
+            repeat = parse_repeat(request.POST)
+        except ValueError as e:  # DesignError is a ValueError too
+            return self._redesign(request.POST, str(e))
+        if len(specs) == 1:
+            return self._launch_single(request, specs[0], repeat)
+        return self._review(request, design, specs, repeat)
 
-            # Parse optional hyperparameter overrides
-            max_turns_raw = (request.POST.get("max_turns") or "").strip()
-            max_turns_override = int(max_turns_raw) if max_turns_raw else None
-            language_override = (request.POST.get("language") or "").strip() or None
-            n_reps_raw = (request.POST.get("n_repetitions") or "").strip()
-            n_repetitions_override = int(n_reps_raw) if n_reps_raw and int(n_reps_raw) > 1 else None
+    def _launch_single(self, request, spec, repeat):
+        """One run setup: launch it (unless starting later) and, if repeating, monitor it."""
+        from django.db import transaction
 
-            # Parse optional generation config JSON override
-            gen_config_override = None
-            gen_json_raw = (request.POST.get("gen_config_json") or "").strip()
-            if gen_json_raw and gen_json_raw != "{}":
-                try:
-                    parsed = json.loads(gen_json_raw)
-                    if not isinstance(parsed, dict):
-                        raise TypeError("Must be a JSON object")
-                    gen_config_override = parsed or None
-                except Exception as e:  # noqa: BLE001 - any parse failure is a user error
-                    return self.render_to_response(self.get_context_data(error=f"Invalid generation config JSON: {e}"))
+        from audits.monitors import create_monitor
 
-            from model_registry.models import RegisteredModel
-
-            run = create_audit_run(
-                project=p,
-                user=request.user,
-                name=f"Audit {timezone.now():%Y-%m-%d %H:%M}",
-                scenario_set_version=version,
-                target_model=RegisteredModel.objects.get(pk=request.POST["target_model"], project=p),
-                auditor_model=RegisteredModel.objects.get(pk=request.POST["auditor_model"], project=p),
-                judge_model=RegisteredModel.objects.get(pk=request.POST["judge_model"], project=p),
-                max_turns_override=max_turns_override,
-                language_override=language_override,
-                n_repetitions_override=n_repetitions_override,
-                gen_config_override=gen_config_override,
-            )
-            submit_audit_run(run)
-            return redirect(f"/audits/{run.id}/")
+        p = request.project
+        run_spec = {
+            "version": spec["scenario_set"],
+            "target": spec["target"],
+            "auditor": spec["auditor"],
+            "judge": spec["judge"],
+            "max_turns": spec["max_turns"],
+            "language": spec["language"],
+            "n_repetitions": spec["n_repetitions"],
+            "gen_config": spec["gen_config"],
+        }
+        run = monitor = None
+        try:
+            with transaction.atomic():
+                if not repeat or repeat["start"] == "now":
+                    run = create_audit_run(
+                        project=p,
+                        user=request.user,
+                        name=f"Run {timezone.now():%Y-%m-%d %H:%M}",
+                        scenario_set_version=run_spec["version"],
+                        target_model=run_spec["target"],
+                        auditor_model=run_spec["auditor"],
+                        judge_model=run_spec["judge"],
+                        max_turns_override=run_spec["max_turns"],
+                        language_override=run_spec["language"],
+                        n_repetitions_override=run_spec["n_repetitions"],
+                        gen_config_override=run_spec["gen_config"],
+                    )
+                if repeat:
+                    first_point = run
+                    if repeat["start"] == "baseline" and repeat["baseline_run"].isdigit():
+                        first_point = AuditRun.objects.filter(pk=int(repeat["baseline_run"]), project=p).first()
+                    monitor = create_monitor(
+                        project=p,
+                        user=request.user,
+                        name=f"{spec['target'].display_name} · {ex_label(spec)}",
+                        run=run_spec,
+                        repeat=repeat,
+                        first_point=first_point,
+                    )
         except Exception as e:  # noqa: BLE001 - surface any creation failure to the user
-            return self.render_to_response(self.get_context_data(error=str(e)))
+            return self._redesign(request.POST, str(e))
+        if run:
+            submit_audit_run(run)
+        if monitor:
+            messages.success(request, f"Monitor “{monitor.name}” created: next run {monitor.next_run_at:%Y-%m-%d %H:%M} UTC.")
+        return redirect(f"/runs/{run.id}/" if run else f"/monitors/{monitor.id}/")
+
+    # --- Review -------------------------------------------------------------
+    # Rows carry the fixed part of a run (scenario version + models) as a JSON
+    # "spec", plus editable fields: name, max turns, language, repetitions and
+    # generation config. Rows can be duplicated client-side, so indices may
+    # have gaps; the server walks 0..row_count and skips missing ones.
+
+    @staticmethod
+    def _row_context(i, spec_objs, *, name, max_turns, language, n_reps, gen_json, include=True, duplicate=False):
+        from audits import experiments as ex
+
+        spec = {"scenario_set": spec_objs["version"], **{r: spec_objs[r] for r in ("target", "auditor", "judge")}}
+        return {
+            "i": i,
+            "spec": ex.spec_to_row(spec),
+            "name": name,
+            "values": {k: ex.factor_value_label(k, spec[k]) for k in ("scenario_set", "target", "auditor", "judge")},
+            "max_turns": max_turns or "",
+            "language": language or "",
+            "n_repetitions": n_reps or "",
+            "gen_config_json": gen_json,
+            "warnings": ex.spec_warnings(spec),
+            "include": include,
+            "duplicate": duplicate,
+        }
+
+    def _render_review(self, request, *, rows, experiment_name, design_post, repeat=None, error=None):
+        from audits import experiments as ex
+        from audits.monitors import repeat_label, zone
+
+        # Columns: the scenario set / model roles that differ between rows.
+        columns = [
+            (key, label)
+            for key, label in ex.DESIGN_AXES.items()
+            if key in ("scenario_set", "target", "auditor", "judge") and len({r["values"][key] for r in rows}) > 1
+        ]
+        fixed = [
+            (label, rows[0]["values"][key])
+            for key, label in ex.DESIGN_AXES.items()
+            if key in rows[0]["values"] and key not in dict(columns)
+        ]
+        warnings = ex.design_warnings([k for k, _ in columns])
+        # A warning true for every run is shown once at the top, not per row.
+        shared = set.intersection(*(set(r["warnings"]) for r in rows)) if len(rows) > 1 else set()
+        warnings += [f"All runs: {w}" for w in rows[0]["warnings"] if w in shared] if rows else []
+        for row in rows:
+            row["cells"] = [row["values"][k] for k, _ in columns]
+            row["warnings"] = [w for w in row["warnings"] if w not in shared]
+        return render(request, "experiment_review.html", {
+            "experiment_name": experiment_name,
+            "columns": columns,
+            "fixed": fixed,
+            "rows": rows,
+            "row_count": max((r["i"] for r in rows), default=-1) + 1,
+            "design_warnings": warnings,
+            "design_post": design_post,
+            "repeat": repeat,
+            "repeat_label": repeat_label(repeat),
+            "repeat_first_local": repeat["first_run_at"].astimezone(zone(repeat["timezone"])) if repeat else None,
+            "error": error,
+            "max_runs": ex.MAX_RUNS_PER_EXPERIMENT,
+        })
+
+    def _review(self, request, design, specs, repeat=None):
+        from audits import experiments as ex
+
+        factors = ex.varied_factors(design)
+        gen_json = json.dumps(design["gen_config"], indent=2, sort_keys=True) if design["gen_config"] else ""
+        rows = [
+            self._row_context(
+                i,
+                {"version": spec["scenario_set"], "target": spec["target"], "auditor": spec["auditor"], "judge": spec["judge"]},
+                name=ex.spec_label(spec, factors),
+                max_turns=spec["max_turns"],
+                language=spec["language"],
+                n_reps=spec["n_repetitions"],
+                gen_json=gen_json,
+            )
+            for i, spec in enumerate(specs)
+        ]
+        design_post = [(k, v) for k, vs in request.POST.lists() if k not in ("csrfmiddlewaretoken", "action") for v in vs]
+        return self._render_review(
+            request, rows=rows, experiment_name=ex.default_experiment_name(design, factors),
+            design_post=design_post, repeat=repeat,
+        )
+
+    def _rows_from_post(self, post, project):
+        """Rebuild review rows and the runs to launch from a review POST.
+
+        Returns (rows, runs, errors). Every row is rebuilt (so the review can be
+        re-shown with the user's edits); only ticked rows become runs.
+        """
+        from model_registry.models import RegisteredModel
+
+        rows, runs, errors = [], [], []
+        for i in range(min(int(post.get("row_count") or 0), 500)):
+            raw_spec = post.get(f"run-{i}-spec")
+            if not raw_spec:
+                continue  # removed duplicate
+            spec = json.loads(raw_spec)
+            objs = {
+                "version": ScenarioSetVersion.objects.get(pk=spec["v"], scenario_set__project=project),
+                **{
+                    role: RegisteredModel.objects.select_related("connection").get(pk=spec[key], project=project)
+                    for role, key in (("target", "t"), ("auditor", "a"), ("judge", "j"))
+                },
+            }
+            name = (post.get(f"run-{i}-name") or "").strip() or f"Run {i + 1}"
+            mt = (post.get(f"run-{i}-max_turns") or "").strip()
+            lang = (post.get(f"run-{i}-language") or "").strip()
+            reps = (post.get(f"run-{i}-n_repetitions") or "").strip()
+            gen_raw = (post.get(f"run-{i}-gen_config_json") or "").strip()
+            include = bool(post.get(f"run-{i}-include"))
+            rows.append(self._row_context(
+                i, objs, name=name, max_turns=mt, language=lang, n_reps=reps, gen_json=gen_raw,
+                include=include, duplicate=bool(post.get(f"run-{i}-duplicate")),
+            ))
+            if not include:
+                continue
+            try:
+                max_turns = int(mt) if mt else None
+                if max_turns is not None and not 1 <= max_turns <= 50:
+                    raise ValueError
+            except ValueError:
+                errors.append(f"“{name}”: max turns must be a whole number from 1 to 50.")
+                continue
+            try:
+                n_reps = int(reps) if reps else None
+                if n_reps is not None and not 1 <= n_reps <= 20:
+                    raise ValueError
+            except ValueError:
+                errors.append(f"“{name}”: repetitions must be a whole number from 1 to 20.")
+                continue
+            gen_config = None
+            if gen_raw and gen_raw != "{}":
+                try:
+                    gen_config = json.loads(gen_raw)
+                    if not isinstance(gen_config, dict):
+                        raise TypeError("must be a JSON object")
+                except (ValueError, TypeError) as exc:
+                    errors.append(f"“{name}”: generation config is not valid JSON ({exc}).")
+                    continue
+            runs.append({
+                "name": name,
+                **objs,
+                "max_turns": max_turns,
+                "language": lang or None,
+                "n_repetitions": n_reps if n_reps and n_reps > 1 else None,
+                "gen_config": gen_config or None,
+            })
+        return rows, runs, errors
+
+    def _launch(self, request):
+        from audits import experiments as ex
+        from audits.monitors import parse_repeat
+
+        p = request.project
+        post = request.POST
+        design_post = [(k[len("design__"):], v) for k, vs in post.lists() if k.startswith("design__") for v in vs]
+        design = _design_from_review(post)
+        try:
+            rows, runs, errors = self._rows_from_post(post, p)
+        except Exception as e:  # noqa: BLE001 - tampered or stale form: start again from the design
+            return self._redesign(design, f"Could not read the review: {e}")
+        try:
+            repeat = parse_repeat(design)
+        except ValueError as e:
+            repeat = None
+            errors.append(str(e))
+        name = post.get("experiment_name", "")
+        if not errors:
+            try:
+                experiment = ex.launch_experiment(project=p, user=request.user, name=name, runs=runs, repeat=repeat)
+            except Exception as e:  # noqa: BLE001 - show the reason on the review screen
+                errors.append(str(e))
+            else:
+                if repeat:
+                    messages.success(request, f"Experiment launched; its {len(runs)} run setups now repeat {ex_repeat(repeat)}.")
+                return redirect(f"/experiments/{experiment.id}/")
+        if not rows:
+            return self._redesign(design, " ".join(errors))
+        return self._render_review(
+            request, rows=rows, experiment_name=name, design_post=design_post, repeat=repeat, error=" ".join(errors)
+        )
 
 
-# ─── Schedules (recurring audits / drift) ────────────────────────────────────
+# ─── Experiments ─────────────────────────────────────────────────────────────
 
-_INTERVAL_PRESETS = [(6, "Every 6 hours"), (24, "Daily"), (72, "Every 3 days"), (168, "Weekly"), (336, "Every 2 weeks")]
+_TERMINAL_STATUSES = ("completed", "failed", "cancelled")
 
 
-class SchedulesView(ProjectMixin, TemplateView):
-    template_name = "schedules.html"
+def _experiment_summary(runs) -> dict:
+    total = len(runs)
+    done = sum(1 for r in runs if r.status in _TERMINAL_STATUSES)
+    failed = sum(1 for r in runs if r.status == "failed")
+    return {
+        "total": total,
+        "done": done,
+        "failed": failed,
+        "active": total - done,
+        "pct": done * 100 // total if total else 0,
+    }
+
+
+class ExperimentsView(ProjectMixin, TemplateView):
+    template_name = "experiments.html"
 
     def get_context_data(self, **kw):
-        from audits.models import AuditSchedule
-        from audits.scheduling import (
-            MAX_SCHEDULES_PER_PROJECT,
-            can_manage_schedule,
-            has_write_role,
-        )
-        from model_registry.models import ModelConnection
+        from audits.experiments import FACTORS
+        from audits.models import Experiment
 
-        p = self.request.project
-        schedules = list(
-            AuditSchedule.objects.filter(project=p).select_related(
-                "project", "scenario_set", "scenario_set_version", "target_model", "auditor_model", "judge_model",
-                "last_run", "created_by",
-            )
+        experiments = list(
+            Experiment.objects.filter(project=self.request.project)
+            .select_related("created_by")
+            .prefetch_related("runs")
         )
-        for s in schedules:
-            s.can_manage = can_manage_schedule(self.request.user, s)
-        kw.setdefault("error", None)
-        # "Repeat on schedule" from an audit detail page: prefill from that run,
-        # pinned to its exact scenario set version, so the run can be the first
-        # point of the series.
-        from_run = kw.get("from_run") or _run_from_query(self.request, "from_run")
-        if from_run:
-            kw.setdefault("clone", _clone_from_run(from_run))
-            kw.setdefault("form", {
-                "name": f"{from_run.target_model.display_name} · {from_run.scenario_set_version.scenario_set.name} drift",
-            })
-        kw["from_run"] = from_run
-        kw.setdefault("form", {})
-        # Prefill for the shared model / hyperparameter blocks (same shape as
-        # NewAuditView's clone). Drift series default to 3 repetitions so the
-        # confidence band is usable.
-        kw.setdefault("clone", {"n_repetitions": 3})
+        for e in experiments:
+            e.summary = _experiment_summary(list(e.runs.all()))
+            e.factor_labels = [FACTORS.get(f, f) for f in e.factors]
+        kw["experiments"] = experiments
+        return super().get_context_data(**kw)
+
+
+class ExperimentDetailView(ProjectMixin, TemplateView):
+    template_name = "experiment_detail.html"
+
+    def get_context_data(self, **kw):
+        from audits.experiments import FACTORS, experiment_pivot, run_factor_values
+        from audits.models import Experiment
+        from audits.monitors import can_manage_monitor, drift_series, pass_counts
+
+        experiment = get_object_or_404(Experiment, pk=kw["experiment_id"], project=self.request.project)
+        runs = list(
+            experiment.runs.select_related(
+                "scenario_set_version__scenario_set", "target_model", "auditor_model", "judge_model"
+            ).order_by("created_at", "id")
+        )
+        factors = [f for f in experiment.factors if f in FACTORS]
+        # Pivot axes from the query string, defaulting to the first two factors.
+        row_factor = self.request.GET.get("rows") if self.request.GET.get("rows") in factors else None
+        col_factor = self.request.GET.get("cols") if self.request.GET.get("cols") in factors else None
+        if not row_factor and not col_factor:
+            row_factor = factors[0] if factors else None
+            col_factor = factors[1] if len(factors) > 1 else None
+        if col_factor == row_factor:
+            col_factor = None
+        counts = pass_counts([r.id for r in runs])
+        for r in runs:
+            values = run_factor_values(r)
+            r.factor_values = [values[f] for f in factors]
+            c = counts[r.id]
+            r.pass_rate = c["k"] * 100 / c["n"] if c["n"] else None
+        # One "setup" per monitor (its repeats) or per standalone run. By
+        # default each setup contributes its latest judged run, so repeats show
+        # the current state instead of being pooled with old ones (which would
+        # hide drift). ?pool=1 pools every run.
+        pool = self.request.GET.get("pool") == "1"
+        latest: dict = {}
+        for r in runs:
+            key = ("monitor", r.monitor_id) if r.monitor_id else ("run", r.id)
+            if key not in latest or counts[r.id]["n"] or not counts[latest[key].id]["n"]:
+                latest[key] = r
+        current = sorted(latest.values(), key=lambda r: r.id)
+        monitors = list(experiment.monitors.select_related("project", "created_by").order_by("id"))
+        for m in monitors:
+            points = drift_series(m)
+            m.chart = _drift_chart(points, width=220, height=48, pad=4)
+            judged = [pt for pt in points if pt["rate"] is not None]
+            m.latest_point = judged[-1] if judged else None
+            m.drops = sum(1 for pt in points if pt["change"] == "drop")
+            m.can_manage = can_manage_monitor(self.request.user, m)
         kw.update(
-            schedules=schedules,
-            sets=ScenarioSet.objects.filter(project=p).prefetch_related("versions"),
-            connections=ModelConnection.objects.filter(project=p).prefetch_related("models").order_by("name"),
-            interval_presets=_INTERVAL_PRESETS,
-            timezones=_timezone_choices(),
-            can_create=has_write_role(self.request.user, p) and not (p.archived and not self.request.user.is_superuser),
-            at_cap=len(schedules) >= MAX_SCHEDULES_PER_PROJECT,
-            max_schedules=MAX_SCHEDULES_PER_PROJECT,
+            experiment=experiment,
+            runs=runs,
+            current_runs=current,
+            has_repeats=len(current) < len(runs),
+            pool=pool,
+            factor_labels=[FACTORS[f] for f in factors],
+            factor_choices=[(f, FACTORS[f]) for f in factors],
+            row_factor=row_factor,
+            col_factor=col_factor,
+            row_label=FACTORS.get(row_factor, ""),
+            col_label=FACTORS.get(col_factor, ""),
+            pivot=experiment_pivot(runs if pool else current, row_factor, col_factor),
+            summary=_experiment_summary(current),
+            monitors=monitors,
+            run_ids=",".join(str(r.id) for r in current),
         )
         return super().get_context_data(**kw)
 
-    def post(self, request, *args, **kwargs):
-        from datetime import datetime, timedelta
 
-        from audits.models import AuditSchedule
-        from audits.scheduling import (
-            MAX_INTERVAL_HOURS,
-            MAX_SCHEDULES_PER_PROJECT,
-            MIN_INTERVAL_HOURS,
-            cron_next,
-            has_write_role,
-            validate_cron,
-            zone,
-        )
-        from audits.services import _generation_parameters
-        from model_registry.models import RegisteredModel
-
-        p = request.project
-        blocked = _require_writable_project(request)
-        if blocked:
-            return blocked
-        if not has_write_role(request.user, p):
-            return HttpResponseForbidden("Admin or auditor role required to create schedules.")
-        form = request.POST
-        try:
-            if AuditSchedule.objects.filter(project=p).count() >= MAX_SCHEDULES_PER_PROJECT:
-                raise ValueError(
-                    f"This workspace already has {MAX_SCHEDULES_PER_PROJECT} schedules (the limit). Delete one first."
-                )
-            name = (form.get("name") or "").strip()
-            if not name:
-                raise ValueError("Name is required.")
-            sset = ScenarioSet.objects.get(pk=form["scenario_set"], project=p)
-            pinned = None
-            version_id = (form.get("scenario_set_version") or "").strip()
-            if version_id:
-                # Pinned to a specific version (e.g. the source run's).
-                pinned = sset.versions.filter(pk=version_id).first()
-                if pinned is None:
-                    raise ValueError("That scenario set version does not belong to the selected set.")
-            elif form.get("pin_version"):
-                pinned = sset.versions.order_by("-version").first()
-                if pinned is None:
-                    raise ValueError("This scenario set has no published version to pin.")
-            tz_name = (form.get("timezone") or "UTC").strip()
-            tz = zone(tz_name)
-            cron_expression = ""
-            if form.get("interval_hours") == "cron":
-                cron_expression = validate_cron(form.get("cron_expression") or "", tz=tz_name)
-                interval_hours = 0
-            else:
-                interval_hours = int(form.get("interval_hours") or 168)
-                if not MIN_INTERVAL_HOURS <= interval_hours <= MAX_INTERVAL_HOURS:
-                    raise ValueError(f"Interval must be between {MIN_INTERVAL_HOURS} hours and 90 days.")
-            first_raw = (form.get("first_run_at") or "").strip()
-            if first_raw:
-                # Wall-clock time in the schedule's timezone.
-                first = timezone.make_aware(datetime.fromisoformat(first_raw), tz)
-            elif not cron_expression:
-                # A minute out: the next sweeper pass picks it up.
-                first = timezone.now() + timedelta(minutes=1)
-            if cron_expression:
-                # First firing at or after the requested start (or now).
-                start = first if first_raw else timezone.now()
-                first = cron_next(cron_expression, start - timedelta(minutes=1), tz_name)
-
-            max_turns_raw = (form.get("max_turns") or "").strip()
-            n_reps_raw = (form.get("n_repetitions") or "").strip()
-            n_reps = int(n_reps_raw) if n_reps_raw else None
-            gen_config = None
-            gen_json_raw = (form.get("gen_config_json") or "").strip()
-            if gen_json_raw and gen_json_raw != "{}":
-                gen_config = json.loads(gen_json_raw)
-                if not isinstance(gen_config, dict):
-                    raise ValueError("Generation config must be a JSON object.")
-
-            models_ = {
-                role: RegisteredModel.objects.get(pk=form[f"{role}_model"], project=p)
-                for role in ("target", "auditor", "judge")
-            }
-            schedule = AuditSchedule.objects.create(
-                project=p,
-                name=name,
-                scenario_set=sset,
-                scenario_set_version=pinned,
-                target_model=models_["target"],
-                auditor_model=models_["auditor"],
-                judge_model=models_["judge"],
-                generation_parameters=_generation_parameters(
-                    max_turns_override=int(max_turns_raw) if max_turns_raw else None,
-                    language_override=(form.get("language") or "").strip() or None,
-                    n_repetitions_override=n_reps if n_reps and n_reps > 1 else None,
-                    gen_config_override=gen_config or None,
-                ),
-                interval_hours=interval_hours,
-                cron_expression=cron_expression,
-                timezone=tz_name,
-                next_run_at=first,
-                created_by=request.user,
-            )
-            messages.success(
-                request, f"Schedule '{name}' created. First run {first.astimezone(tz):%Y-%m-%d %H:%M} {tz_name}."
-            )
-            baseline = _baseline_run(p, form)
-            if baseline and form.get("attach_baseline"):
-                if _matches_schedule(baseline, schedule):
-                    baseline.schedule = schedule
-                    baseline.save(update_fields=["schedule"])
-                    schedule.last_run = baseline
-                    schedule.save(update_fields=["last_run"])
-                    messages.info(request, f"Run #{baseline.id} is the first point of the drift series.")
-                else:
-                    messages.info(
-                        request,
-                        f"Run #{baseline.id} was not added to the series: its settings differ from the schedule's.",
-                    )
-            return redirect(f"/schedules/{schedule.id}/")
-        except Exception as e:  # noqa: BLE001 - surface any validation failure to the user
-            return self.render_to_response(
-                self.get_context_data(
-                    error=str(e), form=form, clone=_clone_from_post(form), from_run=_baseline_run(p, form)
-                )
-            )
-
-
-def _baseline_run(project, form):
-    raw = (form.get("baseline_run") or "").strip()
-    if not raw.isdigit():
-        return None
-    return (
-        AuditRun.objects.filter(pk=int(raw), project=project, schedule__isnull=True)
-        .select_related("scenario_set_version__scenario_set", "target_model", "auditor_model", "judge_model")
-        .first()
-    )
-
-
-def _matches_schedule(run: AuditRun, schedule) -> bool:
-    """Whether ``run`` is the same experiment the schedule will repeat."""
-    from audits.scheduling import resolve_version
-
-    version = resolve_version(schedule)
-    return (
-        version is not None
-        and run.scenario_set_version_id == version.id
-        and run.target_model_id == schedule.target_model_id
-        and run.auditor_model_id == schedule.auditor_model_id
-        and run.judge_model_id == schedule.judge_model_id
-        and (run.generation_parameters_snapshot or {}) == (schedule.generation_parameters or {})
-    )
+# ─── Monitors (recurring runs / drift) ──────────────────────────────────────
+# Monitors are created from New Experiment ("Repeat"); this page lists them.
 
 
 def _timezone_choices() -> list[str]:
-    """IANA zone names for the schedule form (UTC first, then alphabetical)."""
+    """IANA zone names for the Repeat timezone picker (UTC first, then alphabetical)."""
     from zoneinfo import available_timezones
 
     zones = sorted(z for z in available_timezones() if "/" in z and not z.startswith(("Etc/", "SystemV/")))
     return ["UTC", *zones]
 
 
-def _clone_from_post(form) -> dict:
-    """Re-fill the shared audit form blocks from a rejected POST."""
+class MonitorsView(ProjectMixin, TemplateView):
+    template_name = "monitors.html"
 
-    def as_int(key):
-        raw = (form.get(key) or "").strip()
-        return int(raw) if raw.isdigit() else None
+    def get_context_data(self, **kw):
+        from audits.models import Monitor
+        from audits.monitors import (
+            MAX_MONITORS_PER_PROJECT,
+            can_manage_monitor,
+            has_write_role,
+        )
 
-    return {
-        "scenario_set_id": as_int("scenario_set"),
-        "scenario_set_version_id": as_int("scenario_set_version"),
-        "target_model_id": as_int("target_model"),
-        "auditor_model_id": as_int("auditor_model"),
-        "judge_model_id": as_int("judge_model"),
-        "max_turns": form.get("max_turns", ""),
-        "language": form.get("language", ""),
-        "n_repetitions": form.get("n_repetitions", ""),
-        "generation_json": form.get("gen_config_json", ""),
-    }
+        p = self.request.project
+        monitors = list(
+            Monitor.objects.filter(project=p).select_related(
+                "project", "scenario_set", "scenario_set_version", "target_model", "auditor_model", "judge_model",
+                "last_run", "created_by", "experiment",
+            )
+        )
+        for m in monitors:
+            m.can_manage = can_manage_monitor(self.request.user, m)
+        kw.update(
+            monitors=monitors,
+            can_create=has_write_role(self.request.user, p) and not (p.archived and not self.request.user.is_superuser),
+            max_monitors=MAX_MONITORS_PER_PROJECT,
+        )
+        return super().get_context_data(**kw)
 
 
 def _drift_chart(points: list[dict], width: int = 720, height: int = 220, pad: int = 32) -> dict:
@@ -974,87 +1184,87 @@ def _drift_chart(points: list[dict], width: int = 720, height: int = 220, pad: i
     }
 
 
-class ScheduleDetailView(ProjectMixin, TemplateView):
-    template_name = "schedule_detail.html"
+class MonitorDetailView(ProjectMixin, TemplateView):
+    template_name = "monitor_detail.html"
 
     def get_context_data(self, **kw):
-        from audits.models import AuditSchedule
-        from audits.scheduling import BASELINE_WINDOW, can_manage_schedule, drift_series
+        from audits.models import Monitor
+        from audits.monitors import BASELINE_WINDOW, can_manage_monitor, drift_series
 
-        schedule = get_object_or_404(
-            AuditSchedule.objects.select_related(
+        monitor = get_object_or_404(
+            Monitor.objects.select_related(
                 "scenario_set", "scenario_set_version", "target_model", "auditor_model", "judge_model"
             ),
-            pk=kw["schedule_id"],
+            pk=kw["monitor_id"],
             project=self.request.project,
         )
-        points = drift_series(schedule)
+        points = drift_series(monitor)
         for prev, cur in itertools.pairwise(points):
             cur["prev_run_id"] = prev["run"].id
         kw.update(
-            schedule=schedule,
+            monitor=monitor,
             points=list(reversed(points)),
             chart=_drift_chart(points),
             baseline_window=BASELINE_WINDOW,
-            can_manage=can_manage_schedule(self.request.user, schedule),
+            can_manage=can_manage_monitor(self.request.user, monitor),
             drops=sum(1 for p in points if p["change"] == "drop"),
         )
         return super().get_context_data(**kw)
 
 
-class ScheduleActionView(ProjectMixin, View):
-    """POST /schedules/<id>/<action>/ — toggle | run-now | delete."""
+class MonitorActionView(ProjectMixin, View):
+    """POST /monitors/<id>/<action>/ — toggle | run-now | delete."""
 
-    def post(self, request, schedule_id, action):
-        from audits.models import AuditSchedule
-        from audits.scheduling import (
-            can_manage_schedule,
-            launch_schedule,
+    def post(self, request, monitor_id, action):
+        from audits.models import Monitor
+        from audits.monitors import (
+            can_manage_monitor,
+            launch_monitor,
             owner_authorized,
         )
 
         blocked = _require_writable_project(request)
         if blocked:
             return blocked
-        schedule = get_object_or_404(
-            AuditSchedule.objects.select_related("project", "created_by"), pk=schedule_id, project=request.project
+        monitor = get_object_or_404(
+            Monitor.objects.select_related("project", "created_by"), pk=monitor_id, project=request.project
         )
-        if not can_manage_schedule(request.user, schedule):
-            return HttpResponseForbidden("Only a workspace admin or the schedule's creator can do this.")
-        if action == "toggle" and not schedule.enabled and not owner_authorized(schedule):
+        if not can_manage_monitor(request.user, monitor):
+            return HttpResponseForbidden("Only a workspace admin or the monitor's creator can do this.")
+        if action == "toggle" and not monitor.enabled and not owner_authorized(monitor):
             messages.error(
                 request,
-                "Cannot resume: the schedule's creator no longer has admin or auditor role. Recreate it under your account.",
+                "Cannot resume: the monitor's creator no longer has admin or auditor role. Recreate it under your account.",
             )
         elif action == "toggle":
-            schedule.enabled = not schedule.enabled
-            if schedule.enabled and schedule.next_run_at < timezone.now():
-                from audits.scheduling import next_after
+            monitor.enabled = not monitor.enabled
+            if monitor.enabled and monitor.next_run_at < timezone.now():
+                from audits.monitors import next_after
 
-                schedule.next_run_at = next_after(schedule, timezone.now())
-            schedule.save(update_fields=["enabled", "next_run_at", "updated_at"])
-            messages.success(request, f"Schedule '{schedule.name}' {'resumed' if schedule.enabled else 'paused'}.")
+                monitor.next_run_at = next_after(monitor, timezone.now())
+            monitor.save(update_fields=["enabled", "next_run_at", "updated_at"])
+            messages.success(request, f"Monitor '{monitor.name}' {'resumed' if monitor.enabled else 'paused'}.")
         elif action == "run-now":
-            last = schedule.last_run
+            last = monitor.last_run
             if last and last.status not in (AuditRun.Status.COMPLETED, AuditRun.Status.FAILED, AuditRun.Status.CANCELLED):
-                messages.error(request, f"Run #{last.id} from this schedule is still {last.status}.")
+                messages.error(request, f"Run #{last.id} from this monitor is still {last.status}.")
             else:
                 try:
-                    run = launch_schedule(schedule)
+                    run = launch_monitor(monitor)
                 except Exception as e:  # noqa: BLE001 - surface creation failure to the user
                     messages.error(request, f"Could not launch: {e}")
                 else:
-                    schedule.last_run = run
-                    schedule.last_error = ""
-                    schedule.save(update_fields=["last_run", "last_error", "updated_at"])
+                    monitor.last_run = run
+                    monitor.last_error = ""
+                    monitor.save(update_fields=["last_run", "last_error", "updated_at"])
                     submit_audit_run(run)
-                    return redirect(f"/audits/{run.id}/")
+                    return redirect(f"/runs/{run.id}/")
         elif action == "delete":
-            name = schedule.name
-            schedule.delete()
-            messages.success(request, f"Schedule '{name}' deleted. Its runs are kept.")
-            return redirect("/schedules/")
-        return redirect(request.META.get("HTTP_REFERER") or f"/schedules/{schedule_id}/")
+            name = monitor.name
+            monitor.delete()
+            messages.success(request, f"Monitor '{name}' deleted. Its runs are kept.")
+            return redirect("/monitors/")
+        return redirect(request.META.get("HTTP_REFERER") or f"/monitors/{monitor_id}/")
 
 
 # ─── Queue ───────────────────────────────────────────────────────────────────
@@ -1548,7 +1758,7 @@ class ModelsView(ProjectMixin, TemplateView):
                 except (ProtectedError, RestrictedError):
                     # AuditRun pins models via RESTRICT FKs; deleting a model
                     # referenced by an audit run would break the immutable record.
-                    error = f"Cannot delete '{rm.display_name}': it is referenced by audit runs or schedules."
+                    error = f"Cannot delete '{rm.display_name}': it is referenced by audit runs or monitors."
         return self.render_to_response(self.get_context_data(error=error))
 
 
@@ -1571,7 +1781,7 @@ class ConnectionDeleteView(ProjectMixin, View):
                 # RestrictedError for RESTRICT and ProtectedError for PROTECT.
                 messages.error(
                     request,
-                    "Cannot delete: this connection's models are referenced by audit runs or schedules.",
+                    "Cannot delete: this connection's models are referenced by audit runs or monitors.",
                 )
         return redirect("/models/")
 
@@ -1764,8 +1974,8 @@ def _result_rows(run: AuditRun, items: dict | None = None) -> list[dict]:
     return results
 
 
-class AuditResultsFragmentView(ProjectMixin, View):
-    """GET /audits/<id>/results-fragment/ — the Results list alone, for live refresh."""
+class RunResultsFragmentView(ProjectMixin, View):
+    """GET /runs/<id>/results-fragment/ — the Results list alone, for live refresh."""
 
     def get(self, request, run_id):
         from django.template.loader import render_to_string
@@ -1779,12 +1989,12 @@ class AuditResultsFragmentView(ProjectMixin, View):
         return HttpResponse(html)
 
 
-class AuditDetailView(ProjectMixin, DetailView):
-    template_name = "audit_detail.html"
+class RunDetailView(ProjectMixin, DetailView):
+    template_name = "run_detail.html"
     context_object_name = "run"
     pk_url_kwarg = "run_id"
     queryset = AuditRun.objects.select_related(
-        "scenario_set_version__scenario_set", "target_model", "auditor_model", "judge_model", "schedule"
+        "scenario_set_version__scenario_set", "target_model", "auditor_model", "judge_model", "monitor", "experiment"
     )
 
     def get_queryset(self):
@@ -1825,13 +2035,13 @@ class AuditDetailView(ProjectMixin, DetailView):
                 ctx["duration"] = f"{total // 60} min"
             else:
                 ctx["duration"] = f"{total // 3600} hr {total % 3600 // 60} min"
-        from audits.scheduling import has_write_role
+        from audits.monitors import has_write_role
 
         ctx["can_schedule"] = has_write_role(self.request.user, self.request.project)
         return ctx
 
 
-class AuditCancelView(ProjectMixin, View):
+class RunCancelView(ProjectMixin, View):
     def post(self, request, run_id):
         blocked = _require_writable_project(request)
         if blocked:
@@ -1846,10 +2056,10 @@ class AuditCancelView(ProjectMixin, View):
             # their next repetition (they poll the durable flag).
             from audits.events import append_event
             append_event(run.pk, "_run", "run_cancelled", {"by": request.user.username})
-        return redirect(f"/audits/{run_id}/")
+        return redirect(f"/runs/{run_id}/")
 
 
-class AuditArchiveView(ProjectMixin, View):
+class RunArchiveView(ProjectMixin, View):
     """Toggle the soft-archive flag on a run. Project-scoped: runs outside
     the active project are invisible (404)."""
 
@@ -1861,10 +2071,10 @@ class AuditArchiveView(ProjectMixin, View):
         if run:
             run.archived = not run.archived
             run.save(update_fields=["archived"])
-        return redirect(request.META.get("HTTP_REFERER") or f"/audits/{run_id}/")
+        return redirect(request.META.get("HTTP_REFERER") or f"/runs/{run_id}/")
 
 
-class AuditRenameView(ProjectMixin, View):
+class RunRenameView(ProjectMixin, View):
     """Rename an audit run. The name is a display label only; it does not
     affect the frozen reproducibility manifest."""
 
@@ -1881,7 +2091,7 @@ class AuditRenameView(ProjectMixin, View):
                 messages.success(request, "Audit renamed.")
             else:
                 messages.error(request, "Name must be 1-250 characters.")
-        return redirect(f"/audits/{run_id}/")
+        return redirect(f"/runs/{run_id}/")
 
 
 # ─── Scenario Result Detail ──────────────────────────────────────────────────
@@ -1952,8 +2162,8 @@ def _rep_view(rep: dict, index: int) -> dict:
     }
 
 
-class ScenarioResultDetailView(ProjectMixin, TemplateView):
-    template_name = "scenario_result_detail.html"
+class RunResultView(ProjectMixin, TemplateView):
+    template_name = "run_result.html"
 
     def get_context_data(self, **kw):
         run_id = self.kwargs["run_id"]
@@ -2020,7 +2230,7 @@ class ScenarioResultDetailView(ProjectMixin, TemplateView):
 
 # ─── Export Views ────────────────────────────────────────────────────────────
 
-class AuditExportView(ProjectMixin, View):
+class RunExportView(ProjectMixin, View):
     """Export audit results as JSON or CSV download."""
 
     def get(self, request, run_id):

@@ -85,7 +85,7 @@ class AuditCloneTests(TestCase):
         )
 
     def test_clone_prefills_exact_version_and_frozen_parameters(self):
-        response = self.client.get(f"/audits/new/?clone_from={self.run.id}")
+        response = self.client.get(f"/experiments/new/?clone_from={self.run.id}")
 
         self.assertEqual(response.status_code, 200)
         clone = response.context["clone"]

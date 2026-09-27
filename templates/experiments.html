@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block title %}Experiments — SimpleAudit{% endblock %}
+{% block content %}
+<div class="flex flex-wrap items-center justify-between gap-3 mb-2">
+  <h1 class="text-lg font-semibold text-gray-100">Experiments</h1>
+  <a href="{% url 'new_experiment' %}" class="px-3 py-1.5 rounded-lg bg-accent text-white text-xs font-medium hover:bg-accent-hover">+ New Experiment</a>
+</div>
+<p class="text-sm text-gray-500 mb-6 max-w-3xl">Groups of runs launched together to compare models or settings. Single runs appear on the Dashboard.</p>
+
+<div class="bg-surface-raised rounded-xl border border-gray-800 p-4">
+  {% if experiments %}
+  <div class="overflow-x-auto">
+    <table class="w-full text-sm">
+      <thead>
+        <tr class="border-b border-gray-800 text-xs text-gray-500 uppercase">
+          <th class="text-left px-3 py-2 font-medium">Name</th>
+          <th class="text-left px-3 py-2 font-medium">Compares</th>
+          <th class="text-left px-3 py-2 font-medium">Progress</th>
+          <th class="text-left px-3 py-2 font-medium">Created</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for e in experiments %}
+        <tr class="border-b border-gray-800/50 hover:bg-surface-overlay/50 cursor-pointer" onclick="location='/experiments/{{ e.id }}/'">
+          <td class="px-3 py-2.5 text-gray-200 font-medium max-w-[20rem] truncate"><a href="/experiments/{{ e.id }}/" class="hover:text-accent">{{ e.name }}</a></td>
+          <td class="px-3 py-2.5"><div class="flex flex-wrap gap-1">{% for l in e.factor_labels %}<span class="px-2 py-0.5 rounded-full text-[11px] bg-accent/15 text-accent">{{ l }}</span>{% empty %}<span class="text-xs text-gray-600">—</span>{% endfor %}</div></td>
+          <td class="px-3 py-2.5 text-xs text-gray-400 whitespace-nowrap">
+            {{ e.summary.done }}/{{ e.summary.total }} runs done
+            {% if e.summary.active %}<span class="text-amber-400">· {{ e.summary.active }} active</span>{% endif %}
+            {% if e.summary.failed %}<span class="text-red-400">· {{ e.summary.failed }} failed</span>{% endif %}
+          </td>
+          <td class="px-3 py-2.5 text-xs text-gray-500 whitespace-nowrap"><time data-local datetime="{{ e.created_at|date:'c' }}">{{ e.created_at|date:"M j, H:i" }} UTC</time>{% if e.created_by %} · {{ e.created_by.username }}{% endif %}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="py-10 text-center">
+    <p class="text-sm text-gray-400">No experiments yet.</p>
+    <p class="text-xs text-gray-500 mt-1">In New Experiment, pick several targets, judges, scenario sets or settings; every combination becomes a run.</p>
+    <a href="{% url 'new_experiment' %}" class="inline-block mt-4 px-3 py-1.5 rounded-lg bg-accent text-white text-xs font-medium hover:bg-accent-hover">Design an experiment</a>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

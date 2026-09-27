@@ -71,7 +71,8 @@ def test_navigation_all_views(page: Page) -> None:
     login(page)
     views = [
         ("/", "Dashboard"),
-        ("/audits/new/", "New Audit"),
+        ("/experiments/new/", "New Experiment"),
+        ("/experiments/", "Experiments"),
         ("/scenarios/", "Scenario"),
         ("/models/", "Model"),
         ("/compare/", "Compare"),
@@ -83,25 +84,25 @@ def test_navigation_all_views(page: Page) -> None:
         expect(main).to_contain_text(expected_text)
 
 
-def test_new_audit_form_populated(page: Page) -> None:
-    """New Audit view has the form with scenario set and model selectors."""
+def test_new_experiment_form_populated(page: Page) -> None:
+    """New Experiment view has scenario set and model pickers (one or more each)."""
     login(page)
-    page.goto(f"{BASE_URL}/audits/new/")
+    page.goto(f"{BASE_URL}/experiments/new/")
     page.wait_for_timeout(500)
     # Scenario set selector present
-    expect(page.locator('select[name="scenario_set"]')).to_be_visible()
+    expect(page.locator('input[name="scenario_set"]').first).to_be_visible()
     # Model selectors present
-    expect(page.locator('select[name="target_model"]')).to_be_visible()
-    expect(page.locator('select[name="auditor_model"]')).to_be_visible()
-    expect(page.locator('select[name="judge_model"]')).to_be_visible()
+    expect(page.locator('input[name="target_model"]').first).to_be_visible()
+    expect(page.locator('input[name="auditor_model"]').first).to_be_visible()
+    expect(page.locator('input[name="judge_model"]').first).to_be_visible()
     # Submit button present
     expect(page.locator("button[type='submit']")).to_be_visible()
 
 
-def test_new_audit_no_profile_section(page: Page) -> None:
+def test_new_experiment_no_profile_section(page: Page) -> None:
     """Audit Profile section is removed from New Audit form."""
     login(page)
-    page.goto(f"{BASE_URL}/audits/new/")
+    page.goto(f"{BASE_URL}/experiments/new/")
     page.wait_for_timeout(500)
     # Profile selector must NOT exist
     expect(page.locator('select[name="profile"]')).to_have_count(0)
@@ -131,11 +132,11 @@ def test_audit_detail_clone_button(page: Page) -> None:
     if count == 0:
         print("SKIP: no audit runs in database")
         return
-    # Click first run row (navigates via onclick to /audits/<id>/)
+    # Click first run row (navigates via onclick to /runs/<id>/)
     rows.first.click()
     page.wait_for_timeout(1000)
     # Clone Audit button (icon-only link) should be visible
-    expect(page.locator("a[aria-label='Clone this audit']")).to_be_visible()
+    expect(page.locator("a[aria-label='Clone this run']")).to_be_visible()
 
 
 def test_clone_prefills_form(page: Page) -> None:
@@ -152,10 +153,10 @@ def test_clone_prefills_form(page: Page) -> None:
     rows.first.click()
     page.wait_for_timeout(1000)
     # Click Clone Audit (icon-only link)
-    page.click("a[aria-label='Clone this audit']")
+    page.click("a[aria-label='Clone this run']")
     page.wait_for_timeout(1000)
     # Should be on New Audit page with pre-filled values
-    expect(page.locator("main")).to_contain_text("New Audit")
+    expect(page.locator("main")).to_contain_text("New Experiment")
     # Hidden scenario_set_version input should exist (exact version pin)
     expect(page.locator('input[name="scenario_set_version"]')).to_be_attached()
 
@@ -183,8 +184,8 @@ def main() -> int:
         tests = [
             ("login_and_dashboard", test_login_and_dashboard),
             ("navigation_all_views", test_navigation_all_views),
-            ("new_audit_form_populated", test_new_audit_form_populated),
-            ("new_audit_no_profile_section", test_new_audit_no_profile_section),
+            ("new_experiment_form_populated", test_new_experiment_form_populated),
+            ("new_experiment_no_profile_section", test_new_experiment_no_profile_section),
             ("models_view_no_profiles", test_models_view_no_profiles),
             ("audit_detail_clone_button", test_audit_detail_clone_button),
             ("clone_prefills_form", test_clone_prefills_form),

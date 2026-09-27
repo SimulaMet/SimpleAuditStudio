@@ -196,7 +196,7 @@ Hatchet/workflow state is execution state, not the authoritative SimpleAudit dat
 
 ### 6.3 Event stream
 
-`GET /api/audits/{id}/events` streams durable events from PostgreSQL-backed event table or workflow event bridge.
+`GET /api/projects/{project_id}/audit-runs/{id}/events/` streams durable events from PostgreSQL-backed event table or workflow event bridge.
 
 Events include:
 
