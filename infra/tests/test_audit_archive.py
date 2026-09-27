@@ -34,7 +34,7 @@ class AuditArchiveTest(TestCase):
         self.run.archived = True
         self.run.save(update_fields=["archived"])
 
-        resp = self.client.get("/dashboard/")
+        resp = self.client.get("/")
         self.assertEqual(resp.status_code, 200)
         self.assertNotIn(f"/audits/{self.run.id}/", resp.content.decode())
 
@@ -42,12 +42,12 @@ class AuditArchiveTest(TestCase):
         self.run.archived = True
         self.run.save(update_fields=["archived"])
 
-        resp = self.client.get("/dashboard/?status=archived")
+        resp = self.client.get("/?status=archived")
         self.assertEqual(resp.status_code, 200)
         self.assertIn(f"/audits/{self.run.id}/", resp.content.decode())
 
     def test_unarchived_run_visible_in_default_dashboard(self):
-        resp = self.client.get("/dashboard/")
+        resp = self.client.get("/")
         self.assertEqual(resp.status_code, 200)
         self.assertIn(f"/audits/{self.run.id}/", resp.content.decode())
 
@@ -77,7 +77,7 @@ class AuditArchiveTest(TestCase):
         self.assertFalse(self.run.archived)
 
     def test_dashboard_rows_have_clone_and_archive_actions(self):
-        resp = self.client.get("/dashboard/")
+        resp = self.client.get("/")
         html = resp.content.decode()
         self.assertIn(f"/audits/new/?clone_from={self.run.id}", html)
         self.assertIn(f"/audits/{self.run.id}/archive/", html)
@@ -96,7 +96,7 @@ class AuditArchiveTest(TestCase):
         self.run.completed_scenarios = 2
         self.run.save()
 
-        resp = self.client.get("/dashboard/")
+        resp = self.client.get("/")
         html = resp.content.decode()
         self.assertIn('2/5<span class="text-gray-500">(x3)</span>', html)
 
@@ -107,6 +107,6 @@ class AuditArchiveTest(TestCase):
         self.run.completed_scenarios = 2
         self.run.save()
 
-        resp = self.client.get("/dashboard/")
+        resp = self.client.get("/")
         html = resp.content.decode()
         self.assertNotIn("(x", html)

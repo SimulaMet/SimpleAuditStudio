@@ -87,7 +87,7 @@
           </div>
         </div>
       </div>
-      <a href="{% url 'dashboard' %}" class="flex items-center gap-3 px-3 py-2 rounded-lg text-sm whitespace-nowrap {% if request.path == '/' or request.path == '/dashboard/' %}bg-accent/15 text-accent font-medium{% else %}text-gray-400 hover:text-gray-200 hover:bg-surface-overlay{% endif %}">
+      <a href="{% url 'dashboard' %}" class="flex items-center gap-3 px-3 py-2 rounded-lg text-sm whitespace-nowrap {% if request.path == '/' %}bg-accent/15 text-accent font-medium{% else %}text-gray-400 hover:text-gray-200 hover:bg-surface-overlay{% endif %}">
         <span class="text-base w-5 text-center">◉</span><span class="sidebar-label">Dashboard</span>
       </a>
       <a href="{% url 'new_audit' %}" class="flex items-center gap-3 px-3 py-2 rounded-lg text-sm whitespace-nowrap {% if request.path == '/audits/new/' %}bg-accent/15 text-accent font-medium{% else %}text-gray-400 hover:text-gray-200 hover:bg-surface-overlay{% endif %}">

@@ -77,7 +77,7 @@ class LoginCSRFTests(TestCase):
             HTTP_ORIGIN="https://huggingface.co",
         )
         self.assertEqual(response.status_code, 302)
-        self.assertEqual(response.url, "/dashboard/")
+        self.assertEqual(response.url, "/")
 
     def test_demo_mode_uses_cross_site_cookie_policy(self):
         # In demo mode (DEMO_MODE=true in env at settings load time) cookies

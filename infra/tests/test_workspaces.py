@@ -389,7 +389,7 @@ class WorkspaceSwitchTest(TestCase):
         client.login(username=self.user.username, password="testpass123")
         resp = client.post("/api/projects/switch/", {"project_id": self.w2.id}, format="json")
         self.assertEqual(resp.status_code, 200)
-        resp = client.get("/dashboard/")
+        resp = client.get("/")
         self.assertEqual(resp.status_code, 200)
         # The dashboard table shows run IDs (not names); assert on the W2 run's
         # detail link and confirm the W1 run is absent.

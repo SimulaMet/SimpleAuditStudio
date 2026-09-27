@@ -1,7 +1,7 @@
-{# Reusable SEO head partial. Pass: seo_title, seo_description, seo_robots, seo_og_type, seo_jsonld (list of JSON strings), og_image_url. Canonical/og:url derive from the live request. #}
+{# Reusable SEO head partial. Pass: seo_title, seo_description, seo_robots, seo_og_type, seo_jsonld (list of JSON strings), og_image_url. Canonical/og:url derive from the live request unless seo_canonical is given. #}
 <meta name="description" content="{{ seo_description|default:'SimpleAudit Studio is a self-hostable platform for running reproducible AI model audits. Freeze inputs, compare runs, and judge LLM behavior with the SimpleAudit Target → Auditor → Judge engine.' }}">
 <meta name="robots" content="{{ seo_robots|default:'index,follow' }}">
-<link rel="canonical" href="{{ request.build_absolute_uri }}">
+<link rel="canonical" href="{{ seo_canonical|default:request.build_absolute_uri }}">
 <meta name="theme-color" content="#0f1117">
 
 {# Open Graph #}

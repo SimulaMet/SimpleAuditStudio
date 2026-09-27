@@ -61,7 +61,7 @@ class SidebarNavTest(TestCase):
         self.client.force_login(self.user)
 
     def _dashboard(self):
-        return self.client.get("/dashboard/").content.decode()
+        return self.client.get("/").content.decode()
 
     def test_no_dedicated_workspaces_or_profile_nav_links(self):
         content = self._dashboard()
