@@ -27,8 +27,8 @@ from __future__ import annotations
 
 import logging
 import os
-from datetime import timedelta
 import threading as _threading
+from datetime import timedelta
 
 from django.conf import settings
 from django.db import transaction
@@ -370,7 +370,7 @@ def _scenario_execute_impl(workflow_input: ScenarioInput, ctx: Context) -> dict:
     import queue as _queue
     import threading as _threading
 
-    _event_queue: "_queue.Queue" = _queue.Queue()
+    _event_queue: _queue.Queue = _queue.Queue()
     _FLUSH_SENTINEL = object()
     # Durable cancel flag, polled by the flusher (a sync thread that may use the
     # ORM) and read by the engine callbacks (which may not). A user cancel then
@@ -379,8 +379,8 @@ def _scenario_execute_impl(workflow_input: ScenarioInput, ctx: Context) -> dict:
     _CANCEL_POLL_S = 5.0
 
     def _flush_loop() -> None:
-        from django.db import connections, reset_queries
-        from django.db.utils import OperationalError, InterfaceError
+        from django.db import connections
+        from django.db.utils import InterfaceError, OperationalError
 
         consecutive_errors = 0
         max_retries = 5
@@ -396,7 +396,7 @@ def _scenario_execute_impl(workflow_input: ScenarioInput, ctx: Context) -> dict:
                     try:
                         if _is_cancelled(run_id):
                             _cancel_requested.set()
-                    except Exception:  # noqa: BLE001 - polling is best effort
+                    except Exception:  # noqa: BLE001, S110 - polling is best effort
                         pass
                 if item is None:
                     continue
@@ -423,7 +423,7 @@ def _scenario_execute_impl(workflow_input: ScenarioInput, ctx: Context) -> dict:
                             # Reset the broken connection so next event can reconnect.
                             try:
                                 connections.close_all()
-                            except Exception:
+                            except Exception:  # noqa: BLE001, S110 - best-effort cleanup
                                 pass
         finally:
             # This thread got its own thread-local DB connection; release it.
@@ -817,7 +817,10 @@ def _register_tasks(client: Hatchet) -> None:
     # scheduled before slow scenarios finish (_run_finalize_impl raises until
     # every pinned scenario has a durable result). backoff_factor=2.0 with 10
     # retries spans several minutes, covering typical scenario completion times.
-    from hatchet_sdk.types.concurrency import ConcurrencyExpression, ConcurrencyLimitStrategy
+    from hatchet_sdk.types.concurrency import (
+        ConcurrencyExpression,
+        ConcurrencyLimitStrategy,
+    )
 
     _scenario_task = client.task(
         name="audit.scenario_execute",
