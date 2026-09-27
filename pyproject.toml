@@ -26,6 +26,7 @@ dependencies = [
     # the first release containing run_scenario_reps (n_repetitions support);
     # 0.2.1 adds the native on_turn per-phase progress callback.
     "simpleaudit==0.2.1",
+    "cronsim==2.7",
 ]
 
 [project.optional-dependencies]

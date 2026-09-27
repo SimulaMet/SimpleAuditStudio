@@ -515,6 +515,14 @@ wheels = [
 ]
 
 [[package]]
+name = "cronsim"
+version = "2.7"
+source = { registry = "https://pypi.org/simple" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/fb/1a/02f105147f7f2e06ed4f734ff5a6439590bb275a53dd91fc73df6312298a/cronsim-2.7-py3-none-any.whl", hash = "sha256:1e1431fa08c51dc7f72e67e571c7c7a09af26420169b607badd4ca9677ffad1e", size = 14213, upload-time = "2025-10-21T16:38:20.431Z" },
+]
+
+[[package]]
 name = "cryptography"
 version = "50.0.1"
 source = { registry = "https://pypi.org/simple" }
@@ -2159,6 +2167,7 @@ version = "0.2.7"
 source = { editable = "." }
 dependencies = [
     { name = "boto3" },
+    { name = "cronsim" },
     { name = "django" },
     { name = "django-cors-headers" },
     { name = "djangorestframework" },
@@ -2189,6 +2198,7 @@ server = [
 [package.metadata]
 requires-dist = [
     { name = "boto3", specifier = "==1.40.4" },
+    { name = "cronsim", specifier = "==2.7" },
     { name = "django", specifier = "==5.2.4" },
     { name = "django-cors-headers", specifier = "==4.7.0" },
     { name = "djangorestframework", specifier = "==3.16.0" },

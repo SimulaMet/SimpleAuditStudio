@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import logging
 import math
-from datetime import timedelta
+from datetime import UTC, timedelta
 
 from django.db import transaction
 from django.utils import timezone
@@ -26,6 +26,9 @@ _FORM_KEYS = ("max_turns", "language", "n_repetitions")
 
 # Schedules spend the workspace's API keys unattended, so they are capped.
 MAX_SCHEDULES_PER_PROJECT = 10
+# Bounds for fixed-interval schedules. Cron expressions have no minimum gap:
+# a tick is skipped while the previous run is still active, so runs of one
+# schedule never overlap however often the expression fires.
 MIN_INTERVAL_HOURS = 6
 MAX_INTERVAL_HOURS = 24 * 90
 
@@ -82,6 +85,39 @@ def owner_authorized(schedule: AuditSchedule) -> bool:
     if owner is None or not owner.is_active:
         return False
     return has_write_role(owner, schedule.project)
+
+
+def cron_next(expr: str, after):
+    """First firing of ``expr`` (UTC) strictly after ``after``."""
+    from cronsim import CronSim
+
+    return next(CronSim(expr, after.astimezone(UTC)))
+
+
+def validate_cron(expr: str, now=None) -> str:
+    """Normalise and validate a cron expression; raise ValueError if unusable.
+
+    Rejects syntax errors and expressions that never fire. There is no minimum
+    frequency (see ``MIN_INTERVAL_HOURS``).
+    """
+    from cronsim import CronSim, CronSimError
+
+    expr = " ".join((expr or "").split())
+    if len(expr.split(" ")) != 5:
+        raise ValueError("Cron expression needs 5 fields: minute hour day-of-month month day-of-week.")
+    now = now or timezone.now()
+    try:
+        next(CronSim(expr, now.astimezone(UTC)))
+    except (CronSimError, StopIteration) as exc:
+        raise ValueError(f"Invalid cron expression: {exc or 'never fires'}.") from exc
+    return expr
+
+
+def next_after(schedule: AuditSchedule, now):
+    """Next tick strictly after ``now`` for either timing rule."""
+    if schedule.cron_expression:
+        return cron_next(schedule.cron_expression, now)
+    return advance(schedule.next_run_at, schedule.interval_hours, now)
 
 
 def advance(next_run_at, interval_hours: int, now):
@@ -152,7 +188,7 @@ def run_due_schedules(now=None) -> list[int]:
             .order_by("next_run_at")
         )
         for schedule in due:
-            schedule.next_run_at = advance(schedule.next_run_at, schedule.interval_hours, now)
+            schedule.next_run_at = next_after(schedule, now)
             schedule.last_tick_at = now
             last = schedule.last_run
             if not owner_authorized(schedule):

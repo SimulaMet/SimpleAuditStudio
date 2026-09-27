@@ -1,0 +1,76 @@
+{% comment %}
+Hyperparameters + advanced generation config override. Shared by New Audit
+and Schedules. Context: clone (optional prefill: max_turns, language,
+n_repetitions, generation_json). Include audit_form_js.html after the form.
+{% endcomment %}
+<div class="bg-surface-raised rounded-xl border border-gray-800 p-4">
+  <h3 class="text-sm font-semibold text-gray-300 mb-3">Hyperparameters</h3>
+  <div class="grid grid-cols-3 gap-4">
+    <div>
+      <label class="block text-xs font-medium text-gray-500 mb-1 uppercase tracking-wide">Max Turns</label>
+      <input type="number" name="max_turns" min="1" max="50" placeholder="5 (default)" value="{{ clone.max_turns|default:'' }}"
+             class="w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-accent/50">
+      <p class="mt-1 text-xs text-gray-600">Conversation turns per scenario.</p>
+    </div>
+    <div>
+      <label class="block text-xs font-medium text-gray-500 mb-1 uppercase tracking-wide">Language</label>
+      <input type="text" name="language" list="lang-options" placeholder="English (default)" value="{{ clone.language|default:'' }}"
+             class="w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-accent/50">
+      <datalist id="lang-options">
+        <option value="English"></option>
+        <option value="Norwegian"></option>
+        <option value="Spanish"></option>
+        <option value="French"></option>
+        <option value="German"></option>
+        <option value="Danish"></option>
+        <option value="Swedish"></option>
+        <option value="Finnish"></option>
+      </datalist>
+      <p class="mt-1 text-xs text-gray-600">Used in auditor prompts.</p>
+    </div>
+    <div>
+      <label class="block text-xs font-medium text-gray-500 mb-1 uppercase tracking-wide">Repetitions</label>
+      <input type="number" name="n_repetitions" min="1" max="20" placeholder="1 (default)" value="{{ clone.n_repetitions|default:'' }}"
+             class="w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-accent/50">
+      <p class="mt-1 text-xs text-gray-600">Run each scenario N times to measure judge stability.</p>
+    </div>
+  </div>
+</div>
+
+<!-- Advanced: Generation config override -->
+<details class="bg-surface-raised rounded-xl border border-gray-800 p-4 group">
+  <summary class="text-sm font-semibold text-gray-300 cursor-pointer select-none flex items-center gap-2">
+    <span class="text-gray-500 group-open:rotate-90 transition-transform">▸</span>
+    Advanced — Generation Config Override (JSON)
+  </summary>
+  <div class="mt-3 space-y-3">
+    <p class="text-xs text-gray-500">
+      Optional JSON object merged into the frozen generation parameters. All keys are stored in the reproducibility manifest.
+      <br><strong>Per-request generation params</strong> (SimpleAudit 0.1.13+):
+      <code class="text-gray-400">params</code> (all roles), <code class="text-gray-400">target_params</code>,
+      <code class="text-gray-400">judge_params</code>, <code class="text-gray-400">auditor_params</code> —
+      any provider key (<code class="text-gray-400">temperature</code>, <code class="text-gray-400">top_p</code>,
+      <code class="text-gray-400">max_tokens</code>, etc.).
+      <br><strong>Client constructor kwargs:</strong>
+      <code class="text-gray-400">target_kwargs</code>, <code class="text-gray-400">auditor_kwargs</code>,
+      <code class="text-gray-400">judge_kwargs</code> (e.g. <code class="text-gray-400">{"timeout": 120}</code>).
+      <br><strong>Other:</strong> <code class="text-gray-400">max_retries</code>, <code class="text-gray-400">retry_backoff</code>,
+      <code class="text-gray-400">system_prompt</code>, <code class="text-gray-400">probe_prompt</code>,
+      <code class="text-gray-400">judge_prompt</code>.
+      <br><span class="text-gray-500">Note: <code>max_turns</code>, <code>n_repetitions</code>, and <code>language</code> are managed by the form fields above and will be ignored in this JSON.</span>
+    </p>
+    <textarea name="gen_config_json" rows="11" spellcheck="false"{% if clone and clone.generation_json %} data-prefilled="1"{% endif %}
+              class="w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-accent/50 resize-y">{% if clone and clone.generation_json %}{{ clone.generation_json }}{% else %}{
+"params": {},
+"target_params": {},
+"judge_params": {},
+"auditor_params": {},
+"target_kwargs": {},
+"auditor_kwargs": {},
+"judge_kwargs": {},
+"max_retries": 2,
+"retry_backoff": 0.5
+}{% endif %}</textarea>
+    <p id="gen-config-error" class="text-xs text-red-400 hidden"></p>
+  </div>
+</details>

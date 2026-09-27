@@ -6,6 +6,7 @@ import itertools
 import json
 import logging
 import os
+from datetime import UTC
 
 from django.contrib import messages
 from django.contrib.auth import login, logout
@@ -598,36 +599,47 @@ class ProfileView(LoginRequiredMixin, TemplateView):
 
 # ─── New Audit ───────────────────────────────────────────────────────────────
 
+def _run_from_query(request, param: str):
+    """The active project's run named by ``?<param>=<id>``, or None."""
+    raw = request.GET.get(param) or ""
+    if not raw.isdigit():
+        return None
+    return (
+        AuditRun.objects.filter(id=int(raw), project=request.project)
+        .select_related(
+            "scenario_set_version__scenario_set", "target_model", "auditor_model", "judge_model"
+        )
+        .first()
+    )
+
+
+def _clone_from_run(source: AuditRun) -> dict:
+    """Prefill for the shared audit form blocks from an existing run."""
+    params = source.generation_parameters_snapshot or {}
+    # Strip form-managed keys from the JSON so they don't appear in the Advanced
+    # textarea (they're pre-filled in their own fields).
+    _FORM_KEYS = {"max_turns", "n_repetitions", "language"}
+    gen_params = {k: v for k, v in params.items() if k not in _FORM_KEYS}
+    return {
+        "scenario_set_id": source.scenario_set_version.scenario_set_id,
+        "scenario_set_version_id": source.scenario_set_version_id,
+        "target_model_id": source.target_model_id,
+        "auditor_model_id": source.auditor_model_id,
+        "judge_model_id": source.judge_model_id,
+        "max_turns": params.get("max_turns", ""),
+        "language": params.get("language", ""),
+        "n_repetitions": params.get("n_repetitions", ""),
+        "generation_json": json.dumps(gen_params, indent=2, sort_keys=True) if gen_params else "",
+    }
+
+
 class NewAuditView(ProjectMixin, TemplateView):
     template_name = "new_audit.html"
 
     def get_context_data(self, **kw):
         p = self.request.project
-        clone = None
-        clone_id = self.request.GET.get("clone_from")
-        if clone_id and clone_id.isdigit():
-            source = (
-                AuditRun.objects.filter(id=int(clone_id), project=p)
-                .select_related("scenario_set_version", "target_model", "auditor_model", "judge_model")
-                .first()
-            )
-            if source:
-                params = source.generation_parameters_snapshot or {}
-                # Strip form-managed keys from the JSON so they don't appear
-                # in the Advanced textarea (they're pre-filled in their own fields).
-                _FORM_KEYS = {"max_turns", "n_repetitions", "language"}
-                gen_params = {k: v for k, v in params.items() if k not in _FORM_KEYS}
-                clone = {
-                    "scenario_set_id": source.scenario_set_version.scenario_set_id,
-                    "scenario_set_version_id": source.scenario_set_version_id,
-                    "target_model_id": source.target_model_id,
-                    "auditor_model_id": source.auditor_model_id,
-                    "judge_model_id": source.judge_model_id,
-                    "max_turns": params.get("max_turns", ""),
-                    "language": params.get("language", ""),
-                    "n_repetitions": params.get("n_repetitions", ""),
-                    "generation_json": json.dumps(gen_params, indent=2, sort_keys=True) if gen_params else "",
-                }
+        source = _run_from_query(self.request, "clone_from")
+        clone = _clone_from_run(source) if source else None
         from model_registry.models import ModelConnection
 
         connections = (
@@ -729,7 +741,21 @@ class SchedulesView(ProjectMixin, TemplateView):
         for s in schedules:
             s.can_manage = can_manage_schedule(self.request.user, s)
         kw.setdefault("error", None)
+        # "Repeat on schedule" from an audit detail page: prefill from that run,
+        # pinned to its exact scenario set version, so the run can be the first
+        # point of the series.
+        from_run = kw.get("from_run") or _run_from_query(self.request, "from_run")
+        if from_run:
+            kw.setdefault("clone", _clone_from_run(from_run))
+            kw.setdefault("form", {
+                "name": f"{from_run.target_model.display_name} · {from_run.scenario_set_version.scenario_set.name} drift",
+            })
+        kw["from_run"] = from_run
         kw.setdefault("form", {})
+        # Prefill for the shared model / hyperparameter blocks (same shape as
+        # NewAuditView's clone). Drift series default to 3 repetitions so the
+        # confidence band is usable.
+        kw.setdefault("clone", {"n_repetitions": 3})
         kw.update(
             schedules=schedules,
             sets=ScenarioSet.objects.filter(project=p).prefetch_related("versions"),
@@ -749,7 +775,9 @@ class SchedulesView(ProjectMixin, TemplateView):
             MAX_INTERVAL_HOURS,
             MAX_SCHEDULES_PER_PROJECT,
             MIN_INTERVAL_HOURS,
+            cron_next,
             has_write_role,
+            validate_cron,
         )
         from audits.services import _generation_parameters
         from model_registry.models import RegisteredModel
@@ -771,19 +799,34 @@ class SchedulesView(ProjectMixin, TemplateView):
                 raise ValueError("Name is required.")
             sset = ScenarioSet.objects.get(pk=form["scenario_set"], project=p)
             pinned = None
-            if form.get("pin_version"):
+            version_id = (form.get("scenario_set_version") or "").strip()
+            if version_id:
+                # Pinned to a specific version (e.g. the source run's).
+                pinned = sset.versions.filter(pk=version_id).first()
+                if pinned is None:
+                    raise ValueError("That scenario set version does not belong to the selected set.")
+            elif form.get("pin_version"):
                 pinned = sset.versions.order_by("-version").first()
                 if pinned is None:
                     raise ValueError("This scenario set has no published version to pin.")
-            interval_hours = int(form.get("interval_hours") or 168)
-            if not MIN_INTERVAL_HOURS <= interval_hours <= MAX_INTERVAL_HOURS:
-                raise ValueError(f"Interval must be between {MIN_INTERVAL_HOURS} hours and 90 days.")
+            cron_expression = ""
+            if form.get("interval_hours") == "cron":
+                cron_expression = validate_cron(form.get("cron_expression") or "")
+                interval_hours = 0
+            else:
+                interval_hours = int(form.get("interval_hours") or 168)
+                if not MIN_INTERVAL_HOURS <= interval_hours <= MAX_INTERVAL_HOURS:
+                    raise ValueError(f"Interval must be between {MIN_INTERVAL_HOURS} hours and 90 days.")
             first_raw = (form.get("first_run_at") or "").strip()
             if first_raw:
-                first = timezone.make_aware(datetime.fromisoformat(first_raw))
-            else:
+                first = timezone.make_aware(datetime.fromisoformat(first_raw), UTC)
+            elif not cron_expression:
                 # A minute out: the next sweeper pass picks it up.
                 first = timezone.now() + timedelta(minutes=1)
+            if cron_expression:
+                # First firing at or after the requested start (or now).
+                start = first if first_raw else timezone.now()
+                first = cron_next(cron_expression, start - timedelta(minutes=1))
 
             max_turns_raw = (form.get("max_turns") or "").strip()
             n_reps_raw = (form.get("n_repetitions") or "").strip()
@@ -799,7 +842,7 @@ class SchedulesView(ProjectMixin, TemplateView):
                 role: RegisteredModel.objects.get(pk=form[f"{role}_model"], project=p)
                 for role in ("target", "auditor", "judge")
             }
-            AuditSchedule.objects.create(
+            schedule = AuditSchedule.objects.create(
                 project=p,
                 name=name,
                 scenario_set=sset,
@@ -814,13 +857,77 @@ class SchedulesView(ProjectMixin, TemplateView):
                     gen_config_override=gen_config or None,
                 ),
                 interval_hours=interval_hours,
+                cron_expression=cron_expression,
                 next_run_at=first,
                 created_by=request.user,
             )
             messages.success(request, f"Schedule '{name}' created. First run {first:%Y-%m-%d %H:%M} UTC.")
-            return redirect("/schedules/")
+            baseline = _baseline_run(p, form)
+            if baseline and form.get("attach_baseline"):
+                if _matches_schedule(baseline, schedule):
+                    baseline.schedule = schedule
+                    baseline.save(update_fields=["schedule"])
+                    schedule.last_run = baseline
+                    schedule.save(update_fields=["last_run"])
+                    messages.info(request, f"Run #{baseline.id} is the first point of the drift series.")
+                else:
+                    messages.info(
+                        request,
+                        f"Run #{baseline.id} was not added to the series: its settings differ from the schedule's.",
+                    )
+            return redirect(f"/schedules/{schedule.id}/")
         except Exception as e:  # noqa: BLE001 - surface any validation failure to the user
-            return self.render_to_response(self.get_context_data(error=str(e), form=form))
+            return self.render_to_response(
+                self.get_context_data(
+                    error=str(e), form=form, clone=_clone_from_post(form), from_run=_baseline_run(p, form)
+                )
+            )
+
+
+def _baseline_run(project, form):
+    raw = (form.get("baseline_run") or "").strip()
+    if not raw.isdigit():
+        return None
+    return (
+        AuditRun.objects.filter(pk=int(raw), project=project, schedule__isnull=True)
+        .select_related("scenario_set_version__scenario_set", "target_model", "auditor_model", "judge_model")
+        .first()
+    )
+
+
+def _matches_schedule(run: AuditRun, schedule) -> bool:
+    """Whether ``run`` is the same experiment the schedule will repeat."""
+    from audits.scheduling import resolve_version
+
+    version = resolve_version(schedule)
+    return (
+        version is not None
+        and run.scenario_set_version_id == version.id
+        and run.target_model_id == schedule.target_model_id
+        and run.auditor_model_id == schedule.auditor_model_id
+        and run.judge_model_id == schedule.judge_model_id
+        and (run.generation_parameters_snapshot or {}) == (schedule.generation_parameters or {})
+    )
+
+
+def _clone_from_post(form) -> dict:
+    """Re-fill the shared audit form blocks from a rejected POST."""
+
+    def as_int(key):
+        raw = (form.get(key) or "").strip()
+        return int(raw) if raw.isdigit() else None
+
+    return {
+        "scenario_set_id": as_int("scenario_set"),
+        "scenario_set_version_id": as_int("scenario_set_version"),
+        "target_model_id": as_int("target_model"),
+        "auditor_model_id": as_int("auditor_model"),
+        "judge_model_id": as_int("judge_model"),
+        "max_turns": form.get("max_turns", ""),
+        "language": form.get("language", ""),
+        "n_repetitions": form.get("n_repetitions", ""),
+        "generation_json": form.get("gen_config_json", ""),
+    }
 
 
 def _drift_chart(points: list[dict], width: int = 720, height: int = 220, pad: int = 32) -> dict:
@@ -907,9 +1014,9 @@ class ScheduleActionView(ProjectMixin, View):
         elif action == "toggle":
             schedule.enabled = not schedule.enabled
             if schedule.enabled and schedule.next_run_at < timezone.now():
-                from audits.scheduling import advance
+                from audits.scheduling import next_after
 
-                schedule.next_run_at = advance(schedule.next_run_at, schedule.interval_hours, timezone.now())
+                schedule.next_run_at = next_after(schedule, timezone.now())
             schedule.save(update_fields=["enabled", "next_run_at", "updated_at"])
             messages.success(request, f"Schedule '{schedule.name}' {'resumed' if schedule.enabled else 'paused'}.")
         elif action == "run-now":
@@ -1601,7 +1708,7 @@ class AuditDetailView(ProjectMixin, DetailView):
     context_object_name = "run"
     pk_url_kwarg = "run_id"
     queryset = AuditRun.objects.select_related(
-        "scenario_set_version__scenario_set", "target_model", "auditor_model", "judge_model"
+        "scenario_set_version__scenario_set", "target_model", "auditor_model", "judge_model", "schedule"
     )
 
     def get_queryset(self):
@@ -1668,6 +1775,9 @@ class AuditDetailView(ProjectMixin, DetailView):
                 ctx["duration"] = f"{total // 60} min"
             else:
                 ctx["duration"] = f"{total // 3600} hr {total % 3600 // 60} min"
+        from audits.scheduling import has_write_role
+
+        ctx["can_schedule"] = has_write_role(self.request.user, self.request.project)
         return ctx
 
 

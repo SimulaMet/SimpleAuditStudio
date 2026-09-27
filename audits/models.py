@@ -103,6 +103,9 @@ class AuditSchedule(models.Model):
     # Same shape as AuditRun.generation_parameters_snapshot; copied into each run.
     generation_parameters = models.JSONField(default=dict, blank=True)
     interval_hours = models.PositiveIntegerField(default=168)
+    # Standard 5-field cron expression, evaluated in UTC. When set it replaces
+    # interval_hours as the timing rule.
+    cron_expression = models.CharField(max_length=120, blank=True)
     next_run_at = models.DateTimeField(db_index=True)
     last_run = models.ForeignKey("audits.AuditRun", on_delete=models.SET_NULL, null=True, blank=True, related_name="+")
     last_tick_at = models.DateTimeField(null=True, blank=True)
@@ -116,10 +119,12 @@ class AuditSchedule(models.Model):
         ordering = ["name"]
 
     def __str__(self) -> str:
-        return f"{self.name} (every {self.interval_hours}h)"
+        return f"{self.name} ({self.interval_display})"
 
     @property
     def interval_display(self) -> str:
+        if self.cron_expression:
+            return f"cron {self.cron_expression} (UTC)"
         h = self.interval_hours
         if h % 168 == 0:
             n = h // 168
