@@ -590,11 +590,13 @@ function toggleRename() {
     }
   };
   handlers.scenario_attempted = d => {
+    // Execution starts now: every attempt (first run, retry, resume) begins at
+    // rep 1, turn 1 with the auditor writing its probe. Single-rep runs send
+    // no rep_started, so this is also their start signal.
     const vi = d.version_item_id;
     const s = scenarios.get(vi);
-    if (!s) scenarios.set(vi, { phase: 'queued', rep: 0, turn: 0, role: '' });
-    // A retry after a failed attempt restarts the scenario from rep 0.
-    else if (s.phase === 'failed' && !countedVIs.has(vi)) scenarios.set(vi, { phase: 'queued', rep: 0, turn: 0, role: '' });
+    if (s && isFinished(s) && countedVIs.has(vi)) return;
+    scenarios.set(vi, { phase: 'running', rep: 0, turn: 0, role: 'auditor' });
   };
   handlers.scenario_rep_started = d => {
     const p = d.payload || {};
@@ -613,13 +615,24 @@ function toggleRename() {
     if (p.total_reps) totalRepsSeen = Math.max(totalRepsSeen, p.total_reps);
     const prev = scenarios.get(vi);
     if (prev && isFinished(prev)) return; // already finished (e.g. result existed at page load)
-    const role = p.role || '';
+    // The engine fires this AFTER a step completes, so the event says who just
+    // finished; the scenario is now in the NEXT step:
+    //   auditor done (turn t)  -> target replying in turn t
+    //   target done (turn t)   -> auditor probing turn t+1, or judge after the last turn
+    //   judge done             -> rep finished (next rep_started follows)
+    const done = p.role || '';
+    const t = p.turn || 0;
     const rep = Math.max(p.rep || 0, prev ? (prev.rep || 0) : 0);
-    // The judge fires once after all turns; treat it as its own phase.
-    const phase = role === 'judge' ? 'judging' : 'running';
-    const turn = p.turn || 0;
-    scenarios.set(vi, { phase, rep, turn, role });
-    pushRecent({ vi, phase, turn, role, rep, ts: evTs(d) });
+    const lastTurn = (p.max_turns || maxTurnsSeen) - 1;
+    let next;
+    if (done === 'auditor') next = { phase: 'running', rep, turn: t, role: 'target' };
+    else if (done === 'target' && t < lastTurn) next = { phase: 'running', rep, turn: t + 1, role: 'auditor' };
+    else if (done === 'target') next = { phase: 'judging', rep, turn: lastTurn, role: 'judge' };
+    // Rep complete: counts as finished for this rep until the next rep starts
+    // (or scenario_completed lands after the last rep).
+    else next = { phase: 'between', rep: rep + 1, turn: 0, role: '' };
+    scenarios.set(vi, next);
+    if (next.phase !== 'between') pushRecent({ vi, phase: next.phase, turn: next.turn, role: next.role, rep: next.rep, ts: evTs(d) });
   };
   handlers.scenario_completed = d => {
     const p = d.payload || {};
