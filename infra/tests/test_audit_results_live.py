@@ -33,7 +33,7 @@ class _ResultPagesBase(TestCase):
 
 class AuditResultsLiveTests(_ResultPagesBase):
     def _fragment(self):
-        return self.client.get(f"/audits/{self.run.id}/results-fragment/")
+        return self.client.get(f"/runs/{self.run.id}/results-fragment/")
 
     def test_fragment_grows_as_results_land(self):
         self.assertContains(self._fragment(), "Results (0)")
@@ -69,13 +69,13 @@ class AuditResultsLiveTests(_ResultPagesBase):
 
     def test_detail_page_includes_live_refresh(self):
         ScenarioResultFactory(run_id=self.run.id)
-        page = self.client.get(f"/audits/{self.run.id}/")
+        page = self.client.get(f"/runs/{self.run.id}/")
         self.assertContains(page, 'id="results-section"')
-        self.assertContains(page, f"/audits/{self.run.id}/results-fragment/")
+        self.assertContains(page, f"/runs/{self.run.id}/results-fragment/")
 
     def test_fragment_is_project_scoped(self):
         other = AuditRunFactory()
-        self.assertEqual(self.client.get(f"/audits/{other.id}/results-fragment/").status_code, 404)
+        self.assertEqual(self.client.get(f"/runs/{other.id}/results-fragment/").status_code, 404)
 
 
 class ScenarioResultPageTests(_ResultPagesBase):
@@ -108,7 +108,7 @@ class ScenarioResultPageTests(_ResultPagesBase):
                 "n_repetitions": 3,
             },
         )
-        resp = self.client.get(f"/audits/{self.run.id}/results/{sr.pk}/")
+        resp = self.client.get(f"/runs/{self.run.id}/results/{sr.pk}/")
         for text in ("one", "two", "three"):
             self.assertContains(resp, f"Answer {text}")
             self.assertContains(resp, f"Summary {text}")
@@ -125,6 +125,6 @@ class ScenarioResultPageTests(_ResultPagesBase):
 
     def test_single_rep_result_has_no_tabs(self):
         sr = ScenarioResultFactory(run_id=self.run.id, result=self._rep("pass", "solo"))
-        resp = self.client.get(f"/audits/{self.run.id}/results/{sr.pk}/")
+        resp = self.client.get(f"/runs/{self.run.id}/results/{sr.pk}/")
         self.assertContains(resp, "Answer solo")
         self.assertNotContains(resp, "data-rep-tab")

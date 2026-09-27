@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+{% block title %}Monitors — SimpleAudit{% endblock %}
+{% block content %}
+<div class="flex flex-wrap items-center justify-between gap-3 mb-2">
+  <h1 class="text-lg font-semibold text-gray-100">Monitors</h1>
+  {% if can_create %}<a href="{% url 'new_experiment' %}?repeat=168#schedule-card" class="px-3 py-1.5 rounded-lg bg-accent text-white text-xs font-medium hover:bg-accent-hover">+ New monitor</a>{% endif %}
+</div>
+<p class="text-sm text-gray-500 mb-6 max-w-3xl">
+  Runs that repeat on a schedule to track changes in a model's behaviour over time. Create them from New Experiment by choosing a Repeat,
+  or with “Monitor for drift” on any run. Keep the auditor and judge fixed so changes come from the target, not the grader.
+</p>
+
+<div class="bg-surface-raised rounded-xl border border-gray-800 p-4">
+  {% if monitors %}
+  <div class="overflow-x-auto">
+    <table class="w-full text-sm">
+      <thead>
+        <tr class="border-b border-gray-800">
+          <th class="text-left px-3 py-2 text-xs font-medium text-gray-500 uppercase">Name</th>
+          <th class="text-left px-3 py-2 text-xs font-medium text-gray-500 uppercase">Target</th>
+          <th class="text-left px-3 py-2 text-xs font-medium text-gray-500 uppercase">Scenario set</th>
+          <th class="text-left px-3 py-2 text-xs font-medium text-gray-500 uppercase">Repeats</th>
+          <th class="text-left px-3 py-2 text-xs font-medium text-gray-500 uppercase">Next run</th>
+          <th class="text-left px-3 py-2 text-xs font-medium text-gray-500 uppercase">Last run</th>
+          <th class="text-right px-3 py-2 text-xs font-medium text-gray-500 uppercase">Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for s in monitors %}
+        <tr class="border-b border-gray-800/50 hover:bg-surface-overlay/50 cursor-pointer" onclick="location='/monitors/{{ s.id }}/'">
+          <td class="px-3 py-2.5 text-gray-200 font-medium">
+            {{ s.name }}
+            {% if not s.enabled %}<span class="ml-1 inline-flex px-2 py-0.5 rounded-full text-xs bg-gray-800 text-gray-400">paused</span>{% endif %}
+            {% if s.last_error %}<span class="ml-1 text-yellow-500" title="{{ s.last_error }}">⚠</span>{% endif %}
+            {% if s.experiment %}<a href="{% url 'experiment_detail' s.experiment.id %}" onclick="event.stopPropagation()" class="block text-[11px] text-gray-500 hover:text-accent truncate max-w-[18rem]">⊞ {{ s.experiment.name }}</a>{% endif %}
+          </td>
+          <td class="px-3 py-2.5 text-gray-400 text-xs">{{ s.target_model.display_name }}</td>
+          <td class="px-3 py-2.5 text-gray-400 text-xs">{{ s.scenario_set.name }} {% if s.scenario_set_version %}<span class="text-gray-500">(v{{ s.scenario_set_version.version }} pinned)</span>{% else %}<span class="text-gray-500">(latest)</span>{% endif %}</td>
+          <td class="px-3 py-2.5 text-gray-400 text-xs">{{ s.interval_display }}</td>
+          <td class="px-3 py-2.5 text-gray-400 text-xs whitespace-nowrap">{% if s.enabled %}<time data-local datetime="{{ s.next_run_at|date:'c' }}">{{ s.next_run_at|date:"M j, H:i" }} UTC</time>{% else %}—{% endif %}</td>
+          <td class="px-3 py-2.5 text-xs whitespace-nowrap">{% if s.last_run %}<a href="/runs/{{ s.last_run.id }}/" onclick="event.stopPropagation()" class="text-accent hover:underline">#{{ s.last_run.id }}</a> <span class="text-gray-500">{{ s.last_run.status }}</span>{% else %}<span class="text-gray-600">—</span>{% endif %}</td>
+          <td class="px-3 py-2.5 text-right whitespace-nowrap" onclick="event.stopPropagation()">
+            {% if s.can_manage %}
+            <form method="post" action="/monitors/{{ s.id }}/run-now/" class="inline">{% csrf_token %}
+              <button type="submit" class="px-2 py-1 rounded text-xs text-gray-400 hover:text-accent hover:bg-surface-overlay">Run now</button>
+            </form>
+            <form method="post" action="/monitors/{{ s.id }}/toggle/" class="inline">{% csrf_token %}
+              <button type="submit" class="px-2 py-1 rounded text-xs text-gray-400 hover:text-gray-200 hover:bg-surface-overlay">{% if s.enabled %}Pause{% else %}Resume{% endif %}</button>
+            </form>
+            {% else %}
+            <span class="text-xs text-gray-600" title="Only a workspace admin or the creator can change this monitor">by {{ s.created_by.username|default:"deleted user" }}</span>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="text-sm text-gray-500 py-6 text-center">No monitors yet. In New Experiment, set Repeat to anything but “Once”, or use “Monitor for drift” on any run.</p>
+  {% endif %}
+</div>
+{% endblock %}

@@ -29,14 +29,14 @@ class AuditRenameTest(TestCase):
         self.run = AuditRunFactory(project=self.project, status=AuditRun.Status.COMPLETED, name="Original Name")
 
     def test_detail_page_shows_run_name(self):
-        resp = self.client.get(f"/audits/{self.run.id}/")
+        resp = self.client.get(f"/runs/{self.run.id}/")
         self.assertEqual(resp.status_code, 200)
         html = resp.content.decode()
         self.assertIn("Original Name", html)
-        self.assertIn(f"Audit #{self.run.id}", html)
+        self.assertIn(f"Run #{self.run.id}", html)
 
     def test_rename_via_post(self):
-        resp = self.client.post(f"/audits/{self.run.id}/rename/", {"name": "New Name"})
+        resp = self.client.post(f"/runs/{self.run.id}/rename/", {"name": "New Name"})
         self.assertEqual(resp.status_code, 302)
         self.run.refresh_from_db()
         self.assertEqual(self.run.name, "New Name")
@@ -46,7 +46,7 @@ class AuditRenameTest(TestCase):
         original_set_version = self.run.scenario_set_version_id
         original_target = self.run.target_model_id
 
-        self.client.post(f"/audits/{self.run.id}/rename/", {"name": "Changed"})
+        self.client.post(f"/runs/{self.run.id}/rename/", {"name": "Changed"})
         self.run.refresh_from_db()
 
         self.assertEqual(self.run.status, original_status)
@@ -54,19 +54,19 @@ class AuditRenameTest(TestCase):
         self.assertEqual(self.run.target_model_id, original_target)
 
     def test_rename_rejects_empty_name(self):
-        resp = self.client.post(f"/audits/{self.run.id}/rename/", {"name": ""})
+        resp = self.client.post(f"/runs/{self.run.id}/rename/", {"name": ""})
         self.assertEqual(resp.status_code, 302)
         self.run.refresh_from_db()
         self.assertEqual(self.run.name, "Original Name")
 
     def test_rename_rejects_whitespace_only_name(self):
-        resp = self.client.post(f"/audits/{self.run.id}/rename/", {"name": "   "})
+        resp = self.client.post(f"/runs/{self.run.id}/rename/", {"name": "   "})
         self.assertEqual(resp.status_code, 302)
         self.run.refresh_from_db()
         self.assertEqual(self.run.name, "Original Name")
 
     def test_rename_strips_whitespace(self):
-        resp = self.client.post(f"/audits/{self.run.id}/rename/", {"name": "  Padded Name  "})
+        resp = self.client.post(f"/runs/{self.run.id}/rename/", {"name": "  Padded Name  "})
         self.assertEqual(resp.status_code, 302)
         self.run.refresh_from_db()
         self.assertEqual(self.run.name, "Padded Name")
@@ -80,13 +80,13 @@ class AuditRenameTest(TestCase):
         other_client.session["project_id"] = self.project.pk
         other_client.session.save()
 
-        resp = other_client.post(f"/audits/{self.run.id}/rename/", {"name": "Hacked"})
+        resp = other_client.post(f"/runs/{self.run.id}/rename/", {"name": "Hacked"})
         self.assertIn(resp.status_code, (302, 403, 404))
         self.run.refresh_from_db()
         self.assertEqual(self.run.name, "Original Name")
 
     def test_rename_form_present_on_detail_page(self):
-        resp = self.client.get(f"/audits/{self.run.id}/")
+        resp = self.client.get(f"/runs/{self.run.id}/")
         html = resp.content.decode()
-        self.assertIn(f"/audits/{self.run.id}/rename/", html)
+        self.assertIn(f"/runs/{self.run.id}/rename/", html)
         self.assertIn('id="rename-form"', html)

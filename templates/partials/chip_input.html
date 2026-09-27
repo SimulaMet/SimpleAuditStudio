@@ -1,0 +1,18 @@
+{% comment %}
+Multi-value "chip" input. The hidden field {{ name }} holds the values
+comma-separated (what the server parses); chips are the editing UI.
+Context: name, value (comma-separated prefill), placeholder, kind ("int" for
+1-50 whole numbers, else text), suggestions (comma-separated quick-add values).
+Behaviour lives in experiment_new.html (initChips).
+{% endcomment %}
+<div data-chips data-kind="{{ kind }}">
+  <div data-chip-box class="flex flex-wrap items-center gap-1 min-h-[38px] px-2 py-1 rounded-lg bg-surface-overlay border border-gray-700 focus-within:ring-2 focus-within:ring-accent/50 cursor-text">
+    <input type="text" data-chip-input {% if kind == "int" %}inputmode="numeric"{% endif %} placeholder="{{ placeholder }}" aria-label="Add a value"
+           class="flex-1 min-w-[6rem] bg-transparent text-sm text-gray-200 placeholder:text-gray-500 outline-none py-1">
+  </div>
+  <input type="hidden" name="{{ name }}" value="{{ value|default:'' }}" data-axis-list>
+  {% if suggestions %}
+  <div class="mt-1.5 flex flex-wrap gap-1" data-chip-suggestions="{{ suggestions }}"></div>
+  {% endif %}
+  <p class="mt-1 text-[11px] text-red-400 hidden" data-chip-error></p>
+</div>

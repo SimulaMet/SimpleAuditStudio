@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}{{ run.name }} (Audit #{{ run.id }}) — SimpleAudit{% endblock %}
+{% block title %}{{ run.name }} (Run #{{ run.id }}) — SimpleAudit{% endblock %}
 {% block content %}
 <div class="mb-4">
   <a href="{% url 'dashboard' %}" class="text-xs text-gray-500 hover:text-accent">← Back</a>
@@ -7,12 +7,12 @@
 
 <div class="flex flex-wrap items-center justify-between gap-y-2 mb-6">
   <div class="flex items-center gap-2 min-w-0 flex-1 basis-48">
-    <h1 id="audit-title" class="text-lg font-semibold text-gray-100 truncate">{{ run.name }} <span class="text-gray-500 font-normal text-sm">(Audit #{{ run.id }})</span></h1>
-    <button type="button" onclick="toggleRename()" title="Rename this audit" aria-label="Rename this audit" class="shrink-0 inline-flex items-center justify-center w-7 h-7 rounded-md text-gray-500 hover:text-accent hover:bg-surface-overlay transition-colors">
+    <h1 id="audit-title" class="text-lg font-semibold text-gray-100 truncate">{{ run.name }} <span class="text-gray-500 font-normal text-sm">(Run #{{ run.id }})</span></h1>
+    <button type="button" onclick="toggleRename()" title="Rename this run" aria-label="Rename this run" class="shrink-0 inline-flex items-center justify-center w-7 h-7 rounded-md text-gray-500 hover:text-accent hover:bg-surface-overlay transition-colors">
       <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/></svg>
     </button>
   </div>
-  <form id="rename-form" method="post" action="{% url 'audit_rename' run.id %}" class="hidden flex items-center gap-2 mb-6">
+  <form id="rename-form" method="post" action="{% url 'run_rename' run.id %}" class="hidden flex items-center gap-2 mb-6">
     {% csrf_token %}
     <input type="text" name="name" value="{{ run.name }}" maxlength="250" required
            class="px-3 py-1.5 rounded-lg bg-surface-overlay border border-gray-700 text-sm text-gray-200 focus:outline-none focus:ring-2 focus:ring-accent/50 w-full max-w-xs min-w-0"
@@ -21,21 +21,26 @@
     <button type="button" onclick="toggleRename()" class="px-3 py-1.5 rounded-lg bg-surface-overlay text-gray-400 text-xs font-medium hover:text-gray-200">Cancel</button>
   </form>
   <div class="flex items-center gap-2 shrink-0">
-    {% if run.schedule %}
-    <a href="{% url 'schedule_detail' run.schedule.id %}" title="This run is part of a recurring schedule — open its drift chart" class="inline-flex items-center gap-1.5 h-8 px-2.5 rounded-lg bg-accent/15 text-accent text-xs font-medium hover:bg-accent/25 transition-colors max-w-[14rem]">
-      <span aria-hidden="true">↻</span><span class="truncate">{{ run.schedule.name }}</span>
-    </a>
-    {% elif can_schedule %}
-    <a href="{% url 'schedules' %}?from_run={{ run.id }}#new-schedule" title="Re-run this exact audit on a recurring schedule to track drift" aria-label="Repeat on schedule" class="inline-flex items-center gap-1.5 h-8 px-2.5 rounded-lg bg-surface-overlay text-gray-400 text-xs font-medium hover:text-accent transition-colors">
-      <span aria-hidden="true" class="text-sm">↻</span><span class="hidden sm:inline">Repeat on schedule</span>
+    {% if run.experiment %}
+    <a href="{% url 'experiment_detail' run.experiment.id %}" title="This run is one cell of an experiment — open its comparison" class="inline-flex items-center gap-1.5 h-8 px-2.5 rounded-lg bg-surface-overlay text-gray-300 text-xs font-medium hover:text-accent transition-colors max-w-[14rem]">
+      <span aria-hidden="true">⊞</span><span class="truncate">{{ run.experiment.name }}</span>
     </a>
     {% endif %}
-    <a href="{% url 'new_audit' %}?clone_from={{ run.id }}" title="Clone this audit" aria-label="Clone this audit" class="inline-flex items-center justify-center w-8 h-8 rounded-lg bg-surface-overlay text-gray-400 hover:text-accent transition-colors">
+    {% if run.monitor %}
+    <a href="{% url 'monitor_detail' run.monitor.id %}" title="This run is part of a monitor — open its drift chart" class="inline-flex items-center gap-1.5 h-8 px-2.5 rounded-lg bg-accent/15 text-accent text-xs font-medium hover:bg-accent/25 transition-colors max-w-[14rem]">
+      <span aria-hidden="true">↻</span><span class="truncate">{{ run.monitor.name }}</span>
+    </a>
+    {% elif can_schedule %}
+    <a href="{% url 'new_experiment' %}?clone_from={{ run.id }}&repeat=168#schedule-card" title="Repeat this exact run on a schedule to track drift" aria-label="Monitor for drift" class="inline-flex items-center gap-1.5 h-8 px-2.5 rounded-lg bg-surface-overlay text-gray-400 text-xs font-medium hover:text-accent transition-colors">
+      <span aria-hidden="true" class="text-sm">↻</span><span class="hidden sm:inline">Monitor for drift</span>
+    </a>
+    {% endif %}
+    <a href="{% url 'new_experiment' %}?clone_from={{ run.id }}" title="Clone this run" aria-label="Clone this run" class="inline-flex items-center justify-center w-8 h-8 rounded-lg bg-surface-overlay text-gray-400 hover:text-accent transition-colors">
       <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
     </a>
-    <form method="post" action="{% url 'audit_archive' run.id %}" class="inline">
+    <form method="post" action="{% url 'run_archive' run.id %}" class="inline">
       {% csrf_token %}
-      <button type="submit" title="{% if run.archived %}Unarchive this audit{% else %}Archive this audit{% endif %}" aria-label="{% if run.archived %}Unarchive this audit{% else %}Archive this audit{% endif %}" class="inline-flex items-center justify-center w-8 h-8 rounded-lg bg-surface-overlay text-gray-400 hover:text-gray-200 transition-colors">
+      <button type="submit" title="{% if run.archived %}Unarchive this run{% else %}Archive this run{% endif %}" aria-label="{% if run.archived %}Unarchive this run{% else %}Archive this run{% endif %}" class="inline-flex items-center justify-center w-8 h-8 rounded-lg bg-surface-overlay text-gray-400 hover:text-gray-200 transition-colors">
         {% if run.archived %}
         <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg>
         {% else %}
@@ -45,7 +50,7 @@
     </form>
     {% if run.archived %}<span class="inline-flex px-2 py-0.5 rounded-full text-xs font-semibold bg-gray-800 text-gray-400">archived</span>{% endif %}
     {% if run.status == "queued" or run.status == "preparing" or run.status == "target_execution" or run.status == "auditing" or run.status == "judging" or run.status == "aggregation" %}
-    <form method="post" action="{% url 'audit_cancel' run.id %}">
+    <form method="post" action="{% url 'run_cancel' run.id %}">
       {% csrf_token %}
       <button class="px-3 py-1.5 rounded-lg bg-red-900/50 text-red-300 text-xs font-medium hover:bg-red-800/60">Cancel</button>
     </form>
@@ -651,7 +656,7 @@ function toggleRename() {
     clearTimeout(resultsTimer);
     resultsTimer = setTimeout(async () => {
       try {
-        const resp = await fetch('{% url "audit_results_fragment" run.id %}', { credentials: 'same-origin' });
+        const resp = await fetch('{% url "run_results_fragment" run.id %}', { credentials: 'same-origin' });
         if (!resp.ok) return;
         const el = document.getElementById('results-section');
         if (el) el.outerHTML = await resp.text();

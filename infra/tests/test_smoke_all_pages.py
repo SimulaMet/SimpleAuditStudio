@@ -101,8 +101,8 @@ class AllPagesSmokeTest(TestCase):
         self._ok(f"/admin-settings/?tab=workspaces&manage={self.project.id}", "Admin Members panel")
 
     def test_audit_detail(self):
-        self._ok(f"/audits/{self.run.id}/", "Audit detail (single)")
-        self._ok(f"/audits/{self.run_repeated.id}/", "Audit detail (repeated)")
+        self._ok(f"/runs/{self.run.id}/", "Audit detail (single)")
+        self._ok(f"/runs/{self.run_repeated.id}/", "Audit detail (repeated)")
 
     def test_audit_detail_live_state_updates_from_sse(self):
         """The Status card's State row must be live-updated from SSE events.
@@ -123,7 +123,7 @@ class AllPagesSmokeTest(TestCase):
             total_scenarios=1,
             completed_scenarios=0,
         )
-        resp = self.client.get(f"/audits/{active.id}/")
+        resp = self.client.get(f"/runs/{active.id}/")
         html = resp.content.decode()
         # Live state element exists for non-terminal runs...
         self.assertIn('id="run-state"', html)
@@ -133,13 +133,13 @@ class AllPagesSmokeTest(TestCase):
         self.assertIn("updateRunState", html)
 
     def test_audit_exports(self):
-        self._ok(f"/audits/{self.run.id}/export/?format=json", "Export JSON")
-        self._ok(f"/audits/{self.run.id}/export/?format=csv", "Export CSV")
-        self._ok(f"/audits/{self.run_repeated.id}/export/?format=json", "Export JSON (repeated)")
+        self._ok(f"/runs/{self.run.id}/export/?format=json", "Export JSON")
+        self._ok(f"/runs/{self.run.id}/export/?format=csv", "Export CSV")
+        self._ok(f"/runs/{self.run_repeated.id}/export/?format=json", "Export JSON (repeated)")
 
     def test_scenario_result_detail(self):
-        self._ok(f"/audits/{self.run.id}/results/{self.result.id}/", "Result detail (single)")
-        self._ok(f"/audits/{self.run_repeated.id}/results/{self.result_repeated.id}/", "Result detail (repeated)")
+        self._ok(f"/runs/{self.run.id}/results/{self.result.id}/", "Result detail (single)")
+        self._ok(f"/runs/{self.run_repeated.id}/results/{self.result_repeated.id}/", "Result detail (repeated)")
 
     def test_compare(self):
         self._ok(f"/compare/?a={self.run.id}&b={self.run_repeated.id}", "Compare")
@@ -147,5 +147,5 @@ class AllPagesSmokeTest(TestCase):
     def test_scenario_diff(self):
         self._ok(f"/scenarios/diff/{self.scenario_set.id}/", "Scenario diff")
 
-    def test_new_audit_form(self):
-        self._ok("/new-audit/", "New Audit form")
+    def test_new_experiment_form(self):
+        self._ok("/experiments/new/", "New Experiment form")

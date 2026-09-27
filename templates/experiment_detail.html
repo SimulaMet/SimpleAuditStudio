@@ -1,0 +1,197 @@
+{% extends "base.html" %}
+{% block title %}{{ experiment.name }} — Experiments — SimpleAudit{% endblock %}
+{% block content %}
+<div class="mb-4"><a href="{% url 'experiments' %}" class="text-xs text-gray-500 hover:text-accent">← Experiments</a></div>
+
+<div class="flex flex-wrap items-start justify-between gap-3 mb-4">
+  <div class="min-w-0">
+    <h1 class="text-lg font-semibold text-gray-100 break-words">{{ experiment.name }}</h1>
+    <p class="text-xs text-gray-500 mt-1">
+      {{ summary.total }} run setup{{ summary.total|pluralize }}{% if monitors %} · repeats {{ monitors.0.interval_display }}{% endif %} · compares {{ factor_labels|join:" × "|default:"—" }}
+      · created <time data-local datetime="{{ experiment.created_at|date:'c' }}">{{ experiment.created_at|date:"M j, H:i" }} UTC</time>{% if experiment.created_by %} by {{ experiment.created_by.username }}{% endif %}
+    </p>
+  </div>
+  <div class="flex gap-2">
+    {% if runs|length > 1 %}<a href="/compare/?runs={{ run_ids }}" class="px-3 py-1.5 rounded-lg bg-surface-overlay text-gray-300 text-xs font-medium hover:text-white">Compare scenarios</a>{% endif %}
+  </div>
+</div>
+
+<!-- Progress -->
+<div class="bg-surface-raised rounded-xl border border-gray-800 p-4 mb-4">
+  <div class="flex flex-wrap items-center justify-between gap-2 mb-2 text-sm">
+    <h2 class="font-semibold text-gray-300">Progress{% if has_repeats %} <span class="font-normal text-xs text-gray-500">· latest run of each setup</span>{% endif %}</h2>
+    <p class="text-xs text-gray-400">
+      {{ summary.done }}/{{ summary.total }} runs finished
+      {% if summary.active %}<span class="text-amber-400">· {{ summary.active }} running or queued</span>{% endif %}
+      {% if summary.failed %}<span class="text-red-400">· {{ summary.failed }} failed</span>{% endif %}
+    </p>
+  </div>
+  <div class="h-1.5 rounded-full bg-surface-overlay overflow-hidden mb-3"><div class="h-full bg-accent" style="width: {{ summary.pct }}%"></div></div>
+  <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2">
+    {% for r in current_runs %}
+    <a href="/runs/{{ r.id }}/" class="block rounded-lg border px-3 py-2 hover:border-accent/50 transition-colors
+       {% if r.status == 'completed' %}border-emerald-900/60 bg-emerald-950/20{% elif r.status == 'failed' %}border-red-900/60 bg-red-950/20{% elif r.status == 'cancelled' %}border-gray-800{% else %}border-amber-900/50 bg-amber-950/10{% endif %}">
+      <p class="text-xs text-gray-200 truncate" title="{{ r.name }}">{{ r.factor_values|join:" · "|default:r.name }}</p>
+      <p class="text-[11px] mt-0.5 {% if r.status == 'completed' %}text-emerald-400{% elif r.status == 'failed' %}text-red-400{% elif r.status == 'cancelled' %}text-gray-500{% else %}text-amber-400{% endif %}">
+        {% if r.status == 'completed' %}{% if r.pass_rate is not None %}{{ r.pass_rate|floatformat:0 }}% pass{% else %}done{% endif %}
+        {% elif r.status == 'failed' or r.status == 'cancelled' %}{{ r.status }}
+        {% else %}{{ r.get_status_display|lower }}{% if r.total_scenarios %} · {{ r.completed_scenarios }}/{{ r.total_scenarios }}{% endif %}{% endif %}
+      </p>
+    </a>
+    {% empty %}
+    <p class="text-sm text-gray-500 col-span-full">No runs yet.{% if monitors %} The first runs start <time data-local datetime="{{ monitors.0.next_run_at|date:'c' }}">{{ monitors.0.next_run_at|date:"M j, H:i" }} UTC</time>.{% endif %}</p>
+    {% endfor %}
+  </div>
+</div>
+
+{% if monitors %}
+<!-- Over time: one line per repeating run setup -->
+<div class="bg-surface-raised rounded-xl border border-gray-800 p-4 mb-4">
+  <div class="flex flex-wrap items-center justify-between gap-2 mb-3">
+    <h2 class="text-sm font-semibold text-gray-300">Over time</h2>
+    <p class="text-xs text-gray-500">Next run <time data-local datetime="{{ monitors.0.next_run_at|date:'c' }}">{{ monitors.0.next_run_at|date:"M j, H:i" }} UTC</time></p>
+  </div>
+  <div class="overflow-x-auto">
+    <table class="w-full text-sm">
+      <thead>
+        <tr class="border-b border-gray-800 text-xs text-gray-500 uppercase">
+          <th class="text-left px-3 py-2 font-medium">Setup</th>
+          <th class="text-left px-3 py-2 font-medium">Pass rate over time</th>
+          <th class="text-left px-3 py-2 font-medium">Latest</th>
+          <th class="px-3 py-2"><span class="sr-only">Actions</span></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for m in monitors %}
+        <tr class="border-b border-gray-800/50 hover:bg-surface-overlay/50 cursor-pointer" onclick="location='/monitors/{{ m.id }}/'">
+          <td class="px-3 py-2.5 text-gray-200 max-w-[18rem]">
+            <span class="block truncate" title="{{ m.name }}">{{ m.name }}</span>
+            {% if not m.enabled %}<span class="text-[11px] text-gray-500">paused</span>{% endif %}
+            {% if m.last_error %}<span class="text-[11px] text-yellow-500" title="{{ m.last_error }}">⚠ last tick had a problem</span>{% endif %}
+          </td>
+          <td class="px-3 py-2.5">
+            {% if m.chart %}
+            <svg viewBox="0 0 {{ m.chart.width }} {{ m.chart.height }}" class="w-56 h-12" role="img" aria-label="Pass rate over time for {{ m.name }}">
+              <polygon points="{{ m.chart.band }}" fill="currentColor" class="text-accent" fill-opacity="0.15"/>
+              <polyline points="{{ m.chart.line }}" fill="none" stroke="currentColor" class="text-accent" stroke-width="1.5"/>
+              {% for d in m.chart.dots %}<circle cx="{{ d.x }}" cy="{{ d.y }}" r="{% if d.p.change %}3{% else %}2{% endif %}" fill="currentColor" class="{% if d.p.change == 'drop' %}text-red-400{% elif d.p.change == 'rise' %}text-emerald-400{% else %}text-accent{% endif %}"><title>#{{ d.p.run.id }}: {{ d.p.k }}/{{ d.p.n }} pass</title></circle>{% endfor %}
+            </svg>
+            {% else %}<span class="text-xs text-gray-500">waiting for results</span>{% endif %}
+          </td>
+          <td class="px-3 py-2.5 text-xs whitespace-nowrap">
+            {% if m.latest_point %}<span class="text-gray-100 font-semibold">{% widthratio m.latest_point.k m.latest_point.n 100 %}%</span>{% else %}—{% endif %}
+            {% if m.drops %}<span class="ml-1 px-1.5 py-0.5 rounded-full bg-red-900/50 text-red-300">{{ m.drops }} drop{{ m.drops|pluralize }}</span>{% endif %}
+          </td>
+          <td class="px-3 py-2.5 text-right" onclick="event.stopPropagation()">
+            {% if m.can_manage %}
+            <form method="post" action="/monitors/{{ m.id }}/toggle/" class="inline">{% csrf_token %}
+              <button type="submit" class="text-xs text-gray-400 hover:text-gray-200">{% if m.enabled %}Pause{% else %}Resume{% endif %}</button>
+            </form>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <p class="text-xs text-gray-500 mt-3">Red dots: a significant drop against that setup's previous runs. Open a row for its full drift chart.</p>
+</div>
+{% endif %}
+
+<!-- Results pivot -->
+<div class="bg-surface-raised rounded-xl border border-gray-800 p-4 mb-4">
+  <div class="flex flex-wrap items-center justify-between gap-3 mb-3">
+    <div class="flex flex-wrap items-center gap-3">
+      <h2 class="text-sm font-semibold text-gray-300">Pass rate</h2>
+      {% if has_repeats %}
+      <div class="flex gap-1 text-xs" role="group" aria-label="Which runs to count">
+        <a href="?{% if row_factor %}rows={{ row_factor }}&{% endif %}{% if col_factor %}cols={{ col_factor }}{% endif %}" class="px-2 py-1 rounded {% if not pool %}bg-accent/20 text-accent{% else %}text-gray-500 hover:text-gray-300{% endif %}">Latest run per setup</a>
+        <a href="?pool=1{% if row_factor %}&rows={{ row_factor }}{% endif %}{% if col_factor %}&cols={{ col_factor }}{% endif %}" class="px-2 py-1 rounded {% if pool %}bg-accent/20 text-accent{% else %}text-gray-500 hover:text-gray-300{% endif %}">All runs pooled</a>
+      </div>
+      {% endif %}
+    </div>
+    {% if factor_choices|length > 1 %}
+    <form method="get" class="flex flex-wrap items-center gap-2 text-xs text-gray-400">
+      {% if pool %}<input type="hidden" name="pool" value="1">{% endif %}
+      <label>Rows
+        <select name="rows" onchange="this.form.submit()" class="ml-1 px-2 py-1 rounded bg-surface-overlay border border-gray-700 text-gray-200">
+          {% for key, label in factor_choices %}<option value="{{ key }}" {% if key == row_factor %}selected{% endif %}>{{ label }}</option>{% endfor %}
+        </select>
+      </label>
+      <label>Columns
+        <select name="cols" onchange="this.form.submit()" class="ml-1 px-2 py-1 rounded bg-surface-overlay border border-gray-700 text-gray-200">
+          <option value="">None</option>
+          {% for key, label in factor_choices %}<option value="{{ key }}" {% if key == col_factor %}selected{% endif %}>{{ label }}</option>{% endfor %}
+        </select>
+      </label>
+    </form>
+    {% endif %}
+  </div>
+  <div class="overflow-x-auto">
+    <table class="w-full text-sm">
+      <thead>
+        <tr class="border-b border-gray-800 text-xs text-gray-500">
+          <th class="text-left px-3 py-2 font-medium">{{ row_label|default:"" }}{% if col_label %} ╲ {{ col_label }}{% endif %}</th>
+          {% for c in pivot.cols %}<th class="text-left px-3 py-2 font-medium text-gray-300">{{ c }}</th>{% endfor %}
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in pivot.rows %}
+        <tr class="border-b border-gray-800/50">
+          <th class="text-left px-3 py-2.5 font-medium text-gray-300 whitespace-nowrap">{{ row.label }}</th>
+          {% for cell in row.cells %}
+          <td class="px-3 py-2.5 align-top">
+            {% if cell and cell.rate is not None %}
+            <div class="text-gray-100 font-semibold">{{ cell.rate|floatformat:0 }}%</div>
+            <div class="relative h-1.5 w-28 rounded-full bg-surface-overlay mt-1" title="95% interval {{ cell.lo|floatformat:0 }}–{{ cell.hi|floatformat:0 }}%">
+              <div class="absolute h-full rounded-full bg-accent/30" style="left: {{ cell.lo|floatformat:0 }}%; width: {{ cell.span|floatformat:0 }}%"></div>
+              <div class="absolute top-[-2px] h-[10px] w-[2px] bg-accent" style="left: {{ cell.rate|floatformat:0 }}%"></div>
+            </div>
+            <div class="text-[11px] text-gray-500 mt-1">{{ cell.k }}/{{ cell.n }} trials{% if cell.runs|length > 1 %} · {{ cell.runs|length }} runs{% endif %}</div>
+            {% elif cell %}
+            <span class="text-xs text-gray-500">{% with r=cell.runs.0 %}{% if r.status == 'failed' %}failed{% else %}waiting…{% endif %}{% endwith %}</span>
+            {% else %}<span class="text-gray-700">—</span>{% endif %}
+          </td>
+          {% endfor %}
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <p class="text-xs text-gray-500 mt-3">Share of judged trials rated <em>pass</em> (each repetition counts). The bar shows the 95% interval: overlapping bars mean the difference may be noise. Errored trials are excluded.</p>
+</div>
+
+<!-- Runs table -->
+<div class="bg-surface-raised rounded-xl border border-gray-800 p-4">
+  <h2 class="text-sm font-semibold text-gray-300 mb-3">All runs <span class="font-normal text-gray-500">({{ runs|length }})</span></h2>
+  <div class="overflow-x-auto">
+    <table class="w-full text-sm">
+      <thead>
+        <tr class="border-b border-gray-800 text-xs text-gray-500 uppercase">
+          <th class="text-left px-3 py-2 font-medium">Run</th>
+          {% for l in factor_labels %}<th class="text-left px-3 py-2 font-medium">{{ l }}</th>{% endfor %}
+          <th class="text-left px-3 py-2 font-medium">Status</th>
+          <th class="text-left px-3 py-2 font-medium">Pass rate</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in runs %}
+        <tr class="border-b border-gray-800/50 hover:bg-surface-overlay/50 cursor-pointer" onclick="location='/runs/{{ r.id }}/'">
+          <td class="px-3 py-2.5 text-gray-200">#{{ r.id }} <span class="text-xs text-gray-500">{{ r.name }}</span></td>
+          {% for v in r.factor_values %}<td class="px-3 py-2.5 text-xs text-gray-300 whitespace-nowrap">{{ v }}</td>{% endfor %}
+          <td class="px-3 py-2.5 text-xs text-gray-400">{{ r.get_status_display }}{% if r.status != 'completed' and r.total_scenarios %} · {{ r.completed_scenarios }}/{{ r.total_scenarios }}{% endif %}</td>
+          <td class="px-3 py-2.5 text-xs text-gray-200">{% if r.pass_rate is not None %}{{ r.pass_rate|floatformat:0 }}%{% else %}—{% endif %}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+{% if summary.active %}
+<script>
+// Refresh while runs are in flight (paused when the tab is hidden).
+setInterval(() => { if (!document.hidden) location.reload(); }, 15000);
+</script>
+{% endif %}
+{% endblock %}

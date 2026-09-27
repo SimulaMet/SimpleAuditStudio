@@ -1,0 +1,49 @@
+{% comment %}
+Target / auditor / judge pickers where each role takes one or more models
+(New Experiment). Context: connections, sel.target/auditor/judge (id strings).
+Field names match the single-select partial so one-run posts look the same.
+{% endcomment %}
+<div class="bg-surface-raised rounded-xl border border-gray-800 p-4">
+  <div class="flex items-center justify-between mb-1">
+    <h3 class="text-sm font-semibold text-gray-300">Models</h3>
+    <a href="{% url 'models' %}" target="_blank" class="text-xs text-accent hover:text-accent-hover hover:underline">＋ New</a>
+  </div>
+  <p class="text-xs text-gray-500 mb-3">Pick one model per role, or several to compare them.</p>
+  {% if connections %}
+  <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+    {% for role, label, hint, chosen in model_roles %}
+    <fieldset data-axis="{{ role }}_model">
+      <legend class="w-full flex items-baseline justify-between mb-1">
+        <span class="text-xs font-medium text-gray-500 uppercase tracking-wide">{{ label }}</span>
+        <span class="text-[10px] text-gray-500" data-axis-count></span>
+      </legend>
+      <p class="text-[11px] text-gray-600 mb-1.5">{{ hint }}</p>
+      <input type="search" data-filter placeholder="Search {{ label|lower }} models…" aria-label="Search {{ label|lower }} models"
+             class="w-full mb-1.5 px-2.5 py-1.5 rounded-lg bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-2 focus:ring-accent/50">
+      <div data-filter-list class="max-h-56 overflow-y-auto rounded-lg border border-gray-800 bg-surface-overlay/40 divide-y divide-gray-800/60">
+        {% for conn in connections %}
+          {% if conn.models.all %}
+          <p data-filter-group="{{ conn.pk }}" class="px-2.5 pt-2 pb-1 text-[10px] uppercase tracking-wide text-gray-600">{{ conn.name }}</p>
+          {% for m in conn.models.all %}
+          <label data-filter-item data-group="{{ conn.pk }}" class="flex items-start gap-2 px-2.5 py-1.5 text-sm cursor-pointer hover:bg-surface-overlay">
+            <input type="checkbox" name="{{ role }}_model" value="{{ m.id }}" class="mt-0.5 accent-[currentColor]"
+                   {% if m.id|stringformat:"d" in chosen %}checked{% endif %}>
+            <span class="min-w-0">
+              <span class="text-gray-200 block truncate">{{ m.display_name }}</span>
+              <span class="text-[11px] text-gray-500 block truncate">{{ m.model_id }}{% if not m.has_key %} · <span class="text-yellow-500">no key set</span>{% endif %}</span>
+            </span>
+          </label>
+          {% endfor %}
+          {% endif %}
+        {% endfor %}
+        <p data-filter-empty class="hidden px-2.5 py-2 text-xs text-gray-500">No matches.</p>
+      </div>
+    </fieldset>
+    {% endfor %}
+  </div>
+  {% else %}
+  <p class="text-xs text-gray-500">
+    No models yet? <a href="{% url 'models' %}" target="_blank" class="text-accent hover:underline">Register a model connection →</a>
+  </p>
+  {% endif %}
+</div>

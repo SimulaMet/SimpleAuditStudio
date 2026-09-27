@@ -246,6 +246,8 @@ Fields:
 - `summary_metrics` — JSON
 - `error_code`
 - `error_message`
+- `experiment_id` — set when launched as part of an `Experiment`
+- `monitor_id` — set when launched by a `Monitor`
 - `created_by`
 - `created_at`
 
@@ -274,7 +276,51 @@ Rules:
 - worker must verify loaded SimpleAudit version/commit against the run manifest and fail with stable error `SIMPLEAUDIT_VERSION_MISMATCH` on mismatch
 - `workflow_run_id` links to execution system but is not authoritative domain state
 
-### 5.2 Reproducibility manifest
+### 5.2 `Experiment`
+
+A group of runs launched together from one design on New Experiment
+(`/experiments/new/`). Every design input (scenario sets, target, auditor,
+judge, max turns, language) takes one or more values; the cartesian product is
+the list of runs, each an ordinary `AuditRun` with `experiment_id` set. The
+review step can drop, rename, edit (settings and generation config) or
+duplicate runs before launch. A design that yields a single run launches it
+directly, without an `Experiment`.
+
+Fields: `project_id`, `name`, `factors` (JSON list of the inputs that differ
+across its runs, computed from the final runs), `created_by`, timestamps.
+
+Rules:
+
+- at most 50 runs per experiment
+- runs are created atomically (all or none)
+- results compare the latest run of each run setup by default; pooling all
+  runs is opt-in, since pooling hides drift
+
+### 5.3 `Monitor`
+
+One run setup repeated on a schedule to track drift. Created from New
+Experiment when Repeat is not "Once" (one monitor per run setup, linked to the
+experiment if there is one). Each tick creates an ordinary `AuditRun` with
+`monitor_id` (and the monitor's `experiment_id`).
+
+Fields: `project_id`, `name`, `enabled`, pinned `scenario_set_version_id`, the
+three model ids, `generation_parameters` (same shape as the run snapshot),
+timing (`interval_hours`, or `cron_expression` read in `timezone`),
+`next_run_at`, `last_run_id`, `last_tick_at`, `last_error`, `experiment_id`,
+`created_by`.
+
+Rules:
+
+- the worker's sweeper ticks due monitors every pass (`manage.py run_monitors`
+  does one pass for an external cron); claims use `select_for_update(skip_locked)`
+- missed ticks are skipped, not replayed; a tick is skipped while the previous
+  run of that monitor is still active
+- creating or running a monitor needs admin or auditor; each tick re-checks the
+  creator's role and pauses the monitor if it was lost
+- at most 50 monitors per workspace; fixed intervals are 6 hours to 90 days,
+  cron expressions have no minimum
+
+### 5.4 Reproducibility manifest
 
 Derived from `AuditRun` and pinned entities:
 

@@ -36,7 +36,7 @@ class AuditTimingDisplayTest(TestCase):
         run.finished_at = started + timezone.timedelta(minutes=12)
         run.save(update_fields=["started_at", "finished_at"])
 
-        resp = self.client.get(f"/audits/{run.id}/")
+        resp = self.client.get(f"/runs/{run.id}/")
         self.assertEqual(resp.status_code, 200)
         html = resp.content.decode()
         self.assertIn("Duration", html)
@@ -48,7 +48,7 @@ class AuditTimingDisplayTest(TestCase):
         run.finished_at = timezone.now()
         run.save(update_fields=["started_at", "finished_at"])
 
-        resp = self.client.get(f"/audits/{run.id}/")
+        resp = self.client.get(f"/runs/{run.id}/")
         self.assertEqual(resp.status_code, 200)
         html = resp.content.decode()
         # The duration row is present in the DOM (so the live-update JS can
@@ -62,7 +62,7 @@ class AuditTimingDisplayTest(TestCase):
         run.finished_at = None
         run.save(update_fields=["started_at", "finished_at"])
 
-        resp = self.client.get(f"/audits/{run.id}/")
+        resp = self.client.get(f"/runs/{run.id}/")
         self.assertEqual(resp.status_code, 200)
         html = resp.content.decode()
         # The duration row is present in the DOM (so the live-update JS can

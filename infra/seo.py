@@ -159,7 +159,7 @@ def robots_txt(request):
         "Disallow: /logout/",
         "Disallow: /workspaces/",
         "Disallow: /health/",
-        "Disallow: /audits/",
+        "Disallow: /runs/",
         "Disallow: /scenarios/",
         "Disallow: /models/",
         "Disallow: /compare/",
