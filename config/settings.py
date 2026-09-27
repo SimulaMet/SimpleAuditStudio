@@ -156,6 +156,15 @@ AUTH_USER_MODEL = "accounts.User"
 # Distinct from DEMO_MODE (HF Spaces) — this is purely local dev convenience.
 MINIMAL_CONFIG = os.environ.get("SIMPLEAUDIT_MINIMAL", "").strip() == "1"
 
+# SQLite is shared by the web server and worker threads: WAL lets reads run
+# during writes, IMMEDIATE takes the write lock up front (no upgrade deadlocks),
+# and the timeout waits for a busy lock instead of failing.
+SQLITE_OPTIONS = {
+    "timeout": 30,
+    "transaction_mode": "IMMEDIATE",
+    "init_command": "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;",
+}
+
 # Canonical runtime is PostgreSQL. The SQLite branches below are
 # explicit, opt-in LOCAL-ONLY conveniences. They are never the default and
 # must not be used in any deployment.
@@ -164,7 +173,7 @@ if MINIMAL_CONFIG:
         "default": {
             "ENGINE": "django.db.backends.sqlite3",
             "NAME": BASE_DIR / "demo.sqlite3",
-            "OPTIONS": {"timeout": 30},
+            "OPTIONS": SQLITE_OPTIONS,
         }
     }
 elif env_bool("SIMPLEAUDIT_LOCAL_SQLITE", False):
@@ -172,6 +181,7 @@ elif env_bool("SIMPLEAUDIT_LOCAL_SQLITE", False):
         "default": {
             "ENGINE": "django.db.backends.sqlite3",
             "NAME": BASE_DIR / "local_test.sqlite3",
+            "OPTIONS": SQLITE_OPTIONS,
         }
     }
 else:
@@ -183,7 +193,19 @@ else:
             "PASSWORD": os.environ.get("POSTGRES_PASSWORD", ""),
             "HOST": os.environ.get("POSTGRES_HOST", "postgres"),
             "PORT": os.environ.get("POSTGRES_PORT", "5432"),
+            # Reuse connections for 60 s, but check them first, so a database restart
+            # or dropped idle connection costs one reconnect, not a failed request.
             "CONN_MAX_AGE": int(os.environ.get("POSTGRES_CONN_MAX_AGE", "60")),
+            "CONN_HEALTH_CHECKS": True,
+            "OPTIONS": {
+                "connect_timeout": 10,
+                "application_name": "simpleaudit-studio",
+                # Detect dead peers (e.g. after a network blip) instead of hanging.
+                "keepalives": 1,
+                "keepalives_idle": 30,
+                "keepalives_interval": 10,
+                "keepalives_count": 3,
+            },
         }
     }
 

@@ -17,6 +17,8 @@ from __future__ import annotations
 
 from django.db import models, transaction
 
+from infra.db import retry_if_locked
+
 
 class AuditEvent(models.Model):
     """Append-only durable progress event for an audit run."""
@@ -64,6 +66,7 @@ class ScenarioResult(models.Model):
         return f"ScenarioResult(run={self.run_id} vi={self.version_item_id} {self.status})"
 
 
+@retry_if_locked
 def append_event(run_id: int | str, version_item_id: str, kind: str, payload: dict | None = None) -> int:
     """Append a durable event and return its id (usable as an SSE Last-Event-ID)."""
     event = AuditEvent.objects.create(
@@ -160,6 +163,7 @@ def progress_snapshot(run_id: int | str) -> tuple[list[dict], int]:
     return events, last_id
 
 
+@retry_if_locked
 @transaction.atomic
 def upsert_scenario_result(
     run_id: int | str,

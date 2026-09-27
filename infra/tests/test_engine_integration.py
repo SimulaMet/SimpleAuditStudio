@@ -601,6 +601,35 @@ class ResumableExecutionTest(TestCase):
         self.assertIn(run.status, (AuditRun.Status.COMPLETED, AuditRun.Status.FAILED))
         self.assertEqual((run.completed_scenarios, run.failed_scenarios), (1, 1))
 
+    def test_transient_error_result_is_retried(self):
+        """An ERROR result (not an exception) must still trigger Hatchet's retry."""
+        from infra import worker
+
+        run, item = _build_run(self.user, self.project)
+        payload = {**self._payload("ERROR"), "judgment": {"error": "RateLimitError: Error code: 429"}}
+        with mock.patch("infra.engine.run_scenario", return_value=payload), \
+             self.assertRaises(worker.ScenarioAttemptFailed):
+            self._exec(run, item)
+        run.refresh_from_db()
+        self.assertEqual(run.completed_scenarios, 0)   # provisional, not final
+        self.assertIn(run.status, worker._ACTIVE_STATUSES)
+
+    def test_permanent_error_is_final_on_first_attempt_and_fails_run(self):
+        """A 404 / bad key can't be fixed by retrying: fail fast with the reason."""
+        from infra import worker
+
+        run, item = _build_run(self.user, self.project)
+        payload = {**self._payload("ERROR"), "judgment": {"error": "NotFoundError: Error code: 404"}}
+        with mock.patch.object(worker, "WORKER_SIMPLEAUDIT_VERSION", run.simpleaudit_version), \
+             mock.patch.object(worker, "WORKER_GIT_COMMIT", run.git_commit), \
+             mock.patch("infra.engine.run_scenario", return_value=payload):
+            out = self._exec(run, item)
+        self.assertEqual(out["status"], "failed")
+        run.refresh_from_db()
+        self.assertEqual(run.status, AuditRun.Status.FAILED)
+        self.assertEqual(run.error_code, "ALL_SCENARIOS_FAILED")
+        self.assertIn("404", run.error_message)
+
     def test_attempt_budget_survives_resubmission(self):
         from audits.events import append_event, get_result
         from infra import worker
