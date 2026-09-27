@@ -79,6 +79,10 @@ MAX_SCENARIO_ATTEMPTS = SCENARIO_RETRIES + 1
 # concurrency key on the task and the durable result checks), so resuming a
 # run that is merely slow or queued behind other runs is harmless.
 RESUME_STALE_MINUTES = 10
+# A run that never reached Hatchet (e.g. the launching process died mid-submit)
+# is submitted by the sweeper after this grace period instead of waiting
+# RESUME_STALE_MINUTES like a merely slow run.
+NEVER_SUBMITTED_GRACE_SECONDS = 60
 
 # Errors a retry cannot fix (wrong URL, model id or key): the first failure is final.
 _PERMANENT_ERROR_MARKERS = (
@@ -969,7 +973,8 @@ def _sweep_once(stale_minutes: int = RESUME_STALE_MINUTES) -> None:
     """One sweeper pass over active runs: complete, submit, or resume them.
 
     - every scenario has a final result -> complete the run
-    - submission never went through -> submit the missing scenarios
+    - submission never went through (marked pending, or no workflow id and no
+      activity after ``NEVER_SUBMITTED_GRACE_SECONDS``) -> submit it
     - no progress events for ``stale_minutes`` -> resume (resubmit missing)
 
     Runs are never failed for being slow: a run queued behind other runs, or
@@ -992,7 +997,10 @@ def _sweep_once(stale_minutes: int = RESUME_STALE_MINUTES) -> None:
                 continue
             last_event = AuditEvent.objects.filter(run_id=run.pk).order_by("-id").only("created_at").first()
             last_activity = last_event.created_at if last_event else (run.queued_at or run.created_at)
-            if last_activity and last_activity < cutoff:
+            never_submitted = not run.workflow_run_id and last_event is None
+            if never_submitted and last_activity < timezone.now() - _td(seconds=NEVER_SUBMITTED_GRACE_SECONDS):
+                resume_run(run, reason="never_submitted")
+            elif last_activity and last_activity < cutoff:
                 resume_run(run, reason="stalled")
         except Exception as exc:  # noqa: BLE001 - one bad run must not stop the sweep
             logger.warning("Sweeper: run %s skipped: %s", run.pk, exc)
