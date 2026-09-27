@@ -20,6 +20,7 @@ from infra.ui import (
     AuditDetailView,
     AuditExportView,
     AuditRenameView,
+    AuditResultsFragmentView,
     CompareView,
     ConnectionDeleteView,
     DashboardExportView,
@@ -185,5 +186,6 @@ urlpatterns = [
     path("audits/<int:run_id>/rename/", AuditRenameView.as_view(), name="audit_rename"),
     path("audits/<int:run_id>/results/<int:result_id>/", ScenarioResultDetailView.as_view(), name="scenario_result_detail"),
     path("audits/<int:run_id>/export/", AuditExportView.as_view(), name="audit_export"),
+    path("audits/<int:run_id>/results-fragment/", AuditResultsFragmentView.as_view(), name="audit_results_fragment"),
     path("export.csv", DashboardExportView.as_view(), name="dashboard_export"),
 ]

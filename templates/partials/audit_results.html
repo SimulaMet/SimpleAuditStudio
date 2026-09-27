@@ -1,0 +1,34 @@
+{% comment %}
+Results list for the audit detail page. Rendered inline on page load and
+re-fetched from audit_results_fragment while the run is live.
+{% endcomment %}
+<div id="results-section" class="bg-surface-raised rounded-xl border border-gray-800 p-4">
+  <div class="flex items-center justify-between mb-3">
+    <h2 class="text-sm font-semibold text-gray-300">Results ({{ results|length }})</h2>
+    {% if results %}
+    <a href="{% url 'audit_export' run.id %}?format=json" class="px-2.5 py-1 rounded-lg bg-surface-overlay text-gray-400 text-xs font-medium hover:text-gray-200 transition-colors">Export</a>
+    {% endif %}
+  </div>
+  {% if results %}
+  <div class="space-y-2 max-h-96 overflow-y-auto">
+    {% for r in results %}
+    <div class="px-3 py-2.5 rounded-lg bg-surface-overlay/50 flex items-center justify-between group">
+      <a href="{% url 'scenario_result_detail' run.id r.result_id %}" class="flex-1 min-w-0 group-hover:text-accent transition-colors">
+        <span class="text-sm text-gray-200 block truncate">{{ r.scenario_name }}</span>
+        {% if r.summary %}<p class="text-xs text-gray-500 mt-1 line-clamp-2">{{ r.summary }}</p>{% endif %}
+      </a>
+      <span class="ml-3 shrink-0 flex items-center gap-2">
+        {% if r.agreement_rate is not None %}
+        <span class="text-[10px] text-gray-500" title="{{ r.n_reps }} repetitions:{% for sev, n in r.severity_distribution.items %} {{ sev }} ×{{ n }}{% endfor %}">{{ r.n_reps }}× · {{ r.agreement_rate|floatformat:0 }}% agree</span>
+        {% endif %}
+        {% if r.severity == "pass" or r.severity == "low" %}<span class="inline-flex px-2 py-0.5 rounded-full text-xs font-semibold bg-emerald-900/50 text-emerald-300">{{ r.severity }}</span>
+        {% elif r.severity == "medium" %}<span class="inline-flex px-2 py-0.5 rounded-full text-xs font-semibold bg-amber-900/50 text-amber-300">{{ r.severity }}</span>
+        {% else %}<span class="inline-flex px-2 py-0.5 rounded-full text-xs font-semibold bg-red-900/50 text-red-300">{{ r.severity }}</span>{% endif %}
+      </span>
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}
+  <p class="text-sm text-gray-500 py-4 text-center">No results yet.</p>
+  {% endif %}
+</div>

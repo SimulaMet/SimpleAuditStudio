@@ -595,6 +595,7 @@ function toggleRename() {
       if (newIdx > curIdx || d.payload.stage === 'failed' || d.payload.stage === 'cancelled') {
         setStage(d.payload.stage);
         updateRunState(d.payload.stage);
+        if (['completed', 'failed', 'cancelled'].includes(d.payload.stage)) refreshResults();
       }
     }
   };
@@ -643,7 +644,23 @@ function toggleRename() {
     scenarios.set(vi, next);
     if (next.phase !== 'between') pushRecent({ vi, phase: next.phase, turn: next.turn, role: next.role, rep: next.rep, ts: evTs(d) });
   };
+  // The Results list is server-rendered; re-fetch it (debounced) whenever a
+  // scenario reaches a final state so it fills in while the run is live.
+  let resultsTimer = null;
+  function refreshResults() {
+    clearTimeout(resultsTimer);
+    resultsTimer = setTimeout(async () => {
+      try {
+        const resp = await fetch('{% url "audit_results_fragment" run.id %}', { credentials: 'same-origin' });
+        if (!resp.ok) return;
+        const el = document.getElementById('results-section');
+        if (el) el.outerHTML = await resp.text();
+      } catch (e) { /* network hiccup: the next event retries */ }
+    }, 800);
+  }
+
   handlers.scenario_completed = d => {
+    refreshResults();
     const p = d.payload || {};
     const vi = d.version_item_id;
     if (!countedVIs.has(vi)) {
@@ -655,6 +672,7 @@ function toggleRename() {
     pushRecent({ vi, phase: 'done', ts: evTs(d) });
   };
   handlers.scenario_failed = d => {
+    refreshResults();
     const vi = d.version_item_id;
     if (!countedVIs.has(vi)) {
       countedVIs.add(vi);
@@ -807,35 +825,6 @@ function toggleRename() {
   </div>
 </div>
 
-<!-- Results -->
-<div class="bg-surface-raised rounded-xl border border-gray-800 p-4">
-  <div class="flex items-center justify-between mb-3">
-    <h2 class="text-sm font-semibold text-gray-300">Results ({{ results|length }})</h2>
-    {% if results %}
-    <a href="{% url 'audit_export' run.id %}?format=json" class="px-2.5 py-1 rounded-lg bg-surface-overlay text-gray-400 text-xs font-medium hover:text-gray-200 transition-colors">Export</a>
-    {% endif %}
-  </div>
-  {% if results %}
-  <div class="space-y-2 max-h-96 overflow-y-auto">
-    {% for r in results %}
-    <div class="px-3 py-2.5 rounded-lg bg-surface-overlay/50 flex items-center justify-between group">
-      <a href="{% url 'scenario_result_detail' run.id r.result_id %}" class="flex-1 min-w-0 group-hover:text-accent transition-colors">
-        <span class="text-sm text-gray-200 block truncate">{{ r.scenario_name }}</span>
-        {% if r.summary %}<p class="text-xs text-gray-500 mt-1 line-clamp-2">{{ r.summary }}</p>{% endif %}
-      </a>
-      <span class="ml-3 shrink-0 flex items-center gap-2">
-        {% if r.agreement_rate is not None %}
-        <span class="text-[10px] text-gray-500" title="Judge agreement across {{ r.n_reps }} repetitions">{{ r.agreement_rate|floatformat:0 }}% agree</span>
-        {% endif %}
-        {% if r.severity == "pass" or r.severity == "low" %}<span class="inline-flex px-2 py-0.5 rounded-full text-xs font-semibold bg-emerald-900/50 text-emerald-300">{{ r.severity }}</span>
-        {% elif r.severity == "medium" %}<span class="inline-flex px-2 py-0.5 rounded-full text-xs font-semibold bg-amber-900/50 text-amber-300">{{ r.severity }}</span>
-        {% else %}<span class="inline-flex px-2 py-0.5 rounded-full text-xs font-semibold bg-red-900/50 text-red-300">{{ r.severity }}</span>{% endif %}
-      </span>
-    </div>
-    {% endfor %}
-  </div>
-  {% else %}
-  <p class="text-sm text-gray-500 py-4 text-center">No results yet.</p>
-  {% endif %}
-</div>
+<!-- Results (refreshed live, see refreshResults) -->
+{% include "partials/audit_results.html" %}
 {% endblock %}

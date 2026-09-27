@@ -6,137 +6,128 @@
 </div>
 
 <!-- Header -->
-<div class="flex items-center justify-between mb-6">
-  <div class="flex items-center gap-3">
-    <h1 class="text-lg font-semibold text-gray-100">{{ scenario_name }}</h1>
-    {% if severity == "pass" or severity == "low" %}<span class="inline-flex px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-900/50 text-emerald-300">{{ severity }}</span>
-    {% elif severity == "medium" %}<span class="inline-flex px-2.5 py-0.5 rounded-full text-xs font-semibold bg-amber-900/50 text-amber-300">{{ severity }}</span>
-    {% else %}<span class="inline-flex px-2.5 py-0.5 rounded-full text-xs font-semibold bg-red-900/50 text-red-300">{{ severity|default:"unknown" }}</span>{% endif %}
+<div class="flex flex-wrap items-center justify-between gap-3 mb-4">
+  <div class="flex flex-wrap items-center gap-2 min-w-0">
+    <h1 class="text-lg font-semibold text-gray-100 break-words">{{ scenario_name }}</h1>
+    {% include "partials/severity_badge.html" with sev=severity %}
+    {% if is_repeated %}<span class="text-xs text-gray-500">{{ n_reps }}× · {{ agreement_rate|floatformat:0 }}% agree</span>{% endif %}
   </div>
   <a href="{% url 'audit_export' run.id %}?format=json" class="px-3 py-1.5 rounded-lg bg-surface-overlay text-gray-400 text-xs font-medium hover:text-gray-200 transition-colors">Export JSON</a>
 </div>
 
-{% if summary %}
-<div class="bg-surface-raised rounded-xl border border-gray-800 p-4 mb-4">
-  <p class="text-sm text-gray-300">{{ summary }}</p>
-</div>
+{% if error %}
+<div class="mb-4 text-sm text-red-300 bg-red-900/30 rounded-lg px-4 py-2 break-words">Scenario failed: {{ error }}</div>
 {% endif %}
 
-<!-- Repetition Stability (n_repetitions > 1) -->
+<!-- What was tested -->
+{% if scenario_description or expected_behavior or test_prompt %}
+<details class="bg-surface-raised rounded-xl border border-gray-800 p-4 mb-4 group">
+  <summary class="text-sm font-semibold text-gray-300 cursor-pointer select-none flex items-center gap-2">
+    <span class="text-gray-500 group-open:rotate-90 transition-transform">▸</span> Scenario
+  </summary>
+  <div class="mt-3 space-y-3 text-sm">
+    {% if scenario_description %}<p class="text-gray-300 whitespace-pre-wrap">{{ scenario_description }}</p>{% endif %}
+    {% if expected_behavior %}
+    <div>
+      <p class="text-xs text-gray-500 uppercase tracking-wide mb-1">Expected behaviour</p>
+      <ul class="space-y-1">{% for e in expected_behavior %}<li class="text-gray-300 flex gap-2"><span class="text-gray-500">•</span><span>{{ e }}</span></li>{% endfor %}</ul>
+    </div>
+    {% endif %}
+    {% if test_prompt %}
+    <div>
+      <p class="text-xs text-gray-500 uppercase tracking-wide mb-1">Test prompt</p>
+      <p class="text-gray-300 whitespace-pre-wrap">{{ test_prompt }}</p>
+    </div>
+    {% endif %}
+  </div>
+</details>
+{% endif %}
+
 {% if is_repeated %}
+<!-- Stability across repetitions -->
 <div class="bg-surface-raised rounded-xl border border-accent/30 p-4 mb-4">
-  <h2 class="text-sm font-semibold text-accent mb-3">Judge Stability ({{ n_reps }} repetitions)</h2>
-  <div class="grid grid-cols-3 gap-4 mb-3">
-    <div class="text-center">
+  <div class="flex flex-wrap items-baseline justify-between gap-2 mb-3">
+    <h2 class="text-sm font-semibold text-accent">Judge stability across {{ n_reps }} repetitions</h2>
+    <p class="text-xs text-gray-500">Verdict = most common severity</p>
+  </div>
+  <div class="grid grid-cols-3 gap-4 mb-3 text-center">
+    <div>
       <p class="text-lg font-bold {% if low_agreement %}{% if agreement_rate >= 60 %}text-amber-400{% else %}text-red-400{% endif %}{% else %}text-emerald-400{% endif %}">{{ agreement_rate|floatformat:0 }}%</p>
       <p class="text-[10px] text-gray-500 uppercase">Agreement</p>
     </div>
-    <div class="text-center">
-      <p class="text-lg font-bold text-gray-200">{{ aggregated_severity }}</p>
-      <p class="text-[10px] text-gray-500 uppercase">Modal Verdict</p>
+    <div>
+      <p class="text-lg font-bold text-gray-200">{{ severity }}</p>
+      <p class="text-[10px] text-gray-500 uppercase">Verdict</p>
     </div>
-    <div class="text-center">
+    <div>
       <p class="text-lg font-bold text-gray-200">{{ n_reps }}×</p>
-      <p class="text-[10px] text-gray-500 uppercase">Runs</p>
+      <p class="text-[10px] text-gray-500 uppercase">Repetitions</p>
     </div>
   </div>
-  <!-- Severity distribution legend -->
-  {% if severity_distribution %}
-  <div class="flex gap-3 text-[10px] text-gray-500 mb-3 flex-wrap">
-    {% for sev, cnt in severity_distribution.items %}
-    <span><span class="inline-block w-2 h-2 rounded-full {% if sev == 'pass' or sev == 'low' %}bg-emerald-500{% elif sev == 'medium' %}bg-amber-500{% else %}bg-red-500{% endif %} mr-1"></span>{{ sev }}: {{ cnt }}/{{ n_reps }}</span>
-    {% endfor %}
+  {% if distribution %}
+  <div class="flex h-2 rounded-full overflow-hidden bg-surface-overlay" role="img" aria-label="Severity split across repetitions">
+    {% for d in distribution %}<div style="width: {{ d.pct }}%" class="{% if d.severity == 'pass' or d.severity == 'low' %}bg-emerald-500{% elif d.severity == 'medium' %}bg-amber-500{% else %}bg-red-500{% endif %}" title="{{ d.severity }}: {{ d.count }}/{{ n_reps }}"></div>{% endfor %}
+  </div>
+  <div class="flex flex-wrap gap-3 text-[11px] text-gray-400 mt-2">
+    {% for d in distribution %}<span>{{ d.severity }} {{ d.count }}/{{ n_reps }}</span>{% endfor %}
   </div>
   {% endif %}
-  <!-- Per-rep table -->
-  <table class="w-full text-xs">
-    <thead><tr class="border-b border-gray-800">
-      <th class="text-left px-2 py-1 text-gray-500">Rep</th>
-      <th class="text-left px-2 py-1 text-gray-500">Severity</th>
-      <th class="text-right px-2 py-1 text-gray-500">Tokens</th>
-      <th class="text-right px-2 py-1 text-gray-500">Latency</th>
-    </tr></thead>
-    <tbody>
-      {% for rep in rep_summaries %}
-      <tr class="border-b border-gray-800/50 {% if rep.severity != aggregated_severity %}bg-amber-900/10{% endif %}">
-        <td class="px-2 py-1.5 text-gray-400">#{{ rep.index }}</td>
-        <td class="px-2 py-1.5"><span class="{% if rep.severity == 'pass' or rep.severity == 'low' %}text-emerald-400{% elif rep.severity == 'medium' %}text-amber-400{% else %}text-red-400{% endif %}">{{ rep.severity }}</span>{% if rep.severity != aggregated_severity %} <span class="text-amber-500 text-[10px]">≠</span>{% endif %}</td>
-        <td class="px-2 py-1.5 text-right text-gray-500">{{ rep.tokens|default:"—" }}</td>
-        <td class="px-2 py-1.5 text-right text-gray-500">{{ rep.latency_ms|default:"—"}}{% if rep.latency_ms %}ms{% endif %}</td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
   {% if low_agreement %}
-  <p class="mt-3 text-xs text-amber-300 bg-amber-900/20 rounded px-3 py-1.5">⚠ Low judge agreement ({{ agreement_rate|floatformat:0 }}%). This scenario's verdict may be unstable — consider increasing repetitions.</p>
+  <p class="mt-3 text-xs text-amber-300 bg-amber-900/20 rounded px-3 py-1.5">⚠ Low judge agreement. This verdict may be unstable; compare the repetitions below or increase repetitions.</p>
   {% endif %}
 </div>
-{% endif %}
 
-<!-- Conversation -->
-{% if conversation %}
-<div class="bg-surface-raised rounded-xl border border-gray-800 p-4 mb-4">
-  <h2 class="text-sm font-semibold text-gray-300 mb-3">Conversation ({{ conversation|length }} turns)</h2>
-  <div class="space-y-3 max-h-96 overflow-y-auto">
-    {% for turn in conversation %}
-    <div class="rounded-lg p-3 {% if turn.role == 'user' or turn.role == 'system' %}bg-surface-overlay/70{% else %}bg-blue-950/30{% endif %}">
-      <p class="text-[10px] uppercase tracking-wide font-semibold {% if turn.role == 'assistant' %}text-blue-400{% else %}text-gray-500{% endif %} mb-1">{{ turn.role|default:"message" }}</p>
-      <p class="text-sm text-gray-200 whitespace-pre-wrap">{{ turn.content }}</p>
-    </div>
-    {% endfor %}
-  </div>
+<!-- Repetition tabs -->
+<div class="flex flex-wrap gap-1.5 mb-4" role="tablist" aria-label="Repetitions">
+  {% for rep in reps %}
+  <button type="button" role="tab" data-rep-tab="{{ rep.index }}" aria-controls="rep-{{ rep.index }}"
+          class="rep-tab inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors {% if rep.dissent %}border-amber-600/50{% else %}border-gray-800{% endif %}"
+          title="{% if rep.dissent %}Disagrees with the verdict · {% endif %}{{ rep.total_tokens }} tokens">
+    Rep {{ rep.index }}
+    <span class="{% if rep.severity == 'pass' or rep.severity == 'low' %}text-emerald-400{% elif rep.severity == 'medium' %}text-amber-400{% else %}text-red-400{% endif %}">{{ rep.severity }}</span>
+    {% if rep.dissent %}<span class="text-amber-500">≠</span>{% endif %}
+  </button>
+  {% endfor %}
 </div>
+{% for rep in reps %}
+<section id="rep-{{ rep.index }}" role="tabpanel" data-rep-panel="{{ rep.index }}" class="rep-panel {% if rep.index != initial_rep %}hidden{% endif %}">
+  {% include "partials/result_rep_panel.html" %}
+</section>
+{% endfor %}
+<script>
+(function() {
+  const tabs = document.querySelectorAll('[data-rep-tab]');
+  const panels = document.querySelectorAll('[data-rep-panel]');
+  function show(n, updateHash) {
+    if (![...panels].some(p => p.dataset.repPanel === String(n))) return;
+    panels.forEach(p => p.classList.toggle('hidden', p.dataset.repPanel !== String(n)));
+    tabs.forEach(t => {
+      const on = t.dataset.repTab === String(n);
+      t.setAttribute('aria-selected', on);
+      t.classList.toggle('bg-accent/15', on);
+      t.classList.toggle('text-accent', on);
+      t.classList.toggle('bg-surface-overlay', !on);
+      t.classList.toggle('text-gray-400', !on);
+    });
+    if (updateHash) history.replaceState(null, '', '#rep-' + n);
+  }
+  tabs.forEach(t => t.addEventListener('click', () => show(t.dataset.repTab, true)));
+  const m = location.hash.match(/^#rep-(\d+)$/);
+  show(m ? m[1] : {{ initial_rep }}, false);
+})();
+</script>
+{% elif reps %}
+{% with rep=reps.0 %}{% include "partials/result_rep_panel.html" %}{% endwith %}
 {% endif %}
 
-<!-- Issues Found -->
-{% if issues %}
-<div class="bg-surface-raised rounded-xl border border-red-900/30 p-4 mb-4">
-  <h2 class="text-sm font-semibold text-red-300 mb-3">Issues Found ({{ issues|length }})</h2>
-  <ul class="space-y-2">
-    {% for issue in issues %}
-    <li class="text-sm text-gray-200 flex items-start gap-2">
-      <span class="text-red-400 mt-0.5 shrink-0">•</span>
-      <span>{{ issue.description }}</span>
-    </li>
-    {% endfor %}
-  </ul>
-</div>
-{% endif %}
-
-<!-- Judge Rationale / Evidence -->
-{% if rationale %}
-<div class="bg-surface-raised rounded-xl border border-gray-800 p-4 mb-4">
-  <h2 class="text-sm font-semibold text-gray-300 mb-3">Judge Rationale</h2>
-  <p class="text-sm text-gray-300 whitespace-pre-wrap">{{ rationale }}</p>
-</div>
-{% endif %}
-
-<!-- Other Keys -->
-{% if other_keys %}
-<div class="bg-surface-raised rounded-xl border border-gray-800 p-4 mb-4">
-  <h2 class="text-sm font-semibold text-gray-300 mb-3">Details</h2>
-  <div class="space-y-2">
-    {% for key, value in other_keys.items %}
-    <div class="flex items-start gap-2 text-sm">
-      <span class="text-gray-500 shrink-0 min-w-[120px]">{{ key }}</span>
-      <span class="text-gray-300 break-all">{{ value }}</span>
-    </div>
-    {% endfor %}
-  </div>
-</div>
-{% endif %}
-
-<!-- Raw JSON -->
 {% if raw_json %}
-<div class="bg-surface-raised rounded-xl border border-gray-800 p-4">
+<div class="bg-surface-raised rounded-xl border border-gray-800 p-4 mt-4">
   <details>
     <summary class="text-sm font-semibold text-gray-400 cursor-pointer hover:text-gray-200 transition-colors">Raw JSON</summary>
     <pre class="mt-3 text-xs text-gray-400 font-mono overflow-x-auto max-h-96 overflow-y-auto bg-surface-overlay rounded-lg p-3">{{ raw_json }}</pre>
   </details>
 </div>
-{% endif %}
-
-{% if not raw_json %}
+{% else %}
 <div class="bg-surface-raised rounded-xl border border-gray-800 p-8 text-center">
   <p class="text-sm text-gray-500">No result data available for this scenario.</p>
 </div>
