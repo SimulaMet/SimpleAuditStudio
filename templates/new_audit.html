@@ -152,8 +152,18 @@
         <code class="text-gray-400">judge_prompt</code>.
         <br><span class="text-gray-500">Note: <code>max_turns</code>, <code>n_repetitions</code>, and <code>language</code> are managed by the form fields above and will be ignored in this JSON.</span>
       </p>
-      <textarea name="gen_config_json" rows="5" placeholder='{"target_params": {"temperature": 0.7, "max_tokens": 2048}}'
-                class="w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-accent/50 resize-y">{{ clone.generation_json|default:'' }}</textarea>
+      <textarea name="gen_config_json" rows="11" spellcheck="false"
+                class="w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-accent/50 resize-y">{% if clone and clone.generation_json %}{{ clone.generation_json }}{% else %}{
+  "params": {},
+  "target_params": {},
+  "judge_params": {},
+  "auditor_params": {},
+  "target_kwargs": {},
+  "auditor_kwargs": {},
+  "judge_kwargs": {},
+  "max_retries": 2,
+  "retry_backoff": 0.5
+}{% endif %}</textarea>
       <p id="gen-config-error" class="text-xs text-red-400 hidden"></p>
     </div>
   </details>
@@ -230,14 +240,26 @@ function updateNoKeyWarnings() {
 document.querySelectorAll('select[name="target_model"], select[name="auditor_model"], select[name="judge_model"]').forEach(s => s.addEventListener('change', updateNoKeyWarnings));
 updateNoKeyWarnings();
 
-// Strip form-managed keys from the JSON textarea on page load (for old runs)
+// Normalize the generation-config textarea on page load: strip form-managed
+// keys (for old clones), drop empty/null entries so only real overrides are
+// submitted, and reformat.
 (function() {
   const ta = document.querySelector('[name="gen_config_json"]');
   if (!ta || !ta.value.trim()) return;
   try {
-    const obj = JSON.parse(ta.value);
+    let obj = JSON.parse(ta.value);
+    if (typeof obj !== 'object' || obj === null || Array.isArray(obj)) return;
     delete obj.max_turns; delete obj.n_repetitions; delete obj.language;
-    ta.value = Object.keys(obj).length ? JSON.stringify(obj, null, 2) : '';
+    for (const [k, v] of Object.entries(obj)) {
+      if (v === null || v === '' || (typeof v === 'object' && !Array.isArray(v) && Object.keys(v).length === 0)) {
+        delete obj[k];
+      }
+    }
+    // Drop retry defaults that match the engine's built-in values so they
+    // don't get frozen into the manifest as no-op overrides.
+    if (obj.max_retries === 2) delete obj.max_retries;
+    if (obj.retry_backoff === 0.5) delete obj.retry_backoff;
+    ta.value = Object.keys(obj).length ? JSON.stringify(obj, null, 2) : '{}';
   } catch (_) { /* leave as-is if not valid JSON yet */ }
 })();
 
@@ -251,7 +273,21 @@ document.querySelector('form').addEventListener('submit', function(e) {
     let raw = ta.value.trim();
     // Auto-fix common Python-dict → JSON issues: single quotes, True/False/None
     let fixed = raw.replace(/'/g, '"').replace(/\bTrue\b/g, 'true').replace(/\bFalse\b/g, 'false').replace(/\bNone\b/g, 'null');
-    try { JSON.parse(fixed); ta.value = fixed; }
+    try {
+      const parsed = JSON.parse(fixed);
+      if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) throw new Error('Must be a JSON object');
+      // Drop empty/null entries so the frozen manifest only stores real overrides.
+      for (const [k, v] of Object.entries(parsed)) {
+        if (v === null || v === '' || (typeof v === 'object' && !Array.isArray(v) && Object.keys(v).length === 0)) {
+          delete parsed[k];
+        }
+      }
+      // Drop retry defaults that match the engine's built-in values so they
+      // don't get frozen into the manifest as no-op overrides.
+      if (parsed.max_retries === 2) delete parsed.max_retries;
+      if (parsed.retry_backoff === 0.5) delete parsed.retry_backoff;
+      ta.value = Object.keys(parsed).length ? JSON.stringify(parsed, null, 2) : '';
+    }
     catch (err) {
       e.preventDefault();
       errEl.textContent = 'Invalid JSON: ' + err.message + ' (use double quotes for keys/values)';

@@ -88,3 +88,25 @@ class AuditArchiveTest(TestCase):
 
         resp = self.client.get(f"/audits/{self.run.id}/")
         self.assertEqual(resp.status_code, 200)
+
+    def test_progress_column_shows_repetition_count(self):
+        """Runs with n_repetitions > 1 show (xN) in the Progress column."""
+        self.run.generation_parameters_snapshot = {"n_repetitions": 3}
+        self.run.total_scenarios = 5
+        self.run.completed_scenarios = 2
+        self.run.save()
+
+        resp = self.client.get("/dashboard/")
+        html = resp.content.decode()
+        self.assertIn('2/5<span class="text-gray-500">(x3)</span>', html)
+
+    def test_progress_column_hides_repetition_count_for_single_rep(self):
+        """Runs without repetitions (or n_repetitions == 1) show no (xN)."""
+        self.run.generation_parameters_snapshot = {"temperature": 0.7}
+        self.run.total_scenarios = 5
+        self.run.completed_scenarios = 2
+        self.run.save()
+
+        resp = self.client.get("/dashboard/")
+        html = resp.content.decode()
+        self.assertNotIn("(x", html)
