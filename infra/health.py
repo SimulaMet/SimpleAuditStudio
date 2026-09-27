@@ -88,6 +88,24 @@ def _hatchet_probe() -> dict[str, Any]:
             return {"status": "up", "detail": "embedded"}
         return {"status": "down", "detail": "embedded client not started"}
 
+    # Zero-Docker `dev_server --embedded`: the parent started a local engine and
+    # exported its real addresses via the handshake (the worker connects the
+    # same way). HATCHET_SERVER_URL still holds the compose default
+    # (hatchet-server:8888), which does not resolve outside Docker. The embedded
+    # HTTP API needs a token, so probe the gRPC port the worker actually uses.
+    handshake_raw = os.environ.get("HATCHET_EMBEDDED_HANDSHAKE")
+    if handshake_raw:
+        import json
+        import socket
+
+        grpc_address = json.loads(handshake_raw).get("grpc_address", "")
+        host, _, port = grpc_address.rpartition(":")
+        if not host or not port.isdigit():
+            return {"status": "unknown", "detail": "embedded handshake has no gRPC address"}
+        with socket.create_connection((host, int(port)), timeout=3):
+            pass
+        return {"status": "up", "detail": f"embedded (grpc {grpc_address})"}
+
     import requests
 
     base = getattr(settings, "HATCHET_SERVER_URL", "").rstrip("/")
