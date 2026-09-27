@@ -56,7 +56,7 @@ class ConnectionDeleteTest(TestCase):
         # the messages framework), so follow the redirect and check the body.
         get_resp = self.client.get("/models/")
         body = get_resp.content.decode()
-        assert "referenced by audit runs" in body
+        assert "runs or monitors use it" in body
 
     def test_delete_other_project_connection_is_noop(self):
         other_project = ProjectFactory()
@@ -89,7 +89,7 @@ class RegisteredModelDeleteTest(TestCase):
         conn = ModelConnectionFactory(project=self.project, name="conn-a")
         rm = RegisteredModelFactory(connection=conn, project=self.project)
 
-        resp = self.client.post("/models/", {"action": "delete_model", "rm_id": rm.id})
+        resp = self.client.post("/models/", {"action": "delete_model", "rm_id": rm.id}, follow=True)
 
         assert resp.status_code == 200
         assert not RegisteredModel.objects.filter(pk=rm.id).exists()
@@ -101,13 +101,13 @@ class RegisteredModelDeleteTest(TestCase):
         rm = RegisteredModelFactory(connection=conn, project=self.project)
         AuditRunFactory(project=self.project, target_model=rm)
 
-        resp = self.client.post("/models/", {"action": "delete_model", "rm_id": rm.id})
+        resp = self.client.post("/models/", {"action": "delete_model", "rm_id": rm.id}, follow=True)
 
         assert resp.status_code == 200
         # Model must still exist.
         assert RegisteredModel.objects.filter(pk=rm.id).exists()
         body = resp.content.decode()
-        assert "referenced by audit runs" in body
+        assert "runs or monitors use it" in body
 
 
 class DiscoverModelsKeyTests(TestCase):
@@ -130,7 +130,7 @@ class DiscoverModelsKeyTests(TestCase):
         page = self.client.get("/models/")
         self.assertEqual(page.status_code, 200)
         self.assertNotContains(page, "sk-super-secret-123")
-        self.assertContains(page, f"discoverForConn({self.conn.id})")
+        self.assertContains(page, f'data-discover="{self.conn.id}"')
 
     def test_discover_uses_stored_key_for_own_connection_only(self):
         from unittest import mock

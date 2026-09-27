@@ -5,6 +5,18 @@ import os
 
 import httpx
 
+# Quick-start presets for the connection form: (key, label, provider, base URL, key hint).
+PROVIDER_PRESETS = [
+    ("openai", "OpenAI", "openai", "https://api.openai.com/v1", "OPENAI_API_KEY"),
+    ("anthropic", "Anthropic", "anthropic", "https://api.anthropic.com/v1", "ANTHROPIC_API_KEY"),
+    ("openrouter", "OpenRouter", "openrouter", "https://openrouter.ai/api/v1", "OPENROUTER_API_KEY"),
+    ("together", "Together AI", "together", "https://api.together.xyz/v1", "TOGETHER_API_KEY"),
+    ("groq", "Groq", "groq", "https://api.groq.com/openai/v1", "GROQ_API_KEY"),
+    ("ollama", "Ollama (local)", "ollama", "http://localhost:11434/v1", ""),
+    ("vllm", "vLLM", "vllm", "http://localhost:8000/v1", ""),
+    ("custom", "Custom (OpenAI-compatible)", "openai", "", ""),
+]
+
 
 def connection_api_key(conn) -> str:
     """The connection's API key: the stored key first, else the env var it names."""
@@ -48,3 +60,19 @@ def http_error_detail(exc: Exception) -> str:
     if isinstance(exc, httpx.HTTPStatusError):
         return f"HTTP {exc.response.status_code}: {exc.response.text[:200] or exc.response.reason_phrase}"
     return str(exc) or type(exc).__name__
+
+
+def model_usage_counts(project) -> dict[int, int]:
+    """Runs and monitors that reference each model (as target, auditor or judge)."""
+    from collections import Counter
+
+    from django.db.models import Count
+
+    from audits.models import AuditRun, Monitor
+
+    counts: Counter = Counter()
+    for qs in (AuditRun.objects.filter(project=project), Monitor.objects.filter(project=project)):
+        for role in ("target_model", "auditor_model", "judge_model"):
+            for row in qs.values(role).annotate(n=Count("id")):
+                counts[row[role]] += row["n"]
+    return dict(counts)
