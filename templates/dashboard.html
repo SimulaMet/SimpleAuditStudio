@@ -91,7 +91,7 @@
             {% elif run.status == "cancelled" %}<span class="inline-flex px-2 py-0.5 rounded-full text-xs font-semibold bg-gray-800 text-gray-400">cancelled</span>
             {% else %}<span class="inline-flex px-2 py-0.5 rounded-full text-xs font-semibold bg-amber-900/50 text-amber-300">{{ run.get_status_display }}</span>{% endif %}
           </td>
-          <td class="px-3 py-2.5 text-gray-400 text-xs whitespace-nowrap">{% if run.total_scenarios > 0 %}{{ run.completed_scenarios }}/{{ run.total_scenarios }}{% else %}—{% endif %}</td>
+          <td class="px-3 py-2.5 text-gray-400 text-xs whitespace-nowrap">{% if run.total_scenarios > 0 %}{{ run.completed_scenarios }}/{{ run.total_scenarios }}{% with n_reps=run.generation_parameters_snapshot.n_repetitions|default:1 %}{% if n_reps > 1 %}<span class="text-gray-500">(x{{ n_reps }})</span>{% endif %}{% endwith %}{% else %}—{% endif %}</td>
           <td class="px-3 py-2.5 text-gray-400 text-xs whitespace-nowrap">{% if run.status == "completed" or run.status == "failed" or run.status == "cancelled" %}{% if run.summary_metrics.pass_rate is not None %}{{ run.summary_metrics.pass_rate|floatformat:1 }}%{% elif run.completed_scenarios > 0 %}{% widthratio run.successful_scenarios run.completed_scenarios 100 %}%{% else %}—{% endif %}{% else %}—{% endif %}</td>
           <td class="px-3 py-2.5 text-gray-400 text-xs whitespace-nowrap">{{ run.duration_display|default:"—" }}</td>
           <td class="px-3 py-2.5 text-gray-500 text-xs">{{ run.created_at|date:"M j, H:i" }}</td>
