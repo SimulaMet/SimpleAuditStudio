@@ -528,3 +528,61 @@ class RepeatOnScheduleTests(ScheduleTestBase):
         resp = self.client.post("/schedules/", self._payload(scenario_set_version=other_version.id))
         self.assertContains(resp, "does not belong to the selected set")
         self.assertFalse(AuditSchedule.objects.exists())
+
+
+class ScheduleTimezoneTests(ScheduleTestBase):
+    def setUp(self):
+        super().setUp()
+        self.client = Client()
+        self.client.login(username=self.user.username, password="pw")
+
+    def _payload(self, **extra):
+        data = {
+            "name": "Oslo mornings",
+            "interval_hours": "cron",
+            "cron_expression": "0 6 * * *",
+            "timezone": "Europe/Oslo",
+            "first_run_at": "2030-01-10T12:00",
+            "scenario_set": self.sset.id,
+            "target_model": self.model.id,
+            "auditor_model": self.model.id,
+            "judge_model": self.model.id,
+        }
+        data.update(extra)
+        return data
+
+    def test_cron_and_first_run_read_in_schedule_timezone(self):
+        self.assertEqual(self.client.post("/schedules/", self._payload()).status_code, 302)
+        s = AuditSchedule.objects.get(name="Oslo mornings")
+        self.assertEqual(s.timezone, "Europe/Oslo")
+        # 06:00 Oslo on Jan 11 (CET, UTC+1) = 05:00 UTC.
+        self.assertEqual(s.next_run_at.isoformat(), "2030-01-11T05:00:00+00:00")
+        self.assertIn("(Europe/Oslo)", s.interval_display)
+
+    def test_interval_first_run_read_in_schedule_timezone(self):
+        self.client.post("/schedules/", self._payload(interval_hours="24", first_run_at="2030-07-01T09:00"))
+        s = AuditSchedule.objects.get(name="Oslo mornings")
+        # 09:00 Oslo in July (CEST, UTC+2) = 07:00 UTC.
+        self.assertEqual(s.next_run_at.isoformat(), "2030-07-01T07:00:00+00:00")
+
+    def test_unknown_timezone_rejected(self):
+        resp = self.client.post("/schedules/", self._payload(timezone="Mars/Olympus"))
+        self.assertContains(resp, "Unknown timezone")
+        self.assertFalse(AuditSchedule.objects.exists())
+
+    def test_cron_follows_daylight_saving(self):
+        from datetime import datetime
+
+        from audits.scheduling import cron_next
+
+        # Oslo leaves summer time on 2026-10-25: 06:00 local moves from 04:00 to 05:00 UTC.
+        before = cron_next("0 6 * * *", datetime(2026, 10, 23, 12, tzinfo=UTC), "Europe/Oslo")
+        after = cron_next("0 6 * * *", datetime(2026, 10, 25, 12, tzinfo=UTC), "Europe/Oslo")
+        self.assertEqual(before.isoformat(), "2026-10-24T04:00:00+00:00")
+        self.assertEqual(after.isoformat(), "2026-10-26T05:00:00+00:00")
+
+    def test_pages_render_local_time_markup(self):
+        self._schedule(cron_expression="0 6 * * *", timezone="Europe/Oslo")
+        page = self.client.get("/schedules/")
+        self.assertContains(page, "<time data-local datetime=")
+        self.assertContains(page, 'name="timezone"')

@@ -1,0 +1,84 @@
+{% comment %}
+One judged conversation on the scenario result page: a repetition, or the
+whole result of a single-rep run. Context: rep (see infra.ui._rep_view).
+{% endcomment %}
+<div class="space-y-4">
+  {% if rep.summary %}
+  <div class="bg-surface-raised rounded-xl border border-gray-800 p-4">
+    <div class="flex items-center gap-2 mb-2">
+      <h3 class="text-sm font-semibold text-gray-300">Judge verdict</h3>
+      {% include "partials/severity_badge.html" with sev=rep.severity %}
+    </div>
+    <p class="text-sm text-gray-300 whitespace-pre-wrap">{{ rep.summary }}</p>
+  </div>
+  {% endif %}
+
+  {% if rep.issues or rep.positives or rep.recommendations %}
+  <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
+    <div class="bg-surface-raised rounded-xl border {% if rep.issues %}border-red-900/40{% else %}border-gray-800{% endif %} p-4">
+      <h3 class="text-sm font-semibold {% if rep.issues %}text-red-300{% else %}text-gray-400{% endif %} mb-2">Issues found ({{ rep.issues|length }})</h3>
+      {% if rep.issues %}
+      <ul class="space-y-1.5">{% for x in rep.issues %}<li class="text-sm text-gray-200 flex gap-2"><span class="text-red-400 shrink-0">•</span><span>{{ x }}</span></li>{% endfor %}</ul>
+      {% else %}<p class="text-xs text-gray-500">None.</p>{% endif %}
+    </div>
+    <div class="bg-surface-raised rounded-xl border border-gray-800 p-4">
+      <h3 class="text-sm font-semibold text-emerald-300 mb-2">Positive behaviours ({{ rep.positives|length }})</h3>
+      {% if rep.positives %}
+      <ul class="space-y-1.5">{% for x in rep.positives %}<li class="text-sm text-gray-200 flex gap-2"><span class="text-emerald-400 shrink-0">✓</span><span>{{ x }}</span></li>{% endfor %}</ul>
+      {% else %}<p class="text-xs text-gray-500">None recorded.</p>{% endif %}
+    </div>
+    <div class="bg-surface-raised rounded-xl border border-gray-800 p-4">
+      <h3 class="text-sm font-semibold text-gray-300 mb-2">Recommendations ({{ rep.recommendations|length }})</h3>
+      {% if rep.recommendations %}
+      <ul class="space-y-1.5">{% for x in rep.recommendations %}<li class="text-sm text-gray-200 flex gap-2"><span class="text-gray-500 shrink-0">→</span><span>{{ x }}</span></li>{% endfor %}</ul>
+      {% else %}<p class="text-xs text-gray-500">None.</p>{% endif %}
+    </div>
+  </div>
+  {% endif %}
+
+  {% if rep.conversation %}
+  <div class="bg-surface-raised rounded-xl border border-gray-800 p-4">
+    <h3 class="text-sm font-semibold text-gray-300 mb-3">Conversation <span class="text-gray-500 font-normal">({{ rep.turns }} turn{{ rep.turns|pluralize }})</span></h3>
+    <div class="space-y-3">
+      {% for m in rep.conversation %}
+      <div class="flex {% if m.is_target %}justify-end{% endif %}">
+        <div class="max-w-[92%] md:max-w-[80%] rounded-xl px-3 py-2.5 {% if m.is_target %}bg-blue-950/40 border border-blue-900/40{% else %}bg-surface-overlay/70 border border-gray-800{% endif %}">
+          <p class="text-[10px] uppercase tracking-wide font-semibold mb-1 {% if m.is_target %}text-blue-400{% else %}text-gray-500{% endif %}">{{ m.speaker }}{% if m.turn %} · turn {{ m.turn }}{% endif %}</p>
+          <p class="text-sm text-gray-200 whitespace-pre-wrap break-words">{{ m.content }}</p>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+
+  {% if rep.rationale %}
+  <div class="bg-surface-raised rounded-xl border border-gray-800 p-4">
+    <h3 class="text-sm font-semibold text-gray-300 mb-2">Judge rationale</h3>
+    <p class="text-sm text-gray-300 whitespace-pre-wrap">{{ rep.rationale }}</p>
+  </div>
+  {% endif %}
+
+  {% if rep.tokens or rep.other %}
+  <div class="bg-surface-raised rounded-xl border border-gray-800 p-4">
+    {% if rep.tokens %}
+    <h3 class="text-sm font-semibold text-gray-300 mb-2">Token usage <span class="text-gray-500 font-normal">({{ rep.total_tokens }} total)</span></h3>
+    <div class="grid grid-cols-3 gap-3 text-center">
+      {% for t in rep.tokens %}
+      <div class="rounded-lg bg-surface-overlay/50 px-2 py-2">
+        <p class="text-[10px] uppercase text-gray-500">{{ t.role }}</p>
+        <p class="text-xs text-gray-300 mt-0.5">{{ t.input|default:"0" }} in · {{ t.output|default:"0" }} out</p>
+      </div>
+      {% endfor %}
+    </div>
+    {% endif %}
+    {% if rep.other %}
+    <div class="{% if rep.tokens %}mt-3 pt-3 border-t border-gray-800{% endif %} space-y-1.5">
+      {% for key, value in rep.other.items %}
+      <div class="flex items-start gap-2 text-xs"><span class="text-gray-500 shrink-0 min-w-[120px]">{{ key }}</span><span class="text-gray-300 break-all">{{ value }}</span></div>
+      {% endfor %}
+    </div>
+    {% endif %}
+  </div>
+  {% endif %}
+</div>

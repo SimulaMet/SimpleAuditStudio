@@ -1,0 +1,37 @@
+{% comment %}
+Shared local-time rendering, included once by base.html.
+<time data-local datetime="ISO-8601"> shows the browser's local time plus a
+relative part ("Sep 27, 20:00 · in 2h"). data-local="relative" shows only the
+relative part. The server-rendered text (UTC) is the fallback without JS.
+Relative parts refresh every 30s.
+{% endcomment %}
+<script>
+(function() {
+  const rtf = new Intl.RelativeTimeFormat(undefined, { numeric: 'auto', style: 'narrow' });
+  const abs = new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+  const full = new Intl.DateTimeFormat(undefined, { dateStyle: 'full', timeStyle: 'long' });
+  const STEPS = [['year', 31536000], ['month', 2592000], ['week', 604800], ['day', 86400], ['hour', 3600], ['minute', 60]];
+
+  function relative(date) {
+    const secs = (date.getTime() - Date.now()) / 1000;
+    if (Math.abs(secs) < 45) return secs >= 0 ? 'in a moment' : 'just now';
+    for (const [unit, size] of STEPS) {
+      if (Math.abs(secs) >= size) return rtf.format(Math.round(secs / size), unit);
+    }
+    return rtf.format(Math.round(secs / 60), 'minute');
+  }
+
+  function render(root) {
+    (root || document).querySelectorAll('time[data-local][datetime]').forEach(el => {
+      const d = new Date(el.getAttribute('datetime'));
+      if (isNaN(d)) return;
+      el.textContent = el.dataset.local === 'relative' ? relative(d) : abs.format(d) + ' · ' + relative(d);
+      el.title = full.format(d);
+    });
+  }
+
+  window.renderLocalTimes = render;
+  render();
+  setInterval(render, 30000);
+})();
+</script>

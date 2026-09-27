@@ -6,7 +6,6 @@ import itertools
 import json
 import logging
 import os
-from datetime import UTC
 
 from django.contrib import messages
 from django.contrib.auth import login, logout
@@ -761,6 +760,7 @@ class SchedulesView(ProjectMixin, TemplateView):
             sets=ScenarioSet.objects.filter(project=p).prefetch_related("versions"),
             connections=ModelConnection.objects.filter(project=p).prefetch_related("models").order_by("name"),
             interval_presets=_INTERVAL_PRESETS,
+            timezones=_timezone_choices(),
             can_create=has_write_role(self.request.user, p) and not (p.archived and not self.request.user.is_superuser),
             at_cap=len(schedules) >= MAX_SCHEDULES_PER_PROJECT,
             max_schedules=MAX_SCHEDULES_PER_PROJECT,
@@ -778,6 +778,7 @@ class SchedulesView(ProjectMixin, TemplateView):
             cron_next,
             has_write_role,
             validate_cron,
+            zone,
         )
         from audits.services import _generation_parameters
         from model_registry.models import RegisteredModel
@@ -809,9 +810,11 @@ class SchedulesView(ProjectMixin, TemplateView):
                 pinned = sset.versions.order_by("-version").first()
                 if pinned is None:
                     raise ValueError("This scenario set has no published version to pin.")
+            tz_name = (form.get("timezone") or "UTC").strip()
+            tz = zone(tz_name)
             cron_expression = ""
             if form.get("interval_hours") == "cron":
-                cron_expression = validate_cron(form.get("cron_expression") or "")
+                cron_expression = validate_cron(form.get("cron_expression") or "", tz=tz_name)
                 interval_hours = 0
             else:
                 interval_hours = int(form.get("interval_hours") or 168)
@@ -819,14 +822,15 @@ class SchedulesView(ProjectMixin, TemplateView):
                     raise ValueError(f"Interval must be between {MIN_INTERVAL_HOURS} hours and 90 days.")
             first_raw = (form.get("first_run_at") or "").strip()
             if first_raw:
-                first = timezone.make_aware(datetime.fromisoformat(first_raw), UTC)
+                # Wall-clock time in the schedule's timezone.
+                first = timezone.make_aware(datetime.fromisoformat(first_raw), tz)
             elif not cron_expression:
                 # A minute out: the next sweeper pass picks it up.
                 first = timezone.now() + timedelta(minutes=1)
             if cron_expression:
                 # First firing at or after the requested start (or now).
                 start = first if first_raw else timezone.now()
-                first = cron_next(cron_expression, start - timedelta(minutes=1))
+                first = cron_next(cron_expression, start - timedelta(minutes=1), tz_name)
 
             max_turns_raw = (form.get("max_turns") or "").strip()
             n_reps_raw = (form.get("n_repetitions") or "").strip()
@@ -858,10 +862,13 @@ class SchedulesView(ProjectMixin, TemplateView):
                 ),
                 interval_hours=interval_hours,
                 cron_expression=cron_expression,
+                timezone=tz_name,
                 next_run_at=first,
                 created_by=request.user,
             )
-            messages.success(request, f"Schedule '{name}' created. First run {first:%Y-%m-%d %H:%M} UTC.")
+            messages.success(
+                request, f"Schedule '{name}' created. First run {first.astimezone(tz):%Y-%m-%d %H:%M} {tz_name}."
+            )
             baseline = _baseline_run(p, form)
             if baseline and form.get("attach_baseline"):
                 if _matches_schedule(baseline, schedule):
@@ -908,6 +915,14 @@ def _matches_schedule(run: AuditRun, schedule) -> bool:
         and run.judge_model_id == schedule.judge_model_id
         and (run.generation_parameters_snapshot or {}) == (schedule.generation_parameters or {})
     )
+
+
+def _timezone_choices() -> list[str]:
+    """IANA zone names for the schedule form (UTC first, then alphabetical)."""
+    from zoneinfo import available_timezones
+
+    zones = sorted(z for z in available_timezones() if "/" in z and not z.startswith(("Etc/", "SystemV/")))
+    return ["UTC", *zones]
 
 
 def _clone_from_post(form) -> dict:
@@ -1703,6 +1718,67 @@ class CompareView(ProjectMixin, TemplateView):
 
 # ─── Audit Detail ────────────────────────────────────────────────────────────
 
+def _result_rows(run: AuditRun, items: dict | None = None) -> list[dict]:
+    """Rows for the audit detail Results list (handles n_repetitions > 1)."""
+    set_id = run.scenario_set_version.scenario_set_id
+    if items is None:
+        items = {
+            str(vi.pk): vi
+            for vi in ScenarioSetVersionItem.objects.filter(version=run.scenario_set_version).select_related("scenario")
+        }
+    n_reps = int((run.generation_parameters_snapshot or {}).get("n_repetitions") or 1)
+    results = []
+    for sr in ScenarioResult.objects.filter(run_id=run.id).order_by("id"):
+        item = items.get(sr.version_item_id)
+        r = sr.result or {}
+        # When n_repetitions > 1, the result dict has "reps" + "aggregated_severity"
+        summary = r.get("summary", "")
+        if n_reps > 1 and "reps" in r:
+            severity = r.get("aggregated_severity", sr.status)
+            # Stored as a 0-1 fraction; the list shows a percentage.
+            agreement = r.get("agreement_rate")
+            agreement = agreement * 100 if agreement is not None else None
+            sev_dist = r.get("severity_distribution", {})
+            # Repeated results have no top-level summary: show the summary of
+            # the first repetition that reached the aggregated verdict.
+            reps = [rep for rep in r["reps"] if isinstance(rep, dict)]
+            match = next((rep for rep in reps if rep.get("severity") == severity), reps[0] if reps else {})
+            summary = summary or match.get("summary", "")
+        else:
+            severity = r.get("severity", sr.status)
+            agreement = None
+            sev_dist = None
+        results.append({
+            "result_id": sr.pk,
+            "version_item_id": sr.version_item_id,
+            "scenario_name": item.scenario.title if item else sr.version_item_id,
+            "scenario_id": item.scenario_id if item else None,
+            "set_id": set_id,
+            "severity": severity,
+            "summary": summary,
+            "status": sr.status,
+            "agreement_rate": agreement,
+            "severity_distribution": sev_dist,
+            "n_reps": n_reps if (n_reps > 1 and "reps" in r) else None,
+        })
+    return results
+
+
+class AuditResultsFragmentView(ProjectMixin, View):
+    """GET /audits/<id>/results-fragment/ — the Results list alone, for live refresh."""
+
+    def get(self, request, run_id):
+        from django.template.loader import render_to_string
+
+        run = get_object_or_404(
+            AuditRun.objects.select_related("scenario_set_version"), pk=run_id, project=request.project
+        )
+        html = render_to_string(
+            "partials/audit_results.html", {"run": run, "results": _result_rows(run)}, request=request
+        )
+        return HttpResponse(html)
+
+
 class AuditDetailView(ProjectMixin, DetailView):
     template_name = "audit_detail.html"
     context_object_name = "run"
@@ -1719,33 +1795,7 @@ class AuditDetailView(ProjectMixin, DetailView):
         run = self.object
         set_id = run.scenario_set_version.scenario_set_id
         items = {str(vi.pk): vi for vi in ScenarioSetVersionItem.objects.filter(version=run.scenario_set_version).select_related("scenario")}
-        n_reps = int((run.generation_parameters_snapshot or {}).get("n_repetitions") or 1)
-        results = []
-        for sr in ScenarioResult.objects.filter(run_id=run.id).order_by("id"):
-            item = items.get(sr.version_item_id)
-            r = sr.result or {}
-            # When n_repetitions > 1, the result dict has "reps" + "aggregated_severity"
-            if n_reps > 1 and "reps" in r:
-                severity = r.get("aggregated_severity", sr.status)
-                agreement = r.get("agreement_rate")
-                sev_dist = r.get("severity_distribution", {})
-            else:
-                severity = r.get("severity", sr.status)
-                agreement = None
-                sev_dist = None
-            results.append({
-                "result_id": sr.pk,
-                "version_item_id": sr.version_item_id,
-                "scenario_name": item.scenario.title if item else sr.version_item_id,
-                "scenario_id": item.scenario_id if item else None,
-                "set_id": set_id,
-                "severity": severity,
-                "summary": r.get("summary", ""),
-                "status": sr.status,
-                "agreement_rate": agreement,
-                "severity_distribution": sev_dist,
-                "n_reps": n_reps if (n_reps > 1 and "reps" in r) else None,
-            })
+        results = _result_rows(run, items)
         ctx["results"] = results
         # Version item ids that already have a result row; the detail page seeds
         # its SSE dedupe set from this. Pre-serialized to a JSON array because
@@ -1836,6 +1886,72 @@ class AuditRenameView(ProjectMixin, View):
 
 # ─── Scenario Result Detail ──────────────────────────────────────────────────
 
+_REP_TOKEN_ROLES = ("target", "auditor", "judge")
+# Keys rendered as named sections (or intentionally hidden) on the result page.
+_REP_KNOWN_KEYS = {
+    "conversation", "issues_found", "issues", "positive_behaviors", "recommendations", "summary",
+    "severity", "rationale", "evidence", "judge_rationale", "judgment", "scenario_name",
+    "scenario_description", "expected_behavior", "_rep_index", "_language", "error",
+    *(f"{r}_{d}_tokens" for r in _REP_TOKEN_ROLES for d in ("input", "output")),
+}
+
+
+def _as_text_list(value) -> list[str]:
+    """Normalise issues / behaviours / recommendations to a list of strings."""
+    if not value:
+        return []
+    if not isinstance(value, list):
+        value = [value]
+    out = []
+    for item in value:
+        if isinstance(item, dict):
+            out.append(item.get("description") or item.get("issue") or json.dumps(item, ensure_ascii=False))
+        else:
+            out.append(str(item))
+    return out
+
+
+def _rep_view(rep: dict, index: int) -> dict:
+    """One judged conversation (a repetition, or the whole single-rep result)."""
+    conversation = []
+    turn = 0
+    for msg in rep.get("conversation") or []:
+        role = (msg or {}).get("role", "")
+        # SimpleAudit drives the target with the auditor as "user".
+        if role == "user":
+            turn += 1
+        conversation.append({
+            "speaker": {"user": "Auditor", "assistant": "Target"}.get(role, role.title() or "Message"),
+            "is_target": role == "assistant",
+            "turn": turn,
+            "content": (msg or {}).get("content", ""),
+        })
+    tokens = [
+        {
+            "role": r.title(),
+            "input": rep.get(f"{r}_input_tokens"),
+            "output": rep.get(f"{r}_output_tokens"),
+        }
+        for r in _REP_TOKEN_ROLES
+        if rep.get(f"{r}_input_tokens") is not None or rep.get(f"{r}_output_tokens") is not None
+    ]
+    total_tokens = sum((t["input"] or 0) + (t["output"] or 0) for t in tokens)
+    return {
+        "index": index,
+        "severity": rep.get("severity", ""),
+        "summary": rep.get("summary", ""),
+        "conversation": conversation,
+        "turns": turn,
+        "issues": _as_text_list(rep.get("issues_found", rep.get("issues"))),
+        "positives": _as_text_list(rep.get("positive_behaviors")),
+        "recommendations": _as_text_list(rep.get("recommendations")),
+        "rationale": rep.get("rationale") or rep.get("evidence") or rep.get("judge_rationale") or "",
+        "tokens": tokens,
+        "total_tokens": total_tokens,
+        "other": {k: v for k, v in rep.items() if k not in _REP_KNOWN_KEYS},
+    }
+
+
 class ScenarioResultDetailView(ProjectMixin, TemplateView):
     template_name = "scenario_result_detail.html"
 
@@ -1845,80 +1961,59 @@ class ScenarioResultDetailView(ProjectMixin, TemplateView):
         run = get_object_or_404(AuditRun, pk=run_id, project=self.request.project)
         sr = get_object_or_404(ScenarioResult, pk=result_id, run_id=run_id)
 
-        # Resolve scenario name via version item
-        item = ScenarioSetVersionItem.objects.filter(pk=sr.version_item_id).select_related("scenario").first()
+        item = (
+            ScenarioSetVersionItem.objects.filter(pk=sr.version_item_id)
+            .select_related("scenario", "revision")
+            .first()
+        )
         scenario_name = item.scenario.title if item else f"Scenario {sr.version_item_id}"
-
-        # Parse result JSON into structured sections
         result_data = sr.result or {}
 
-        # Detect repeated format (n_repetitions > 1)
-        is_repeated = "reps" in result_data and isinstance(result_data.get("reps"), list)
-        reps = result_data.get("reps", []) if is_repeated else []
-        aggregated_severity = result_data.get("aggregated_severity", "") if is_repeated else ""
-        raw_agreement = result_data.get("agreement_rate") if is_repeated else None
-        # Convert fraction (0.6667) to percentage (66.67) for display
-        agreement_rate = round(raw_agreement * 100, 1) if raw_agreement is not None else None
-        low_agreement = (agreement_rate is not None and agreement_rate < 80)
-        severity_distribution = result_data.get("severity_distribution", {}) if is_repeated else {}
-        n_reps = len(reps) if is_repeated else 0
+        is_repeated = isinstance(result_data.get("reps"), list)
+        raw_reps = [r for r in result_data["reps"] if isinstance(r, dict)] if is_repeated else [result_data]
+        reps = [_rep_view(r, i + 1) for i, r in enumerate(raw_reps)] if result_data else []
 
         if is_repeated:
-            # Show the modal rep's details as the "primary" view
-            primary_rep = reps[0] if reps else {}
-            severity = aggregated_severity or primary_rep.get("severity", sr.status)
+            severity = result_data.get("aggregated_severity") or (reps[0]["severity"] if reps else sr.status)
+            raw_agreement = result_data.get("agreement_rate")
+            # Stored as a fraction (0.6667); shown as a percentage.
+            agreement_rate = round(raw_agreement * 100, 1) if raw_agreement is not None else None
+            distribution = result_data.get("severity_distribution") or {}
         else:
-            primary_rep = result_data
             severity = result_data.get("severity", sr.status)
+            agreement_rate = None
+            distribution = {}
+        for rep in reps:
+            rep["dissent"] = is_repeated and rep["severity"] != severity
+        # Open on the first repetition that disagrees with the verdict, if any.
+        initial_rep = next((r["index"] for r in reps if r["dissent"]), 1)
 
-        conversation = primary_rep.get("conversation", [])
-        raw_issues = primary_rep.get("issues_found", primary_rep.get("issues", []))
-        # Normalize issues to dicts with 'description' key for template safety
-        issues = []
-        for iss in raw_issues:
-            if isinstance(iss, str):
-                issues.append({"description": iss})
-            elif isinstance(iss, dict):
-                issues.append(iss)
-            else:
-                issues.append({"description": str(iss)})
-        rationale = primary_rep.get("rationale", primary_rep.get("evidence", primary_rep.get("judge_rationale", "")))
-        summary = primary_rep.get("summary", "")
-
-        # Per-rep summary table for repeated results
-        rep_summaries = []
-        if is_repeated:
-            for i, rep in enumerate(reps):
-                rep_summaries.append({
-                    "index": i + 1,
-                    "severity": rep.get("severity", ""),
-                    "tokens": rep.get("tokens_used", rep.get("total_tokens", "")),
-                    "latency_ms": rep.get("latency_ms", ""),
-                })
-
-        # Collect remaining keys not already displayed as named sections
-        known_keys = {"conversation", "issues_found", "issues", "rationale", "evidence", "judge_rationale", "severity", "summary", "reps", "aggregated_severity", "agreement_rate", "severity_distribution", "n_repetitions"}
-        other_keys = {k: v for k, v in primary_rep.items() if k not in known_keys}
+        revision = item.revision if item else None
+        first = raw_reps[0] if raw_reps else {}
+        expected = (revision.expected_behavior if revision else None) or first.get("expected_behavior") or []
 
         kw.update(
             run=run,
             sr=sr,
             scenario_name=scenario_name,
+            scenario_description=(revision.description if revision else "") or first.get("scenario_description", ""),
+            expected_behavior=_as_text_list(
+                [e.get("criterion", e) if isinstance(e, dict) else e for e in expected]
+            ),
+            test_prompt=revision.test_prompt if revision else "",
             severity=severity,
-            summary=summary,
-            conversation=conversation,
-            issues=issues,
-            rationale=rationale,
-            other_keys=other_keys,
-            raw_json=json.dumps(result_data, indent=2, ensure_ascii=False) if result_data else "",
             is_repeated=is_repeated,
             reps=reps,
-            rep_summaries=rep_summaries,
-            aggregated_severity=aggregated_severity,
+            n_reps=len(reps),
+            initial_rep=initial_rep,
             agreement_rate=agreement_rate,
-            low_agreement=low_agreement,
-            severity_distribution=severity_distribution,
-            n_reps=n_reps,
+            low_agreement=agreement_rate is not None and agreement_rate < 80,
+            distribution=[
+                {"severity": sev, "count": n, "pct": round(n * 100 / len(reps), 1) if reps else 0}
+                for sev, n in distribution.items()
+            ],
+            error=result_data.get("error", "") if sr.status != "completed" else "",
+            raw_json=json.dumps(result_data, indent=2, ensure_ascii=False) if result_data else "",
         )
         return super().get_context_data(**kw)
 

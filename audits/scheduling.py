@@ -87,14 +87,29 @@ def owner_authorized(schedule: AuditSchedule) -> bool:
     return has_write_role(owner, schedule.project)
 
 
-def cron_next(expr: str, after):
-    """First firing of ``expr`` (UTC) strictly after ``after``."""
+def zone(name: str):
+    """ZoneInfo for an IANA name; raise ValueError for unknown zones."""
+    from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+    try:
+        return ZoneInfo(name or "UTC")
+    except (ZoneInfoNotFoundError, ValueError) as exc:
+        raise ValueError(f"Unknown timezone: {name!r}.") from exc
+
+
+def cron_next(expr: str, after, tz: str = "UTC"):
+    """First firing of ``expr`` on ``tz``'s wall clock strictly after ``after``, in UTC.
+
+    Evaluating in the local zone keeps ``0 6 * * *`` at 06:00 local across
+    daylight-saving changes; a firing inside a spring-forward gap runs at the
+    first valid moment after it.
+    """
     from cronsim import CronSim
 
-    return next(CronSim(expr, after.astimezone(UTC)))
+    return next(CronSim(expr, after.astimezone(zone(tz)))).astimezone(UTC)
 
 
-def validate_cron(expr: str, now=None) -> str:
+def validate_cron(expr: str, now=None, tz: str = "UTC") -> str:
     """Normalise and validate a cron expression; raise ValueError if unusable.
 
     Rejects syntax errors and expressions that never fire. There is no minimum
@@ -107,7 +122,7 @@ def validate_cron(expr: str, now=None) -> str:
         raise ValueError("Cron expression needs 5 fields: minute hour day-of-month month day-of-week.")
     now = now or timezone.now()
     try:
-        next(CronSim(expr, now.astimezone(UTC)))
+        next(CronSim(expr, now.astimezone(zone(tz))))
     except (CronSimError, StopIteration) as exc:
         raise ValueError(f"Invalid cron expression: {exc or 'never fires'}.") from exc
     return expr
@@ -116,7 +131,7 @@ def validate_cron(expr: str, now=None) -> str:
 def next_after(schedule: AuditSchedule, now):
     """Next tick strictly after ``now`` for either timing rule."""
     if schedule.cron_expression:
-        return cron_next(schedule.cron_expression, now)
+        return cron_next(schedule.cron_expression, now, schedule.timezone)
     return advance(schedule.next_run_at, schedule.interval_hours, now)
 
 
