@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import logging
 import os
+from datetime import timedelta
 import threading as _threading
 
 from django.conf import settings
@@ -65,6 +66,24 @@ class FinalizeInput(BaseModel):
     # every scenario has a durable result row.
     total_scenarios: int = 0
 
+
+# Scenario execution budget. Hatchet retries a failing task SCENARIO_RETRIES
+# times; attempts are counted durably (scenario_attempted events), so the budget
+# also holds across resubmissions (crash recovery, resume). A failure on the
+# last attempt is final; earlier failures are provisional and retried.
+SCENARIO_RETRIES = 2
+MAX_SCENARIO_ATTEMPTS = SCENARIO_RETRIES + 1
+
+# A run with no progress events for this long is resumed: its missing
+# scenarios are resubmitted. Resubmission is idempotent (see the per-scenario
+# concurrency key on the task and the durable result checks), so resuming a
+# run that is merely slow or queued behind other runs is harmless.
+RESUME_STALE_MINUTES = 10
+
+_ACTIVE_STATUSES = (
+    "queued", "preparing", "target_execution", "auditing", "judging",
+    "aggregation", "report_generation",
+)
 
 _CLIENT: Hatchet | None = None
 
@@ -241,16 +260,19 @@ def _scenario_execute_impl(workflow_input: ScenarioInput, ctx: Context) -> dict:
 
     run_id = workflow_input.run_id
     version_item_id = workflow_input.version_item_id
-    attempt = workflow_input.attempt
 
     # Graceful no-op if the run row was deleted (e.g. purged) while its
     # Hatchet tasks were still pending. Matches the pattern in
     # _run_finalize_impl and _is_cancelled.
     try:
-        AuditRun.objects.get(pk=int(run_id))
+        _run_row = AuditRun.objects.get(pk=int(run_id))
     except (AuditRun.DoesNotExist, ValueError):
         logger.warning("Scenario task for missing run %s — skipping", run_id)
         return {"status": "missing"}
+    # A finished or cancelled run takes no more work (late duplicates, retries
+    # queued before a cancel, resubmissions racing completion).
+    if _run_row.status not in _ACTIVE_STATUSES:
+        return {"status": "run_" + str(_run_row.status)}
 
     # Optional fault injection for recovery tests: fail the first N EXECUTIONS.
     # Hatchet retries re-run the task with the SAME input (the `attempt` field
@@ -270,13 +292,25 @@ def _scenario_execute_impl(workflow_input: ScenarioInput, ctx: Context) -> dict:
     # skip re-execution. Failed results are NOT skipped — they should be
     # retried on re-submission. This makes workflow re-submission safe (e.g.,
     # after a worker restart killed in-flight tasks) without wasting API calls.
-    from audits.events import ScenarioResult as _SR
-    _existing = _SR.objects.filter(
-        run_id=int(run_id), version_item_id=str(version_item_id), status="completed"
-    ).first()
-    if _existing is not None:
+    if _has_terminal_result(run_id, version_item_id):
         append_event(run_id, version_item_id, "scenario_skipped_existing", {})
+        _maybe_finalize(run_id)
         return {"status": "skipped_existing"}
+
+    # Durable attempt budget: counts every execution of this scenario, across
+    # Hatchet retries AND resubmissions. Past the budget, give up for good
+    # instead of burning model calls on a scenario that keeps crashing.
+    attempt = _attempt_count(run_id, version_item_id) + 1
+    if attempt > MAX_SCENARIO_ATTEMPTS:
+        with transaction.atomic():
+            upsert_scenario_result(
+                run_id, version_item_id, status="failed", attempts=attempt - 1,
+                result={"error": f"Gave up after {attempt - 1} attempts"},
+            )
+        _sync_run_counters(run_id)
+        append_event(run_id, version_item_id, "scenario_failed", {"error": f"Gave up after {attempt - 1} attempts"})
+        _maybe_finalize(run_id)
+        return {"status": "failed", "reason": "attempts_exhausted"}
 
     append_event(run_id, version_item_id, "scenario_attempted", {"attempt": attempt})
     append_event(run_id, "_run", "run_stage", {"stage": "target_execution"})
@@ -300,6 +334,11 @@ def _scenario_execute_impl(workflow_input: ScenarioInput, ctx: Context) -> dict:
         AuditRun.objects.filter(pk=run.pk, started_at__isnull=True).update(
             started_at=timezone.now()
         )
+    # Same pattern for status: leave queued/preparing once work actually runs,
+    # so the Status card and run lists stop showing "Queued" mid-run.
+    AuditRun.objects.filter(
+        pk=run.pk, status__in=[AuditRun.Status.QUEUED, AuditRun.Status.PREPARING]
+    ).update(status=AuditRun.Status.TARGET_EXECUTION)
 
     from infra.engine import EngineError, run_scenario_repeated
     from infra.engine import run_scenario as engine_run_scenario
@@ -333,6 +372,11 @@ def _scenario_execute_impl(workflow_input: ScenarioInput, ctx: Context) -> dict:
 
     _event_queue: "_queue.Queue" = _queue.Queue()
     _FLUSH_SENTINEL = object()
+    # Durable cancel flag, polled by the flusher (a sync thread that may use the
+    # ORM) and read by the engine callbacks (which may not). A user cancel then
+    # stops the engine at the next rep instead of running every remaining rep.
+    _cancel_requested = _threading.Event()
+    _CANCEL_POLL_S = 5.0
 
     def _flush_loop() -> None:
         from django.db import connections, reset_queries
@@ -342,9 +386,20 @@ def _scenario_execute_impl(workflow_input: ScenarioInput, ctx: Context) -> dict:
         max_retries = 5
         try:
             while True:
-                item = _event_queue.get()
+                try:
+                    item = _event_queue.get(timeout=_CANCEL_POLL_S)
+                except _queue.Empty:
+                    item = None
                 if item is _FLUSH_SENTINEL:
                     break
+                if not _cancel_requested.is_set():
+                    try:
+                        if _is_cancelled(run_id):
+                            _cancel_requested.set()
+                    except Exception:  # noqa: BLE001 - polling is best effort
+                        pass
+                if item is None:
+                    continue
                 kind, payload = item
                 for attempt in range(max_retries):
                     try:
@@ -377,25 +432,26 @@ def _scenario_execute_impl(workflow_input: ScenarioInput, ctx: Context) -> dict:
     _flusher = _threading.Thread(target=_flush_loop, daemon=True)
     _flusher.start()
     # Mutable holder for the active rep index (0-based) so _on_turn can stamp
-    # each turn with the correct rep number. The engine does NOT call
-    # on_rep_started reliably, so we detect rep boundaries via role cycle:
-    # judge → auditor means a new repetition has started.
+    # each turn with the correct rep number. Set by _on_rep_started, which the
+    # engine wrapper fires right before each rep begins (see
+    # run_scenario_repeated). Engine-internal retries within a rep re-emit
+    # auditor turns but stay in the same rep.
     current_rep = [0]
-    _last_role = [""]
+    # Set when this task is cancelled (Hatchet cancel or the run's durable
+    # cancel flag) so the engine stops at the next rep instead of running on
+    # as an orphaned thread. Only touched from the engine's event loop.
+    import asyncio as _asyncio
+    _cancel_event = _asyncio.Event()
+
+    def _check_cancel() -> None:
+        if _cancel_event.is_set():
+            return
+        if getattr(ctx, "is_cancelled", False) or _cancel_requested.is_set():
+            _cancel_event.set()
 
     def _on_turn(turn_index: int, max_t: int, role: str) -> None:
-        """Queue a per-turn progress event (flushed live by the worker thread).
-
-        Detects rep boundaries: when role cycles from 'judge' back to 'auditor',
-        a new repetition has started. This works regardless of max_turns value.
-        """
-        if _last_role[0] == "judge" and role == "auditor":
-            current_rep[0] += 1
-            _event_queue.put((
-                "scenario_rep_started",
-                {"rep": current_rep[0], "total_reps": n_reps},
-            ))
-        _last_role[0] = role
+        """Queue a per-turn progress event (flushed live by the worker thread)."""
+        _check_cancel()
         _event_queue.put((
             "scenario_turn",
             {
@@ -408,7 +464,8 @@ def _scenario_execute_impl(workflow_input: ScenarioInput, ctx: Context) -> dict:
         ))
 
     def _on_rep_started(rep_idx: int) -> None:
-        """Fallback: track the active rep if the engine does call this."""
+        """Track the active rep; called from the engine's event loop (queue only)."""
+        _check_cancel()
         current_rep[0] = rep_idx
         _event_queue.put((
             "scenario_rep_started",
@@ -451,6 +508,7 @@ def _scenario_execute_impl(workflow_input: ScenarioInput, ctx: Context) -> dict:
                 on_rep_done=_on_rep_done,
                 on_turn=_on_turn,
                 on_rep_started=_on_rep_started,
+                cancel_event=_cancel_event,
             )
             # Use aggregated severity for the run-level counter
             severity = result_payload.get("aggregated_severity", "")
@@ -470,25 +528,40 @@ def _scenario_execute_impl(workflow_input: ScenarioInput, ctx: Context) -> dict:
         # Stop the live flusher: drains any remaining turn events and joins the
         # thread so all turn events are durable before the terminal event below.
         _stop_event_flusher()
+        if _cancel_event.is_set():
+            # Stopped early: the reps are partial, so record nothing and let
+            # Hatchet's retry (or the user's cancel) decide what happens next.
+            append_event(run_id, version_item_id, "scenario_skipped_cancelled", {})
+            return {"status": "cancelled"}
     except EngineError as exc:
         _stop_event_flusher()
-        # A load/config failure is a hard error for this scenario: record it and
-        # let Hatchet retry per policy. Do not swallow — the run must reflect it.
-        append_event(run_id, version_item_id, "scenario_failed", {"error": str(exc)})
+        # A load/config/crash failure: record it durably. Before the last
+        # attempt it is provisional and re-raised so Hatchet retries; on the
+        # last attempt it is final and counts toward run completion.
+        if _has_terminal_result(run_id, version_item_id, completed_only=True):
+            # A concurrent duplicate already succeeded; its result stands.
+            return {"status": "skipped_existing"}
+        final = attempt >= MAX_SCENARIO_ATTEMPTS
+        append_event(run_id, version_item_id, "scenario_failed", {"error": str(exc), "final": final})
         with transaction.atomic():
-            pre_existing = _result_row_exists(run_id, version_item_id)
             upsert_scenario_result(run_id, version_item_id, status="failed", attempts=attempt, result={"error": str(exc)})
-            _bump_run_counters(run_id, version_item_id, succeeded=False, pre_existing=pre_existing)
-        raise
+        _sync_run_counters(run_id)
+        if not final:
+            raise
+        _maybe_finalize(run_id)
+        return {"status": "failed", "attempt": attempt}
 
-    severity = result_payload.get("severity", "")
+    # A concurrent duplicate may have finished first; never overwrite it.
+    if _has_terminal_result(run_id, version_item_id, completed_only=True):
+        append_event(run_id, version_item_id, "scenario_skipped_existing", {})
+        return {"status": "skipped_existing"}
+
     failed = severity.upper() == "ERROR"
     with transaction.atomic():
-        pre_existing = _result_row_exists(run_id, version_item_id)
         upsert_scenario_result(
             run_id, version_item_id, status="failed" if failed else "completed", attempts=attempt, result=result_payload
         )
-        _bump_run_counters(run_id, version_item_id, succeeded=not failed, pre_existing=pre_existing)
+    _sync_run_counters(run_id)
 
     append_event(
         run_id,
@@ -496,6 +569,7 @@ def _scenario_execute_impl(workflow_input: ScenarioInput, ctx: Context) -> dict:
         "scenario_completed" if not failed else "scenario_failed",
         {"attempt": attempt, "severity": severity},
     )
+    _maybe_finalize(run_id)
     return {"status": "failed" if failed else "completed", "attempt": attempt, "severity": severity}
 
 
@@ -505,64 +579,136 @@ def _iter_attempted_events(run_id: str, version_item_id: str):
     return [e for e in list_events(run_id) if e["version_item_id"] == version_item_id and e["kind"] == "scenario_attempted"]
 
 
-def _result_row_exists(run_id: str, version_item_id: str) -> bool:
-    """Whether a durable ScenarioResult row already exists for this item.
+def _attempt_count(run_id: str, version_item_id: str) -> int:
+    """Executions of this scenario so far (durable, survives resubmission)."""
+    from audits.events import AuditEvent
 
-    Must be called BEFORE upserting the result so the counter bump can tell a
-    first execution (bump) apart from a retry (adjust only).
-    """
+    return AuditEvent.objects.filter(
+        run_id=int(run_id), version_item_id=str(version_item_id), kind="scenario_attempted"
+    ).count()
+
+
+def _terminal_results(run_id: str):
+    """Result rows that are final: completed, or failed with no attempts left."""
+    from django.db.models import Q
+
     from audits.events import ScenarioResult
 
-    return ScenarioResult.objects.filter(
-        run_id=int(run_id), version_item_id=version_item_id
-    ).exists()
+    return ScenarioResult.objects.filter(run_id=int(run_id)).filter(
+        Q(status="completed") | Q(status="failed", attempts__gte=MAX_SCENARIO_ATTEMPTS)
+    )
 
 
-def _bump_run_counters(
-    run_id: str, version_item_id: str, *, succeeded: bool, pre_existing: bool
-) -> None:
-    """Idempotently bump run counters for a given version item.
+def _has_terminal_result(run_id: str, version_item_id: str, completed_only: bool = False) -> bool:
+    from audits.events import ScenarioResult
 
-    ``pre_existing`` must be captured by the caller BEFORE upserting the
-    ScenarioResult row: it tells us whether a durable result already existed
-    before this execution. First execution (no prior row) increments the
-    counters; a retry (prior row present) only adjusts pass/fail if the
-    outcome changed, never double-counting.
+    if completed_only:
+        qs = ScenarioResult.objects.filter(run_id=int(run_id), status="completed")
+    else:
+        qs = _terminal_results(run_id)
+    return qs.filter(version_item_id=str(version_item_id)).exists()
+
+
+def _sync_run_counters(run_id: str) -> None:
+    """Recompute the run's counters from the durable result rows.
+
+    Derived, not incremented: concurrent scenario completions, retries and
+    duplicate executions can never double-count or lose an update.
+    completed = final results; successful/failed = current row outcomes.
     """
+    from audits.events import ScenarioResult
+    from audits.models import AuditRun
+
+    rows = ScenarioResult.objects.filter(run_id=int(run_id))
+    AuditRun.objects.filter(pk=int(run_id)).update(
+        completed_scenarios=_terminal_results(run_id).count(),
+        successful_scenarios=rows.filter(status="completed").count(),
+        failed_scenarios=rows.filter(status="failed").count(),
+        updated_at=timezone.now(),
+    )
+
+
+def _provenance_mismatch(run) -> bool:
+    """Frozen engine version/commit differs from the one this worker loaded."""
+    if run.simpleaudit_version and run.simpleaudit_version != WORKER_SIMPLEAUDIT_VERSION:
+        return True
+    return bool(run.git_commit and WORKER_GIT_COMMIT and run.git_commit != WORKER_GIT_COMMIT)
+
+
+def _maybe_finalize(run_id: str) -> str | None:
+    """Complete the run once every pinned scenario has a final result.
+
+    Called after each scenario result (so the last scenario finalizes the run
+    inline), by the sweeper, and by the legacy finalize task. The status flip is
+    a conditional UPDATE, so exactly one caller wins and emits the terminal
+    events. Returns the run's terminal status, or None if work remains.
+    """
+    from audits.events import append_event
     from audits.models import AuditRun
 
     try:
         run = AuditRun.objects.get(pk=int(run_id))
     except (AuditRun.DoesNotExist, ValueError):
-        return
+        return None
+    if run.status not in _ACTIVE_STATUSES:
+        return str(run.status)
+    done = _terminal_results(run_id).count()
+    if not run.total_scenarios or done < run.total_scenarios:
+        return None
+    if _provenance_mismatch(run):
+        if AuditRun.objects.filter(pk=run.pk, status__in=_ACTIVE_STATUSES).update(
+            status=AuditRun.Status.FAILED, error_code="SIMPLEAUDIT_VERSION_MISMATCH", finished_at=timezone.now(),
+        ):
+            append_event(run_id, "_run", "run_failed", {"code": "SIMPLEAUDIT_VERSION_MISMATCH"})
+        return "failed"
+    if AuditRun.objects.filter(pk=run.pk, status__in=_ACTIVE_STATUSES).update(
+        status=AuditRun.Status.COMPLETED, finished_at=timezone.now(), completed_scenarios=done,
+    ):
+        append_event(run_id, "_run", "run_stage", {"stage": "aggregation"})
+        append_event(run_id, "_run", "run_completed", {"scenarios": done})
+    return "completed"
 
-    if pre_existing:
-        # Re-execution (retry): the counter was already bumped on the first
-        # execution. Adjust pass/fail only if the outcome changed. The stored
-        # status is still the PREVIOUS attempt's (the upsert runs after this
-        # check in the caller), so read it directly.
-        from audits.events import ScenarioResult
 
-        existing = ScenarioResult.objects.filter(
-            run_id=int(run_id), version_item_id=version_item_id
-        ).first()
-        was_success = existing is not None and existing.status == "completed"
-        if was_success != succeeded:
-            if succeeded:
-                run.failed_scenarios = max(0, run.failed_scenarios - (1 if not was_success else 0))
-                run.successful_scenarios += 1
-            else:
-                run.successful_scenarios = max(0, run.successful_scenarios - (1 if was_success else 0))
-                run.failed_scenarios += 1
-            run.save(update_fields=["completed_scenarios", "successful_scenarios", "failed_scenarios"])
-        return
+def _missing_version_item_ids(run) -> list[str]:
+    """Pinned scenarios of ``run`` without a final result yet."""
+    from scenarios.models import ScenarioSetVersionItem
 
-    run.completed_scenarios += 1
-    if succeeded:
-        run.successful_scenarios += 1
-    else:
-        run.failed_scenarios += 1
-    run.save(update_fields=["completed_scenarios", "successful_scenarios", "failed_scenarios"])
+    done = set(_terminal_results(run.pk).values_list("version_item_id", flat=True))
+    return [
+        str(pk)
+        for pk in ScenarioSetVersionItem.objects.filter(version=run.scenario_set_version)
+        .order_by("position").values_list("pk", flat=True)
+        if str(pk) not in done
+    ]
+
+
+def resume_run(run, reason: str) -> int:
+    """Resubmit the run's missing scenarios; finalize if none are missing.
+
+    Safe to call at any time: already-final scenarios are not resubmitted, a
+    scenario still queued or running rejects its duplicate (per-scenario
+    concurrency key), and the durable attempt budget bounds retries. Returns
+    how many scenarios were resubmitted.
+    """
+    from audits.events import append_event
+    from audits.models import AuditRun
+
+    missing = _missing_version_item_ids(run)
+    if not missing:
+        _maybe_finalize(str(run.pk))
+        return 0
+    submit_run_workflow(
+        str(run.pk), missing, simpleaudit_version=run.simpleaudit_version, git_commit=run.git_commit,
+    )
+    run.refresh_from_db()
+    meta = dict(run.runtime_metadata or {})
+    meta["submission"] = {"status": "submitted", "at": timezone.now().isoformat(), "scenarios": len(missing)}
+    meta["resumes"] = int(meta.get("resumes") or 0) + 1
+    meta["last_resume"] = {"at": timezone.now().isoformat(), "reason": reason, "scenarios": len(missing)}
+    AuditRun.objects.filter(pk=run.pk).update(runtime_metadata=meta)
+    append_event(run.pk, "_run", "run_resumed", {"reason": reason, "scenarios": len(missing)})
+    logger.info("Resumed run %s (%s): resubmitted %d scenario(s)", run.pk, reason, len(missing))
+    return len(missing)
 
 
 def _run_finalize_impl(workflow_input: FinalizeInput, ctx: Context) -> dict:
@@ -599,37 +745,21 @@ def _run_finalize_impl(workflow_input: FinalizeInput, ctx: Context) -> dict:
         raise RuntimeError("SIMPLEAUDIT_VERSION_MISMATCH")
 
     if _is_cancelled(run_id):
-        append_event(run_id, "_run", "run_cancelled", {})
         return {"status": "cancelled"}
 
-    # Idempotency: if the run already reached a terminal state, do nothing.
     try:
         current = AuditRun.objects.get(pk=int(run_id))
     except (AuditRun.DoesNotExist, ValueError):
         return {"status": "missing"}
-    if current.status in (AuditRun.Status.COMPLETED, AuditRun.Status.FAILED, AuditRun.Status.CANCELLED):
-        return {"status": current.status.value if hasattr(current.status, "value") else str(current.status)}
-
-    # Ordering guarantee: wait until every pinned scenario has a result row.
-    # Poll for up to 5 minutes before giving up — this covers slow scenarios
-    # and post-restart recovery without depending solely on Hatchet retries.
-    import time as _time
-
-    done = _count_results(run_id)
-    total = workflow_input.total_scenarios or current.total_scenarios or 0
-    if total and done < total:
-        deadline = _time.monotonic() + 300.0  # 5 min max wait
-        while done < total and _time.monotonic() < deadline:
-            _time.sleep(5.0)
-            done = _count_results(run_id)
-        if done < total:
-            append_event(run_id, "_run", "finalize_waiting", {"done": done, "total": total})
-            raise RuntimeError(f"finalize premature: {done}/{total} scenarios have results")
-
-    append_event(run_id, "_run", "run_stage", {"stage": "aggregation"})
-    append_event(run_id, "_run", "run_completed", {"scenarios": done})
-    _mark_run_completed(run_id)
-    return {"status": "completed", "scenarios": done}
+    status = _maybe_finalize(run_id)
+    done = _terminal_results(run_id).count()
+    if status is None:
+        # Not done yet. No blocking wait: the last scenario finalizes the run
+        # inline and the sweeper is the backstop, so this never holds a slot.
+        total = workflow_input.total_scenarios or current.total_scenarios or 0
+        append_event(run_id, "_run", "finalize_waiting", {"done": done, "total": total})
+        raise RuntimeError(f"finalize premature: {done}/{total} scenarios have results")
+    return {"status": status, "scenarios": done}
 
 
 def _count_results(run_id: str) -> int:
@@ -687,19 +817,37 @@ def _register_tasks(client: Hatchet) -> None:
     # scheduled before slow scenarios finish (_run_finalize_impl raises until
     # every pinned scenario has a durable result). backoff_factor=2.0 with 10
     # retries spans several minutes, covering typical scenario completion times.
+    from hatchet_sdk.types.concurrency import ConcurrencyExpression, ConcurrencyLimitStrategy
+
     _scenario_task = client.task(
         name="audit.scenario_execute",
         input_validator=ScenarioInput,
-        retries=2,
+        retries=SCENARIO_RETRIES,
         backoff_factor=2.0,
-        execution_timeout="300s",
+        # At most one live execution per (run, scenario): a resubmission while
+        # the original is still queued or running is dropped, so crash
+        # recovery and resume can never run a scenario twice at once.
+        concurrency=ConcurrencyExpression(
+            expression="input.run_id + ':' + input.version_item_id",
+            max_runs=1,
+            limit_strategy=ConcurrencyLimitStrategy.CANCEL_NEWEST,
+        ),
+        # Effectively no cap (Hatchet requires a value). A scenario runs in a
+        # Python thread that cannot be killed, so a timeout would not stop it:
+        # Hatchet would start a duplicate retry beside the still-running
+        # original, doubling model calls and starving worker slots. Hangs are
+        # handled by per-request HTTP timeouts, engine retries, and the
+        # stuck-run sweeper instead.
+        execution_timeout=timedelta(days=365),
     )(_scenario_execute_impl)
+    # Legacy: no longer submitted (runs finalize inline when their last scenario
+    # lands, with the sweeper as backstop). Kept registered so finalize tasks
+    # already queued in Hatchet from older submissions still resolve.
     _finalize_task = client.task(
         name="audit.run_finalize",
         input_validator=FinalizeInput,
         execution_timeout="60s",
-        retries=10,
-        backoff_factor=2.0,
+        retries=0,
     )(_run_finalize_impl)
     _tasks_client_id = id(client)
 
@@ -719,40 +867,27 @@ _ensure_tasks_registered()
 
 
 def submit_run_workflow(run_id: str, version_item_ids: list[str], *, simpleaudit_version: str | None, git_commit: str | None):
-    """Enqueue the per-run audit tasks (one scenario task each + a finalize task).
+    """Enqueue one ``audit.scenario_execute`` task per given scenario.
 
-    Uses the two standalone tasks registered at module level (``audit.scenario_execute``
-    and ``audit.run_finalize``). Standalone tasks are the reliable primitive here:
-    the worker subscribes to a fixed set of action names at startup, so dynamically
-    built per-run workflow steps (which would need their own queue subscriptions)
-    are never dispatched.
+    Standalone tasks are the reliable primitive: the worker subscribes to a
+    fixed set of action names at startup. There is no separate finalize task:
+    the scenario that writes the last final result completes the run inline
+    (``_maybe_finalize``), and the sweeper completes or resumes anything left.
 
-    Ordering guarantee: the finalize task is enqueued alongside the scenario tasks
-    and may be scheduled before slow scenarios finish. That is safe because
-    ``_run_finalize_impl`` refuses to mark the run completed until every pinned
-    scenario has a durable result row, retrying via Hatchet until they do. A run
-    therefore can never reach ``completed`` with missing results.
-
-    Returns the finalize task run reference, or raises if the client is unavailable.
+    Safe to call repeatedly for the same scenarios (see ``resume_run``).
+    Returns the last task run reference, or raises if the client is unavailable.
     """
     # Re-register tasks against the current client if it changed since import
     # (e.g. embedded engine started after this module loaded). Without this,
     # submission would target a stale client and fail with DNS/RPC errors.
     _ensure_tasks_registered()
+    ref = None
     for vid in version_item_ids:
-        _scenario_task.run(
-            input=ScenarioInput(run_id=str(run_id), version_item_id=str(vid), attempt=1),
+        ref = _scenario_task.run(
+            input=ScenarioInput(run_id=str(run_id), version_item_id=str(vid)),
             wait_for_result=False,
         )
-    return _finalize_task.run(
-        input=FinalizeInput(
-            run_id=str(run_id),
-            simpleaudit_version=simpleaudit_version,
-            git_commit=git_commit,
-            total_scenarios=len(version_item_ids),
-        ),
-        wait_for_result=False,
-    )
+    return ref
 
 
 def build_worker() -> Worker:
@@ -787,131 +922,71 @@ def _recover_stuck_runs() -> None:
     idempotent: already-completed scenarios skip instantly via the durable
     result check.
 
-    Only recovers runs that have been stuck for more than a short grace period
-    to avoid racing with a concurrent healthy worker.
+    Only the missing scenarios are resubmitted (see ``resume_run``).
     """
-    from django.utils import timezone as dj_timezone
-
     from audits.models import AuditRun
-    from scenarios.models import ScenarioSetVersionItem
 
-    grace = dj_timezone.now() - __import__("datetime").timedelta(seconds=30)
-    stuck = AuditRun.objects.filter(
-        status__in=[
-            AuditRun.Status.QUEUED,
-            AuditRun.Status.PREPARING,
-            AuditRun.Status.TARGET_EXECUTION,
-            AuditRun.Status.AUDITING,
-            AuditRun.Status.JUDGING,
-            AuditRun.Status.AGGREGATION,
-            AuditRun.Status.REPORT_GENERATION,
-        ],
-        updated_at__lt=grace,
-        archived=False,
-    )
+    # No grace period: resuming is idempotent (per-scenario concurrency key +
+    # durable result checks), so it cannot double-run work a healthy worker is
+    # doing, and a run the crash interrupted resumes immediately.
+    stuck = AuditRun.objects.filter(status__in=_ACTIVE_STATUSES, archived=False)
 
     recovered = 0
     for run in stuck:
         try:
-            items = list(
-                ScenarioSetVersionItem.objects.filter(version=run.scenario_set_version)
-            )
-            vids = [str(it.pk) for it in items]
-            if not vids:
-                continue
-            submit_run_workflow(
-                str(run.pk),
-                vids,
-                simpleaudit_version=run.simpleaudit_version,
-                git_commit=run.git_commit,
-            )
-            recovered += 1
-            logger.info("Crash recovery: re-submitted run %s (%d scenarios)", run.pk, len(vids))
+            if resume_run(run, reason="worker_start"):
+                recovered += 1
         except Exception as exc:  # noqa: BLE001 - crash recovery must not fail the whole sweep
-            logger.warning("Crash recovery: failed to re-submit run %s: %s", run.pk, exc)
+            logger.warning("Crash recovery: failed to resume run %s: %s", run.pk, exc)
 
     if recovered:
         logger.info("Crash recovery: re-submitted %d stuck run(s)", recovered)
 
 
-def _stuck_run_sweeper(interval: int = 60, stale_minutes: int = 30) -> None:
-    """Periodically mark runs as failed if they've been active with no new events.
+def _sweep_once(stale_minutes: int = RESUME_STALE_MINUTES) -> None:
+    """One sweeper pass over active runs: complete, submit, or resume them.
 
-    Catches cases where the worker is alive but a run's event thread died or
-    the Hatchet tasks silently stopped making progress. Runs in a non-terminal
-    state whose last event (or creation time) is older than ``stale_minutes``
-    are marked FAILED with a diagnostic message.
+    - every scenario has a final result -> complete the run
+    - submission never went through -> submit the missing scenarios
+    - no progress events for ``stale_minutes`` -> resume (resubmit missing)
+
+    Runs are never failed for being slow: a run queued behind other runs, or
+    waiting for the worker to come back, is resumed, not killed. Scenarios that
+    keep crashing are bounded by the durable attempt budget instead.
     """
-    import time
-    from datetime import timedelta
-
-    from django.utils import timezone as dj_timezone
+    from datetime import timedelta as _td
 
     from audits.events import AuditEvent
     from audits.models import AuditRun
 
-    logger.info("Stuck-run sweeper started (interval=%ds, stale=%dmin)", interval, stale_minutes)
+    cutoff = timezone.now() - _td(minutes=stale_minutes)
+    for run in AuditRun.objects.filter(status__in=_ACTIVE_STATUSES, archived=False):
+        try:
+            if _maybe_finalize(str(run.pk)):
+                continue
+            meta = run.runtime_metadata or {}
+            if (meta.get("submission") or {}).get("status") == "pending":
+                resume_run(run, reason="submission_retry")
+                continue
+            last_event = AuditEvent.objects.filter(run_id=run.pk).order_by("-id").only("created_at").first()
+            last_activity = last_event.created_at if last_event else (run.queued_at or run.created_at)
+            if last_activity and last_activity < cutoff:
+                resume_run(run, reason="stalled")
+        except Exception as exc:  # noqa: BLE001 - one bad run must not stop the sweep
+            logger.warning("Sweeper: run %s skipped: %s", run.pk, exc)
+
+
+def _stuck_run_sweeper(interval: int = 60, stale_minutes: int = RESUME_STALE_MINUTES) -> None:
+    """Background loop around ``_sweep_once``; never crashes."""
+    import time
+
+    logger.info("Run sweeper started (interval=%ds, resume after %dmin idle)", interval, stale_minutes)
     while True:
         time.sleep(interval)
         try:
-            cutoff = dj_timezone.now() - timedelta(minutes=stale_minutes)
-            active_statuses = [
-                AuditRun.Status.QUEUED,
-                AuditRun.Status.PREPARING,
-                AuditRun.Status.TARGET_EXECUTION,
-                AuditRun.Status.AUDITING,
-                AuditRun.Status.JUDGING,
-                AuditRun.Status.AGGREGATION,
-                AuditRun.Status.REPORT_GENERATION,
-            ]
-            candidates = AuditRun.objects.filter(
-                status__in=active_statuses,
-                archived=False,
-            ).select_related()
-            from audits.events import ScenarioResult
-
-            for run in candidates:
-                # Check if all scenarios actually completed but status wasn't updated.
-                result_count = ScenarioResult.objects.filter(run_id=run.pk).count()
-                if run.total_scenarios and result_count >= run.total_scenarios:
-                    logger.info(
-                        "Force-completing run %s: all %d/%d results present but status=%s",
-                        run.pk, result_count, run.total_scenarios, run.status,
-                    )
-                    run.status = AuditRun.Status.COMPLETED
-                    run.completed_scenarios = result_count
-                    run.finished_at = dj_timezone.now()
-                    run.save(update_fields=["status", "completed_scenarios", "finished_at"])
-                    try:
-                        append_event(run.pk, "_run", "run_completed", {"scenarios": result_count, "recovered": True})
-                    except Exception:
-                        pass
-                    continue
-
-                # Find the most recent event for this run.
-                last_event = AuditEvent.objects.filter(run_id=run.pk).order_by("-id").first()
-                last_activity = last_event.created_at if last_event else run.updated_at
-                if last_activity and last_activity < cutoff:
-                    minutes_stale = int((dj_timezone.now() - last_activity).total_seconds() // 60)
-                    logger.warning(
-                        "Marking run %s as FAILED: no activity for %d min (status=%s)",
-                        run.pk, minutes_stale, run.status,
-                    )
-                    run.status = AuditRun.Status.FAILED
-                    run.finished_at = dj_timezone.now()
-                    meta = dict(run.runtime_metadata or {})
-                    meta["failure_reason"] = f"Stuck: no progress events for {minutes_stale} min"
-                    run.runtime_metadata = meta
-                    run.save(update_fields=["status", "finished_at", "runtime_metadata"])
-                    # Emit a terminal event so the UI updates.
-                    try:
-                        append_event(run.pk, "_run", "run_failed", {
-                            "error": f"Run stuck with no progress for {minutes_stale} min",
-                        })
-                    except Exception:
-                        pass
+            _sweep_once(stale_minutes)
         except Exception as exc:  # noqa: BLE001 - sweeper must never crash
-            logger.warning("Stuck-run sweeper iteration failed: %s", exc)
+            logger.warning("Run sweeper iteration failed: %s", exc)
 
 
 def start_worker(max_startup_retries: int = 30, startup_retry_delay: float = 2.0) -> None:
@@ -950,7 +1025,7 @@ def start_worker(max_startup_retries: int = 30, startup_retry_delay: float = 2.0
     except Exception as exc:  # noqa: BLE001 - crash recovery must not block worker startup
         logger.warning("Crash recovery skipped: %s", exc)
 
-    # Start periodic stuck-run sweeper (marks runs failed if no events for 30 min).
+    # Periodic sweeper: completes finished runs, resumes stalled ones.
     _sweeper = _threading.Thread(target=_stuck_run_sweeper, daemon=True, name="stuck-run-sweeper")
     _sweeper.start()
 
