@@ -11,6 +11,7 @@ import inspect
 from unittest import mock
 
 from django.test import TestCase
+from django.utils import timezone
 
 from accounts.models import Project, ProjectMembership, User
 from audits.events import get_result
@@ -650,6 +651,25 @@ class ResumableExecutionTest(TestCase):
             out = self._exec(run, item)
         eng.assert_not_called()
         self.assertEqual(out["status"], "run_cancelled")
+
+    def test_sweeper_submits_never_submitted_run_after_grace(self):
+        """A run whose launch crashed before reaching Hatchet is picked up within a minute."""
+        from datetime import timedelta
+
+        from infra import worker
+
+        run, _item = _build_run(self.user, self.project)
+        AuditRun.objects.filter(pk=run.pk).update(status=AuditRun.Status.QUEUED, workflow_run_id="")
+        with mock.patch.object(worker, "resume_run") as resume:
+            worker._sweep_once()   # just created: within the grace period
+            resume.assert_not_called()
+            AuditRun.objects.filter(pk=run.pk).update(
+                created_at=timezone.now() - timedelta(seconds=worker.NEVER_SUBMITTED_GRACE_SECONDS + 5),
+                queued_at=None,
+            )
+            worker._sweep_once()
+        resume.assert_called_once()
+        self.assertEqual(resume.call_args.kwargs["reason"], "never_submitted")
 
     def test_sweeper_resumes_stalled_run_with_missing_scenarios_only(self):
         from datetime import timedelta
