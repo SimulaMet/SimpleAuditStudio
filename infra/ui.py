@@ -108,13 +108,12 @@ class HealthView(AdminRequiredMixin, TemplateView):
 class IndexView(TemplateView):
     """Redirect helper kept for backward compatibility with the ``index`` name.
 
-    The public landing page now lives at ``/`` via ``LandingView`` (see
-    ``config/urls.py``). This view simply forwards to it so any existing links
-    or references to the ``index`` URL name keep working.
+    ``/`` is the home page (dashboard when signed in, landing page otherwise;
+    see ``config/urls.py``). This view simply forwards there.
     """
 
     def get(self, request, *args, **kwargs):
-        return redirect("landing")
+        return redirect("/")
 
 
 class LoginView(TemplateView):

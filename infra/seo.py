@@ -84,7 +84,13 @@ def _software_schema(request) -> dict:
 # ─── Public page views ───────────────────────────────────────────────────────
 
 class LandingView(TemplateView):
+    """Public landing page: ``/`` for signed-out visitors (see ``home_view``)
+    and ``/landing/`` for anyone. ``/landing/`` is noindex with a canonical of
+    ``/`` so search engines see a single landing URL.
+    """
+
     template_name = "public/landing.html"
+    always_show = False
 
     def get_context_data(self, **kw):
         ctx = _base_context(self.request)
@@ -95,7 +101,8 @@ class LandingView(TemplateView):
                 "audits. Freeze inputs, compare runs, and judge LLM behavior with the SimpleAudit "
                 "Target → Auditor → Judge engine."
             ),
-            page_robots="index,follow",
+            page_robots="noindex,follow" if self.always_show else "index,follow",
+            page_canonical=_absolute_url(self.request, "/"),
             page_jsonld=[
                 json.dumps(_organization_schema(self.request)),
                 json.dumps(_website_schema(self.request)),
@@ -150,7 +157,6 @@ def robots_txt(request):
         "Disallow: /login/",
         "Disallow: /register/",
         "Disallow: /logout/",
-        "Disallow: /dashboard/",
         "Disallow: /workspaces/",
         "Disallow: /health/",
         "Disallow: /audits/",

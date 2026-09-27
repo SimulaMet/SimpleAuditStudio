@@ -6,6 +6,7 @@ from django.contrib import admin
 from django.http import Http404
 from django.shortcuts import redirect
 from django.urls import include, path
+from django.views.generic import RedirectView
 from django.views.static import serve as _static_serve
 from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView
 
@@ -100,6 +101,17 @@ def _favicon(request):
 
 
 # --- URL patterns ----------------------------------------------------------
+_landing_view = LandingView.as_view()
+_dashboard_view = DashboardView.as_view()
+
+
+def home_view(request, *args, **kwargs):
+    """Signed in: the dashboard. Signed out: the public landing page."""
+    if request.user.is_authenticated:
+        return _dashboard_view(request, *args, **kwargs)
+    return _landing_view(request, *args, **kwargs)
+
+
 urlpatterns = [
     path("static/<path:path>", _serve_static, name="static-serve"),
     path("favicon.ico", _favicon, name="favicon"),
@@ -121,7 +133,9 @@ urlpatterns = [
     path("api/", include("model_registry.urls")),
     path("api/", include("audits.urls")),
     # Public landing page (indexable, no auth) — the site's SEO surface
-    path("", LandingView.as_view(), name="landing"),
+    # "/" is the dashboard when signed in and the public landing page otherwise.
+    path("", home_view, name="dashboard"),
+    path("landing/", LandingView.as_view(always_show=True), name="landing_page"),
     # UI (server-rendered CBVs)
     path("index", IndexView.as_view(), name="index"),
     path("login/", LoginView.as_view(), name="login"),
@@ -133,7 +147,8 @@ urlpatterns = [
     path("auth/workos/login/", WorkOSLoginView.as_view(), name="workos_login"),
     path("auth/workos/verify/", WorkOSVerifyView.as_view(), name="workos_verify"),
     path("auth/workos/callback/", WorkOSCallbackView.as_view(), name="workos_callback"),
-    path("dashboard/", DashboardView.as_view(), name="dashboard"),
+    # Old dashboard URL: kept only as a redirect for bookmarks (query preserved).
+    path("dashboard/", RedirectView.as_view(url="/", query_string=True, permanent=True)),
     path("workspaces/", WorkspacesView.as_view(), name="workspaces"),
     path("admin-settings/", AdminView.as_view(), name="admin_settings"),
     path("profile/", ProfileView.as_view(), name="profile"),
@@ -160,5 +175,5 @@ urlpatterns = [
     path("audits/<int:run_id>/rename/", AuditRenameView.as_view(), name="audit_rename"),
     path("audits/<int:run_id>/results/<int:result_id>/", ScenarioResultDetailView.as_view(), name="scenario_result_detail"),
     path("audits/<int:run_id>/export/", AuditExportView.as_view(), name="audit_export"),
-    path("dashboard/export.csv", DashboardExportView.as_view(), name="dashboard_export"),
+    path("export.csv", DashboardExportView.as_view(), name="dashboard_export"),
 ]
