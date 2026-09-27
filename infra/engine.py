@@ -479,6 +479,15 @@ def run_scenario_repeated(
     if auditor_kw:
         model_entry["auditor_kwargs"] = auditor_kw
 
+    # The engine consults ``rep_is_done(label, i)`` right before starting rep
+    # ``i`` — the only hook that fires at every rep boundary with the exact
+    # index. Use it to signal rep starts; always return False so no rep is
+    # skipped. on_rep_started must be async-safe (no Django ORM calls).
+    def _rep_is_done(label: str, rep_index: int) -> bool:
+        if on_rep_started:
+            on_rep_started(rep_index)
+        return False
+
     try:
         experiment = AuditExperiment(
             models=[model_entry],
@@ -497,6 +506,7 @@ def run_scenario_repeated(
             show_progress=False,
             n_repetitions=n_repetitions,
             on_rep_done=_on_rep_done,
+            rep_is_done=_rep_is_done,
             cancel_event=cancel_event,
             max_retries_per_rep=max_retries,
         )

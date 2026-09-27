@@ -11,7 +11,7 @@ from rest_framework.response import Response
 
 from accounts.models import Project
 from accounts.services import ensure_project_access, require_project_writable
-from audits.events import ScenarioResult, list_events
+from audits.events import ScenarioResult, append_event, list_events
 from audits.models import AuditRun
 from audits.serializers import AuditRunCreateSerializer, AuditRunSerializer
 from audits.services import create_audit_run, submit_audit_run
@@ -26,6 +26,8 @@ logger = logging.getLogger("simpleaudit.audit")
 _TERMINAL_EVENT_KINDS = {"run_completed", "run_failed", "run_cancelled"}
 _SSE_POLL_INTERVAL_SECONDS = 1.0
 _SSE_MAX_DURATION_SECONDS = 3600
+# Max events read per poll; a backlog drains over successive polls.
+_SSE_BATCH_SIZE = 1000
 
 
 def _get_project_or_404(project_id) -> Project:
@@ -171,6 +173,9 @@ def cancel_audit_run(request, project_id, run_id):
     if run.finished_at is None:
         run.finished_at = timezone.now()
     run.save(update_fields=["status", "finished_at"])
+    # Terminal event so live progress (SSE) ends right away; running scenarios
+    # see the durable flag and stop at their next repetition.
+    append_event(run.id, "_run", "run_cancelled", {"by": request.user.username})
     logger.info("Audit run %s cancellation requested by user %s", run.id, request.user.username)
     return Response(AuditRunSerializer(run).data)
 
@@ -246,14 +251,15 @@ def stream_audit_run_events(request, project_id, run_id):
             if time.monotonic() - start > _SSE_MAX_DURATION_SECONDS:
                 yield "event: timeout\ndata: {}\n\n"
                 break
-            events = list_events(run.id, after_id=sent_after)
+            events = list_events(run.id, after_id=sent_after, limit=_SSE_BATCH_SIZE)
             for e in events:
                 sent_after = e["id"]
                 data = json.dumps({"kind": e["kind"], "version_item_id": e["version_item_id"], "payload": e["payload"], "ts": e["created_at"]})
                 yield f"id: {e['id']}\nevent: {e['kind']}\ndata: {data}\n\n"
                 if e["kind"] in _TERMINAL_EVENT_KINDS:
                     return
-            time.sleep(_SSE_POLL_INTERVAL_SECONDS)
+            if len(events) < _SSE_BATCH_SIZE:
+                time.sleep(_SSE_POLL_INTERVAL_SECONDS)
 
     response = StreamingHttpResponse(event_stream(), content_type="text/event-stream")
     response["Cache-Control"] = "no-cache"

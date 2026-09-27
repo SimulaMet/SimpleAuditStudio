@@ -75,24 +75,89 @@ def append_event(run_id: int | str, version_item_id: str, kind: str, payload: di
     return event.id
 
 
-def list_events(run_id: int | str, after_id: int = 0) -> list[dict]:
+def _event_dict(e: AuditEvent) -> dict:
+    return {
+        "id": e.id,
+        "run_id": e.run_id,
+        "version_item_id": e.version_item_id,
+        "kind": e.kind,
+        "payload": e.payload,
+        "created_at": e.created_at.isoformat(),
+    }
+
+
+def list_events(run_id: int | str, after_id: int = 0, limit: int | None = None) -> list[dict]:
     """Return durable events for a run with id > after_id, oldest first.
 
     Mirrors SSE replay semantics: a client reconnecting with a
     ``Last-Event-ID`` passes it as ``after_id`` to fetch only what it missed.
+    ``limit`` caps the batch so a large backlog is streamed in chunks.
     """
     qs = AuditEvent.objects.filter(run_id=int(run_id), id__gt=after_id).order_by("id")
-    return [
-        {
-            "id": e.id,
-            "run_id": e.run_id,
-            "version_item_id": e.version_item_id,
-            "kind": e.kind,
-            "payload": e.payload,
-            "created_at": e.created_at.isoformat(),
-        }
-        for e in qs
-    ]
+    if limit is not None:
+        qs = qs[:limit]
+    return [_event_dict(e) for e in qs]
+
+
+# Per-scenario event kinds whose most recent occurrence fully determines where
+# that scenario currently is (queued / in rep R at turn T / judging / done).
+SCENARIO_STATE_KINDS = (
+    "scenario_attempted",
+    "scenario_rep_started",
+    "scenario_turn",
+    "scenario_completed",
+    "scenario_failed",
+    "scenario_skipped_existing",
+)
+
+
+def progress_snapshot(run_id: int | str) -> tuple[list[dict], int]:
+    """Latest state event per scenario, plus the run's highest event id.
+
+    Lets the live progress page start from current state and stream only newer
+    events, instead of replaying the whole log (1000 scenarios x 20 reps is
+    hundreds of thousands of events).
+    """
+    from django.db.models import Max
+
+    run_id = int(run_id)
+    latest_ids = (
+        AuditEvent.objects.filter(run_id=run_id, kind__in=SCENARIO_STATE_KINDS)
+        .values("version_item_id")
+        .annotate(last_id=Max("id"))
+        .values_list("last_id", flat=True)
+    )
+    ids = list(latest_ids)
+    # A terminal run event that landed just before the page rendered must not
+    # be skipped, or the page would wait forever for it.
+    terminal_id = (
+        AuditEvent.objects.filter(run_id=run_id, kind__in=("run_completed", "run_failed", "run_cancelled"))
+        .aggregate(m=Max("id"))["m"]
+    )
+    if terminal_id:
+        ids.append(terminal_id)
+    # Stage too (the run row's status can lag behind the event log): one event
+    # per distinct stage, since stages can be logged out of order; the client
+    # only moves the stage forward, so it settles on the furthest one.
+    ids += list(
+        AuditEvent.objects.filter(run_id=run_id, kind="run_stage")
+        .values("payload__stage")
+        .annotate(last_id=Max("id"))
+        .values_list("last_id", flat=True)
+    )
+    # The last few activity events seed "Latest Activity"; replayed in id
+    # order, so each scenario's newest state still wins.
+    ids += list(
+        AuditEvent.objects.filter(
+            run_id=run_id,
+            kind__in=("scenario_turn", "scenario_rep_started", "scenario_completed", "scenario_failed"),
+        )
+        .order_by("-id")
+        .values_list("id", flat=True)[:4]
+    )
+    events = [_event_dict(e) for e in AuditEvent.objects.filter(id__in=set(ids)).order_by("id")]
+    last_id = AuditEvent.objects.filter(run_id=run_id).aggregate(m=Max("id"))["m"] or 0
+    return events, last_id
 
 
 @transaction.atomic
@@ -111,17 +176,24 @@ def upsert_scenario_result(
     When ``result`` is provided it replaces the stored structured result; when
     omitted the existing result (if any) is preserved.
     """
+    from django.db import IntegrityError
+
     run_id = int(run_id)
-    existing = ScenarioResult.objects.filter(run_id=run_id, version_item_id=version_item_id).first()
+    existing = ScenarioResult.objects.select_for_update().filter(run_id=run_id, version_item_id=version_item_id).first()
     if existing is None:
-        ScenarioResult.objects.create(
-            run_id=run_id,
-            version_item_id=version_item_id,
-            status=status,
-            attempts=attempts,
-            result=result or {},
-        )
-        return
+        try:
+            # Savepoint: a concurrent writer may insert first (unique key).
+            with transaction.atomic():
+                ScenarioResult.objects.create(
+                    run_id=run_id,
+                    version_item_id=version_item_id,
+                    status=status,
+                    attempts=attempts,
+                    result=result or {},
+                )
+            return
+        except IntegrityError:
+            existing = ScenarioResult.objects.select_for_update().get(run_id=run_id, version_item_id=version_item_id)
     existing.attempts = max(existing.attempts, attempts)
     existing.status = status
     if result is not None:

@@ -153,6 +153,12 @@ def submit_audit_run(run: AuditRun) -> str | None:
     )
     version_item_ids = [str(item.id) for item in items]
 
+    # Written BEFORE submission: the worker can start scenarios (and log
+    # target_execution) before submit returns, and a later "preparing" would
+    # make the live progress stage appear to go backwards.
+    append_event(run.id, "_run", "run_queued", {"scenarios": len(items)})
+    append_event(run.id, "_run", "run_stage", {"stage": "preparing"})
+
     try:
         ref = submit_run_workflow(
             run.id,
@@ -169,8 +175,6 @@ def submit_audit_run(run: AuditRun) -> str | None:
     # step, so the run cannot be marked completed until every scenario has a
     # result. wait_for_result=False enqueues and returns immediately; the worker
     # executes the steps asynchronously.
-    append_event(run.id, "_run", "run_queued", {"scenarios": len(items)})
-    append_event(run.id, "_run", "run_stage", {"stage": "preparing"})
     run.refresh_from_db()
     meta = dict(run.runtime_metadata or {})
     meta["submission"] = {

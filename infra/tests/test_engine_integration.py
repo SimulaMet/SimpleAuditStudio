@@ -498,19 +498,20 @@ class CrashRecoveryTest(TestCase):
             _recover_stuck_runs()
             mock_submit.assert_not_called()
 
-    def test_does_not_recover_recently_updated_run(self):
+    def test_recovers_recently_updated_run(self):
+        """No grace period: resume is idempotent, so a just-interrupted run
+        resumes at once instead of waiting for the sweeper."""
         from unittest.mock import patch
 
         from infra.tests.test_engine_integration import _build_run
         from infra.worker import _recover_stuck_runs
 
         run, _item = _build_run(self.user, self.project)
-        # updated_at is just now (within grace period) — should NOT recover
         AuditRun.objects.filter(pk=run.pk).update(status="queued")
 
         with patch("infra.worker.submit_run_workflow") as mock_submit:
             _recover_stuck_runs()
-            mock_submit.assert_not_called()
+            mock_submit.assert_called_once()
 
     def test_does_not_recover_completed_run(self):
         from datetime import timedelta
@@ -530,3 +531,126 @@ class CrashRecoveryTest(TestCase):
         with patch("infra.worker.submit_run_workflow") as mock_submit:
             _recover_stuck_runs()
             mock_submit.assert_not_called()
+
+
+class ResumableExecutionTest(TestCase):
+    """Guarantees of the resumable job pipeline: inline finalize, durable
+    attempt budget, derived counters, cancel propagation, and resume."""
+
+    def setUp(self):
+        self.user = User.objects.create_user(username="resume", password="pass12345")
+        self.project = Project.objects.create(name="RS", slug="rs")
+        ProjectMembership.objects.create(project=self.project, user=self.user, role=ProjectMembership.Role.AUDITOR)
+
+    def _payload(self, severity="pass"):
+        return {
+            "scenario_name": "dose", "severity": severity, "issues_found": [], "positive_behaviors": [],
+            "summary": "ok", "recommendations": [], "conversation": [], "_language": "English",
+        }
+
+    def _exec(self, run, item):
+        from infra import worker
+        return worker._scenario_execute_impl(
+            worker.ScenarioInput(run_id=str(run.id), version_item_id=str(item.id)), ctx=None
+        )
+
+    def test_last_scenario_finalizes_run_inline(self):
+        from audits.events import list_events
+        from infra import worker
+
+        run, item = _build_run(self.user, self.project)
+        with mock.patch.object(worker, "WORKER_SIMPLEAUDIT_VERSION", run.simpleaudit_version), \
+             mock.patch.object(worker, "WORKER_GIT_COMMIT", run.git_commit), \
+             mock.patch("infra.engine.run_scenario", return_value=self._payload()):
+            self.assertEqual(self._exec(run, item)["status"], "completed")
+        run.refresh_from_db()
+        self.assertEqual(run.status, AuditRun.Status.COMPLETED)
+        self.assertEqual((run.completed_scenarios, run.successful_scenarios, run.failed_scenarios), (1, 1, 0))
+        self.assertEqual([e["kind"] for e in list_events(run.id)].count("run_completed"), 1)
+
+    def test_duplicate_execution_is_skipped_and_not_double_counted(self):
+        from infra import worker
+
+        run, item = _build_run(self.user, self.project)
+        with mock.patch.object(worker, "WORKER_SIMPLEAUDIT_VERSION", run.simpleaudit_version), \
+             mock.patch.object(worker, "WORKER_GIT_COMMIT", run.git_commit), \
+             mock.patch("infra.engine.run_scenario", return_value=self._payload()) as eng:
+            self._exec(run, item)
+            second = self._exec(run, item)
+        self.assertEqual(eng.call_count, 1)
+        self.assertTrue(second["status"].startswith(("run_", "skipped")))
+        run.refresh_from_db()
+        self.assertEqual(run.completed_scenarios, 1)
+
+    def test_failures_are_provisional_until_attempt_budget_is_spent(self):
+        from infra import worker
+        from infra.engine import EngineError
+
+        run, item = _build_run(self.user, self.project)
+        with mock.patch("infra.engine.run_scenario", side_effect=EngineError("boom")):
+            for _ in range(worker.MAX_SCENARIO_ATTEMPTS - 1):
+                with self.assertRaises(EngineError):
+                    self._exec(run, item)
+                run.refresh_from_db()
+                self.assertNotEqual(run.status, AuditRun.Status.COMPLETED)
+                self.assertEqual(run.completed_scenarios, 0)
+            # Last attempt: final failure, no re-raise, run completes.
+            out = self._exec(run, item)
+        self.assertEqual(out["status"], "failed")
+        run.refresh_from_db()
+        self.assertIn(run.status, (AuditRun.Status.COMPLETED, AuditRun.Status.FAILED))
+        self.assertEqual((run.completed_scenarios, run.failed_scenarios), (1, 1))
+
+    def test_attempt_budget_survives_resubmission(self):
+        from audits.events import append_event, get_result
+        from infra import worker
+
+        run, item = _build_run(self.user, self.project)
+        for _ in range(worker.MAX_SCENARIO_ATTEMPTS):
+            append_event(run.id, str(item.id), "scenario_attempted", {})
+        with mock.patch("infra.engine.run_scenario") as eng:
+            out = self._exec(run, item)
+        eng.assert_not_called()
+        self.assertEqual(out["reason"], "attempts_exhausted")
+        self.assertEqual(get_result(run.id, str(item.id))["status"], "failed")
+
+    def test_cancelled_run_takes_no_more_work(self):
+        run, item = _build_run(self.user, self.project)
+        AuditRun.objects.filter(pk=run.pk).update(status=AuditRun.Status.CANCELLED)
+        with mock.patch("infra.engine.run_scenario") as eng:
+            out = self._exec(run, item)
+        eng.assert_not_called()
+        self.assertEqual(out["status"], "run_cancelled")
+
+    def test_sweeper_resumes_stalled_run_with_missing_scenarios_only(self):
+        from datetime import timedelta
+
+        from django.utils import timezone
+
+        from infra import worker
+
+        run, item = _build_run(self.user, self.project)
+        AuditRun.objects.filter(pk=run.pk).update(
+            status=AuditRun.Status.TARGET_EXECUTION, queued_at=timezone.now() - timedelta(hours=1),
+        )
+        with mock.patch("infra.worker.submit_run_workflow") as submit:
+            worker._sweep_once(stale_minutes=10)
+        submit.assert_called_once()
+        self.assertEqual(submit.call_args[0][1], [str(item.id)])
+        run.refresh_from_db()
+        self.assertEqual(run.status, AuditRun.Status.TARGET_EXECUTION)  # resumed, not failed
+        self.assertEqual(run.runtime_metadata["resumes"], 1)
+
+    def test_sweeper_completes_run_whose_results_are_all_in(self):
+        from audits.events import upsert_scenario_result
+        from infra import worker
+
+        run, item = _build_run(self.user, self.project)
+        upsert_scenario_result(run.id, str(item.id), status="completed", attempts=1, result={})
+        with mock.patch.object(worker, "WORKER_SIMPLEAUDIT_VERSION", run.simpleaudit_version), \
+             mock.patch.object(worker, "WORKER_GIT_COMMIT", run.git_commit), \
+             mock.patch("infra.worker.submit_run_workflow") as submit:
+            worker._sweep_once()
+        submit.assert_not_called()
+        run.refresh_from_db()
+        self.assertEqual(run.status, AuditRun.Status.COMPLETED)
