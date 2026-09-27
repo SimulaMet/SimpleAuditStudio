@@ -1,0 +1,18 @@
+{% comment %}Multi-select filter popover. Params: key (query param), label, items ([{id, name}]).{% endcomment %}
+<div class="relative" data-pop data-multi="{{ key }}" data-label="{{ label }}">
+  <button type="button" data-pop-btn aria-haspopup="true" aria-expanded="false"
+          class="inline-flex items-center gap-1 max-w-[14rem] px-2.5 py-1.5 rounded-lg bg-surface-overlay border border-gray-700 text-xs text-gray-300 hover:text-white whitespace-nowrap">
+    <span data-multi-label class="truncate">{{ label }}</span> <span class="text-gray-500">▾</span>
+  </button>
+  <div data-pop-menu class="hidden absolute left-0 top-full mt-1 z-30 w-64 rounded-lg border border-gray-700 bg-surface-raised shadow-xl p-2">
+    <input type="search" data-multi-search placeholder="Search {{ label|lower }}…" aria-label="Search {{ label|lower }}"
+           class="w-full mb-1.5 px-2 py-1 rounded bg-surface-overlay border border-gray-700 text-xs text-gray-200 focus:outline-none focus:ring-1 focus:ring-accent/50">
+    <ul class="max-h-64 overflow-y-auto space-y-0.5">
+      {% for item in items %}
+      <li><label class="flex items-center gap-2 px-1.5 py-1 rounded text-xs text-gray-300 hover:bg-surface-overlay cursor-pointer">
+        <input type="checkbox" value="{{ item.id }}" data-name="{{ item.name }}" class="accent-accent"> <span class="truncate" title="{{ item.name }}">{{ item.name }}</span></label></li>
+      {% empty %}<li class="px-1.5 py-1 text-xs text-gray-500">Nothing yet</li>{% endfor %}
+    </ul>
+    <button type="button" data-multi-clear class="mt-1.5 w-full text-xs text-gray-400 hover:text-accent py-1 border-t border-gray-800">Clear</button>
+  </div>
+</div>

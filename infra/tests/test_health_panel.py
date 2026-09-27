@@ -1,5 +1,4 @@
 """Tests for the admin Health panel: probes, API auth gating, and page render."""
-import time
 from unittest import mock
 
 from django.test import Client, TestCase
@@ -39,7 +38,7 @@ class HealthProbeTest(TestCase):
         self.assertIn("overall", data)
         self.assertIn("components", data)
         self.assertIn("resources", data)
-        for name in ("web", "postgres", "hatchet", "worker", "minio", "engine", "model_endpoints"):
+        for name in ("web", "postgres", "hatchet", "worker", "engine", "model_endpoints"):
             self.assertIn(name, data["components"])
         for name in ("memory", "disk", "cpu", "queue"):
             self.assertIn(name, data["resources"])
@@ -94,21 +93,6 @@ class HealthProbeTest(TestCase):
         )
         result = _queue_throughput_probe()
         self.assertGreaterEqual(result["runs"]["completed"], 1)
-
-    def test_minio_probe_fails_fast_when_unreachable(self):
-        """A health probe must not hang; an unreachable MinIO should fail in <5s."""
-        from django.test import override_settings
-
-        from infra import health
-
-        with override_settings(MINIO_ENDPOINT="http://127.0.0.1:1", MINIO_ACCESS_KEY="test", MINIO_SECRET_KEY="test", MINIO_BUCKET="b"):
-            start = time.monotonic()
-            # Call through _probe() exactly as collect_health() does, so the
-            # raised ClientError is normalized to a down component.
-            result = health._probe(health._minio_probe)
-            elapsed = time.monotonic() - start
-        self.assertEqual(result["status"], "down")
-        self.assertLess(elapsed, 5.0, f"MinIO probe took {elapsed:.1f}s (should fail fast)")
 
 
 class HealthApiAuthTest(TestCase):

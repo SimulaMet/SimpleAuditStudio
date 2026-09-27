@@ -1,13 +1,13 @@
 # SimpleAudit Studio — Domain Model
 
-Status: current  
-Date: 2026-09-22
+Status: current (matches the code)  
+Date: 2026-09-28
 
 ## 1. Core invariant
 
 **Every `AuditRun` must reference immutable inputs.**
 
-Once an audit is submitted, its effective scenario content, model configuration, judge profile, generation parameters, engine version, and runtime metadata are frozen. Later edits to scenarios, models, endpoints, or profiles must not alter historical audits.
+Once an audit is submitted, its effective scenario content, model configuration, generation parameters, engine version, and runtime metadata are frozen. Later edits to scenarios, models or connections must not alter historical runs.
 
 This invariant must be enforced by schema design and service behavior, not only by convention.
 
@@ -15,20 +15,28 @@ This invariant must be enforced by schema design and service behavior, not only 
 
 ```mermaid
 erDiagram
+    PROJECT ||--o{ PROJECT_MEMBERSHIP : has
+    USER ||--o{ PROJECT_MEMBERSHIP : holds
+    PROJECT ||--o{ SCENARIO : owns
+    PROJECT ||--o{ SCENARIO_SET : owns
+    PROJECT ||--o{ MODEL_CONNECTION : owns
     SCENARIO ||--o{ SCENARIO_REVISION : has
-    SCENARIO_SET ||--o{ SCENARIO_SET_VERSION : has
+    SCENARIO_SET ||--o{ SCENARIO_SET_VERSION : publishes
     SCENARIO_SET_VERSION ||--o{ SCENARIO_SET_VERSION_ITEM : contains
-    SCENARIO_REVISION ||--o{ SCENARIO_SET_VERSION_ITEM : referenced_by
-    MODEL_ENDPOINT ||--o{ AUDIT_RUN : target
-    MODEL_ENDPOINT ||--o{ AUDIT_RUN : auditor
-    MODEL_ENDPOINT ||--o{ AUDIT_RUN : judge
-    AUDIT_PROFILE ||--o{ AUDIT_RUN : optional
-    SCENARIO_SET_VERSION ||--o{ AUDIT_RUN : pins
-    AUDIT_RUN ||--o{ AUDIT_RUN_SCENARIO : produces
+    SCENARIO_REVISION ||--o{ SCENARIO_SET_VERSION_ITEM : pinned_by
+    MODEL_CONNECTION ||--o{ REGISTERED_MODEL : serves
+    REGISTERED_MODEL ||--o{ AUDIT_RUN : "target / auditor / judge"
+    SCENARIO_SET_VERSION ||--o{ AUDIT_RUN : pinned_by
+    EXPERIMENT ||--o{ AUDIT_RUN : groups
+    EXPERIMENT ||--o{ MONITOR : groups
+    MONITOR ||--o{ AUDIT_RUN : launches
+    AUDIT_RUN ||--o{ SCENARIO_RESULT : produces
     AUDIT_RUN ||--o{ AUDIT_EVENT : emits
-    AUDIT_RUN ||--o{ AUDIT_ARTIFACT : stores
-    AUDIT_RUN ||--o{ COMPARISON : included_in
 ```
+
+All tables use a `core_` prefix (e.g. `core_audit_run`). `SCENARIO_RESULT` and
+`AUDIT_EVENT` reference the run by `run_id` (no foreign key) so the worker can
+write them without locking the run row.
 
 ## 3. Scenario domain
 
@@ -80,7 +88,7 @@ Rules:
 
 Execution-relevant metadata:
 
-For MVP, `ScenarioRevision.content_hash` includes:
+`ScenarioRevision.content_hash` (`infra.hashing.scenario_revision_hash`, the only implementation) covers:
 
 - `description`
 - `expected_behavior`
@@ -199,17 +207,13 @@ Rules:
 - display name is user-facing; `model_id` is provider-specific
 - inherits auth from its connection
 
-### 4.3 `SecretReference`
+### 4.3 API keys
 
-Not necessarily a table initially. It is a named indirection:
-
-```text
-SIMULACHAT_API_KEY
-OPENAI_API_KEY
-LOCAL_INFERENCE_NO_SECRET
-```
-
-Production may later add a `Secret` table with encrypted values or external vault IDs, but audit manifests must store only the reference.
+A connection authenticates with either `api_key_direct` (stored on the
+connection) or `secret_reference`, the name of an environment variable read at
+execution time (e.g. `OPENAI_API_KEY`). The direct key wins when both are set.
+Keys are never rendered into pages: the models page and model discovery look the
+connection up server-side (`model_registry.services`).
 
 ## 5. Audit run
 
@@ -270,7 +274,7 @@ Rules:
 
 - status transitions validated by service layer
 - terminal states are immutable; retry always creates a new `AuditRun` referencing the same immutable inputs
-- config snapshots exclude raw secrets
+- config snapshots never contain raw API keys; they keep `connection_id` and `secret_reference`, and the worker resolves the key at execution time (`infra.engine.snapshot_api_key`), so a rotated key applies to queued runs too
 - workers execute only from config snapshots and pinned scenario version
 - `simpleaudit_version` and `git_commit` must be non-null for production runs
 - worker must verify loaded SimpleAudit version/commit against the run manifest and fail with stable error `SIMPLEAUDIT_VERSION_MISMATCH` on mismatch
@@ -350,137 +354,38 @@ Derived from `AuditRun` and pinned entities:
 
 The manifest must be downloadable and stable.
 
-## 6. Results
+## 6. Results and events (`audits/events.py`)
 
-### 6.1 `AuditRunScenario`
+### 6.1 `ScenarioResult`
 
-Per-scenario result row.
+One row per (run, scenario version item), upserted by the worker.
 
-Fields:
+Fields: `run_id`, `version_item_id`, `status`, `attempts` (the highest attempt
+seen; retries never lower it), `result` (JSON: judgment, severity, transcript
+summary; with repetitions `reps`, `aggregated_severity`, `agreement_rate`),
+`updated_at`. Unique on (`run_id`, `version_item_id`).
 
-- `id`
-- `run_id`
-- `version_item_id`
-- `scenario_id`
-- `scenario_revision_id`
-- `status`
-- `severity`
-- `issues_found` — JSON
-- `positive_behaviors` — JSON
-- `summary`
-- `recommendations` — JSON
-- `conversation_ref`
-- `judgment` — JSON
-- `target_tokens`
-- `auditor_tokens`
-- `judge_tokens`
-- `latency_ms`
-- `attempt_count`
-- `error_code`
-- `created_at`
-- `updated_at`
+### 6.2 `AuditEvent`
 
-Rules:
+Append-only progress log that drives live progress (SSE) and the run page.
 
-- unique `(run_id, version_item_id)` for final result
-- large conversation text may live in artifact storage while DB stores summary/judgment
-- retries update attempt metadata but preserve final idempotent result identity
+Fields: `run_id`, `version_item_id` (`"_run"` for run-level events), `kind`
+(e.g. `scenario_attempted`, `run_completed`, `run_failed`, `run_cancelled`,
+`finalize_waiting`), `payload` (JSON), `created_at`.
 
-### 6.2 `AuditArtifact`
+## 7. Comparison
 
-Stored file reference.
+`/compare/?runs=a,b,…` compares completed runs on the scenarios they share
+(`audits/comparison.py`). Nothing is stored. The page shows every input that
+differs between runs (models, scenario set version, engine version, generation
+parameters) and warns when the judge or auditor differs, since judge effects can
+dominate target-model effects.
 
-Fields:
+## 8. User preferences
 
-- `id`
-- `run_id`
-- `kind` — `results_json`, `transcript`, `report`, `export`, `debug_bundle`
-- `uri`
-- `content_type`
-- `size_bytes`
-- `sha256`
-- `created_at`
-
-Rules:
-
-- URI access authorized
-- hash enables integrity verification
-- artifacts are immutable once written
-
-## 7. Events and progress
-
-### 7.1 `AuditEvent`
-
-Durable event row.
-
-Fields:
-
-- `id`
-- `run_id`
-- `sequence`
-- `type`
-- `stage`
-- `payload` — JSON
-- `trace_id`
-- `created_at`
-
-Rules:
-
-- sequence unique per run
-- events append-only
-- SSE replays from `Last-Event-ID`
-- counters are derived from events or maintained transactionally with result writes
-
-## 8. Comparisons
-
-### 8.1 `Comparison`
-
-Saved comparison definition.
-
-Fields:
-
-- `id`
-- `project_id`
-- `name`
-- `run_ids` — JSON list or join table
-- `mode` — `all`, `identical_scenarios`, `custom`
-- `options` — JSON
-- `created_by`
-- `created_at`
-
-Recommended production shape uses a join table:
-
-- `comparison_run(comparison_id, run_id, position)`
-
-### 8.2 Comparison validity
-
-Comparison engine computes compatibility flags:
-
-- same scenario set version
-- same scenario revisions
-- same judge model/profile
-- same auditor model/profile
-- same SimpleAudit version
-- same material generation parameters
-
-Material generation parameter differences include changes to any of:
-
-- `max_turns`
-- target temperature
-- auditor temperature
-- judge temperature
-- `top_p`
-- `max_tokens`
-- language
-- retry policy that can alter executed calls
-- timeout/concurrency settings only when they changed actual execution behavior
-
-Judge identity is a first-class comparison dimension. When judges differ, the
-UI must show a prominent standing advisory, not only a buried warning, because
-measured judge effects can dominate target-model effects. Intersection mode
-should be recommended or default for cross-judge comparisons.
-
-UI displays warnings and offers intersection mode. It must not silently compare incompatible experiments.
+`User.preferences` (JSON) holds per-user UI settings written through
+`POST /me/preferences/` (a whitelist of keys, 20 KB cap). Today:
+`dashboard_columns`, the dashboard grid's column order, visibility and widths.
 
 ## 9. Users and authorization
 
@@ -500,29 +405,23 @@ Permissions:
 
 | Action | admin | auditor | viewer |
 |---|---:|---:|---:|
-| view project resources | yes | yes | yes |
-| create/edit scenarios | yes | yes | no |
-| publish scenario set version | yes | yes | no |
-| manage models | yes | no | no |
-| submit audit | yes | yes | no |
-| cancel audit | yes | yes if owner | no |
-| view results | yes | yes | yes |
-| manage users | yes | no | no |
+| view workspace resources and results | yes | yes | yes |
+| create/edit scenarios, publish versions | yes | yes | no |
+| manage model connections and models | yes | yes | no |
+| launch runs and experiments, create monitors | yes | yes | no |
+| cancel, archive, rename runs | yes | yes | no |
+| manage any monitor | yes | own only | no |
+| manage members, rename/delete workspace | yes | no | no |
 
-## 10. Migration strategy
+Superusers can do everything, in every workspace. Archived workspaces are
+read-only for everyone except superusers. The UI and the API enforce the same
+rule (`infra.ui.write_block_reason`, `require_project_role`).
 
-Initial production schema should be created with Django migrations.
+## 10. Migrations
 
-Important constraints:
-
-- foreign keys enforced
-- unique constraints on version identities
-- check constraints on status enums
-- content hash columns indexed where useful
-- append-only tables protected by application permissions and tests
-- no destructive migration without backup/restore test
-
-Backfill from prototype is optional and should be treated as import, not as source of truth.
+One `0001_initial` per app (the schema was reset before release) plus later
+additive migrations. The HF Space and Compose web service run `migrate` on
+start.
 
 ## 11. SimpleAudit compatibility
 
@@ -534,6 +433,5 @@ The platform must preserve existing SimpleAudit semantics:
 - judgment structure
 - token accounting
 - result aggregation
-- visualizer-compatible saved results
 
-Any change to these semantics requires explicit sign-off from the SimpleAudit Domain role and regression tests against existing expected outputs.
+Any change to these semantics needs regression tests against existing expected outputs.

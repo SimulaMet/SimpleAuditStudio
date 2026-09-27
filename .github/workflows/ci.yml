@@ -3,35 +3,9 @@ name: CI
 on:
   push:
     branches: [main]
-    paths:
-      - "accounts/**"
-      - "audits/**"
-      - "config/**"
-      - "infra/**"
-      - "model_registry/**"
-      - "scenarios/**"
-      - "simpleaudit_studio/**"
-      - "templates/**"
-      - "static/**"
-      - "manage.py"
-      - "pyproject.toml"
-      - "uv.lock"
-      - ".github/workflows/ci.yml"
+    paths-ignore: ["docs/**", "**.md", "LICENSE"]
   pull_request:
-    paths:
-      - "accounts/**"
-      - "audits/**"
-      - "config/**"
-      - "infra/**"
-      - "model_registry/**"
-      - "scenarios/**"
-      - "simpleaudit_studio/**"
-      - "templates/**"
-      - "static/**"
-      - "manage.py"
-      - "pyproject.toml"
-      - "uv.lock"
-      - ".github/workflows/ci.yml"
+    paths-ignore: ["docs/**", "**.md", "LICENSE"]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -48,6 +22,8 @@ jobs:
       SIMPLEAUDIT_LOCAL_SQLITE: "1"
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # the embedded-Hatchet step diffs against origin/main
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -66,3 +42,15 @@ jobs:
       - name: Run tests (embedded Hatchet, serial)
         if: steps.hatchet-changed.outputs.changed == 'true'
         run: uv run python manage.py test infra.tests.test_minimal_config.TestEmbeddedHatchetLifecycle
+
+  docker:
+    # Build both images (no push) so Dockerfile / compose breakage is caught.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build HF Space / demo image
+        run: docker build -t simpleaudit-studio:ci .
+      - name: Build Compose image
+        run: docker build -f deploy/compose/Dockerfile -t simpleaudit-studio-compose:ci .
+      - name: Validate compose file
+        run: cp .env.example .env && docker compose config --quiet

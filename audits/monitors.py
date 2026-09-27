@@ -21,7 +21,6 @@ from audits.models import AuditRun, Monitor
 
 logger = logging.getLogger("simpleaudit.monitor")
 
-_TERMINAL = {AuditRun.Status.COMPLETED, AuditRun.Status.FAILED, AuditRun.Status.CANCELLED}
 _FORM_KEYS = ("max_turns", "language", "n_repetitions")
 
 # Monitors spend the workspace's API keys unattended, so they are capped.
@@ -68,12 +67,17 @@ def has_write_role(user, project) -> bool:
     return _role(user, project) in _write_roles()
 
 
-def can_manage_monitor(user, monitor: Monitor) -> bool:
+_LOOKUP = object()
+
+
+def can_manage_monitor(user, monitor: Monitor, *, role=_LOOKUP) -> bool:
+    """Admins manage any monitor, auditors their own. Pass ``role`` when checking many."""
     from accounts.models import ProjectMembership
 
     if user and user.is_authenticated and user.is_superuser:
         return True
-    role = _role(user, monitor.project)
+    if role is _LOOKUP:
+        role = _role(user, monitor.project)
     if role == ProjectMembership.Role.ADMIN:
         return True
     return role == ProjectMembership.Role.AUDITOR and monitor.created_by_id == user.id
@@ -290,7 +294,9 @@ def create_monitor(*, project, user, name: str, run: dict, repeat: dict, experim
         project=project,
         name=name[:250],
         scenario_set=run["version"].scenario_set,
-        scenario_set_version=run["version"],  # always pinned: keeps the series comparable
+        # Pinned unless "Always latest" was picked (then each tick resolves the
+        # newest version; drift baselines reset when the version changes).
+        scenario_set_version=None if getattr(run["version"], "follow_latest", False) else run["version"],
         target_model=run["target"],
         auditor_model=run["auditor"],
         judge_model=run["judge"],
@@ -346,7 +352,7 @@ def run_due_monitors(now=None) -> list[int]:
                     "in this workspace. Recreate the monitor under an authorized user."
                 )
                 logger.warning("Monitor %s paused: owner lost write role", monitor.pk)
-            elif last is not None and last.status not in _TERMINAL:
+            elif last is not None and last.is_active:
                 monitor.last_error = f"Skipped {now:%Y-%m-%d %H:%M}: run #{last.id} still {last.status}."
             else:
                 try:

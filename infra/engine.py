@@ -44,15 +44,29 @@ def _ensure_engine_available() -> None:
         ) from exc
 
 
-def _resolve_secret(secret_reference: str | None, api_key_direct: str | None = None) -> str | None:
-    """Resolve credentials: direct key takes priority, then env var reference."""
-    direct = (api_key_direct or "").strip()
-    if direct:
-        return direct
+def _resolve_secret(secret_reference: str | None) -> str | None:
+    """The value of the environment variable a connection names, or None."""
     ref = (secret_reference or "").strip()
     if not ref:
         return None
-    return os.environ.get(ref)
+    return os.environ.get(ref) or None
+
+
+def snapshot_api_key(snapshot: dict) -> str | None:
+    """API key for a frozen endpoint snapshot, resolved at execution time.
+
+    Snapshots never store raw keys. The key comes from the snapshot's connection
+    (its stored key, else the env var it names); when the connection is gone,
+    from the snapshot's own ``secret_reference``.
+    """
+    from model_registry.models import ModelConnection
+    from model_registry.services import connection_api_key
+
+    conn_id = snapshot.get("connection_id")
+    conn = ModelConnection.objects.filter(pk=conn_id).first() if conn_id else None
+    if conn is not None:
+        return connection_api_key(conn) or None
+    return _resolve_secret(snapshot.get("secret_reference"))
 
 
 def _validate_secrets(*snapshots: tuple[str, dict]) -> None:
@@ -65,17 +79,13 @@ def _validate_secrets(*snapshots: tuple[str, dict]) -> None:
     ``secret_reference`` (e.g. a local server needing no auth) is allowed.
     """
     for role, snap in snapshots:
-        direct = (snap.get("api_key_direct") or "").strip()
         ref = (snap.get("secret_reference") or "").strip()
-        if direct:
-            continue  # direct key present, no need to validate env var
-        if not ref:
-            continue
-        if _resolve_secret(ref) is None:
-            raise EngineError(
-                f"Secret for {role} endpoint is not set: environment variable "
-                f"'{ref}' is missing or empty. Set it in the worker environment."
-            )
+        if not ref or snapshot_api_key(snap):
+            continue   # no auth needed, or a key was found
+        raise EngineError(
+            f"Secret for {role} endpoint is not set: environment variable "
+            f"'{ref}' is missing or empty. Set it in the worker environment."
+        )
 
 
 # Providers that any_llm does not know about are treated as OpenAI-compatible
@@ -142,7 +152,7 @@ def _auditor_kwargs_from_snapshot(snapshot: dict[str, Any]) -> dict[str, Any]:
     raw_params = dict(snapshot.get("default_parameters") or {})
     gen_params, client_kwargs = _split_endpoint_params(raw_params)
     base_url = snapshot.get("base_url") or None
-    api_key = _resolve_secret(snapshot.get("secret_reference"), snapshot.get("api_key_direct"))
+    api_key = snapshot_api_key(snapshot)
     # any_llm's OpenAI-compatible client requires *some* API key even when the
     # endpoint needs no auth (self-hosted / local servers). A snapshot without a
     # secret_reference means "no auth", so supply a non-secret placeholder — the

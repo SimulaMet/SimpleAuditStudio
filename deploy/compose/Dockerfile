@@ -45,7 +45,7 @@ RUN python manage.py collectstatic --noinput
 
 # Non-root user; media/static dirs must exist before dropping privileges.
 RUN useradd --create-home appuser \
-    && mkdir -p /app/staticfiles /app/media \
+    && mkdir -p /app/staticfiles \
     && chown -R appuser:appuser /app
 USER appuser
 

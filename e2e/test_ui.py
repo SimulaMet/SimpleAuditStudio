@@ -56,6 +56,19 @@ def login(page: Page) -> None:
     page.wait_for_selector("aside nav a:visible", timeout=15_000)
 
 
+def open_first_run(page: Page) -> bool:
+    """Open the newest run from the dashboard grid; False when there are no runs."""
+    page.goto(f"{BASE_URL}/")
+    page.wait_for_selector("#runs-grid .tabulator-row, #runs-grid .tabulator-placeholder")
+    rows = page.locator("#runs-grid .tabulator-row")
+    if rows.count() == 0:
+        return False
+    # Clicking a plain cell opens the run (links and checkboxes keep their own behaviour).
+    rows.first.locator('.tabulator-cell[tabulator-field="scenario_set"]').click()
+    page.wait_for_url("**/runs/*/")
+    return True
+
+
 def test_login_and_dashboard(page: Page) -> None:
     """Login succeeds and dashboard shows stats + runs table."""
     login(page)
@@ -99,42 +112,12 @@ def test_new_experiment_form_populated(page: Page) -> None:
     expect(page.locator("button[type='submit']")).to_be_visible()
 
 
-def test_new_experiment_no_profile_section(page: Page) -> None:
-    """Audit Profile section is removed from New Audit form."""
-    login(page)
-    page.goto(f"{BASE_URL}/experiments/new/")
-    page.wait_for_timeout(500)
-    # Profile selector must NOT exist
-    expect(page.locator('select[name="profile"]')).to_have_count(0)
-    # "Audit Profile" heading must NOT exist
-    expect(page.locator("text=Audit Profile")).to_have_count(0)
-
-
-def test_models_view_no_profiles(page: Page) -> None:
-    """Models view no longer shows Audit Profiles section."""
-    login(page)
-    page.goto(f"{BASE_URL}/models/")
-    page.wait_for_timeout(500)
-    # "Audit Profiles" heading must NOT exist
-    expect(page.locator("text=Audit Profiles")).to_have_count(0)
-    # Profile add form must NOT exist
-    expect(page.locator('input[name="profile_name"]')).to_have_count(0)
-
-
 def test_audit_detail_clone_button(page: Page) -> None:
     """Audit detail page shows Clone Audit button (if runs exist)."""
     login(page)
-    page.goto(f"{BASE_URL}/")
-    page.wait_for_timeout(500)
-    # Find first audit run link
-    rows = page.locator("table tbody tr")
-    count = rows.count()
-    if count == 0:
+    if not open_first_run(page):
         print("SKIP: no audit runs in database")
         return
-    # Click first run row (navigates via onclick to /runs/<id>/)
-    rows.first.click()
-    page.wait_for_timeout(1000)
     # Clone Audit button (icon-only link) should be visible
     expect(page.locator("a[aria-label='Clone this run']")).to_be_visible()
 
@@ -142,23 +125,16 @@ def test_audit_detail_clone_button(page: Page) -> None:
 def test_clone_prefills_form(page: Page) -> None:
     """Clone Audit pre-fills the New Audit form with original values."""
     login(page)
-    page.goto(f"{BASE_URL}/")
-    page.wait_for_timeout(500)
-    rows = page.locator("table tbody tr")
-    count = rows.count()
-    if count == 0:
+    if not open_first_run(page):
         print("SKIP: no audit runs in database")
         return
-    # Navigate to first run detail (row onclick)
-    rows.first.click()
-    page.wait_for_timeout(1000)
     # Click Clone Audit (icon-only link)
     page.click("a[aria-label='Clone this run']")
     page.wait_for_timeout(1000)
     # Should be on New Audit page with pre-filled values
     expect(page.locator("main")).to_contain_text("New Experiment")
-    # Hidden scenario_set_version input should exist (exact version pin)
-    expect(page.locator('input[name="scenario_set_version"]')).to_be_attached()
+    # The cloned run's exact scenario set version is ticked
+    expect(page.locator('input[name="scenario_version"]:checked')).to_have_count(1)
 
 
 def test_compare_view(page: Page) -> None:
@@ -185,8 +161,6 @@ def main() -> int:
             ("login_and_dashboard", test_login_and_dashboard),
             ("navigation_all_views", test_navigation_all_views),
             ("new_experiment_form_populated", test_new_experiment_form_populated),
-            ("new_experiment_no_profile_section", test_new_experiment_no_profile_section),
-            ("models_view_no_profiles", test_models_view_no_profiles),
             ("audit_detail_clone_button", test_audit_detail_clone_button),
             ("clone_prefills_form", test_clone_prefills_form),
             ("compare_view", test_compare_view),

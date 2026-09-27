@@ -11,11 +11,11 @@ from django.contrib import messages
 from django.contrib.auth import login, logout
 from django.contrib.auth.forms import AuthenticationForm
 from django.contrib.auth.mixins import LoginRequiredMixin
-from django.db.models import ProtectedError, RestrictedError
+from django.db.models import Count, F, ProtectedError, Q, RestrictedError
 from django.http import HttpResponse, HttpResponseForbidden, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
-from django.views.generic import DetailView, ListView, TemplateView, View
+from django.views.generic import DetailView, TemplateView, View
 
 from accounts import workos_auth
 from accounts.models import User
@@ -23,6 +23,7 @@ from audits.comparison import compare_runs
 from audits.events import ScenarioResult
 from audits.models import AuditRun
 from audits.services import create_audit_run, submit_audit_run
+from infra.hashing import scenario_revision_hash
 from scenarios.models import (
     Scenario,
     ScenarioRevision,
@@ -50,13 +51,9 @@ class AdminRequiredMixin(LoginRequiredMixin):
         if not request.user.is_authenticated:
             return super().dispatch(request, *args, **kwargs)
 
-        from accounts.models import ProjectMembership
+        from accounts.services import is_any_project_admin
 
-        if not request.user.is_superuser and not ProjectMembership.objects.filter(
-            user=request.user, role=ProjectMembership.Role.ADMIN
-        ).exists():
-            from django.http import HttpResponseForbidden
-
+        if not is_any_project_admin(request.user):
             return HttpResponseForbidden("Admin access required.")
         return super().dispatch(request, *args, **kwargs)
 
@@ -68,23 +65,33 @@ class SuperuserRequiredMixin(LoginRequiredMixin):
         if not request.user.is_authenticated:
             return super().dispatch(request, *args, **kwargs)
         if not request.user.is_superuser:
-            from django.http import HttpResponseForbidden
-
             return HttpResponseForbidden("Super admin access required.")
         return super().dispatch(request, *args, **kwargs)
 
 
-def _require_writable_project(request):
-    """Block mutations on an archived workspace for non-superusers (UI forms).
+def write_block_reason(request) -> str | None:
+    """Why this request may not change workspace data, or None when it may.
 
-    Returns a redirect response with an error message when the active project
-    is archived and the user is not a superuser; otherwise returns None so the
-    view proceeds. (Raising the DRF StableAPIError here would 500 in a plain
-    Django view, so we use the messages framework instead.)
+    Viewers are blocked (admin or auditor role required, the same rule as the
+    API), and so is everyone but superusers in an archived workspace.
     """
+    from audits.monitors import has_write_role
+
     project = getattr(request, "project", None)
-    if project is not None and project.archived and not request.user.is_superuser:
-        messages.error(request, "This workspace is archived and read-only.")
+    if project is None:
+        return None
+    if project.archived and not request.user.is_superuser:
+        return "This workspace is archived and read-only."
+    if not has_write_role(request.user, project):
+        return "Admin or auditor role required to make changes in this workspace."
+    return None
+
+
+def _require_write_access(request):
+    """Guard for UI forms that change data: redirect back with an error when blocked, else None."""
+    reason = write_block_reason(request)
+    if reason:
+        messages.error(request, reason)
         return redirect(request.META.get("HTTP_REFERER") or "/")
     return None
 
@@ -105,17 +112,6 @@ class HealthView(AdminRequiredMixin, TemplateView):
 
 
 # ─── Auth ────────────────────────────────────────────────────────────────────
-
-class IndexView(TemplateView):
-    """Redirect helper kept for backward compatibility with the ``index`` name.
-
-    ``/`` is the home page (dashboard when signed in, landing page otherwise;
-    see ``config/urls.py``). This view simply forwards there.
-    """
-
-    def get(self, request, *args, **kwargs):
-        return redirect("/")
-
 
 class LoginView(TemplateView):
     template_name = "auth/login.html"
@@ -278,53 +274,6 @@ class WorkOSVerifyView(TemplateView):
         return redirect("dashboard")
 
 
-class WorkOSCallbackView(View):
-    """Handle the WorkOS hosted AuthKit redirect (OAuth code flow).
-
-    Kept for when the hosted UI is available (production environments).
-    The primary flow uses the two-step Magic Auth above.
-    """
-
-    def get(self, request):
-        from django.conf import settings
-
-        if not settings.WORKOS_ENABLED:
-            return redirect("login")
-        error = request.GET.get("error")
-        if error:
-            messages.error(request, f"WorkOS sign-in failed: {request.GET.get('error_description', error)}")
-            return redirect("login")
-
-        expected_state = request.session.pop("workos_state", None)
-        if not expected_state or request.GET.get("state") != expected_state:
-            messages.error(request, "WorkOS sign-in failed: state mismatch. Please try again.")
-            return redirect("login")
-
-        code = request.GET.get("code", "")
-        if not code:
-            messages.error(request, "WorkOS sign-in failed: missing authorization code.")
-            return redirect("login")
-
-        try:
-            user, created = workos_auth.exchange_code_for_user(
-                code,
-                ip_address=request.META.get("REMOTE_ADDR"),
-                user_agent=request.META.get("HTTP_USER_AGENT", ""),
-            )
-        except Exception as exc:
-            logger.exception("WorkOS code exchange failed")
-            messages.error(request, f"WorkOS sign-in failed: {exc}")
-            return redirect("login")
-
-        login(request, user)
-        if created:
-            _grant_default_project(user)
-            messages.success(request, "Welcome! Your account was created via WorkOS sign-in.")
-        else:
-            messages.success(request, "Signed in with WorkOS.")
-        return redirect("dashboard")
-
-
 def _grant_default_project(user):
     """Give first-time WorkOS users membership in the 'Default' project (viewer).
 
@@ -342,54 +291,38 @@ def _grant_default_project(user):
 
 # ─── Dashboard ───────────────────────────────────────────────────────────────
 
-class DashboardView(ProjectMixin, ListView):
+class DashboardView(ProjectMixin, TemplateView):
+    """Runs dashboard: stat cards + an interactive grid (rows load from RunsDataView)."""
+
     template_name = "dashboard.html"
-    context_object_name = "runs"
-    paginate_by = 25
-
-    _SORT_WHITELIST = {"created_at", "-created_at", "status", "-id"}
-
-    def get_queryset(self):
-        from django.db.models import Q
-
-        qs = AuditRun.objects.filter(project=self.request.project).select_related(
-            "scenario_set_version__scenario_set", "target_model", "auditor_model", "judge_model"
-        )
-        # Status filter via ?status=active|completed|failed|cancelled|archived
-        status = self.request.GET.get("status", "")
-        if status == "archived":
-            qs = qs.filter(archived=True)
-        else:
-            qs = qs.filter(archived=False)
-            if status == "active":
-                qs = qs.exclude(status__in=["completed", "failed", "cancelled"])
-            elif status in ("completed", "failed", "cancelled"):
-                qs = qs.filter(status=status)
-        # Search via ?q=
-        q = (self.request.GET.get("q") or "").strip()
-        if q:
-            qs = qs.filter(Q(name__icontains=q) | Q(scenario_set_version__scenario_set__name__icontains=q))
-        # Sort via ?sort= (whitelisted)
-        sort = self.request.GET.get("sort", "-created_at")
-        if sort not in self._SORT_WHITELIST:
-            sort = "-created_at"
-        qs = qs.order_by(sort)
-        return qs
 
     def get_context_data(self, **kw):
+        from audits.models import Experiment
+        from model_registry.models import RegisteredModel
+
+        p = self.request.project
+        base = AuditRun.objects.filter(project=p)
         ctx = super().get_context_data(**kw)
-        base = AuditRun.objects.filter(project=self.request.project)
-        visible = base.filter(archived=False)
-        ctx["stats"] = {
-            "total": visible.count(),
-            "active": visible.exclude(status__in=["completed", "failed", "cancelled"]).count(),
-            "completed": visible.filter(status="completed").count(),
-            "failed": visible.filter(status="failed").count(),
-            "archived": base.filter(archived=True).count(),
-        }
-        ctx["current_status"] = self.request.GET.get("status", "")
-        ctx["search_query"] = (self.request.GET.get("q") or "").strip()
-        ctx["current_sort"] = self.request.GET.get("sort", "-created_at")
+        live = Q(archived=False)
+        ctx["stats"] = base.aggregate(   # one query for all stat cards
+            total=Count("id", filter=live),
+            active=Count("id", filter=live & ~Q(status__in=AuditRun.TERMINAL_STATUSES)),
+            completed=Count("id", filter=live & Q(status=AuditRun.Status.COMPLETED)),
+            failed=Count("id", filter=live & Q(status=AuditRun.Status.FAILED)),
+            cancelled=Count("id", filter=live & Q(status=AuditRun.Status.CANCELLED)),
+            archived=Count("id", filter=Q(archived=True)),
+        )
+        # Filter options as [{id, name}] — only values that appear in this workspace's runs.
+        ctx["filter_targets"] = (
+            RegisteredModel.objects.filter(target_audit_runs__project=p).distinct().order_by("display_name")
+            .values("id", name=F("display_name"))
+        )
+        ctx["filter_sets"] = (
+            ScenarioSet.objects.filter(project=p, versions__audit_runs__isnull=False).distinct().order_by("name")
+            .values("id", "name")
+        )
+        ctx["filter_experiments"] = Experiment.objects.filter(project=p).order_by("-created_at").values("id", "name")[:200]
+        ctx["column_layout"] = (self.request.user.preferences or {}).get("dashboard_columns")
         return ctx
 
 
@@ -633,24 +566,29 @@ def _clone_from_run(source: AuditRun) -> dict:
 
 
 def _design_selection(post=None, clone=None) -> dict:
-    """What the design form should show as selected: from a POST, a cloned run, or empty."""
+    """What the design form should show as selected: from a POST, a cloned run, or empty.
+
+    ``versions``: ticked scenario set version ids; a set id in ``sets`` means
+    "its latest version" (the default tick).
+    """
     if post is not None:
         return {
             "sets": post.getlist("scenario_set"),
+            "versions": post.getlist("scenario_version"),
             "target": post.getlist("target_model"),
             "auditor": post.getlist("auditor_model"),
             "judge": post.getlist("judge_model"),
-            "pinned_version": post.get("scenario_set_version", ""),
         }
     if clone:
+        # Clone pins the cloned run's exact version.
         return {
-            "sets": [str(clone["scenario_set_id"])],
+            "sets": [],
+            "versions": [str(clone["scenario_set_version_id"])],
             "target": [str(clone["target_model_id"])],
             "auditor": [str(clone["auditor_model_id"])],
             "judge": [str(clone["judge_model_id"])],
-            "pinned_version": str(clone["scenario_set_version_id"]),
         }
-    return {"sets": [], "target": [], "auditor": [], "judge": [], "pinned_version": ""}
+    return {"sets": [], "versions": [], "target": [], "auditor": [], "judge": []}
 
 
 def ex_repeat(repeat: dict) -> str:
@@ -708,6 +646,28 @@ class NewExperimentView(ProjectMixin, TemplateView):
         kw.setdefault("clone", clone)
         kw.setdefault("sel", _design_selection(clone=clone))
         sel = kw["sel"]
+        # Scenario sets with their versions (newest first) and which are ticked:
+        # a set id in sel["sets"] means its latest version.
+        from django.db.models import Prefetch
+
+        sets = list(
+            ScenarioSet.objects.filter(project=p)
+            .order_by("name")
+            .prefetch_related(
+                Prefetch("versions", queryset=ScenarioSetVersion.objects.select_related("published_by").order_by("-version"))
+            )
+        )
+        for sset in sets:
+            sset.version_list = list(sset.versions.all())
+            latest_id = str(sset.version_list[0].id) if sset.version_list else None
+            sset.follow_value = f"latest:{sset.id}"
+            sset.ticked = {str(v.id) for v in sset.version_list if str(v.id) in sel["versions"]}
+            if sset.follow_value in sel["versions"]:
+                sset.ticked.add(sset.follow_value)
+            if latest_id and str(sset.id) in sel["sets"]:
+                sset.ticked.add(latest_id)
+            # Open the version list when anything but the current version is ticked.
+            sset.show_versions = bool(sset.ticked - {latest_id})
         # Repeat prefill: a POST being re-shown, else ?repeat= (e.g. "Monitor for drift").
         from audits.monitors import REPEAT_CHOICES
 
@@ -721,7 +681,7 @@ class NewExperimentView(ProjectMixin, TemplateView):
             "clone_from": str(source.id) if source else "",
         })
         kw.update(
-            sets=ScenarioSet.objects.filter(project=p).prefetch_related("versions"),
+            sets=sets,
             connections=ModelConnection.objects.filter(project=p).prefetch_related("models").order_by("name"),
             model_roles=[
                 ("target", "Target", "The model under test.", sel["target"]),
@@ -751,7 +711,7 @@ class NewExperimentView(ProjectMixin, TemplateView):
     def post(self, request, *args, **kwargs):
         from audits import experiments as ex
 
-        blocked = _require_writable_project(request)
+        blocked = _require_write_access(request)
         if blocked:
             return blocked
         action = request.POST.get("action", "design")
@@ -916,18 +876,38 @@ class NewExperimentView(ProjectMixin, TemplateView):
         Returns (rows, runs, errors). Every row is rebuilt (so the review can be
         re-shown with the user's edits); only ticked rows become runs.
         """
+        import copy
+
         from model_registry.models import RegisteredModel
 
-        rows, runs, errors = [], [], []
+        specs = {}
         for i in range(min(int(post.get("row_count") or 0), 500)):
             raw_spec = post.get(f"run-{i}-spec")
-            if not raw_spec:
-                continue  # removed duplicate
-            spec = json.loads(raw_spec)
+            if raw_spec:   # missing = removed duplicate
+                specs[i] = json.loads(raw_spec)
+        # Two queries for all rows; ids from another workspace are simply absent.
+        versions = ScenarioSetVersion.objects.select_related("scenario_set").filter(scenario_set__project=project).in_bulk(
+            {spec["v"] for spec in specs.values()}
+        )
+        models = RegisteredModel.objects.select_related("connection").filter(project=project).in_bulk(
+            {spec[k] for spec in specs.values() for k in ("t", "a", "j")}
+        )
+
+        def lookup(found, pk, model):
+            if pk not in found:
+                raise model.DoesNotExist(f"{model.__name__} {pk} is not in this workspace.")
+            return found[pk]
+
+        rows, runs, errors = [], [], []
+        for i, spec in specs.items():
+            version = lookup(versions, spec["v"], ScenarioSetVersion)
+            if spec.get("f"):
+                version = copy.copy(version)   # the flag is per row
+                version.follow_latest = True
             objs = {
-                "version": ScenarioSetVersion.objects.get(pk=spec["v"], scenario_set__project=project),
+                "version": version,
                 **{
-                    role: RegisteredModel.objects.select_related("connection").get(pk=spec[key], project=project)
+                    role: lookup(models, spec[key], RegisteredModel)
                     for role, key in (("target", "t"), ("auditor", "a"), ("judge", "j"))
                 },
             }
@@ -1012,12 +992,11 @@ class NewExperimentView(ProjectMixin, TemplateView):
 
 # ─── Experiments ─────────────────────────────────────────────────────────────
 
-_TERMINAL_STATUSES = ("completed", "failed", "cancelled")
 
 
 def _experiment_summary(runs) -> dict:
     total = len(runs)
-    done = sum(1 for r in runs if r.status in _TERMINAL_STATUSES)
+    done = sum(1 for r in runs if not r.is_active)
     failed = sum(1 for r in runs if r.status == "failed")
     return {
         "total": total,
@@ -1134,6 +1113,7 @@ class MonitorsView(ProjectMixin, TemplateView):
         from audits.models import Monitor
         from audits.monitors import (
             MAX_MONITORS_PER_PROJECT,
+            _role,
             can_manage_monitor,
             has_write_role,
         )
@@ -1145,8 +1125,9 @@ class MonitorsView(ProjectMixin, TemplateView):
                 "last_run", "created_by", "experiment",
             )
         )
+        role = _role(self.request.user, p)   # once, not per monitor
         for m in monitors:
-            m.can_manage = can_manage_monitor(self.request.user, m)
+            m.can_manage = can_manage_monitor(self.request.user, m, role=role)
         kw.update(
             monitors=monitors,
             can_create=has_write_role(self.request.user, p) and not (p.archived and not self.request.user.is_superuser),
@@ -1223,7 +1204,7 @@ class MonitorActionView(ProjectMixin, View):
             owner_authorized,
         )
 
-        blocked = _require_writable_project(request)
+        blocked = _require_write_access(request)
         if blocked:
             return blocked
         monitor = get_object_or_404(
@@ -1276,7 +1257,7 @@ class ScenariosView(ProjectMixin, TemplateView):
 
     def get_context_data(self, **kw):
         p = self.request.project
-        sets = ScenarioSet.objects.filter(project=p).prefetch_related("versions__items__scenario").order_by("name")
+        sets = ScenarioSet.objects.filter(project=p).annotate(version_count=Count("versions")).order_by("name")
         selected = None
         items = []
         versions = []
@@ -1303,15 +1284,6 @@ class ScenariosView(ProjectMixin, TemplateView):
         return super().get_context_data(**kw)
 
 
-def _content_hash(description: str, expected_behavior: list | None = None, test_prompt: str = "") -> str:
-    payload = json.dumps({
-        "description": description,
-        "expected_behavior": expected_behavior or [],
-        "test_prompt": test_prompt,
-    }, sort_keys=True, ensure_ascii=False)
-    return hashlib.sha256(payload.encode()).hexdigest()
-
-
 def _create_revision(scenario, description: str, user, expected_behavior: list | None = None, test_prompt: str = "") -> ScenarioRevision:
     """Create the next revision for a scenario."""
     rev = scenario.revisions.count() + 1
@@ -1319,7 +1291,7 @@ def _create_revision(scenario, description: str, user, expected_behavior: list |
     return ScenarioRevision.objects.create(
         scenario=scenario, revision=rev, description=description,
         expected_behavior=eb, test_prompt=test_prompt,
-        content_hash=_content_hash(description, eb, test_prompt),
+        content_hash=scenario_revision_hash(description=description, expected_behavior=eb, test_prompt=test_prompt, metadata={}),
         created_by=user,
     )
 
@@ -1348,7 +1320,7 @@ def _publish_new_version(sset, user, extra_scenario_ids=None):
 
 class ScenarioSetCreateView(ProjectMixin, View):
     def post(self, request):
-        blocked = _require_writable_project(request)
+        blocked = _require_write_access(request)
         if blocked:
             return blocked
         name = request.POST.get("name", "").strip()
@@ -1363,7 +1335,7 @@ class ScenarioSetCreateView(ProjectMixin, View):
 
 class ScenarioSetRenameView(ProjectMixin, View):
     def post(self, request, set_id):
-        blocked = _require_writable_project(request)
+        blocked = _require_write_access(request)
         if blocked:
             return blocked
         sset = ScenarioSet.objects.filter(pk=set_id, project=request.project).first()
@@ -1380,7 +1352,7 @@ class ScenarioSetRenameView(ProjectMixin, View):
 
 class ScenarioSetDeleteView(ProjectMixin, View):
     def post(self, request, set_id):
-        blocked = _require_writable_project(request)
+        blocked = _require_write_access(request)
         if blocked:
             return blocked
         sset = ScenarioSet.objects.filter(pk=set_id, project=request.project).first()
@@ -1395,7 +1367,7 @@ class ScenarioSetDeleteView(ProjectMixin, View):
 
 class ScenarioCreateView(ProjectMixin, View):
     def post(self, request):
-        blocked = _require_writable_project(request)
+        blocked = _require_write_access(request)
         if blocked:
             return blocked
         name = request.POST.get("name", "").strip()
@@ -1422,7 +1394,7 @@ class ScenarioCreateView(ProjectMixin, View):
 
 class ScenarioEditView(ProjectMixin, View):
     def post(self, request, scenario_id):
-        blocked = _require_writable_project(request)
+        blocked = _require_write_access(request)
         if blocked:
             return blocked
         scenario = Scenario.objects.filter(pk=scenario_id, project=request.project).first()
@@ -1459,7 +1431,7 @@ class ScenarioEditView(ProjectMixin, View):
 
 class ScenarioDeleteView(ProjectMixin, View):
     def post(self, request, scenario_id):
-        blocked = _require_writable_project(request)
+        blocked = _require_write_access(request)
         if blocked:
             return blocked
         set_id = request.POST.get("set_id", "").strip()
@@ -1534,7 +1506,7 @@ class ScenarioRevertView(ProjectMixin, View):
         })
 
     def post(self, request, set_id):
-        blocked = _require_writable_project(request)
+        blocked = _require_write_access(request)
         if blocked:
             return blocked
         sset = ScenarioSet.objects.filter(pk=set_id, project=request.project).first()
@@ -1629,7 +1601,7 @@ class ScenarioExportView(ProjectMixin, View):
 
 class ScenarioImportView(ProjectMixin, View):
     def post(self, request, set_id):
-        blocked = _require_writable_project(request)
+        blocked = _require_write_access(request)
         if blocked:
             return blocked
         sset = ScenarioSet.objects.filter(pk=set_id, project=request.project).first()
@@ -1668,7 +1640,6 @@ class ModelsView(ProjectMixin, TemplateView):
         from model_registry.models import ModelConnection
 
         p = self.request.project
-        highlight_id = self.request.GET.get("highlight")
         q = (self.request.GET.get("q") or "").strip()
 
         connections = ModelConnection.objects.filter(project=p).prefetch_related("models")
@@ -1680,7 +1651,6 @@ class ModelsView(ProjectMixin, TemplateView):
 
         kw.update(
             connections=connections,
-            highlight_id=highlight_id,
             search_query=q,
         )
         return super().get_context_data(**kw)
@@ -1688,7 +1658,7 @@ class ModelsView(ProjectMixin, TemplateView):
     def post(self, request, *args, **kwargs):
         from model_registry.models import ModelConnection, RegisteredModel
 
-        blocked = _require_writable_project(request)
+        blocked = _require_write_access(request)
         if blocked:
             return blocked
         p = request.project
@@ -1696,11 +1666,13 @@ class ModelsView(ProjectMixin, TemplateView):
         error = None
 
         # ── Connection actions ──────────────────────────────────────────────
-        if action == "add_connection":
+        if action in ("add_connection", "edit_connection"):
+            error = _base_url_error(request.POST.get("conn_base_url", ""))
+        if not error and action == "add_connection":
             name = request.POST.get("conn_name", "").strip()
             base_url = request.POST.get("conn_base_url", "").strip()
-            if not name or not base_url:
-                error = "Connection name and Base URL are required."
+            if not name:
+                error = "Connection name is required."
             else:
                 ModelConnection.objects.create(
                     project=p,
@@ -1712,7 +1684,7 @@ class ModelsView(ProjectMixin, TemplateView):
                     enabled=True,
                     created_by=request.user,
                 )
-        elif action == "edit_connection":
+        elif not error and action == "edit_connection":
             conn = ModelConnection.objects.filter(pk=request.POST.get("conn_id"), project=p).first()
             if not conn:
                 error = "Connection not found."
@@ -1766,7 +1738,7 @@ class ConnectionDeleteView(ProjectMixin, View):
     def post(self, request, conn_id):
         from model_registry.models import ModelConnection
 
-        blocked = _require_writable_project(request)
+        blocked = _require_write_access(request)
         if blocked:
             return blocked
         conn = ModelConnection.objects.filter(pk=conn_id, project=request.project).first()
@@ -1786,64 +1758,39 @@ class ConnectionDeleteView(ProjectMixin, View):
         return redirect("/models/")
 
 
+def _base_url_error(raw: str) -> str | None:
+    """Error message for an invalid connection base URL, or None when it is valid."""
+    from django.core.exceptions import ValidationError
+
+    from model_registry.serializers import EndpointURLField
+
+    if not raw.strip():
+        return "Base URL is required."
+    try:
+        EndpointURLField().to_internal_value(raw)
+    except ValidationError:
+        return "Base URL must be an http(s) URL, e.g. https://api.openai.com/v1."
+    return None
+
+
 class DiscoverModelsView(ProjectMixin, View):
-    """Proxy GET {base_url}/models to auto-discover available models."""
+    """List the models a connection's server offers (GET {base_url}/models)."""
 
     def post(self, request):
-        import json as _json
-        import urllib.error
-        import urllib.request
+        from model_registry.models import ModelConnection
+        from model_registry.services import fetch_remote_model_ids, http_error_detail
 
-        base_url = (request.POST.get("base_url") or "").strip().rstrip("/")
-        api_key = (request.POST.get("api_key_direct") or "").strip()
-        provider = (request.POST.get("provider") or "openai").strip()
-
-        if not base_url:
-            return JsonResponse({"error": "Base URL is required."}, status=400)
-
-        # Build the models endpoint URL
-        if provider == "openai" or "/v1" in base_url:
-            url = f"{base_url}/models"
-        elif provider == "anthropic":
-            url = f"{base_url}/v1/models"
-        else:
-            url = f"{base_url}/models"
-
-        headers = {"Accept": "application/json"}
-        if api_key:
-            headers["Authorization"] = f"Bearer {api_key}"
-
+        # Looked up server-side (scoped to the workspace) so the API key never
+        # reaches the browser.
+        conn = ModelConnection.objects.filter(pk=request.POST.get("connection_id") or 0, project=request.project).first()
+        if conn is None:
+            return JsonResponse({"error": "Connection not found in this workspace."}, status=404)
         try:
-            req = urllib.request.Request(url, headers=headers, method="GET")
-            with urllib.request.urlopen(req, timeout=10) as resp:
-                data = _json.loads(resp.read().decode())
-        except urllib.error.HTTPError as e:
-            body = ""
-            try:
-                body = e.read().decode()[:200]
-            except Exception:  # noqa: BLE001,S110 - body read is best-effort
-                pass
-            return JsonResponse({"error": f"HTTP {e.code}: {body or e.reason}"}, status=502)
+            models = fetch_remote_model_ids(conn)
+        except ValueError as e:
+            return JsonResponse({"error": str(e)}, status=400)
         except Exception as e:  # noqa: BLE001 - surface any upstream failure to the user
-            return JsonResponse({"error": str(e)}, status=502)
-
-        # Normalize response — OpenAI-compatible: {"data": [{"id": "...", ...}]}
-        models = []
-        if isinstance(data, dict) and "data" in data:
-            for item in data["data"]:
-                mid = item.get("id") or item.get("model") or ""
-                if mid:
-                    models.append(mid)
-        elif isinstance(data, list):
-            for item in data:
-                if isinstance(item, str):
-                    models.append(item)
-                elif isinstance(item, dict):
-                    mid = item.get("id") or item.get("model") or ""
-                    if mid:
-                        models.append(mid)
-
-        models.sort()
+            return JsonResponse({"error": http_error_detail(e)}, status=502)
         return JsonResponse({"models": models})
 
 
@@ -1866,19 +1813,15 @@ class CompareView(ProjectMixin, TemplateView):
                 rdata = entry["runs"].get(col_run_id, {})
                 values.append(rdata.get("severity") or rdata.get("status") or "—")
             rows.append({"scenario": entry["scenario_key"], "values": values})
-        # Per-run link metadata
+        # Per-run header metadata (one query for all runs)
+        run_objs = AuditRun.objects.select_related("target_model").in_bulk([r["id"] for r in raw["runs"]])
         run_meta = []
         for r in raw["runs"]:
-            run_obj = AuditRun.objects.filter(id=r["id"]).select_related(
-                "target_model", "auditor_model", "judge_model",
-                "scenario_set_version__scenario_set"
-            ).first()
+            run_obj = run_objs.get(r["id"])
             run_meta.append({
                 "id": r["id"],
-                "target_model_id": run_obj.target_model_id if run_obj else None,
-                "auditor_model_id": run_obj.auditor_model_id if run_obj else None,
-                "judge_model_id": run_obj.judge_model_id if run_obj else None,
-                "scenario_set_id": run_obj.scenario_set_version.scenario_set_id if run_obj and run_obj.scenario_set_version else None,
+                "name": run_obj.name if run_obj else f"Run #{r['id']}",
+                "target": run_obj.target_model.display_name if run_obj else (r["target"] or "?"),
             })
         return {
             "warnings": raw["warnings"],
@@ -1984,7 +1927,7 @@ class RunResultsFragmentView(ProjectMixin, View):
             AuditRun.objects.select_related("scenario_set_version"), pk=run_id, project=request.project
         )
         html = render_to_string(
-            "partials/audit_results.html", {"run": run, "results": _result_rows(run)}, request=request
+            "partials/run_results.html", {"run": run, "results": _result_rows(run)}, request=request
         )
         return HttpResponse(html)
 
@@ -2018,7 +1961,7 @@ class RunDetailView(ProjectMixin, DetailView):
         )
         # Live progress starts from each scenario's latest event and streams
         # only newer ones, so page load stays cheap for big runs.
-        if run.status not in ("completed", "failed", "cancelled"):
+        if run.is_active:
             from audits.events import progress_snapshot
 
             snap_events, snap_last_id = progress_snapshot(run.id)
@@ -2027,14 +1970,7 @@ class RunDetailView(ProjectMixin, DetailView):
         ctx["set_id"] = set_id
         ctx["progress_pct"] = (run.completed_scenarios * 100 // run.total_scenarios) if run.total_scenarios else 0
         ctx["stages"] = ["queued", "preparing", "target_execution", "auditing", "judging", "aggregation", "completed"]
-        if run.started_at and run.finished_at:
-            total = int((run.finished_at - run.started_at).total_seconds())
-            if total < 60:
-                ctx["duration"] = f"{total} sec"
-            elif total < 3600:
-                ctx["duration"] = f"{total // 60} min"
-            else:
-                ctx["duration"] = f"{total // 3600} hr {total % 3600 // 60} min"
+        ctx["duration"] = run.duration_display
         from audits.monitors import has_write_role
 
         ctx["can_schedule"] = has_write_role(self.request.user, self.request.project)
@@ -2043,19 +1979,14 @@ class RunDetailView(ProjectMixin, DetailView):
 
 class RunCancelView(ProjectMixin, View):
     def post(self, request, run_id):
-        blocked = _require_writable_project(request)
+        blocked = _require_write_access(request)
         if blocked:
             return blocked
         run = AuditRun.objects.filter(pk=run_id, project=request.project).first()
-        if run and run.status not in (AuditRun.Status.COMPLETED, AuditRun.Status.FAILED, AuditRun.Status.CANCELLED):
-            run.status = AuditRun.Status.CANCELLED
-            if run.finished_at is None:
-                run.finished_at = timezone.now()
-            run.save(update_fields=["status", "finished_at"])
-            # Terminal event so live progress ends; running scenarios stop at
-            # their next repetition (they poll the durable flag).
-            from audits.events import append_event
-            append_event(run.pk, "_run", "run_cancelled", {"by": request.user.username})
+        if run:
+            from audits.services import cancel_run
+
+            cancel_run(run, request.user)
         return redirect(f"/runs/{run_id}/")
 
 
@@ -2064,7 +1995,7 @@ class RunArchiveView(ProjectMixin, View):
     the active project are invisible (404)."""
 
     def post(self, request, run_id):
-        blocked = _require_writable_project(request)
+        blocked = _require_write_access(request)
         if blocked:
             return blocked
         run = AuditRun.objects.filter(pk=run_id, project=request.project).first()
@@ -2079,7 +2010,7 @@ class RunRenameView(ProjectMixin, View):
     affect the frozen reproducibility manifest."""
 
     def post(self, request, run_id):
-        blocked = _require_writable_project(request)
+        blocked = _require_write_access(request)
         if blocked:
             return blocked
         run = AuditRun.objects.filter(pk=run_id, project=request.project).first()
@@ -2264,41 +2195,4 @@ class RunExportView(ProjectMixin, View):
             response = HttpResponse(payload, content_type="application/json; charset=utf-8")
 
         response["Content-Disposition"] = f'attachment; filename="{filename}"'
-        return response
-
-
-class DashboardExportView(ProjectMixin, View):
-    """Export dashboard runs as CSV, respecting ?status= filter."""
-
-    def get(self, request):
-        qs = AuditRun.objects.filter(project=request.project).select_related(
-            "scenario_set_version__scenario_set"
-        ).order_by("-created_at")
-        status = request.GET.get("status", "")
-        if status == "archived":
-            qs = qs.filter(archived=True)
-        else:
-            qs = qs.filter(archived=False)
-            if status == "active":
-                qs = qs.exclude(status__in=["completed", "failed", "cancelled"])
-            elif status in ("completed", "failed", "cancelled"):
-                qs = qs.filter(status=status)
-
-        buf = io.StringIO()
-        writer = csv.writer(buf)
-        writer.writerow(["id", "name", "status", "scenario_set", "created_at", "started_at", "finished_at"])
-        for run in qs:
-            set_name = run.scenario_set_version.scenario_set.name if run.scenario_set_version else ""
-            writer.writerow([
-                run.id,
-                run.name,
-                run.status,
-                set_name,
-                run.created_at.isoformat() if run.created_at else "",
-                run.started_at.isoformat() if run.started_at else "",
-                run.finished_at.isoformat() if run.finished_at else "",
-            ])
-
-        response = HttpResponse(buf.getvalue(), content_type="text/csv; charset=utf-8")
-        response["Content-Disposition"] = 'attachment; filename="dashboard_runs.csv"'
         return response

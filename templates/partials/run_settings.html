@@ -1,49 +1,29 @@
 {% comment %}
-Hyperparameters + advanced generation config override. Shared by New Audit
-and Schedules. Context: clone (optional prefill: max_turns, language,
-n_repetitions, generation_json), multi (New Experiment: max turns and language
-become chip inputs holding several values to compare; the hidden field keeps
-them comma-separated). Include audit_form_js.html after the form.
+Run settings for New Experiment + advanced generation config override.
+Max turns and language are chip inputs holding several values to compare
+(the hidden field keeps them comma-separated). Context: clone (optional
+prefill: max_turns, language, n_repetitions, generation_json).
+Include run_settings_js.html after the form.
 {% endcomment %}
 <div class="bg-surface-raised rounded-xl border border-gray-800 p-4">
-  <h3 class="text-sm font-semibold text-gray-300 {% if multi %}mb-1{% else %}mb-3{% endif %}">Run settings</h3>
-  {% if multi %}<p class="text-xs text-gray-500 mb-3">Add several max-turn values or languages to compare them; every run can still be adjusted on the review screen.</p>{% endif %}
+  <h3 class="text-sm font-semibold text-gray-300 mb-1">Run settings</h3>
+  <p class="text-xs text-gray-500 mb-3">Type a value and press Enter to add it; add several to compare. Each run can still be adjusted on review.</p>
   <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
     <div>
       <label class="block text-xs font-medium text-gray-500 mb-1 uppercase tracking-wide">Max Turns</label>
-      {% if multi %}
-      {% include "partials/chip_input.html" with name="max_turns" value=clone.max_turns placeholder="5 (default) — type, then Enter" kind="int" suggestions="2,3,5,8" %}
-      {% else %}
-      <input type="number" min="1" max="50" placeholder="5 (default)" name="max_turns" value="{{ clone.max_turns|default:'' }}"
-             class="w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-accent/50">
-      {% endif %}
+      {% include "partials/chip_input.html" with name="max_turns" value=clone.max_turns placeholder="5 (default)" kind="int" suggestions="2,3,5,8" %}
       <p class="mt-1 text-xs text-gray-600">Conversation turns per scenario.</p>
     </div>
     <div>
       <label class="block text-xs font-medium text-gray-500 mb-1 uppercase tracking-wide">Language</label>
-      {% if multi %}
-      {% include "partials/chip_input.html" with name="language" value=clone.language placeholder="English (default) — type, then Enter" kind="text" suggestions="English,Norwegian,Spanish,French,German,Danish,Swedish,Finnish" %}
-      {% else %}
-      <input type="text" name="language" list="lang-options" placeholder="English (default)" value="{{ clone.language|default:'' }}"
-             class="w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-accent/50">
-      {% endif %}
-      <datalist id="lang-options">
-        <option value="English"></option>
-        <option value="Norwegian"></option>
-        <option value="Spanish"></option>
-        <option value="French"></option>
-        <option value="German"></option>
-        <option value="Danish"></option>
-        <option value="Swedish"></option>
-        <option value="Finnish"></option>
-      </datalist>
+      {% include "partials/chip_input.html" with name="language" value=clone.language placeholder="English (default)" kind="text" suggestions="English,Norwegian,Spanish,French,German,Danish,Swedish,Finnish" %}
       <p class="mt-1 text-xs text-gray-600">Used in auditor prompts.</p>
     </div>
     <div>
       <label class="block text-xs font-medium text-gray-500 mb-1 uppercase tracking-wide">Repetitions</label>
       <input type="number" name="n_repetitions" min="1" max="20" placeholder="1 (default)" value="{{ clone.n_repetitions|default:'' }}"
              class="w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-accent/50">
-      <p class="mt-1 text-xs text-gray-600">Run each scenario N times to measure judge stability{% if multi %} (same for every run){% endif %}.</p>
+      <p class="mt-1 text-xs text-gray-600">Run each scenario N times to measure judge stability (same for every run).</p>
     </div>
   </div>
 

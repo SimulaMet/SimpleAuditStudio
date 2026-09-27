@@ -152,11 +152,11 @@ def compare_runs(project, run_ids: list[int]) -> dict:
             text = getter(r)
             url = None
             if label == "Target model" and r.target_model_id:
-                url = f"/models/?highlight={r.target_model.connection_id}"
+                url = f"/models/#conn-{r.target_model.connection_id}"
             elif label == "Auditor model" and r.auditor_model_id:
-                url = f"/models/?highlight={r.auditor_model.connection_id}"
+                url = f"/models/#conn-{r.auditor_model.connection_id}"
             elif label == "Judge model" and r.judge_model_id:
-                url = f"/models/?highlight={r.judge_model.connection_id}"
+                url = f"/models/#conn-{r.judge_model.connection_id}"
             elif label == "Scenario set version" and r.scenario_set_version:
                 url = f"/scenarios/?set={r.scenario_set_version.scenario_set_id}"
             cells.append(_cell(text, url))

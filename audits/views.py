@@ -3,7 +3,6 @@ import logging
 import time
 
 from django.http import StreamingHttpResponse
-from django.utils import timezone
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
@@ -11,10 +10,10 @@ from rest_framework.response import Response
 
 from accounts.models import Project
 from accounts.services import ensure_project_access, require_project_writable
-from audits.events import ScenarioResult, append_event, list_events
+from audits.events import ScenarioResult, list_events
 from audits.models import AuditRun
 from audits.serializers import AuditRunCreateSerializer, AuditRunSerializer
-from audits.services import create_audit_run, submit_audit_run
+from audits.services import cancel_run, create_audit_run, submit_audit_run
 from infra.exceptions import StableAPIError
 from infra.middleware import set_correlation_context
 from model_registry.models import RegisteredModel
@@ -162,20 +161,12 @@ def cancel_audit_run(request, project_id, run_id):
     except AuditRun.DoesNotExist as exc:
         raise StableAPIError(detail="Audit run not found.", code="audit_run_not_found", http_status=404) from exc
 
-    if run.status in (AuditRun.Status.COMPLETED, AuditRun.Status.FAILED, AuditRun.Status.CANCELLED):
+    if not cancel_run(run, request.user):
         raise StableAPIError(
             detail=f"Run is already {run.status}; cannot cancel.",
             code="run_already_terminal",
             http_status=409,
         )
-
-    run.status = AuditRun.Status.CANCELLED
-    if run.finished_at is None:
-        run.finished_at = timezone.now()
-    run.save(update_fields=["status", "finished_at"])
-    # Terminal event so live progress (SSE) ends right away; running scenarios
-    # see the durable flag and stop at their next repetition.
-    append_event(run.id, "_run", "run_cancelled", {"by": request.user.username})
     logger.info("Audit run %s cancellation requested by user %s", run.id, request.user.username)
     return Response(AuditRunSerializer(run).data)
 

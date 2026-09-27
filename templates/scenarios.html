@@ -15,7 +15,7 @@
     <a href="?set={{ s.id }}"
        class="block px-4 py-3 rounded-xl border text-sm transition-colors {% if selected and selected.id == s.id %}bg-accent/15 border-accent/30 text-accent{% else %}bg-surface-raised border-gray-800 text-gray-300 hover:border-gray-600{% endif %}">
       <span class="font-medium">{{ s.name }}</span>
-      <span class="text-xs text-gray-500 ml-2">{{ s.versions.count }}v</span>
+      <span class="text-xs text-gray-500 ml-2">{{ s.version_count }}v</span>
     </a>
     {% empty %}
     <p class="text-sm text-gray-500">No scenario sets yet.</p>
@@ -23,7 +23,7 @@
     </div><!-- /set-list -->
 
     <!-- Create new set -->
-    <form method="post" action="{% url 'scenario_set_create' %}" class="pt-2 border-t border-gray-800 mt-3 space-y-2">
+    <form method="post" action="{% url 'scenario_set_create' %}" data-write class="pt-2 border-t border-gray-800 mt-3 space-y-2">
       {% csrf_token %}
       <div>
         <label class="block text-xs text-gray-500 mb-1">Set Name</label>
@@ -51,9 +51,9 @@
         </div>
         <div class="flex gap-2 items-center">
           <a href="{% url 'scenario_export' selected.id %}" class="px-2 py-1 rounded text-xs bg-surface-overlay text-gray-400 hover:text-gray-200">Export</a>
-          <button onclick="document.getElementById('import-set-modal').style.display='block'" class="px-2 py-1 rounded text-xs bg-surface-overlay text-gray-400 hover:text-gray-200">Import</button>
-          <button onclick="document.getElementById('edit-set-modal').style.display='block'" class="px-2 py-1 rounded text-xs bg-surface-overlay text-gray-400 hover:text-gray-200">Edit</button>
-          <form method="post" action="{% url 'scenario_set_delete' selected.id %}" onsubmit="return confirm('Delete this set and all its versions?')">
+          <button data-write onclick="openModal('import-set-modal')" class="px-2 py-1 rounded text-xs bg-surface-overlay text-gray-400 hover:text-gray-200">Import</button>
+          <button data-write onclick="openModal('edit-set-modal')" class="px-2 py-1 rounded text-xs bg-surface-overlay text-gray-400 hover:text-gray-200">Edit</button>
+          <form method="post" data-write action="{% url 'scenario_set_delete' selected.id %}" data-confirm="Delete this set and all its versions?">
             {% csrf_token %}
             <button class="px-2 py-1 rounded text-xs bg-red-900/30 text-red-400 hover:bg-red-900/50">Delete</button>
           </form>
@@ -109,11 +109,11 @@
               <span class="ml-2 text-xs text-gray-600">rev {{ item.revision.revision }}</span>
             </div>
             <div class="flex gap-1 shrink-0">
-              <button onclick="document.getElementById('edit-scenario-{{ item.scenario.id }}').style.display='block'" class="text-xs text-gray-500 hover:text-accent">✎</button>
-              <form method="post" action="{% url 'scenario_delete' item.scenario.id %}" onsubmit="return confirm('Delete scenario?')">
+              <button data-write onclick="document.getElementById('edit-scenario-{{ item.scenario.id }}').style.display='block'" title="Edit scenario" aria-label="Edit scenario" class="text-xs text-gray-500 hover:text-accent">✎</button>
+              <form method="post" data-write action="{% url 'scenario_delete' item.scenario.id %}" data-confirm="Delete this scenario?">
                 {% csrf_token %}
                 <input type="hidden" name="set_id" value="{{ selected.id }}">
-                <button class="text-xs text-gray-600 hover:text-red-400">✕</button>
+                <button title="Delete scenario" aria-label="Delete scenario" class="text-xs text-gray-600 hover:text-red-400">✕</button>
               </form>
             </div>
           </div>
@@ -126,8 +126,6 @@
                   onsubmit="return confirmScenarioSave({{ item.scenario.id }}, this)">
               {% csrf_token %}
               <input type="hidden" name="set_id" value="{{ selected.id }}">
-              <input type="hidden" id="orig-desc-{{ item.scenario.id }}" value="{{ item.revision.description }}">
-              <input type="hidden" id="orig-eb-{{ item.scenario.id }}" value="{% for b in item.revision.expected_behavior %}{{ b }}\n{% endfor %}">
               <div class="grid grid-cols-2 gap-2">
                 <input type="text" name="title" value="{{ item.scenario.title }}" required
                        class="px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-1 focus:ring-accent/50">
@@ -155,7 +153,7 @@
       </div>
 
       <!-- Add scenario form -->
-      <form method="post" action="{% url 'scenario_create' %}" class="space-y-2 pt-3 border-t border-gray-800">
+      <form method="post" action="{% url 'scenario_create' %}" data-write class="space-y-2 pt-3 border-t border-gray-800">
         {% csrf_token %}
         <input type="hidden" name="set_id" value="{{ selected.id }}">
         <div class="grid grid-cols-2 gap-2">
@@ -181,9 +179,26 @@
   </div>
 </div>
 
+<script>
+// Centered modals: must open as flex (display:block breaks the centering).
+function openModal(id) {
+  const m = document.getElementById(id);
+  if (!m) return;
+  m.style.display = 'flex';
+  const first = m.querySelector('input:not([type=hidden]), textarea, select');
+  if (first) first.focus();
+}
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') document.querySelectorAll('[data-modal]').forEach(m => { m.style.display = 'none'; });
+});
+document.addEventListener('click', e => {
+  if (e.target.matches && e.target.matches('[data-modal]')) e.target.style.display = 'none';
+});
+</script>
+
 <!-- Edit set modal -->
 {% if selected %}
-<div id="edit-set-modal" style="display:none" class="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
+<div id="edit-set-modal" style="display:none" data-modal role="dialog" aria-modal="true" aria-label="Edit scenario set" class="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
   <div class="bg-surface-raised rounded-xl border border-gray-700 p-5 w-96 max-w-full mx-4">
     <h3 class="text-sm font-semibold text-gray-200 mb-3">Edit Scenario Set</h3>
     <form method="post" action="{% url 'scenario_set_rename' selected.id %}" class="space-y-3">
@@ -211,14 +226,12 @@
 // Live version hint: shows "Will publish as vN" when description OR expected_behavior changes
 const CURRENT_VERSION = {{ viewing_version.version|default:0 }};
 
+// Scenario content changed (a new version will be published)? defaultValue is the saved text.
 function _contentChanged(id) {
-  const descEl = document.getElementById('desc-' + id);
-  const ebEl = document.getElementById('eb-' + id);
-  const origDesc = document.getElementById('orig-desc-' + id);
-  const origEb = document.getElementById('orig-eb-' + id);
-  const descDiff = descEl && origDesc && descEl.value.trim() !== origDesc.value.trim();
-  const ebDiff = ebEl && origEb && ebEl.value.trim() !== origEb.value.trim();
-  return descDiff || ebDiff;
+  return ['desc-', 'eb-'].some(prefix => {
+    const el = document.getElementById(prefix + id);
+    return el && el.value.trim() !== el.defaultValue.trim();
+  });
 }
 
 document.querySelectorAll('textarea[id^="desc-"], textarea[id^="eb-"]').forEach(ta => {
@@ -243,26 +256,20 @@ function confirmScenarioSave(scenarioId, form) {
 }
 
 // ─── Diff Rendering Helpers (jsdiff-based) ──────────────────────────────────
-function escHtml(s) {
-  const div = document.createElement('div');
-  div.textContent = s || '';
-  return div.innerHTML;
-}
-
 /** Render an inline word-level diff using jsdiff. Returns HTML string. */
 function renderInlineDiff(oldText, newText) {
   if (!oldText && !newText) return '<span class="text-gray-600 italic">empty</span>';
-  if (!oldText) return `<span class="bg-green-900/40 text-green-300 rounded px-0.5">${escHtml(newText)}</span>`;
-  if (!newText) return `<span class="bg-red-900/40 text-red-300 rounded px-0.5 line-through">${escHtml(oldText)}</span>`;
+  if (!oldText) return `<span class="bg-green-900/40 text-green-300 rounded px-0.5">${esc(newText)}</span>`;
+  if (!newText) return `<span class="bg-red-900/40 text-red-300 rounded px-0.5 line-through">${esc(oldText)}</span>`;
   const parts = Diff.diffWords(oldText, newText);
   let html = '';
   parts.forEach(part => {
     if (part.added) {
-      html += `<span class="bg-green-900/50 text-green-300 rounded-sm px-0.5">${escHtml(part.value)}</span>`;
+      html += `<span class="bg-green-900/50 text-green-300 rounded-sm px-0.5">${esc(part.value)}</span>`;
     } else if (part.removed) {
-      html += `<span class="bg-red-900/50 text-red-300 rounded-sm px-0.5 line-through">${escHtml(part.value)}</span>`;
+      html += `<span class="bg-red-900/50 text-red-300 rounded-sm px-0.5 line-through">${esc(part.value)}</span>`;
     } else {
-      html += escHtml(part.value);
+      html += esc(part.value);
     }
   });
   return html;
@@ -298,10 +305,10 @@ function buildDiffBody(d, opts) {
     html += `<div class="mb-4"><h4 class="text-xs font-semibold text-green-400 uppercase tracking-wide mb-2">Added</h4>`;
     d.added.forEach(s => {
       html += `<div class="ml-2 pl-3 border-l-2 border-green-800 pb-2 mb-2">`;
-      html += `<p class="text-sm text-green-300 font-medium">+ ${escHtml(s.title)}</p>`;
-      html += `<p class="text-xs text-gray-400 mt-1 whitespace-pre-wrap">${escHtml(s.description)}</p>`;
+      html += `<p class="text-sm text-green-300 font-medium">+ ${esc(s.title)}</p>`;
+      html += `<p class="text-xs text-gray-400 mt-1 whitespace-pre-wrap">${esc(s.description)}</p>`;
       if (s.expected_behavior && s.expected_behavior.length) {
-        html += `<p class="text-xs text-gray-500 mt-1"><span class="text-gray-600">Criteria:</span> ${s.expected_behavior.map(escHtml).join('; ')}</p>`;
+        html += `<p class="text-xs text-gray-500 mt-1"><span class="text-gray-600">Criteria:</span> ${s.expected_behavior.map(esc).join('; ')}</p>`;
       }
       html += `</div>`;
     });
@@ -313,8 +320,8 @@ function buildDiffBody(d, opts) {
     html += `<div class="mb-4"><h4 class="text-xs font-semibold text-red-400 uppercase tracking-wide mb-2">Removed</h4>`;
     d.removed.forEach(s => {
       html += `<div class="ml-2 pl-3 border-l-2 border-red-800 pb-2 mb-2">`;
-      html += `<p class="text-sm text-red-300 font-medium">− ${escHtml(s.title)}</p>`;
-      html += `<p class="text-xs text-gray-400 mt-1 whitespace-pre-wrap line-through decoration-red-900">${escHtml(s.description)}</p>`;
+      html += `<p class="text-sm text-red-300 font-medium">− ${esc(s.title)}</p>`;
+      html += `<p class="text-xs text-gray-400 mt-1 whitespace-pre-wrap line-through decoration-red-900">${esc(s.description)}</p>`;
       html += `</div>`;
     });
     html += `</div>`;
@@ -325,7 +332,7 @@ function buildDiffBody(d, opts) {
     html += `<div class="mb-4"><h4 class="text-xs font-semibold text-yellow-400 uppercase tracking-wide mb-2">Modified</h4>`;
     d.changed.forEach(s => {
       html += `<div class="ml-2 pl-3 border-l-2 border-yellow-800 pb-3 mb-3">`;
-      html += `<p class="text-sm text-yellow-300 font-medium mb-1">~ ${escHtml(s.title)}</p>`;
+      html += `<p class="text-sm text-yellow-300 font-medium mb-1">~ ${esc(s.title)}</p>`;
       // Description inline diff
       const descKeyFrom = opts.descKeyFrom || 'from_desc';
       const descKeyTo = opts.descKeyTo || 'to_desc';
@@ -363,7 +370,7 @@ async function showRevertDiff(setId, targetVer) {
   try {
     const resp = await fetch(`/scenarios/revert/${setId}/?target_version=${targetVer}`);
     const d = await resp.json();
-    if (d.error) { body.innerHTML = `<p class="text-red-400">${d.error}</p>`; return; }
+    if (d.error) { body.innerHTML = `<p class="text-red-400">${esc(d.error)}</p>`; return; }
 
     body.innerHTML = buildDiffBody(d, {
       labelFrom: `v${d.latest_version} (current)`,
@@ -373,7 +380,7 @@ async function showRevertDiff(setId, targetVer) {
       footer: `Confirming will publish v${d.target_version}'s content as a new version (v${d.latest_version + 1}). Historical versions are not modified.`
     });
   } catch (e) {
-    body.innerHTML = `<p class="text-red-400 text-sm">Failed to load diff: ${escHtml(e.message)}</p>`;
+    body.innerHTML = `<p class="text-red-400 text-sm">Failed to load diff: ${esc(e.message)}</p>`;
   }
 }
 
@@ -398,7 +405,7 @@ async function showVersionDiff(setId, fromVer, toVer) {
   try {
     const resp = await fetch(`/scenarios/diff/${setId}/?from=${fromVer}&to=${toVer}`);
     const d = await resp.json();
-    if (d.error) { body.innerHTML = `<p class="text-red-400">${d.error}</p>`; return; }
+    if (d.error) { body.innerHTML = `<p class="text-red-400">${esc(d.error)}</p>`; return; }
 
     body.innerHTML = buildDiffBody(d, {
       labelFrom: `v${d.from_version}`,
@@ -407,7 +414,7 @@ async function showVersionDiff(setId, fromVer, toVer) {
       ebKeyFrom: 'from_eb', ebKeyTo: 'to_eb',
     });
   } catch (e) {
-    body.innerHTML = `<p class="text-red-400 text-sm">Failed to load diff: ${escHtml(e.message)}</p>`;
+    body.innerHTML = `<p class="text-red-400 text-sm">Failed to load diff: ${esc(e.message)}</p>`;
   }
 }
 
@@ -470,7 +477,7 @@ function filterScenarios(query) {
 
 <!-- Import Set Modal -->
 {% if selected %}
-<div id="import-set-modal" style="display:none" class="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
+<div id="import-set-modal" style="display:none" data-modal role="dialog" aria-modal="true" aria-label="Import scenarios" class="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
   <div class="bg-surface-raised rounded-xl border border-gray-700 p-5 w-96 max-w-full mx-4">
     <h3 class="text-sm font-semibold text-gray-200 mb-3">Import Scenarios</h3>
     <p class="text-xs text-gray-500 mb-3">Upload a JSON file exported from another set. Scenarios will be added and published as a new version.</p>
@@ -505,24 +512,11 @@ async function submitImport(setId) {
     const text = await fileInput.files[0].text();
     const data = JSON.parse(text);
 
-    // Get CSRF token from cookie or meta tag
-    let csrfToken = '';
-    const csrfInput = document.querySelector('[name=csrfmiddlewaretoken]');
-    if (csrfInput) {
-      csrfToken = csrfInput.value;
-    } else {
-      const cookies = document.cookie.split(';');
-      for (const c of cookies) {
-        const [name, val] = c.trim().split('=');
-        if (name === 'csrftoken') { csrfToken = val; break; }
-      }
-    }
-
     const resp = await fetch(`/scenarios/${setId}/import/`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'X-CSRFToken': csrfToken,
+        'X-CSRFToken': csrfToken(),
       },
       body: JSON.stringify(data),
     });

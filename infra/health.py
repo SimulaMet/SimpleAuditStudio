@@ -151,34 +151,6 @@ def _worker_probe() -> dict[str, Any]:
     return {"status": "up", "idle": True}
 
 
-def _minio_probe() -> dict[str, Any]:
-    from django.conf import settings
-
-    endpoint = getattr(settings, "MINIO_ENDPOINT", "")
-    access_key = getattr(settings, "MINIO_ACCESS_KEY", "")
-    secret_key = getattr(settings, "MINIO_SECRET_KEY", "")
-    if not endpoint or not access_key:
-        return {"status": "unknown", "detail": "MinIO not configured (storage profile off)"}
-    import boto3
-    from botocore.config import Config
-    bucket = getattr(settings, "MINIO_BUCKET", "")
-    # Short connect/read timeout and NO retries: a health probe must fail fast,
-    # not hang for ~10s on boto3's default retry stack when MinIO is absent.
-    client = boto3.client(
-        "s3",
-        endpoint_url=endpoint,
-        aws_access_key_id=access_key,
-        aws_secret_access_key=secret_key,
-        region_name="us-east-1",
-        config=Config(connect_timeout=2, read_timeout=2, retries={"max_attempts": 0}),
-    )
-    if bucket:
-        client.head_bucket(Bucket=bucket)
-    else:
-        client.list_buckets()
-    return {"status": "up"}
-
-
 def _engine_probe() -> dict[str, Any]:
     from infra.simpleaudit_package import resolve_engine_provenance
 
@@ -195,20 +167,22 @@ def _engine_probe() -> dict[str, Any]:
 
 def _model_endpoints_probe() -> dict[str, Any]:
     """Ping each registered model endpoint's base_url, grouped by connection."""
-    from model_registry.models import ModelConnection
+    from django.db.models import Prefetch
+
+    from model_registry.models import ModelConnection, RegisteredModel
+    from model_registry.services import connection_api_key, models_url
 
     groups: list[dict[str, Any]] = []
-
-    # New model: connections with their models
-    conns = ModelConnection.objects.filter(enabled=True).prefetch_related("models").order_by("id")
-    seen_urls: set[str] = set()
+    enabled_models = Prefetch(
+        "models", queryset=RegisteredModel.objects.filter(enabled=True).order_by("display_name"), to_attr="enabled_models"
+    )
+    conns = ModelConnection.objects.filter(enabled=True).prefetch_related(enabled_models).order_by("id")
     for conn in conns:
         base = (conn.base_url or "").strip()
         if not base:
             continue
         # If no API key is configured, don't ping — report "no key"
-        secret_ref = (conn.secret_reference or "").strip()
-        api_key = os.environ.get(secret_ref, "") if secret_ref else ""
+        api_key = connection_api_key(conn)
         if not api_key:
             conn_status = "no_key"
             latency = None
@@ -221,11 +195,8 @@ def _model_endpoints_probe() -> dict[str, Any]:
             try:
                 import requests
                 start = _now_ms()
-                url = base.rstrip("/")
-                if not url.endswith("/models"):
-                    url = f"{url}/models"
                 headers = {"Authorization": f"Bearer {api_key}"}
-                resp = requests.get(url, timeout=2, headers=headers)
+                resp = requests.get(models_url(conn), timeout=2, headers=headers)
                 if resp.status_code == 200:
                     conn_status = "up"
                     latency = round(_now_ms() - start, 1)
@@ -236,7 +207,7 @@ def _model_endpoints_probe() -> dict[str, Any]:
 
         models = [
             {"id": m.id, "display_name": m.display_name, "model_id": m.model_id, "status": conn_status}
-            for m in conn.models.filter(enabled=True).order_by("display_name")
+            for m in conn.enabled_models
         ]
         if models:
             groups.append({
@@ -248,7 +219,6 @@ def _model_endpoints_probe() -> dict[str, Any]:
                 "detail": detail,
                 "models": models,
             })
-        seen_urls.add(base)
 
     # "no_key" is not a failure — it's an expected state for unconfigured connections
     overall = "up" if all(g["status"] in ("up", "no_key") for g in groups) else "down"
@@ -383,7 +353,7 @@ def collect_health() -> dict[str, Any]:
 
     Returns a dict with two top-level sections:
       - ``components``: name -> probe result (web, postgres, hatchet, worker,
-        minio, engine, model_endpoints)
+        engine, model_endpoints)
       - ``resources``:  name -> probe result (memory, disk, cpu, queue)
     Plus a computed ``overall`` status: "ok" if nothing is down, "degraded" if
     anything is degraded/unknown-but-configured, "down" if a core component is down.
@@ -393,7 +363,6 @@ def collect_health() -> dict[str, Any]:
         "postgres": _probe(_postgres_probe),
         "hatchet": _probe(_hatchet_probe),
         "worker": _probe(_worker_probe),
-        "minio": _probe(_minio_probe),
         "engine": _probe(_engine_probe),
         "model_endpoints": _probe(_model_endpoints_probe),
     }

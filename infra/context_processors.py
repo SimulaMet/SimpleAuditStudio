@@ -24,19 +24,10 @@ def admin_status(request):
     Admin = superuser OR holds an ADMIN membership in any project. Computed
     once per request; anonymous users get False without hitting the DB.
     """
-    user = getattr(request, "user", None)
-    if user is None or not user.is_authenticated:
-        return {"is_admin": False, "is_superuser": False}
-    if user.is_superuser:
-        return {"is_admin": True, "is_superuser": True}
-    from accounts.models import ProjectMembership
+    from accounts.services import is_any_project_admin
 
-    return {
-        "is_admin": ProjectMembership.objects.filter(
-            user=user, role=ProjectMembership.Role.ADMIN
-        ).exists(),
-        "is_superuser": False,
-    }
+    user = getattr(request, "user", None)
+    return {"is_admin": is_any_project_admin(user), "is_superuser": bool(user and user.is_superuser)}
 
 
 def workspaces(request):
@@ -78,3 +69,17 @@ def workspaces(request):
             }
         )
     return {"workspaces": items}
+
+
+def write_access(request):
+    """``can_write``: may this user change data in the current workspace?
+
+    Pages mark edit controls with ``data-write``; base.html hides them when
+    False (the server enforces the same rule in ``write_block_reason``).
+    """
+    user = getattr(request, "user", None)
+    if user is None or not user.is_authenticated or getattr(request, "project", None) is None:
+        return {"can_write": False}
+    from infra.ui import write_block_reason
+
+    return {"can_write": write_block_reason(request) is None}

@@ -1,6 +1,6 @@
 services:
   postgres:
-    # Postgres 16 per ADR 002. Tag is overridable via POSTGRES_IMAGE for
+    # Postgres 16. Tag is overridable via POSTGRES_IMAGE for
     # air-gapped hosts that have a specific tag pre-cached.
     image: ${POSTGRES_IMAGE:-postgres:16-alpine}
     environment:
@@ -9,7 +9,7 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      # Creates the separate Hatchet queue database on first init (ADR 003).
+      # Creates the separate Hatchet queue database on first init.
       # Only runs when the data volume is empty (fresh install).
       - ./deploy/postgres-init.sql:/docker-entrypoint-initdb.d/10-hatchet-db.sql:ro
     healthcheck:
@@ -18,33 +18,10 @@ services:
       timeout: 3s
       retries: 20
 
-  # Object storage for large audit artifacts (ADR 005). Optional profile so the
+
   # core stack (postgres + hatchet + web + worker) can run on hosts that cannot
   # pull MinIO; enable with `docker compose --profile storage up`. The audit
   # execution path does not require it — only large-artifact persistence does.
-  minio:
-    profiles: ["storage"]
-    image: ${MINIO_IMAGE:-minio/minio:RELEASE.2025-04-22T22-12-26Z}
-    command: server /data --console-address ":9001"
-    environment:
-      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-minioadmin}
-      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-minioadmin123}
-    ports:
-      - "9000:9000"
-      - "9001:9001"
-    volumes:
-      - minio_data:/data
-    healthcheck:
-      test: ["CMD", "mc", "ready", "local"]
-      interval: 10s
-      timeout: 5s
-      retries: 20
-
-  # OpenAI-compatible mock model endpoint for end-to-end demos/tests without real
-  # API keys. NOT part of the production path. Enable with
-  # `docker compose --profile mock up`. Point a ModelEndpoint's base_url at
-  # http://mock-model:8901/v1 to run a full Target -> Auditor -> Judge audit
-  # through the live worker.
   mock-model:
     profiles: ["mock"]
     # Compose application image (web + worker only). The root Dockerfile is the
@@ -63,7 +40,7 @@ services:
       timeout: 5s
       retries: 10
 
-  # Durable workflow engine (ADR 003 — accepted after Phase 4 spike passed 8/8).
+  # Durable workflow engine.
   # Postgres-backed task queue that coordinates audit execution. It is NOT the
   # authoritative SimpleAudit database; PostgreSQL domain tables remain source of truth.
   #
@@ -148,7 +125,9 @@ services:
     restart: unless-stopped
 
   web:
-    build: .
+    build:
+      context: .
+      dockerfile: deploy/compose/Dockerfile
     env_file: .env
     environment:
       POSTGRES_HOST: postgres
@@ -162,8 +141,6 @@ services:
       HATCHET_TOKEN_FILE: /config/authdisabled-token
     volumes:
       - hatchet_config:/config:ro
-    # MinIO is an optional profile (see above); the web service does not hard-
-    # depend on it so the core stack runs without object storage.
     depends_on:
       postgres:
         condition: service_healthy
@@ -177,7 +154,7 @@ services:
     # collection, then serve with gunicorn. The seed is safe on every start:
     # it skips anything already present. Set SEED_ON_BOOT=false to opt out.
     # Set SEED_DEMO_AUDITS=false to skip demo audit runs only.
-    command: 'sh -c "python manage.py migrate --noinput && python manage.py bootstrap_platform --username ${BOOTSTRAP_USERNAME:-studio} --email ${BOOTSTRAP_EMAIL:-admin@example.local} --password ${BOOTSTRAP_PASSWORD:?Set BOOTSTRAP_PASSWORD in .env} --project-name ${BOOTSTRAP_PROJECT_NAME:-Default} && if [ "${SEED_ON_BOOT:-true}" != "false" ]; then SEED_ARGS=\"\"; if [ \"${SEED_DEMO_AUDITS:-true}\" = \"false\" ]; then SEED_ARGS=\"--skip-demo-audits\"; fi; python manage.py seed_platform $SEED_ARGS || echo ''WARNING: seed_platform failed - continuing without seed data''; fi && python manage.py collectstatic --noinput && gunicorn config.wsgi:application --bind 0.0.0.0:8000 --workers 2"'
+    command: 'sh -c "python manage.py migrate --noinput && python manage.py bootstrap_platform --username ${BOOTSTRAP_USERNAME:-studio} --email ${BOOTSTRAP_EMAIL:-admin@example.local} --password ${BOOTSTRAP_PASSWORD:?Set BOOTSTRAP_PASSWORD in .env} --project-name ${BOOTSTRAP_PROJECT_NAME:-Default} && if [ "${SEED_ON_BOOT:-true}" != "false" ]; then SEED_ARGS=\"\"; if [ \"${SEED_DEMO_AUDITS:-true}\" = \"false\" ]; then SEED_ARGS=\"--skip-demo-audits\"; fi; python manage.py seed_platform $$SEED_ARGS || echo ''WARNING: seed_platform failed - continuing without seed data''; fi && python manage.py collectstatic --noinput && gunicorn config.wsgi:application --bind 0.0.0.0:8000 --workers 2"'
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:8000/healthz"]
       interval: 30s
@@ -186,6 +163,5 @@ services:
 
 volumes:
   postgres_data:
-  minio_data:
   # Shared Hatchet config; carries the auth-disabled worker JWT from server -> worker.
   hatchet_config:

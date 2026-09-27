@@ -1,5 +1,4 @@
 """Tests for workspace archive read-only enforcement + delete-empty behavior."""
-import json
 
 from django.test import Client, TestCase
 
@@ -10,15 +9,7 @@ from infra.tests.factories import (
     ScenarioFactory,
     UserFactory,
 )
-
-
-def _login(client, user, pw="testpass123"):
-    creds = {"username": user.username, "password": pw}
-    client.login(**creds)
-
-
-def _post(client, url, payload):
-    return client.post(url, data=json.dumps(payload), content_type="application/json")
+from infra.tests.utils import login, post_json
 
 
 def _scenario_payload():
@@ -39,15 +30,15 @@ class ArchiveReadOnlyTest(TestCase):
         self.client = Client(SERVER_NAME="localhost")
 
     def test_member_can_create_scenario_when_active(self):
-        _login(self.client, self.member)
-        resp = _post(self.client, f"/api/projects/{self.project.id}/scenarios/create/", _scenario_payload())
+        login(self.client, self.member)
+        resp = post_json(self.client, f"/api/projects/{self.project.id}/scenarios/create/", _scenario_payload())
         self.assertEqual(resp.status_code, 201)
 
     def test_member_cannot_create_scenario_when_archived(self):
         self.project.archived = True
         self.project.save()
-        _login(self.client, self.member)
-        resp = _post(self.client, f"/api/projects/{self.project.id}/scenarios/create/", _scenario_payload())
+        login(self.client, self.member)
+        resp = post_json(self.client, f"/api/projects/{self.project.id}/scenarios/create/", _scenario_payload())
         self.assertEqual(resp.status_code, 403)
         self.assertEqual(resp.json()["error"]["code"], "workspace_archived")
 
@@ -55,7 +46,7 @@ class ArchiveReadOnlyTest(TestCase):
         ScenarioFactory(project=self.project)
         self.project.archived = True
         self.project.save()
-        _login(self.client, self.member)
+        login(self.client, self.member)
         resp = self.client.get(f"/api/projects/{self.project.id}/scenarios/")
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(len(resp.json()), 1)
@@ -69,8 +60,8 @@ class ArchiveReadOnlyTest(TestCase):
         MembershipFactory(user=admin, project=self.project, role="admin")
         self.project.archived = True
         self.project.save()
-        _login(self.client, admin)
-        resp = _post(self.client, f"/api/projects/{self.project.id}/scenarios/create/", _scenario_payload())
+        login(self.client, admin)
+        resp = post_json(self.client, f"/api/projects/{self.project.id}/scenarios/create/", _scenario_payload())
         self.assertEqual(resp.status_code, 201)
 
 
@@ -82,7 +73,7 @@ class DeleteWorkspaceTest(TestCase):
         self.admin.set_password("testpass123")
         self.admin.save()
         self.client = Client(SERVER_NAME="localhost")
-        _login(self.client, self.admin)
+        login(self.client, self.admin)
 
     def test_delete_empty_workspace(self):
         project = ProjectFactory(name="Empty")
@@ -109,7 +100,7 @@ class ArchivedBadgeTest(TestCase):
         self.project = ProjectFactory(name="Acme")
         MembershipFactory(user=self.user, project=self.project, role="admin")
         self.client = Client(SERVER_NAME="localhost")
-        _login(self.client, self.user)
+        login(self.client, self.user)
 
     def test_workspace_list_includes_archived_flag(self):
         self.project.archived = True

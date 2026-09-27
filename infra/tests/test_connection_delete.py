@@ -14,6 +14,7 @@ from infra.tests.factories import (
     RegisteredModelFactory,
     UserFactory,
 )
+from model_registry.models import ModelConnection
 
 
 class ConnectionDeleteTest(TestCase):
@@ -107,3 +108,41 @@ class RegisteredModelDeleteTest(TestCase):
         assert RegisteredModel.objects.filter(pk=rm.id).exists()
         body = resp.content.decode()
         assert "referenced by audit runs" in body
+
+
+class DiscoverModelsKeyTests(TestCase):
+    """The Models page must never render API keys; discover resolves them server-side."""
+
+    def setUp(self):
+        self.user = UserFactory()
+        self.user.set_password("pw")
+        self.user.save()
+        self.project = ProjectFactory()
+        MembershipFactory(user=self.user, project=self.project, role="viewer")
+        self.client = Client()
+        self.client.login(username=self.user.username, password="pw")
+        self.conn = ModelConnection.objects.create(
+            project=self.project, name="Secret conn", provider="openai",
+            base_url="https://api.example.invalid/v1", api_key_direct="sk-super-secret-123",
+        )
+
+    def test_models_page_does_not_contain_the_key(self):
+        page = self.client.get("/models/")
+        self.assertEqual(page.status_code, 200)
+        self.assertNotContains(page, "sk-super-secret-123")
+        self.assertContains(page, f"discoverForConn({self.conn.id})")
+
+    def test_discover_uses_stored_key_for_own_connection_only(self):
+        from unittest import mock
+
+        fake = mock.MagicMock()
+        fake.json.return_value = {"data": [{"id": "gpt-x"}]}
+        with mock.patch("model_registry.services.httpx.get", return_value=fake) as get:
+            resp = self.client.post("/models/discover/", {"connection_id": self.conn.id})
+        self.assertEqual(resp.json()["models"], ["gpt-x"])
+        url, kwargs = get.call_args.args[0], get.call_args.kwargs
+        self.assertEqual(kwargs["headers"]["Authorization"], "Bearer sk-super-secret-123")
+        self.assertEqual(url, "https://api.example.invalid/v1/models")
+
+        other = ModelConnection.objects.create(project=ProjectFactory(), name="Other", base_url="https://x.invalid/v1")
+        self.assertEqual(self.client.post("/models/discover/", {"connection_id": other.id}).status_code, 404)

@@ -9,9 +9,9 @@ All functions are idempotent: existing data is skipped, never duplicated.
 """
 from __future__ import annotations
 
-import hashlib
-import json
 import logging
+
+from infra.hashing import scenario_revision_hash
 
 logger = logging.getLogger(__name__)
 
@@ -34,19 +34,6 @@ DEFAULT_MODELS = [
         ],
     ),
 ]
-
-
-def compute_content_hash(description: str, expected_behavior: list, test_prompt: str) -> str:
-    payload = json.dumps(
-        {
-            "description": description,
-            "expected_behavior": expected_behavior,
-            "test_prompt": test_prompt,
-        },
-        sort_keys=True,
-        ensure_ascii=False,
-    )
-    return hashlib.sha256(payload.encode()).hexdigest()
 
 
 def import_scenario_pack(project, user, pack_name: str, dry_run: bool = False):
@@ -123,7 +110,9 @@ def import_scenario_pack(project, user, pack_name: str, dry_run: bool = False):
                 "description": description,
                 "expected_behavior": expected_behavior,
                 "test_prompt": test_prompt,
-                "content_hash": compute_content_hash(description, expected_behavior, test_prompt),
+                "content_hash": scenario_revision_hash(
+                    description=description, expected_behavior=expected_behavior, test_prompt=test_prompt, metadata={}
+                ),
                 "created_by": user,
             },
         )

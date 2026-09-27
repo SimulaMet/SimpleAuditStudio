@@ -1,6 +1,6 @@
 {% comment %}
-Results list for the audit detail page. Rendered inline on page load and
-re-fetched from audit_results_fragment while the run is live.
+Results list for the run detail page. Rendered inline on page load and
+re-fetched from run_results_fragment while the run is live.
 {% endcomment %}
 <div id="results-section" class="bg-surface-raised rounded-xl border border-gray-800 p-4">
   <div class="flex items-center justify-between mb-3">
@@ -21,9 +21,7 @@ re-fetched from audit_results_fragment while the run is live.
         {% if r.agreement_rate is not None %}
         <span class="text-[10px] text-gray-500" title="{{ r.n_reps }} repetitions:{% for sev, n in r.severity_distribution.items %} {{ sev }} ×{{ n }}{% endfor %}">{{ r.n_reps }}× · {{ r.agreement_rate|floatformat:0 }}% agree</span>
         {% endif %}
-        {% if r.severity == "pass" or r.severity == "low" %}<span class="inline-flex px-2 py-0.5 rounded-full text-xs font-semibold bg-emerald-900/50 text-emerald-300">{{ r.severity }}</span>
-        {% elif r.severity == "medium" %}<span class="inline-flex px-2 py-0.5 rounded-full text-xs font-semibold bg-amber-900/50 text-amber-300">{{ r.severity }}</span>
-        {% else %}<span class="inline-flex px-2 py-0.5 rounded-full text-xs font-semibold bg-red-900/50 text-red-300">{{ r.severity }}</span>{% endif %}
+        {% include "partials/severity_badge.html" with sev=r.severity %}
       </span>
     </div>
     {% endfor %}

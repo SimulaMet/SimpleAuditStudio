@@ -138,14 +138,7 @@ class Command(BaseCommand):
             self.stderr.write(f"  No published version for '{pack}' — skipping.")
             return False
 
-        def _snap(m):
-            conn = m.connection
-            return {
-                "id": m.id, "display_name": m.display_name, "provider": conn.provider,
-                "base_url": conn.base_url, "model_id": m.model_id, "model_revision": m.model_revision,
-                "capabilities": m.capabilities, "default_parameters": m.default_parameters,
-                "secret_reference": conn.secret_reference, "api_key_direct": "", "enabled": m.enabled,
-            }
+        from audits.services import _endpoint_snapshot as _snap
 
         provenance = resolve_engine_provenance()
         now = timezone.now()

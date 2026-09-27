@@ -1,418 +1,116 @@
 # SimpleAudit Studio — Deployment
 
-Status: current  
-Date: 2026-09-22
+Status: current (matches the code)  
+Date: 2026-09-28
 
-## 1. Deployment goals
+Three ways to run it. All of them run `migrate` on start and create the admin
+user and default workspace if missing.
 
-A new user should be able to deploy a functional self-hosted instance with minimal manual steps:
+| | Demo / HF Space | Local development | Docker Compose |
+|---|---|---|---|
+| Start | `uvx simpleaudit-studio` or the root `Dockerfile` | `uv run manage.py dev_server --embedded` | `docker compose up -d` |
+| Database | SQLite | SQLite | PostgreSQL 16 |
+| Queue | embedded Hatchet (in-process) | embedded Hatchet | `hatchet-server` container |
+| Web server | `runserver` (port 7860 in the image, 8000 with uvx) | `runserver` :8000 | gunicorn :8000 |
+| Persistent data | no (HF Space storage is ephemeral) | local files | Docker volumes |
+
+## 1. Demo: uvx and the HF Space
 
 ```bash
-git clone <repository>
-cd simpleaudit-studio
-cp .env.example .env
-# edit required secrets/settings
+uvx simpleaudit-studio          # models point at api.openai.com; add a key in the UI
+uvx simpleaudit-studio --mock   # built-in mock model server, simulated results
+```
+
+`simpleaudit_studio/cli.py` sets `SIMPLEAUDIT_MINIMAL=1`, migrates, bootstraps,
+seeds scenario packs and model connections, starts embedded Hatchet and runs the
+web server and worker in one process.
+
+The root `Dockerfile` builds the same thing for the Hugging Face Space
+(`CMD python -m simpleaudit_studio.cli`, port 7860). It sets demo defaults
+(`DEMO_MODE=true`, user `studio` / `admin123`); override secrets in the Space
+settings. Data is lost when the Space restarts.
+
+## 2. Local development
+
+```bash
+cp .env.local.example .env
+uv sync --extra dev
+uv run manage.py setup_local            # migrate + admin (BOOTSTRAP_PASSWORD from .env) + seed
+uv run manage.py dev_server --embedded  # web + worker + embedded Hatchet → http://localhost:8000
+SIMPLEAUDIT_LOCAL_SQLITE=1 uv run manage.py test infra
+```
+
+Only one `dev_server --embedded` can run at a time: they share the embedded
+PostgreSQL directory (`~/.simpleaudit-studio/embedded-pg`, or
+`SIMPLEAUDIT_EMBEDDED_PG_DIR`). The worker does not auto-reload; restart
+`dev_server` after changing worker code.
+
+## 3. Docker Compose (production)
+
+```bash
+cp .env.example .env    # set POSTGRES_PASSWORD, BOOTSTRAP_PASSWORD, DJANGO_SECRET_KEY
 docker compose up -d
+docker compose --profile mock up -d   # also start the mock model server
 ```
 
-After startup, the user should get:
-
-- web UI available at configured URL
-- PostgreSQL initialized/migrated
-- object storage bucket initialized
-- workflow server available to workers
-- worker running
-- health checks passing
-- documented first-run bootstrap command
-
-No undocumented manual database setup is allowed.
-
-First-run bootstrap (idempotent, runs automatically on container start):
-
-1. create the platform owner account (`BOOTSTRAP_USERNAME`, default `studio`) with `is_staff=True` — not a Django superuser
-2. create the Default workspace
-3. grant the owner an ADMIN membership in the Default workspace
-4. optionally import a starter scenario pack into that project
-5. print or log next steps for model endpoint registration
-
-Configuration via environment variables: `BOOTSTRAP_USERNAME`, `BOOTSTRAP_EMAIL`, `BOOTSTRAP_PASSWORD`, `BOOTSTRAP_PROJECT_NAME`.
-
-Bootstrap must be idempotent and must not require hand-editing SQL.
-
-## 2. Canonical components
-
-| Component | Purpose | Default Compose service |
-|---|---|---|
-| Django web/API | UI + REST + SSE | `web` |
-| PostgreSQL | authoritative state | `postgres` |
-| MinIO/S3 | artifacts | `minio` |
-| Hatchet server | durable workflow/queue | `hatchet-server` |
-| Worker | runs audits (CPU + external API models) | `worker` |
-| OTel collector | traces/logs/metrics | optional |
-| Langfuse | LLM observability | optional |
-
-## 3. Environments
-
-### 3.1 Development
-
-Purpose:
-
-- fast local iteration
-- deterministic mock provider
-- lower timeouts
-
-Requirements:
-
-- same component types as production where practical
-- Docker Compose preferred
-- no SQLite in canonical dev path
-- seed command idempotent
-
-### 3.2 Staging
-
-Purpose:
-
-- pre-release validation
-- live provider smoke tests
-- failure injection
-- backup/restore drills
-
-Requirements:
-
-- isolated data
-- same migration path as production
-- access to representative model API endpoints if available
-
-### 3.3 Production
-
-Purpose:
-
-- real audits
-- durable historical records
-- controlled upgrades
-
-Requirements:
-
-- TLS termination
-- strong secrets
-- backups
-- monitoring/alerting
-- logged administrative actions
-- pinned images
-- documented rollback
-
-## 4. Configuration
-
-Configuration is split into:
-
-### 4.1 Non-secret settings
-
-`.env` or environment:
-
-- `DJANGO_SETTINGS_MODULE`
-- `DJANGO_DEBUG`
-- `DJANGO_ALLOWED_HOSTS`
-- `SIMPLEAUDIT_LOCAL_SQLITE` — local-dev/test only; forces the SQLite branch (never in deployments)
-- `POSTGRES_DB`
-- `POSTGRES_USER`
-- `POSTGRES_PASSWORD`
-- `POSTGRES_HOST`
-- `POSTGRES_PORT`
-- `MINIO_ENDPOINT`
-- `MINIO_ACCESS_KEY`
-- `MINIO_SECRET_KEY`
-- `MINIO_BUCKET`
-- `HATCHET_SERVER_URL`
-- `HATCHET_GRPC_URL`
-- `HATCHET_API_KEY`
-- `HATCHET_TOKEN_FILE`
-- `HATCHET_TLS_STRATEGY`
-- `WORKER_POOL`
-- `MAX_CONCURRENT_AUDITS`
-- `MAX_SCENARIOS_PER_RUN` — single source of truth for scenario count validation
-- `SSE_MAX_CONNECTIONS_PER_USER`
-- `OTEL_EXPORTER_OTLP_ENDPOINT`
-- `LANGFUSE_PUBLIC_KEY`
-- `LANGFUSE_SECRET_KEY`
-- `LANGFUSE_HOST`
-
-### 4.2 Secrets
-
-Never commit:
-
-- Django secret key
-- Postgres password
-- MinIO keys
-- Hatchet API key
-- model API keys
-- Langfuse secret key
-- signing keys
-
-Secrets are injected into worker environment only when needed. Web/API should not receive model API keys unless an admin feature requires read-only validation.
-
-Startup secret validation:
-
-- refuse to boot in production if required values remain `change-me`
-- wildcard `ALLOWED_HOSTS=*` is permitted for HF Spaces and proxy-based deployments where the platform injects unpredictable hostnames (e.g. `proxy.spaces.internal.huggingface.tech`). This trades strict host validation for deployment flexibility; CSRF_TRUSTED_ORIGINS still enforces origin checks on POST requests.
-- the worker resolves SimpleAudit provenance from installed package metadata at
-  startup; a run whose frozen version disagrees with the loaded engine fails with
-  `SIMPLEAUDIT_VERSION_MISMATCH` (see `infra/simpleaudit_package.py`)
-- validate database/object storage/workflow connectivity during readiness checks
-
-### 4.3 `.env.example`
-
-Must include placeholders and comments:
-
-```env
-DJANGO_SECRET_KEY=change-me
-DJANGO_DEBUG=false
-DJANGO_ALLOWED_HOSTS=*
-
-POSTGRES_DB=simpleaudit
-POSTGRES_USER=simpleaudit
-POSTGRES_PASSWORD=change-me
-POSTGRES_HOST=postgres
-POSTGRES_PORT=5432
-
-MINIO_ENDPOINT=http://minio:9000
-MINIO_ACCESS_KEY=change-me
-MINIO_SECRET_KEY=change-me
-MINIO_BUCKET=simpleaudit-artifacts
-
-HATCHET_SERVER_URL=http://hatchet-server:8888
-HATCHET_GRPC_URL=hatchet-server:7077
-HATCHET_API_KEY=
-
-WORKER_POOL=cpu
-MAX_CONCURRENT_AUDITS=2
-MAX_SCENARIOS_PER_RUN=500
-
-# SimpleAudit engine: no env vars needed. It is a pip dependency pinned in
-# pyproject.toml; provenance is read from installed package metadata.
-
-# Optional observability
-OTEL_EXPORTER_OTLP_ENDPOINT=
-LANGFUSE_PUBLIC_KEY=
-LANGFUSE_SECRET_KEY=
-LANGFUSE_HOST=
-```
-
-## 5. Dockerfiles
-
-Recommended images:
-
-- `web`: Python + Django + frontend assets if built
-- `worker`: Python + SimpleAudit + worker dependencies
-- `postgres`: official PostgreSQL image
-- `minio`: official MinIO image
-- `hatchet-server`: vendor image or pinned build
-- optional `collector`: OpenTelemetry Collector
-
-Rules:
-
-- pin base images by digest or exact tag
-- use non-root user where supported
-- do not copy `.env` into image
-- do not bake secrets into layers
-- include healthcheck
-- record application version and SimpleAudit commit in `/app/version.json` or equivalent
-
-The self-hosting deployment uses one image:
-
-- **`deploy/compose/Dockerfile`** — the compose-stack application image
-  (web + worker only; Postgres/Hatchet run as separate containers). Referenced
-  by `docker-compose.yml`, which builds it from the cloned checkout.
-
-> Note: the repository also contains a root `Dockerfile` (a minimal-config
-> single-process image serving :7860). It exists solely so Hugging Face Spaces
-> can build the project (HF Spaces build only the root Dockerfile) and is not a
-> documented self-hosting path.
-
-## 6. Migrations
-
-Startup sequence:
-
-1. wait for PostgreSQL
-2. run Django migrations
-3. initialize object storage bucket if missing
-4. verify workflow connectivity
-5. start web server
-
-Commands:
-
-```bash
-docker compose exec web python manage.py migrate
-docker compose exec web python manage.py check
-docker compose exec web python manage.py collectstatic --noinput
-```
-
-Automatic migrations on web startup may be enabled for small deployments but must be configurable. Upgrades should document explicit migration step.
-
-## 7. Health checks
-
-Required endpoints:
-
-- `/healthz` — liveness
-- `/readyz` — readiness including DB/workflow/storage checks
-
-Compose healthchecks:
-
-- postgres: `pg_isready`
-- minio: `mc ready` or HTTP health
-- hatchet: vendor health endpoint
-- web: `/healthz`
-- worker: heartbeat/metrics endpoint or process supervision
-
-Readiness must fail if:
-
-- DB unreachable
-- migrations pending
-- object storage unreachable
-- workflow server unreachable for submission
-
-## 8. Logging
-
-All containers emit structured JSON logs to stdout/stderr.
-
-Correlation fields:
-
-- `request_id`
-- `user_id`
-- `project_id`
-- `audit_run_id`
-- `workflow_run_id`
-- `task_id`
-- `trace_id`
-
-Redaction:
-
-- API keys
-- bearer tokens
-- full prompts/transcripts unless debug mode explicitly enabled
-- cookie/session values
-
-Log levels:
-
-- production default: `INFO`
-- debugging: `DEBUG` with explicit warning that transcripts may appear
-
-## 9. Backups and restore
-
-Back up:
-
-- PostgreSQL logical dump or basebackup
-- MinIO bucket
-- optional workflow database if vendor requires
-- `.env` stored securely outside repository
-
-Restore test:
-
-1. take backup
-2. destroy disposable environment
-3. restore DB and objects
-4. run migrations
-5. verify historical audit manifest and artifact hash
-6. verify UI can open restored audit
-
-Backup frequency and retention are deployment-specific but must be documented.
-
-## 10. Upgrades
-
-Upgrade procedure:
-
-1. announce maintenance if needed
-2. drain/cancel or allow running audits according to policy
-3. pull new images
-4. run migrations
-5. restart web
-6. restart workers
-7. verify health checks
-8. run smoke audit with mock provider
-
-Rollback:
-
-- keep previous image tags available
-- do not use destructive migrations without forward-only plan or backup
-- document incompatible schema changes
-- prefer additive migrations
-
-## 11. Deployment profiles
-
-### Full profile (default)
-
-Components:
-
-- PostgreSQL
-- MinIO/S3
-- Hatchet server
-- worker
-- web/API
-- optional OTel collector/Langfuse
-
-Use for production and staging.
-
-### Minimal profile (operator option)
-
-Components:
-
-- PostgreSQL
-- Hatchet server
-- worker
-- web/API
-- local volume or managed object storage compatible with the same artifact interface
-
-Langfuse/OTel collector may be omitted. This profile is an operational
-simplification, not a second architecture. It must still use durable workflow,
-PostgreSQL, authentication, and object-storage-compatible artifact persistence.
-
-## 12. Scaling
-
-Single host:
-
-- scale worker concurrency within host resources
-
-Multi host:
-
-- remote workers point to same Postgres/MinIO/Hatchet
-- add labels for capabilities
-- consider separate network segmentation for workers
-
-Do not scale horizontally until single-host bottlenecks are measured.
-
-## 13. Security deployment checklist
-
-- TLS at reverse proxy
-- strong unique secrets
-- private object storage
-- no public MinIO console unless protected
-- CSRF trusted origins configured
-- rate limiting enabled
-- dependency scanning in CI
-- container images scanned
-- workers run non-root
-- secrets not in image/env files committed to git
-- SSRF policy configured for model endpoints
-- audit logging enabled
-
-## 14. Release process
-
-Release candidate:
-
-1. tag version
-2. build images
-3. run full CI
-4. deploy clean staging
-5. run E2E critical journey
-6. run backup/restore drill
-7. publish release notes
-8. promote to production
-
-Release notes include:
-
-- version
-- SimpleAudit commit
-- migration summary
-- breaking changes
-- known issues
-- upgrade instructions
-- rollback instructions
+Services (`docker-compose.yml`):
+
+- `postgres`: domain database; `deploy/postgres-init.sql` creates the separate Hatchet database on first start.
+- `hatchet-server`: durable workflow engine (HTTP :8888, gRPC :7077).
+- `worker`: `manage.py run_worker`; runs audits, the stuck-run sweeper and monitor ticks.
+- `web`: migrate, `bootstrap_platform`, `seed_platform` (skip with `SEED_ON_BOOT=false`, or only the demo runs with `SEED_DEMO_AUDITS=false`), `collectstatic`, gunicorn.
+- `mock-model` (profile `mock`): OpenAI-compatible mock server (`deploy/mock_openai_server.py`).
+
+`web` and `worker` build from `deploy/compose/Dockerfile`.
+
+## 4. Environment variables
+
+Only these are read by the code.
+
+| Variable | Purpose |
+|---|---|
+| `DJANGO_SECRET_KEY` | Required outside local SQLite mode. |
+| `DJANGO_DEBUG` | `true` for debugging only. |
+| `DJANGO_ALLOWED_HOSTS` | Comma-separated; default `*` (see security notes). |
+| `DJANGO_CSRF_TRUSTED_ORIGINS` | Extra trusted origins (full URLs). |
+| `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_HOST`, `POSTGRES_PORT`, `POSTGRES_CONN_MAX_AGE` | PostgreSQL connection. |
+| `SIMPLEAUDIT_LOCAL_SQLITE` | `1` = local SQLite database (`local_test.sqlite3`). |
+| `SIMPLEAUDIT_MINIMAL` | `1` = single-process demo mode (set by the CLI). |
+| `SIMPLEAUDIT_EMBEDDED_PG_DIR` | Data directory for embedded Hatchet's PostgreSQL. |
+| `HATCHET_SERVER_URL`, `HATCHET_GRPC_URL`, `HATCHET_API_KEY`, `HATCHET_TOKEN_FILE`, `HATCHET_TLS_STRATEGY` | External Hatchet connection. |
+| `HATCHET_EMBEDDED_HANDSHAKE` | Set internally by `dev_server --embedded` so web and worker find the embedded engine; don't set it yourself. |
+| `WORKER_POOL` | Worker label (`cpu` by default). |
+| `BOOTSTRAP_USERNAME`, `BOOTSTRAP_EMAIL`, `BOOTSTRAP_PASSWORD`, `BOOTSTRAP_PROJECT_NAME` | First admin user and workspace. |
+| `DEMO_MODE`, `DEMO_USERNAME`, `DEMO_PASSWORD` | Prefilled demo login and the HF iframe cookie/CSRF policy. |
+| `WORKOS_CLIENT_ID`, `WORKOS_API_KEY` | Optional passwordless email sign-in. |
+| `SENTRY_DSN`, `SENTRY_ENVIRONMENT` | Optional error tracking. |
+| `LOG_LEVEL`, `PORT` | Logging level; web port for the CLI. |
+| any name in a connection's `secret_reference` | Model API key read at execution time. |
+
+## 5. Management commands
+
+| Command | Does |
+|---|---|
+| `setup_local` | migrate + bootstrap + seed (local dev). |
+| `bootstrap_platform` | Create the admin user and default workspace (idempotent). |
+| `seed_platform` | Import scenario packs and model connections, plus demo runs (`seed_demo_audits`). |
+| `dev_server [--embedded]` | Web + worker for development. |
+| `run_worker` | Hatchet worker (Compose `worker`). |
+| `run_monitors` | One monitor pass, for an external cron if you don't run the worker sweeper. |
+| `purge_test_data` | Delete runs, scenario sets and models left by smoke tests (`--dry-run` first). |
+
+## 6. Operations
+
+- **Health:** `/healthz` (liveness), `/readyz` (readiness), `/health/` (admin panel).
+- **Backups:** `docker compose exec postgres pg_dump -U simpleaudit simpleaudit > backup.sql`. Restore with `psql` into an empty database before starting `web`.
+- **Upgrades:** pull, `docker compose build`, `docker compose up -d`. Migrations run when `web` starts; take a backup first.
+
+## 7. Security notes
+
+- Set a strong `DJANGO_SECRET_KEY` and change `BOOTSTRAP_PASSWORD` (start-up
+  checks reject empty values and `change-me`).
+- `DJANGO_ALLOWED_HOSTS=*` is allowed because HF Spaces and similar proxies use
+  unpredictable host names. Behind your own domain, list it explicitly.
+- Direct API keys are stored on the connection in the database (never in run
+  records or API responses); prefer `secret_reference` environment variables in
+  production.

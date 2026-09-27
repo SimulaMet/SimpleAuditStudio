@@ -4,9 +4,11 @@ Run:
     SIMPLEAUDIT_LOCAL_SQLITE=1 uv run manage.py test infra.tests.test_experiments
 """
 import json
+from datetime import timedelta
 from unittest import mock
 
 from django.test import Client, TestCase
+from django.utils import timezone
 
 from audits.models import AuditRun, Experiment
 from infra.tests.factories import (
@@ -89,7 +91,7 @@ class ExperimentFlowTests(_ExperimentBase):
         page = self.client.get("/experiments/new/")
         self.assertContains(page, "New Experiment")
         self.assertContains(page, 'type="checkbox" name="target_model"')
-        self.assertContains(page, 'type="checkbox" name="scenario_set"')
+        self.assertContains(page, 'name="scenario_version"')
 
     def test_single_combination_launches_directly(self):
         resp = self.client.post("/experiments/new/", self._design(target_model=[self.t1.id], max_turns="3"))
@@ -172,8 +174,8 @@ class ExperimentFlowTests(_ExperimentBase):
         client = Client()
         client.login(username=viewer.username, password="pw")
         review = self.client.post("/experiments/new/", self._design())
-        resp = client.post("/experiments/new/", self._review_to_launch_payload(review))
-        self.assertContains(resp, "Insufficient project role")
+        resp = client.post("/experiments/new/", self._review_to_launch_payload(review), follow=True)
+        self.assertContains(resp, "Admin or auditor role required")
         self.assertFalse(AuditRun.objects.exists())
 
     def test_foreign_model_in_spec_rejected(self):
@@ -293,3 +295,100 @@ class ReviewWarningTests(_ExperimentBase):
         )
         rows = review.context["rows"]
         self.assertEqual(sum("grades itself" in " ".join(r["warnings"]) for r in rows), 1)
+
+
+class ScenarioVersionPickTests(_ExperimentBase):
+    def setUp(self):
+        super().setUp()
+        self.v_a1 = ScenarioSetVersionFactory(scenario_set=self.set_a, version=1)  # older than v_a (v2)
+
+    def test_design_lists_versions_latest_first(self):
+        page = self.client.get("/experiments/new/")
+        row = next(s for s in page.context["sets"] if s.id == self.set_a.id)
+        self.assertEqual([v.version for v in row.version_list], [2, 1])
+        self.assertContains(page, f'name="scenario_version" value="{self.v_a1.id}"')
+        self.assertContains(page, "Versions ▾")
+
+    def test_older_version_runs_that_version(self):
+        payload = self._design(target_model=[self.t1.id], max_turns="")
+        del payload["scenario_set"]
+        payload["scenario_version"] = [self.v_a1.id]
+        self.client.post("/experiments/new/", payload)
+        self.assertEqual(AuditRun.objects.get().scenario_set_version_id, self.v_a1.id)
+
+    def test_two_versions_of_one_set_are_compared(self):
+        payload = self._design(target_model=[self.t1.id], max_turns="")
+        del payload["scenario_set"]
+        payload["scenario_version"] = [self.v_a1.id, self.v_a.id]
+        review = self.client.post("/experiments/new/", payload)
+        self.assertEqual([k for k, _ in review.context["columns"]], ["scenario_set"])
+        self.assertEqual({r["values"]["scenario_set"] for r in review.context["rows"]}, {"Health v1", "Health v2"})
+
+    def test_set_id_means_latest(self):
+        self.client.post("/experiments/new/", self._design(target_model=[self.t1.id], max_turns=""))
+        self.assertEqual(AuditRun.objects.get().scenario_set_version_id, self.v_a.id)
+
+    def test_clone_ticks_exact_version(self):
+        run = AuditRun.objects.create(
+            project=self.project, name="old", scenario_set_version=self.v_a1,
+            target_model=self.t1, auditor_model=self.judge, judge_model=self.judge,
+            target_config_snapshot={}, auditor_config_snapshot={}, judge_config_snapshot={},
+            generation_parameters_snapshot={}, simpleaudit_version="0.2.1", git_commit="",
+        )
+        page = self.client.get(f"/experiments/new/?clone_from={run.id}")
+        row = next(s for s in page.context["sets"] if s.id == self.set_a.id)
+        self.assertEqual(row.ticked, {str(self.v_a1.id)})
+        self.assertTrue(row.show_versions)  # older version ticked: list opens
+
+    def test_version_from_other_workspace_rejected(self):
+        foreign = ScenarioSetVersionFactory()
+        payload = self._design()
+        payload["scenario_version"] = [foreign.id]
+        resp = self.client.post("/experiments/new/", payload)
+        self.assertContains(resp, "not in this workspace")
+        self.assertFalse(AuditRun.objects.exists())
+
+
+class AlwaysLatestTests(_ExperimentBase):
+    def _payload(self, versions, **extra):
+        payload = self._design(target_model=[self.t1.id], max_turns="", **extra)
+        del payload["scenario_set"]
+        payload["scenario_version"] = versions
+        return payload
+
+    def test_design_offers_always_latest_unticked_by_default(self):
+        page = self.client.get("/experiments/new/")
+        self.assertContains(page, f'value="latest:{self.set_a.id}"')
+        self.assertContains(page, "Always latest")
+        self.assertNotContains(page, f'value="latest:{self.set_a.id}"\n                   checked')
+
+    def test_always_latest_runs_today_and_monitor_is_unpinned(self):
+        from audits.models import Monitor
+        from audits.monitors import run_due_monitors
+
+        self.client.post("/experiments/new/", self._payload(
+            [f"latest:{self.set_a.id}"], repeat="168", timezone="UTC", start="now"
+        ))
+        run = AuditRun.objects.get()
+        monitor = Monitor.objects.get()
+        self.assertEqual(run.scenario_set_version_id, self.v_a.id)  # current latest (v2)
+        self.assertIsNone(monitor.scenario_set_version_id)  # follows new versions
+        self.assertIn("always latest", monitor.name)
+        self.assertEqual(run.monitor_id, monitor.id)  # still the first point
+        # A new version is published; the next tick uses it.
+        v3 = ScenarioSetVersionFactory(scenario_set=self.set_a, version=3)
+        AuditRun.objects.update(status="completed")
+        Monitor.objects.update(next_run_at=timezone.now())
+        new_id = run_due_monitors(now=timezone.now() + timedelta(seconds=1))[0]
+        self.assertEqual(AuditRun.objects.get(pk=new_id).scenario_set_version_id, v3.id)
+
+    def test_pinned_and_always_latest_are_compared(self):
+        review = self.client.post("/experiments/new/", self._payload([f"latest:{self.set_a.id}", self.v_a.id]))
+        labels = {r["values"]["scenario_set"] for r in review.context["rows"]}
+        self.assertEqual(labels, {"Health v2", "Health (always latest, now v2)"})
+
+    def test_always_latest_for_foreign_set_rejected(self):
+        foreign = ScenarioSetFactory()
+        ScenarioSetVersionFactory(scenario_set=foreign)
+        resp = self.client.post("/experiments/new/", self._payload([f"latest:{foreign.id}"]))
+        self.assertContains(resp, "not in this workspace")

@@ -1,51 +1,79 @@
 {% extends "base.html" %}
 {% block title %}New Experiment — SimpleAudit{% endblock %}
 {% block content %}
-<h1 class="text-lg font-semibold text-gray-100 mb-1">New Experiment</h1>
-<p class="text-sm text-gray-500 mb-6 max-w-4xl">
-  Pick one value per input for a single run, or several to compare them: every combination becomes a run.
-  You review the runs before anything is launched.
-</p>
+<div class="flex flex-wrap items-baseline gap-x-3 gap-y-1 mb-4">
+  <h1 class="text-lg font-semibold text-gray-100">New Experiment</h1>
+  <p class="text-sm text-gray-500">Pick one value per input for a single run, or several to compare: every combination becomes a run, reviewed before launch.</p>
+</div>
 
 {% if error %}
-<div class="mb-4 text-sm text-red-300 bg-red-900/30 rounded-lg px-4 py-2 max-w-4xl">{{ error }}</div>
+<div class="mb-4 text-sm text-red-300 bg-red-900/30 rounded-lg px-4 py-2">{{ error }}</div>
 {% endif %}
 {% if not can_launch %}
-<div class="mb-4 text-sm text-yellow-300 bg-yellow-900/20 rounded-lg px-4 py-2 max-w-4xl">
+<div class="mb-4 text-sm text-yellow-300 bg-yellow-900/20 rounded-lg px-4 py-2">
   You have view-only access to this workspace. Launching runs needs the admin or auditor role, because runs spend the workspace's API keys.
   Ask a workspace admin, or <a href="{% url 'workspaces' %}?new=1" class="underline">create your own workspace</a>.
 </div>
 {% endif %}
 
-<form method="post" id="design-form" class="space-y-4 max-w-4xl">
+<form method="post" id="design-form" class="space-y-4 max-w-7xl">
   {% csrf_token %}
   <input type="hidden" name="action" value="design">
 
-  <div id="picker-sections" class="space-y-4">
-  <div class="bg-surface-raised rounded-xl border border-gray-800 p-4">
+  {# Row 1 (wide screens): scenario sets | models, equal height, lists scroll inside. #}
+  <div id="picker-sections" class="grid grid-cols-1 xl:grid-cols-3 gap-4">
+  <div class="bg-surface-raised rounded-xl border border-gray-800 p-4 min-w-0">
     <div class="flex items-center justify-between mb-1">
       <h3 class="text-sm font-semibold text-gray-300">Scenario sets</h3>
       <a href="{% url 'scenarios' %}" target="_blank" class="text-xs text-accent hover:text-accent-hover hover:underline">＋ New</a>
     </div>
-    <p class="text-xs text-gray-500 mb-3">Each selected set gets its own runs, using its latest published version.</p>
+    <p class="text-xs text-gray-500 mb-3">Ticking a set uses its latest version. Open <em>Versions</em> to use an older one, or tick several to compare them.</p>
     {% if sets %}
-    <fieldset data-axis="scenario_set">
+    <fieldset data-axis="scenario_version">
     <div class="flex items-center gap-2 mb-2">
       <input type="search" data-filter placeholder="Search scenario sets…" aria-label="Search scenario sets"
              class="flex-1 px-2.5 py-1.5 rounded-lg bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-2 focus:ring-accent/50">
       <span class="text-[10px] text-gray-500 shrink-0" data-axis-count></span>
     </div>
-    <div data-filter-list class="grid grid-cols-1 sm:grid-cols-2 gap-1.5 max-h-72 overflow-y-auto">
+    <div data-filter-list class="space-y-1.5 h-60 overflow-y-auto pr-1">
       {% for s in sets %}
-      <label data-filter-item class="flex items-start gap-2 px-2.5 py-2 rounded-lg border border-gray-800 bg-surface-overlay/40 text-sm cursor-pointer hover:bg-surface-overlay">
-        <input type="checkbox" name="scenario_set" value="{{ s.id }}" class="mt-0.5" {% if s.id|stringformat:"d" in sel.sets %}checked{% endif %}>
-        <span class="min-w-0">
-          <span class="text-gray-200 block truncate">{{ s.name }}</span>
-          <span class="text-[11px] text-gray-500">
-            {% if sel.pinned_version and s.id|stringformat:"d" in sel.sets and clone.scenario_set_id == s.id %}pinned to the cloned run's version{% else %}v{{ s.versions.count }} · latest{% endif %}
-          </span>
-        </span>
-      </label>
+      {# Only the version checkboxes are submitted (name="scenario_version"); the set checkbox is a shortcut for "latest". #}
+      <div data-filter-item data-set-row class="rounded-lg border border-gray-800 bg-surface-overlay/40 text-sm">
+        <div class="flex items-start gap-2 px-2.5 py-2">
+          <input type="checkbox" data-set-toggle id="set-{{ s.id }}" class="mt-0.5" {% if s.ticked %}checked{% endif %} {% if not s.version_list %}disabled{% endif %}>
+          <label for="set-{{ s.id }}" class="min-w-0 flex-1 cursor-pointer">
+            <span class="text-gray-200 block truncate">{{ s.name }}</span>
+            <span class="text-[11px] text-gray-500" data-set-summary>{% if s.version_list %}v{{ s.version_list.0.version }} · latest{% else %}no published version yet{% endif %}</span>
+          </label>
+          {% if s.version_list %}
+          <button type="button" data-version-toggle aria-expanded="{% if s.show_versions %}true{% else %}false{% endif %}"
+                  class="shrink-0 text-[11px] text-gray-400 hover:text-accent px-1.5 py-0.5 rounded hover:bg-surface-overlay">Versions {% if s.show_versions %}▴{% else %}▾{% endif %}</button>
+          {% endif %}
+        </div>
+        <div data-version-list class="{% if not s.show_versions %}hidden{% endif %} border-t border-gray-800 px-2.5 py-1.5 space-y-0.5 max-h-44 overflow-y-auto">
+          {% if s.version_list %}
+          <label class="flex items-baseline gap-2 text-xs cursor-pointer py-0.5 border-b border-gray-800/60 pb-1.5 mb-1" title="Not pinned: each run uses the newest version published at that time">
+            <input type="checkbox" name="scenario_version" value="{{ s.follow_value }}" data-follow data-version="{{ s.version_list.0.version }}"
+                   {% if s.follow_value in s.ticked %}checked{% endif %}>
+            <span class="text-gray-200">Always latest</span>
+            <span class="text-gray-500 truncate">follows new versions · now v{{ s.version_list.0.version }}</span>
+          </label>
+          {% endif %}
+          {% for v in s.version_list %}
+          <div class="flex items-baseline gap-2 text-xs py-0.5">
+            <label class="flex items-baseline gap-2 min-w-0 flex-1 cursor-pointer">
+              <input type="checkbox" name="scenario_version" value="{{ v.id }}" data-version="{{ v.version }}" {% if forloop.first %}data-latest{% endif %}
+                     {% if v.id|stringformat:"d" in s.ticked %}checked{% endif %}>
+              <span class="text-gray-200 shrink-0">v{{ v.version }}{% if forloop.first %} <span class="text-accent">latest</span>{% endif %}</span>
+              <span class="text-gray-500 truncate" title="Published {{ v.published_at|date:'M j, Y, H:i' }} UTC{% if v.published_by %} by {{ v.published_by.username }}{% endif %}">{{ v.scenario_count }} scenario{{ v.scenario_count|pluralize }} · {{ v.published_at|date:"M j" }}</span>
+            </label>
+            {# New tab: keep the design form as it is. #}
+            <a href="{% url 'scenarios' %}?set={{ s.id }}&version={{ v.version }}" target="_blank" rel="noopener"
+               title="Open v{{ v.version }} of {{ s.name }} in a new tab" class="shrink-0 text-gray-500 hover:text-accent">View ↗</a>
+          </div>
+          {% endfor %}
+        </div>
+      </div>
       {% endfor %}
       <p data-filter-empty class="hidden px-2.5 py-2 text-xs text-gray-500">No matches.</p>
     </div>
@@ -55,15 +83,16 @@
     {% endif %}
   </div>
 
-  {% include "partials/audit_models_multi.html" %}
+  <div class="xl:col-span-2 min-w-0">{% include "partials/model_pickers.html" %}</div>
   </div>
 
-  {% if sel.pinned_version %}<input type="hidden" name="scenario_set_version" value="{{ sel.pinned_version }}">{% endif %}
 
-  {% include "partials/audit_hyperparameters.html" with multi=True %}
+  {# Row 2 (wide screens): run settings | schedule. #}
+  <div class="grid grid-cols-1 xl:grid-cols-2 gap-4 items-start">
+  <div class="min-w-0">{% include "partials/run_settings.html" %}</div>
 
   <!-- Schedule: run once, or repeat (creates monitors) -->
-  <div class="bg-surface-raised rounded-xl border border-gray-800 p-4" id="schedule-card">
+  <div class="bg-surface-raised rounded-xl border border-gray-800 p-4 min-w-0" id="schedule-card">
     <h3 class="text-sm font-semibold text-gray-300 mb-1">Schedule</h3>
     <p class="text-xs text-gray-500 mb-3">Run once, or repeat on a schedule to track changes over time. Repeating runs appear under Monitors.</p>
     <input type="hidden" name="clone_from" value="{{ rep.clone_from }}">
@@ -109,12 +138,13 @@
       </fieldset>
     </div>
   </div>
+  </div>
 
   <!-- Sticky summary: how many runs this design makes -->
   <div class="sticky bottom-0 z-10 pb-4 pt-2 bg-gradient-to-t from-surface via-surface/90 to-transparent">
     <div class="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-gray-700 bg-surface-raised px-4 py-3 shadow-lg">
       <p class="text-sm text-gray-300 min-w-0" id="design-summary" aria-live="polite">—</p>
-      <button type="submit" id="launch-audit-btn" data-busy-label="Working…" {% if not can_launch %}disabled title="Admin or auditor role required"{% endif %}
+      <button type="submit" id="launch-btn" data-busy-label="Working…" {% if not can_launch %}disabled title="Admin or auditor role required"{% endif %}
               class="shrink-0 px-4 py-2 rounded-lg bg-accent text-white text-sm font-medium hover:bg-accent-hover transition-colors disabled:opacity-60 disabled:cursor-not-allowed disabled:hover:bg-accent">
         Launch run
       </button>
@@ -125,11 +155,11 @@
 <script>
 (function() {
   const form = document.getElementById('design-form');
-  const btn = document.getElementById('launch-audit-btn');
+  const btn = document.getElementById('launch-btn');
   const summary = document.getElementById('design-summary');
   const canLaunch = {{ can_launch|yesno:"true,false" }};
   const MAX_RUNS = {{ max_runs }};
-  const AXES = [['scenario_set', 'scenario set'], ['target_model', 'target'], ['auditor_model', 'auditor'], ['judge_model', 'judge']];
+  const AXES = [['scenario_version', 'scenario set'], ['target_model', 'target'], ['auditor_model', 'auditor'], ['judge_model', 'judge']];
 
   function listCount(name) {
     const el = form.querySelector(`[name="${name}"]`);
@@ -146,7 +176,12 @@
       const counter = form.querySelector(`[data-axis="${name}"] [data-axis-count]`);
       if (counter) counter.textContent = n > 1 ? n + ' selected' : '';
       if (!n) missing.push(label);
-      if (n > 1) compared.push(n + ' ' + label + 's');
+      if (n > 1) {
+        // Two versions of one set are compared as versions, not as different sets.
+        const sameSet = name === 'scenario_version' &&
+          [...form.querySelectorAll('[data-set-row]')].some(r => r.querySelectorAll('input[name="scenario_version"]:checked').length > 1);
+        compared.push(n + ' ' + (sameSet ? 'scenario versions' : label + 's'));
+      }
       runs *= Math.max(n, 1);
     });
     [['max_turns', 'max-turn values'], ['language', 'languages']].forEach(([name, label]) => {
@@ -294,12 +329,49 @@
   }
   form.querySelectorAll('[data-chips]').forEach(initChips);
 
-  // A cloned run pins its exact scenario set version; drop the pin if that set is unticked.
-  const pin = form.querySelector('[name="scenario_set_version"]');
-  const pinnedSet = "{{ clone.scenario_set_id|default:'' }}";
-  form.addEventListener('change', e => {
-    if (pin && e.target.name === 'scenario_set' && e.target.value === pinnedSet && !e.target.checked) pin.remove();
-  });
+  // --- Scenario set rows: the set checkbox means "latest"; versions can be picked. ---
+  function syncSetRow(row) {
+    const versions = [...row.querySelectorAll('input[name="scenario_version"]')];
+    const ticked = versions.filter(v => v.checked);
+    const toggle = row.querySelector('[data-set-toggle]');
+    const summary = row.querySelector('[data-set-summary]');
+    if (!versions.length) return;
+    toggle.checked = ticked.length > 0;
+    toggle.indeterminate = false;
+    const latest = versions.find(v => 'latest' in v.dataset);
+    const name = v => 'follow' in v.dataset ? 'always latest' : 'v' + v.dataset.version;
+    if (!ticked.length) summary.textContent = `v${latest.dataset.version} · latest`;
+    else if (ticked.length === 1) {
+      const v = ticked[0];
+      summary.textContent = 'follow' in v.dataset ? `always latest (now v${v.dataset.version})`
+        : `v${v.dataset.version}` + (v === latest ? ' · latest' : ' · older version');
+    } else {
+      summary.innerHTML = `<span class="text-accent">comparing ${ticked.map(name).reverse().join(' vs ')}</span>`;
+    }
+  }
+  function initSetRows(root) {
+    root.querySelectorAll('[data-set-row]').forEach(row => {
+      syncSetRow(row);
+      row.querySelector('[data-set-toggle]').addEventListener('change', e => {
+        const versions = [...row.querySelectorAll('input[name="scenario_version"]')];
+        if (e.target.checked) {
+          if (!versions.some(v => v.checked)) versions.find(v => 'latest' in v.dataset).checked = true;
+        } else {
+          versions.forEach(v => { v.checked = false; });
+        }
+        syncSetRow(row);
+      });
+      row.querySelectorAll('input[name="scenario_version"]').forEach(v => v.addEventListener('change', () => syncSetRow(row)));
+      const btn = row.querySelector('[data-version-toggle]');
+      if (btn) btn.addEventListener('click', () => {
+        const list = row.querySelector('[data-version-list]');
+        const open = list.classList.toggle('hidden') === false;
+        btn.setAttribute('aria-expanded', open);
+        btn.textContent = open ? 'Versions ▴' : 'Versions ▾';
+      });
+    });
+  }
+  initSetRows(form);
 
   // Returning from another tab (e.g. after adding a model): refresh the pickers, keeping ticks.
   let focusTimer = null;
@@ -317,6 +389,7 @@
         fresh.querySelectorAll('input[type="checkbox"]').forEach(i => { i.checked = ticked.has(i.name + '=' + i.value); });
         target.replaceWith(fresh);
         initFilters(fresh);
+        initSetRows(fresh);
         update();
       } catch (e) { /* offline: keep the current pickers */ }
     }, 800);
@@ -335,5 +408,5 @@
   update();
 })();
 </script>
-{% include "partials/audit_form_js.html" %}
+{% include "partials/run_settings_js.html" %}
 {% endblock %}

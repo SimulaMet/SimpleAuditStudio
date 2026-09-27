@@ -1,35 +1,12 @@
 """Tests for the idempotent first-run seed command (seed_platform)."""
-import os
-from contextlib import contextmanager
 
 from django.core.management import call_command
 from django.test import TestCase
 
 from accounts.models import Project, ProjectMembership, User
+from infra.tests.utils import safe_env
 from model_registry.models import ModelConnection, RegisteredModel
 from scenarios.models import Scenario, ScenarioSet, ScenarioSetVersion
-
-
-@contextmanager
-def _safe_env():
-    """Provide a safe, non-default config so the startup check passes on both
-    local SQLite and real Postgres (same pattern as test_bootstrap.py)."""
-    values = {
-        "DJANGO_SECRET_KEY": "test-secret-key-not-change-me",
-        "POSTGRES_PASSWORD": "testpass123",
-        "MINIO_ACCESS_KEY": "test-minio-access",
-        "MINIO_SECRET_KEY": "test-minio-secret",
-    }
-    old = {k: os.environ.get(k) for k in values}
-    os.environ.update(values)
-    try:
-        yield
-    finally:
-        for key, value in old.items():
-            if value is None:
-                os.environ.pop(key, None)
-            else:
-                os.environ[key] = value
 
 
 class SeedPlatformTests(TestCase):
@@ -43,7 +20,7 @@ class SeedPlatformTests(TestCase):
         )
 
     def _run_seed(self, **extra):
-        with _safe_env():
+        with safe_env():
             call_command("seed_platform", project=self.project.id, **extra)
 
     def test_seed_creates_scenario_sets_and_versions(self):
@@ -147,5 +124,5 @@ class SeedPlatformTests(TestCase):
     def test_seed_fails_cleanly_without_project(self):
         from django.core.management.base import CommandError
 
-        with _safe_env(), self.assertRaises(CommandError):
+        with safe_env(), self.assertRaises(CommandError):
             call_command("seed_platform", project=99999)
