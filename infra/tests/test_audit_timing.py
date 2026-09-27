@@ -51,7 +51,10 @@ class AuditTimingDisplayTest(TestCase):
         resp = self.client.get(f"/audits/{run.id}/")
         self.assertEqual(resp.status_code, 200)
         html = resp.content.decode()
-        self.assertNotIn("Duration", html)
+        # The duration row is present in the DOM (so the live-update JS can
+        # reveal it if a start time appears) but must be hidden when there is
+        # no duration to show.
+        self.assertIn('id="run-duration-row" style="display:none"', html)
 
     def test_no_duration_when_finished_missing(self):
         run = AuditRunFactory(project=self.project, status=AuditRun.Status.QUEUED)
@@ -62,4 +65,7 @@ class AuditTimingDisplayTest(TestCase):
         resp = self.client.get(f"/audits/{run.id}/")
         self.assertEqual(resp.status_code, 200)
         html = resp.content.decode()
-        self.assertNotIn("Duration", html)
+        # The duration row is present in the DOM (so the live-update JS can
+        # reveal it when the run ends) but must be hidden while the run is
+        # still in progress.
+        self.assertIn('id="run-duration-row" style="display:none"', html)
