@@ -1,7 +1,8 @@
-"""Django settings for the production SimpleAudit Studio.
+"""Django settings for SimpleAudit Studio.
 
-The canonical runtime is Docker Compose with PostgreSQL, MinIO, and a durable
-workflow system. SQLite is intentionally not configured here.
+Production runs on PostgreSQL with Hatchet. SQLite is used only for local
+development (SIMPLEAUDIT_LOCAL_SQLITE) and the single-container demo
+(see infra/minimal_config.py).
 """
 import os
 from pathlib import Path
@@ -14,6 +15,15 @@ def env_bool(name: str, default: bool = False) -> bool:
     if value is None:
         return default
     return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _pkg_version() -> str:
+    from importlib.metadata import PackageNotFoundError, version
+
+    try:
+        return version("simpleaudit-studio")
+    except PackageNotFoundError:
+        return "dev"
 
 
 def env_list(name: str, default: str = "") -> list[str]:
@@ -92,7 +102,6 @@ INSTALLED_APPS = [
     "django.contrib.sessions",
     "django.contrib.messages",
     "django.contrib.staticfiles",
-    "corsheaders",
     "rest_framework",
     "rest_framework.authtoken",
     "drf_spectacular",
@@ -107,7 +116,6 @@ INSTALLED_APPS = [
 MIDDLEWARE = [
     "infra.middleware.RequestIDMiddleware",
     "django.middleware.security.SecurityMiddleware",
-    "corsheaders.middleware.CorsMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
@@ -133,6 +141,7 @@ TEMPLATES = [
                 "infra.context_processors.admin_status",
                 "infra.context_processors.gravatar_url",
                 "infra.context_processors.workspaces",
+                "infra.context_processors.write_access",
             ],
         },
     },
@@ -147,7 +156,7 @@ AUTH_USER_MODEL = "accounts.User"
 # Distinct from DEMO_MODE (HF Spaces) — this is purely local dev convenience.
 MINIMAL_CONFIG = os.environ.get("SIMPLEAUDIT_MINIMAL", "").strip() == "1"
 
-# Canonical runtime is PostgreSQL (ADR 002). The SQLite branches below are
+# Canonical runtime is PostgreSQL. The SQLite branches below are
 # explicit, opt-in LOCAL-ONLY conveniences. They are never the default and
 # must not be used in any deployment.
 if MINIMAL_CONFIG:
@@ -192,12 +201,7 @@ USE_TZ = True
 
 STATIC_URL = "static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
-# Serve the SPA's static assets (app.js/app.css) from the repo in development.
-# In production, `collectstatic` copies them to STATIC_ROOT and a reverse proxy
-# or WhiteNoise serves them.
 STATICFILES_DIRS = [BASE_DIR / "static"]
-MEDIA_URL = "media/"
-MEDIA_ROOT = BASE_DIR / "media"
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
@@ -216,30 +220,22 @@ REST_FRAMEWORK = {
 SPECTACULAR_SETTINGS = {
     "TITLE": "SimpleAudit Studio API",
     "DESCRIPTION": "Production API for reproducible AI audits.",
-    "VERSION": "0.1.0",
+    "VERSION": _pkg_version(),
     "SERVE_INCLUDE_SCHEMA": False,
 }
-
-CORS_ALLOW_ALL_ORIGINS = DEBUG
-CORS_ALLOWED_ORIGINS = env_list("CORS_ALLOWED_ORIGINS")
 
 LOGIN_URL = "/login/"
 LOGIN_REDIRECT_URL = "/"
 LOGOUT_REDIRECT_URL = "/login/"
 
-# Demo mode: prefill login form with demo credentials and show a hint banner.
-# Enable for public demos / HF Spaces so visitors can log in without knowing creds.
-# WorkOS AuthKit (passwordless email verification + SSO). The flow is enabled
-# only when both values are configured; the login page hides the button otherwise.
+# WorkOS Magic Auth (passwordless email codes). Enabled only when both values are
+# configured; the login page hides the option otherwise.
 WORKOS_CLIENT_ID = os.environ.get("WORKOS_CLIENT_ID", "")
 WORKOS_API_KEY = os.environ.get("WORKOS_API_KEY", "")
 WORKOS_ENABLED = bool(WORKOS_CLIENT_ID and WORKOS_API_KEY)
-# Public base URL of this deployment, used to build OAuth redirect URIs.
-# e.g. http://localhost:8000 or https://studio.example.com
-# NOTE: named APP_BASE_URL (not WORKOS_BASE_URL) because the WorkOS SDK itself
-# reads WORKOS_BASE_URL as its *API* endpoint and would be misconfigured.
-APP_BASE_URL = os.environ.get("APP_BASE_URL", "http://localhost:8000").rstrip("/")
 
+# Demo mode: prefill the login form with demo credentials and show a hint banner
+# (public demos / HF Spaces).
 DEMO_MODE = env_bool("DEMO_MODE", False)
 DEMO_USERNAME = os.environ.get("DEMO_USERNAME", "studio")
 DEMO_PASSWORD = os.environ.get("DEMO_PASSWORD", "admin123")
@@ -264,12 +260,6 @@ if DEMO_MODE:
     CSRF_COOKIE_SECURE = True
 
 # Operational settings used by health checks and bootstrap commands.
-# MinIO is OFF by default; enable via `docker compose --profile storage up`
-# and set MINIO_ACCESS_KEY / MINIO_SECRET_KEY in .env.
-MINIO_ENDPOINT = os.environ.get("MINIO_ENDPOINT", "")
-MINIO_ACCESS_KEY = os.environ.get("MINIO_ACCESS_KEY", "")
-MINIO_SECRET_KEY = os.environ.get("MINIO_SECRET_KEY", "")
-MINIO_BUCKET = os.environ.get("MINIO_BUCKET", "simpleaudit-artifacts")
 if MINIMAL_CONFIG:
     # In local demo mode the embedded Hatchet client provides its own connection
     # details at runtime; these placeholders are never used for real connections.
@@ -290,9 +280,6 @@ WORKER_POOL = os.environ.get("WORKER_POOL", "cpu")
 # setting here. It is resolved from the installed package metadata at runtime by
 # infra.simpleaudit_package.resolve_engine_provenance(), so the web and worker
 # always agree on what engine they actually have. See that module for details.
-MAX_CONCURRENT_AUDITS = int(os.environ.get("MAX_CONCURRENT_AUDITS", "2"))
-MAX_SCENARIOS_PER_RUN = int(os.environ.get("MAX_SCENARIOS_PER_RUN", "500"))
-SSE_MAX_CONNECTIONS_PER_USER = int(os.environ.get("SSE_MAX_CONNECTIONS_PER_USER", "10"))
 
 # --- Sentry error tracking & tracing ---
 SENTRY_DSN = os.environ.get("SENTRY_DSN", "")

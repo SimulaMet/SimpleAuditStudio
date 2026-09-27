@@ -21,6 +21,9 @@ class User(AbstractUser):
 
     # Stable WorkOS AuthKit user id; null for locally-created accounts.
     workos_user_id = models.CharField(max_length=64, unique=True, null=True, blank=True)
+    # Per-user UI preferences (e.g. dashboard column layout). Keys are
+    # whitelisted by the preference endpoint; values are small JSON.
+    preferences = models.JSONField(default=dict, blank=True)
 
     groups = models.ManyToManyField(
         "auth.Group",

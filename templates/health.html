@@ -7,7 +7,7 @@
     <span id="overall-badge" class="px-2.5 py-1 rounded-full text-xs font-medium bg-gray-800 text-gray-400">…</span>
     <span id="last-updated" class="text-xs text-gray-600"></span>
     <div class="relative group/refresh">
-      <button id="refresh-btn" class="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-surface-overlay border border-gray-700 text-xs text-gray-400 hover:text-gray-200 hover:border-gray-600 transition-colors">
+      <button id="refresh-btn" title="Auto-refresh interval" aria-label="Auto-refresh interval" class="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-surface-overlay border border-gray-700 text-xs text-gray-400 hover:text-gray-200 hover:border-gray-600 transition-colors">
         <span class="relative inline-flex items-center justify-center w-6 h-6">
           <svg class="w-6 h-6 -rotate-90" viewBox="0 0 24 24">
             <circle cx="12" cy="12" r="10" fill="none" stroke="#34d399" stroke-opacity="0.15" stroke-width="2"/>
@@ -36,27 +36,28 @@
 <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wide mb-3">Components</h2>
 <div id="component-grid" class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3 mb-8">
   {% for name, comp in health.components.items %}
-  <div class="bg-surface-raised rounded-xl border border-gray-800 p-4" data-component="{{ name }}">
-    <div class="flex items-center justify-between mb-2">
-      <span class="text-sm font-medium text-gray-200 capitalize">{{ name }}</span>
-      <span class="status-dot w-2.5 h-2.5 rounded-full bg-gray-600" data-dot></span>
+  {# min-w-0: a long detail or model name must not widen the grid column. #}
+  <div class="bg-surface-raised rounded-xl border border-gray-800 p-4 min-w-0 {% if name == "model_endpoints" %}col-span-2 md:col-span-1{% endif %}" data-component="{{ name }}">
+    <div class="flex items-center justify-between gap-2 mb-2">
+      <span class="text-sm font-medium text-gray-200 capitalize truncate">{% if name == "model_endpoints" %}Model endpoints{% else %}{{ name }}{% endif %}</span>
+      <span class="status-dot w-2.5 h-2.5 rounded-full bg-gray-600 shrink-0" data-dot></span>
     </div>
-    <p class="text-xs text-gray-500 min-h-[1rem]" data-detail>{{ comp.detail|default:"" }}</p>
+    <p class="text-xs text-gray-500 min-h-[1rem] max-h-20 overflow-y-auto break-words" data-detail title="{{ comp.detail|default:'' }}">{{ comp.detail|default:"" }}</p>
     <p class="text-xs text-gray-600 mt-1" data-latency>{% if comp.latency_ms is not None %}{{ comp.latency_ms }} ms{% endif %}</p>
     {% if name == "engine" %}
-    <p class="text-xs text-gray-500 mt-1 truncate" data-engine>{{ comp.version|default:"—" }}{% if comp.commit %} · {{ comp.commit|slice:":8" }}{% endif %}</p>
+    <p class="text-xs text-gray-500 mt-1 truncate" data-engine title="{{ comp.version|default:'' }}{% if comp.commit %} · {{ comp.commit }}{% endif %}">{{ comp.version|default:"—" }}{% if comp.commit %} · {{ comp.commit|slice:":8" }}{% endif %}</p>
     {% endif %}
     {% if name == "model_endpoints" %}
-    <div class="mt-2 space-y-2 max-h-48 overflow-y-auto" data-endpoints>
+    <div class="mt-2 space-y-2 max-h-48 overflow-auto pr-1" data-endpoints>
       {% for group in comp.groups %}
       <div data-group="{{ group.name }}">
-        <p class="text-[10px] font-medium text-gray-500 uppercase tracking-wide mb-1">{{ group.name }} <span class="text-gray-600 normal-case">· {{ group.provider }}</span></p>
+        <p class="text-[10px] font-medium text-gray-500 uppercase tracking-wide mb-1 truncate" title="{{ group.name }} · {{ group.provider }}">{{ group.name }} <span class="text-gray-600 normal-case">· {{ group.provider }}</span></p>
         <ul class="space-y-0.5">
           {% for m in group.models %}
-          <li class="flex items-center gap-2 text-xs">
+          <li class="flex items-center gap-2 text-xs min-w-0">
             <span class="w-2 h-2 rounded-full shrink-0 bg-gray-600"></span>
-            <span class="text-gray-400 truncate flex-1">{{ m.display_name }}</span>
-            <span class="text-gray-600">{{ m.status }}</span>
+            <span class="text-gray-400 truncate flex-1 min-w-0" title="{{ m.display_name }}">{{ m.display_name }}</span>
+            <span class="text-gray-600 shrink-0">{{ m.status }}</span>
           </li>
           {% endfor %}
         </ul>
@@ -72,38 +73,38 @@
 <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wide mb-3">Resources &amp; Throughput</h2>
 <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
   <!-- Memory -->
-  <div class="bg-surface-raised rounded-xl border border-gray-800 p-4" data-resource="memory">
+  <div class="bg-surface-raised rounded-xl border border-gray-800 p-4 min-w-0" data-resource="memory">
     <div class="flex items-center justify-between mb-2">
       <span class="text-sm font-medium text-gray-200">Memory</span>
       <span class="status-dot w-2.5 h-2.5 rounded-full bg-gray-600" data-dot></span>
     </div>
     <div class="bar-track h-1.5 rounded-full bg-gray-800 mb-2"><div class="bar-fill h-1.5 rounded-full bg-accent" data-bar style="width:0%"></div></div>
-    <p class="text-xs text-gray-500" data-summary>—</p>
-    <p class="text-xs text-gray-600 mt-1" data-sub></p>
+    <p class="text-xs text-gray-500 break-words" data-summary>—</p>
+    <p class="text-xs text-gray-600 mt-1 max-h-20 overflow-y-auto break-words" data-sub></p>
   </div>
   <!-- Disk -->
-  <div class="bg-surface-raised rounded-xl border border-gray-800 p-4" data-resource="disk">
+  <div class="bg-surface-raised rounded-xl border border-gray-800 p-4 min-w-0" data-resource="disk">
     <div class="flex items-center justify-between mb-2">
       <span class="text-sm font-medium text-gray-200">Disk</span>
       <span class="status-dot w-2.5 h-2.5 rounded-full bg-gray-600" data-dot></span>
     </div>
     <div class="bar-track h-1.5 rounded-full bg-gray-800 mb-2"><div class="bar-fill h-1.5 rounded-full bg-accent" data-bar style="width:0%"></div></div>
-    <p class="text-xs text-gray-500" data-summary>—</p>
-    <p class="text-xs text-gray-600 mt-1" data-sub></p>
+    <p class="text-xs text-gray-500 break-words" data-summary>—</p>
+    <p class="text-xs text-gray-600 mt-1 max-h-20 overflow-y-auto break-words" data-sub></p>
   </div>
   <!-- CPU -->
-  <div class="bg-surface-raised rounded-xl border border-gray-800 p-4" data-resource="cpu">
+  <div class="bg-surface-raised rounded-xl border border-gray-800 p-4 min-w-0" data-resource="cpu">
     <div class="flex items-center justify-between mb-2">
       <span class="text-sm font-medium text-gray-200">CPU Load</span>
       <span class="status-dot w-2.5 h-2.5 rounded-full bg-gray-600" data-dot></span>
     </div>
     <p class="text-2xl font-bold text-gray-100" data-load>—</p>
-    <p class="text-xs text-gray-600 mt-1" data-sub></p>
+    <p class="text-xs text-gray-600 mt-1 max-h-20 overflow-y-auto break-words" data-sub></p>
   </div>
   <!-- Queue / throughput -->
-  <div class="bg-surface-raised rounded-xl border border-gray-800 p-4" data-resource="queue">
+  <div class="bg-surface-raised rounded-xl border border-gray-800 p-4 min-w-0" data-resource="queue">
     <div class="flex items-center justify-between mb-2">
-      <span class="text-sm font-medium text-gray-200">Audit Queue</span>
+      <span class="text-sm font-medium text-gray-200">Run Queue</span>
       <span class="status-dot w-2.5 h-2.5 rounded-full bg-gray-600" data-dot></span>
     </div>
     <div class="grid grid-cols-2 gap-2 text-center" data-queue-counts>
@@ -112,12 +113,13 @@
       <div><span class="text-lg font-bold text-emerald-400" data-q="completed">—</span><p class="text-[10px] text-gray-600 uppercase">Done</p></div>
       <div><span class="text-lg font-bold text-red-400" data-q="failed">—</span><p class="text-[10px] text-gray-600 uppercase">Failed</p></div>
     </div>
-    <p class="text-xs text-gray-600 mt-2" data-sub></p>
+    <p class="text-xs text-gray-600 mt-2 max-h-20 overflow-y-auto break-words" data-sub></p>
   </div>
 </div>
 
 <script>
 (function () {
+  // Names come from user-edited connections/models: escape before innerHTML.
   let intervalSec = 30, nextAt = 0, rafId = null;
   const btn = document.getElementById("refresh-btn");
   const menu = document.getElementById("refresh-menu");
@@ -131,16 +133,18 @@
     rafId = requestAnimationFrame(tick);
   }
 
+  let refreshTimer = null;
   function schedule() {
     cancelAnimationFrame(rafId);
+    clearTimeout(refreshTimer);
     nextAt = Date.now() + intervalSec * 1000;
     label.textContent = intervalSec + "s";
-    setTimeout(refresh, intervalSec * 1000);
+    refreshTimer = setTimeout(refresh, intervalSec * 1000);
     rafId = requestAnimationFrame(tick);
   }
 
   btn.onclick = (e) => { e.stopPropagation(); menu.classList.toggle("hidden"); };
-  document.onclick = () => menu.classList.add("hidden");
+  document.addEventListener("click", () => menu.classList.add("hidden"));
   menu.onclick = (e) => e.stopPropagation();
   menu.querySelectorAll("[data-sec]").forEach(b => b.onclick = () => {
     intervalSec = +b.dataset.sec; menu.classList.add("hidden"); schedule();
@@ -182,7 +186,7 @@
       if (!card) return;
       setDot(card.querySelector("[data-dot]"), comp.status);
       const detail = card.querySelector("[data-detail]");
-      if (detail) detail.textContent = comp.detail || "";
+      if (detail) { detail.textContent = comp.detail || ""; detail.title = comp.detail || ""; }
       const lat = card.querySelector("[data-latency]");
       if (lat) lat.textContent = comp.latency_ms != null ? comp.latency_ms + " ms" : "";
       const eng = card.querySelector("[data-engine]");
@@ -192,14 +196,14 @@
         const list = card.querySelector("[data-endpoints]");
         if (list) {
           list.innerHTML = comp.groups.map(g =>
-            '<div data-group="' + g.name + '">' +
-            '<p class="text-[10px] font-medium text-gray-500 uppercase tracking-wide mb-1">' + g.name + ' <span class="text-gray-600 normal-case">· ' + g.provider + '</span></p>' +
+            '<div data-group="' + esc(g.name) + '">' +
+            '<p class="text-[10px] font-medium text-gray-500 uppercase tracking-wide mb-1 truncate" title="' + esc(g.name + ' · ' + g.provider) + '">' + esc(g.name) + ' <span class="text-gray-600 normal-case">· ' + esc(g.provider) + '</span></p>' +
             '<ul class="space-y-0.5">' +
             g.models.map(m =>
-              '<li class="flex items-center gap-2 text-xs">' +
+              '<li class="flex items-center gap-2 text-xs min-w-0">' +
               '<span class="w-2 h-2 rounded-full shrink-0 ' + (DOT_COLORS[m.status] || DOT_COLORS.unknown) + '"></span>' +
-              '<span class="text-gray-400 truncate flex-1">' + (m.display_name || m.model_id) + '</span>' +
-              '<span class="text-gray-600">' + m.status + '</span></li>'
+              '<span class="text-gray-400 truncate flex-1 min-w-0" title="' + esc(m.display_name || m.model_id) + '">' + esc(m.display_name || m.model_id) + '</span>' +
+              '<span class="text-gray-600 shrink-0">' + esc(m.status) + '</span></li>'
             ).join("") +
             '</ul></div>'
           ).join("");

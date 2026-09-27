@@ -139,8 +139,3 @@ def resolve_engine_provenance() -> EngineProvenance:
         return EngineProvenance(version=version, commit=direct_url_commit, source="metadata")
 
     return EngineProvenance(version=version, commit=None, source="metadata")
-
-
-def clear_cache() -> None:
-    """Clear the resolution cache (used by tests after mutating the environment)."""
-    resolve_engine_provenance.cache_clear()

@@ -1,0 +1,73 @@
+{% comment %}
+Universal tooltips (included once by base.html). Any element with a `title`,
+and any icon-only button/link with an `aria-label`, shows a styled tooltip on
+hover and keyboard focus. Nothing to add per element: set title or aria-label.
+The native tooltip is suppressed by moving `title` into `data-tip` on first
+hover; scripts that later set `title` again (e.g. live refresh) still work.
+{% endcomment %}
+<style>
+  #ui-tip { position: fixed; z-index: 100; pointer-events: none; max-width: 20rem; padding: 4px 8px;
+            border-radius: 6px; font-size: 12px; line-height: 1.35; white-space: pre-line;
+            background: #0b0d12; color: #e5e7eb; border: 1px solid #374151;
+            box-shadow: 0 4px 12px rgb(0 0 0 / .4); opacity: 0; transition: opacity .08s; }
+  #ui-tip.show { opacity: 1; }
+</style>
+<div id="ui-tip" role="tooltip"></div>
+<script>
+(function () {
+  const tip = document.getElementById('ui-tip');
+  let current = null, timer = null;
+
+  // The element a tooltip belongs to, and its text (or null).
+  function find(node) {
+    const el = node instanceof Element && node.closest('[title], [data-tip], button[aria-label], a[aria-label]');
+    if (!el) return [null, ''];
+    if (el.hasAttribute('title')) {            // take over from the native tooltip
+      el.dataset.tip = el.getAttribute('title');
+      el.removeAttribute('title');
+      // Icon-only controls keep an accessible name once title is gone.
+      if (!el.hasAttribute('aria-label') && !/[\p{L}\p{N}]/u.test(el.textContent)) el.setAttribute('aria-label', el.dataset.tip);
+    }
+    let text = el.dataset.tip || '';
+    // Icon-only (no letters or digits, e.g. an SVG, "✎" or "×"): fall back to aria-label.
+    if (!text && !/[\p{L}\p{N}]/u.test(el.textContent)) text = el.getAttribute('aria-label') || '';
+    return [text ? el : null, text];
+  }
+
+  function place(el) {
+    const r = el.getBoundingClientRect(), t = tip.getBoundingClientRect(), gap = 6;
+    let top = r.bottom + gap;
+    if (top + t.height > innerHeight - 4) top = r.top - t.height - gap;   // flip above
+    const left = Math.min(Math.max(4, r.left + r.width / 2 - t.width / 2), innerWidth - t.width - 4);
+    tip.style.top = top + 'px';
+    tip.style.left = left + 'px';
+  }
+
+  function show(node) {
+    const [el, text] = find(node);
+    if (el === current) return;
+    hide();
+    if (!el) return;
+    current = el;
+    timer = setTimeout(() => {
+      tip.textContent = text;
+      tip.classList.add('show');
+      place(el);
+    }, 120);
+  }
+
+  function hide() {
+    clearTimeout(timer);
+    current = null;
+    tip.classList.remove('show');
+  }
+
+  document.addEventListener('mouseover', e => show(e.target));
+  document.addEventListener('mouseout', e => { if (current && !current.contains(e.relatedTarget)) hide(); });
+  document.addEventListener('focusin', e => show(e.target));
+  document.addEventListener('focusout', hide);
+  document.addEventListener('scroll', hide, true);
+  document.addEventListener('click', hide, true);
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') hide(); });
+})();
+</script>

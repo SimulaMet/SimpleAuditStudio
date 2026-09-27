@@ -7,7 +7,7 @@
 
 <div class="flex flex-wrap items-center justify-between gap-y-2 mb-6">
   <div class="flex items-center gap-2 min-w-0 flex-1 basis-48">
-    <h1 id="audit-title" class="text-lg font-semibold text-gray-100 truncate">{{ run.name }} <span class="text-gray-500 font-normal text-sm">(Run #{{ run.id }})</span></h1>
+    <h1 class="text-lg font-semibold text-gray-100 truncate">{{ run.name }} <span class="text-gray-500 font-normal text-sm">(Run #{{ run.id }})</span></h1>
     <button type="button" onclick="toggleRename()" title="Rename this run" aria-label="Rename this run" class="shrink-0 inline-flex items-center justify-center w-7 h-7 rounded-md text-gray-500 hover:text-accent hover:bg-surface-overlay transition-colors">
       <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/></svg>
     </button>
@@ -22,13 +22,13 @@
   </form>
   <div class="flex items-center gap-2 shrink-0">
     {% if run.experiment %}
-    <a href="{% url 'experiment_detail' run.experiment.id %}" title="This run is one cell of an experiment — open its comparison" class="inline-flex items-center gap-1.5 h-8 px-2.5 rounded-lg bg-surface-overlay text-gray-300 text-xs font-medium hover:text-accent transition-colors max-w-[14rem]">
-      <span aria-hidden="true">⊞</span><span class="truncate">{{ run.experiment.name }}</span>
+    <a href="{% url 'experiment_detail' run.experiment.id %}" title="Part of experiment “{{ run.experiment.name }}” — open its comparison" class="inline-flex items-center gap-1.5 h-8 px-2.5 rounded-lg bg-surface-overlay text-gray-300 text-xs font-medium hover:text-accent transition-colors">
+      <span aria-hidden="true">⊞</span><span>Experiment</span>
     </a>
     {% endif %}
     {% if run.monitor %}
-    <a href="{% url 'monitor_detail' run.monitor.id %}" title="This run is part of a monitor — open its drift chart" class="inline-flex items-center gap-1.5 h-8 px-2.5 rounded-lg bg-accent/15 text-accent text-xs font-medium hover:bg-accent/25 transition-colors max-w-[14rem]">
-      <span aria-hidden="true">↻</span><span class="truncate">{{ run.monitor.name }}</span>
+    <a href="{% url 'monitor_detail' run.monitor.id %}" title="Repeats as monitor “{{ run.monitor.name }}” ({{ run.monitor.interval_display }}) — open its drift chart" class="inline-flex items-center gap-1.5 h-8 px-2.5 rounded-lg bg-accent/15 text-accent text-xs font-medium hover:bg-accent/25 transition-colors">
+      <span aria-hidden="true">↻</span><span>Monitor</span>
     </a>
     {% elif can_schedule %}
     <a href="{% url 'new_experiment' %}?clone_from={{ run.id }}&repeat=168#schedule-card" title="Repeat this exact run on a schedule to track drift" aria-label="Monitor for drift" class="inline-flex items-center gap-1.5 h-8 px-2.5 rounded-lg bg-surface-overlay text-gray-400 text-xs font-medium hover:text-accent transition-colors">
@@ -446,7 +446,6 @@ function toggleRename() {
     ids.forEach(vi => { const r = (scenarios.get(vi) || {}).role; if (r === 'target') t++; else a++; });
     return { a, t };
   }
-  function esc(x) { return String(x).replace(/&/g, '&amp;').replace(/</g, '&lt;'); }
 
   function renderDetail(st) {
     const el = document.getElementById('combo-detail');
@@ -561,7 +560,7 @@ function toggleRename() {
       else if (ev.phase === 'failed') status = 'Failed';
       else status = `${repTag}Turn-${(ev.turn || 0) + 1}/${maxTurnsSeen} · ${ev.role || '?'}`;
       const time = timeAgo(ev.ts);
-      return `<p class="event-log-entry"><span class="text-gray-600">${time}</span> <span class="text-gray-300">${shortName}</span> <span class="text-gray-500">${status}</span></p>`;
+      return `<p class="event-log-entry"><span class="text-gray-600">${time}</span> <span class="text-gray-300">${esc(shortName)}</span> <span class="text-gray-500">${status}</span></p>`;
     }).join('');
   }
 
@@ -696,8 +695,8 @@ function toggleRename() {
   // Track start time for duration calculation on terminal events.
   let runStartedAt = null;
   const startedEl = document.getElementById('run-started');
-  if (startedEl && startedEl.textContent !== '—') {
-    runStartedAt = new Date(startedEl.textContent).getTime() || null;
+  if (startedEl && startedEl.getAttribute('datetime')) {
+    runStartedAt = new Date(startedEl.getAttribute('datetime')).getTime() || null;
   }
 
   function updateStatusCardTerminal() {
@@ -708,9 +707,10 @@ function toggleRename() {
     const durEl = document.getElementById('run-duration');
     if (durEl && runStartedAt) {
       const secs = Math.round((now.getTime() - runStartedAt) / 1000);
-      if (secs < 60) durEl.textContent = secs + ' sec';
-      else if (secs < 3600) durEl.textContent = Math.floor(secs / 60) + ' min';
-      else durEl.textContent = Math.floor(secs / 3600) + ' hr ' + Math.floor((secs % 3600) / 60) + ' min';
+      // Same format as AuditRun.duration_display
+      if (secs < 60) durEl.textContent = secs + 's';
+      else if (secs < 3600) durEl.textContent = Math.floor(secs / 60) + 'm ' + (secs % 60) + 's';
+      else durEl.textContent = Math.floor(secs / 3600) + 'h ' + Math.floor((secs % 3600) / 60) + 'm';
       if (durRow) durRow.style.display = '';
     }
   }
@@ -807,8 +807,8 @@ function toggleRename() {
         {% elif run.status == "failed" %}<span id="run-state" class="min-w-0 text-right text-red-400 font-medium">failed</span>
         {% else %}<span id="run-state" class="min-w-0 text-right text-amber-400 font-medium">{{ run.get_status_display }}</span>{% endif %}
       </div>
-      <div class="flex justify-between gap-2"><span class="text-gray-500 shrink-0">Started</span><span id="run-started" class="min-w-0 text-right">{{ run.started_at|date:"M j, H:i"|default:"—" }}</span></div>
-      <div class="flex justify-between gap-2"><span class="text-gray-500 shrink-0">Finished</span><span id="run-finished" class="min-w-0 text-right">{{ run.finished_at|date:"M j, H:i"|default:"—" }}</span></div>
+      <div class="flex justify-between gap-2"><span class="text-gray-500 shrink-0">Started</span><span class="min-w-0 text-right">{% if run.started_at %}<time id="run-started" data-local datetime="{{ run.started_at|date:'c' }}">{{ run.started_at|date:"M j, H:i" }} UTC</time>{% else %}<span id="run-started">—</span>{% endif %}</span></div>
+      <div class="flex justify-between gap-2"><span class="text-gray-500 shrink-0">Finished</span><span id="run-finished" class="min-w-0 text-right">{% if run.finished_at %}<time data-local datetime="{{ run.finished_at|date:'c' }}">{{ run.finished_at|date:"M j, H:i" }} UTC</time>{% else %}—{% endif %}</span></div>
       {% if duration %}<div class="flex justify-between gap-2" id="run-duration-row"><span class="text-gray-500 shrink-0">Duration</span><span id="run-duration" class="min-w-0 text-right">{{ duration }}</span></div>{% else %}<div class="flex justify-between gap-2" id="run-duration-row" style="display:none"><span class="text-gray-500 shrink-0">Duration</span><span id="run-duration" class="min-w-0 text-right"></span></div>{% endif %}
       <div class="flex justify-between gap-2"><span class="text-gray-500 shrink-0">Scenarios</span><span id="run-scenarios" class="min-w-0 text-right">{{ run.total_scenarios }} total, {{ run.completed_scenarios }} done</span></div>
     </div>
@@ -819,9 +819,9 @@ function toggleRename() {
     <div class="space-y-1.5 text-xs">
       <div class="flex justify-between gap-2"><span class="text-gray-500 shrink-0">Scenario Set</span><a href="/scenarios/?set={{ run.scenario_set_version.scenario_set_id }}" class="min-w-0 text-gray-300 text-right break-all hover:text-accent transition-colors">{{ run.scenario_set_version.scenario_set.name }} v{{ run.scenario_set_version.version }}</a></div>
       <div class="flex justify-between gap-2"><span class="text-gray-500 shrink-0">Content Hash</span><span class="min-w-0 text-gray-400 font-mono truncate max-w-[140px]">{{ run.scenario_set_version.content_hash|truncatechars:16 }}</span></div>
-      <div class="flex justify-between gap-2"><span class="text-gray-500 shrink-0">Target</span>{% if run.target_model %}<a href="/models/?highlight={{ run.target_model.connection_id }}" class="min-w-0 text-gray-300 text-right break-all hover:text-accent transition-colors">{{ run.target_model.display_name }} ({{ run.target_model.model_id }})</a>{% else %}<span class="text-gray-300">—</span>{% endif %}</div>
-      <div class="flex justify-between gap-2"><span class="text-gray-500 shrink-0">Auditor</span>{% if run.auditor_model %}<a href="/models/?highlight={{ run.auditor_model.connection_id }}" class="min-w-0 text-gray-300 text-right break-all hover:text-accent transition-colors">{{ run.auditor_model.display_name }} ({{ run.auditor_model.model_id }})</a>{% else %}<span class="text-gray-300">—</span>{% endif %}</div>
-      <div class="flex justify-between gap-2"><span class="text-gray-500 shrink-0">Judge</span>{% if run.judge_model %}<a href="/models/?highlight={{ run.judge_model.connection_id }}" class="min-w-0 text-gray-300 text-right break-all hover:text-accent transition-colors">{{ run.judge_model.display_name }} ({{ run.judge_model.model_id }})</a>{% else %}<span class="text-gray-300">—</span>{% endif %}</div>
+      <div class="flex justify-between gap-2"><span class="text-gray-500 shrink-0">Target</span>{% if run.target_model %}<a href="/models/#conn-{{ run.target_model.connection_id }}" class="min-w-0 text-gray-300 text-right break-all hover:text-accent transition-colors">{{ run.target_model.display_name }} ({{ run.target_model.model_id }})</a>{% else %}<span class="text-gray-300">—</span>{% endif %}</div>
+      <div class="flex justify-between gap-2"><span class="text-gray-500 shrink-0">Auditor</span>{% if run.auditor_model %}<a href="/models/#conn-{{ run.auditor_model.connection_id }}" class="min-w-0 text-gray-300 text-right break-all hover:text-accent transition-colors">{{ run.auditor_model.display_name }} ({{ run.auditor_model.model_id }})</a>{% else %}<span class="text-gray-300">—</span>{% endif %}</div>
+      <div class="flex justify-between gap-2"><span class="text-gray-500 shrink-0">Judge</span>{% if run.judge_model %}<a href="/models/#conn-{{ run.judge_model.connection_id }}" class="min-w-0 text-gray-300 text-right break-all hover:text-accent transition-colors">{{ run.judge_model.display_name }} ({{ run.judge_model.model_id }})</a>{% else %}<span class="text-gray-300">—</span>{% endif %}</div>
       <div class="flex justify-between gap-2"><span class="text-gray-500 shrink-0">Max Turns</span><span class="min-w-0 text-gray-300">{{ run.generation_parameters_snapshot.max_turns|default:"5 (default)" }}</span></div>
       <div class="flex justify-between gap-2"><span class="text-gray-500 shrink-0">Repetitions</span><span class="min-w-0 text-gray-300">{% if run.generation_parameters_snapshot.n_repetitions %}{{ run.generation_parameters_snapshot.n_repetitions }}×{% else %}1 (single){% endif %}</span></div>
       <div class="flex justify-between gap-2"><span class="text-gray-500 shrink-0">Language</span><span class="min-w-0 text-gray-300">{{ run.generation_parameters_snapshot.language|default:"English" }}</span></div>
@@ -831,5 +831,5 @@ function toggleRename() {
 </div>
 
 <!-- Results (refreshed live, see refreshResults) -->
-{% include "partials/audit_results.html" %}
+{% include "partials/run_results.html" %}
 {% endblock %}

@@ -282,10 +282,10 @@ class MonitorPermissionTests(_ClientMixin, MonitorTestBase):
         self.assertEqual(client.get("/monitors/").status_code, 200)
         self.assertEqual(client.get(f"/monitors/{m.id}/").status_code, 200)
         # Even a later start (no run created now) must not let a viewer make a monitor.
-        resp = client.post("/experiments/new/", self._design(start="at", first_run_at="2099-01-01T00:00"))
-        self.assertContains(resp, "Insufficient project role")
+        resp = client.post("/experiments/new/", self._design(start="at", first_run_at="2099-01-01T00:00"), follow=True)
+        self.assertContains(resp, "Admin or auditor role required")
         for action in ("toggle", "run-now", "delete"):
-            self.assertEqual(client.post(f"/monitors/{m.id}/{action}/").status_code, 403)
+            self.assertIn(client.post(f"/monitors/{m.id}/{action}/").status_code, (302, 403))
         self.assertEqual(Monitor.objects.count(), 1)
 
     def test_auditor_creates_and_manages_own_but_not_others(self):
@@ -352,8 +352,8 @@ class LaunchPermissionTests(MonitorTestBase):
             "target_model": self.model.id,
             "auditor_model": self.model.id,
             "judge_model": self.model.id,
-        })
-        self.assertContains(resp, "Insufficient project role")
+        }, follow=True)
+        self.assertContains(resp, "Admin or auditor role required")
         self.assertFalse(AuditRun.objects.exists())
 
 
@@ -469,9 +469,7 @@ class RepeatFlowTests(_ClientMixin, MonitorTestBase):
 
     def test_baseline_start_attaches_existing_run(self):
         run = self._existing_run()
-        self.client.post("/experiments/new/", self._design(
-            start="baseline", clone_from=str(run.id), scenario_set_version=str(self.v1.id)
-        ))
+        self.client.post("/experiments/new/", self._design(start="baseline", clone_from=str(run.id)))
         m = Monitor.objects.get()
         run.refresh_from_db()
         self.assertEqual(run.monitor_id, m.id)

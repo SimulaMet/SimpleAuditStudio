@@ -36,13 +36,6 @@ class RegisterSerializer(serializers.Serializer):
         return User.objects.create_user(**validated_data)
 
 
-class ProjectSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = Project
-        fields = ("id", "name", "slug", "description", "created_at", "updated_at")
-        read_only_fields = ("id", "created_at", "updated_at")
-
-
 class WorkspaceItemSerializer(serializers.ModelSerializer):
     """Workspace as shown in lists/detail, including whether the requesting
     user can administer it (drives UI affordances)."""

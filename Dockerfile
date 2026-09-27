@@ -29,12 +29,10 @@ RUN apt-get update \
 
 # --- Python dependencies -----------------------------------------------------
 # pyproject.toml is the single source of truth; uv.lock pins exact versions.
-# The postgres extra is included because Django imports the psycopg driver at
-# startup even when SIMPLEAUDIT_MINIMAL=1 uses SQLite for the domain DB.
 # uv sync creates /app/.venv; the PATH update keeps the `python` entrypoint.
 COPY pyproject.toml uv.lock README.md ./
 RUN pip install uv \
-    && uv sync --frozen --no-install-project --no-dev --extra postgres
+    && uv sync --frozen --no-install-project --no-dev
 ENV PATH="/app/.venv/bin:$PATH"
 
 # --- Application code --------------------------------------------------------
@@ -45,7 +43,7 @@ RUN python manage.py collectstatic --noinput
 
 # --- Non-root user ------------------------------------------------------------
 RUN useradd --create-home appuser \
-    && mkdir -p /app/staticfiles /app/media \
+    && mkdir -p /app/staticfiles \
     && chown -R appuser:appuser /app
 USER appuser
 
@@ -63,9 +61,7 @@ ENV SIMPLEAUDIT_MINIMAL=1 \
     BOOTSTRAP_PROJECT_NAME=Default \
     DEMO_MODE=true \
     DEMO_USERNAME=studio \
-    DEMO_PASSWORD=admin123 \
-    MAX_CONCURRENT_AUDITS=1 \
-    MAX_SCENARIOS_PER_RUN=50
+    DEMO_PASSWORD=admin123
 
 EXPOSE 7860
 

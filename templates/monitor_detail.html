@@ -23,7 +23,7 @@
     <form method="post" action="/monitors/{{ monitor.id }}/toggle/">{% csrf_token %}
       <button type="submit" class="px-3 py-1.5 rounded-lg bg-surface-overlay text-gray-300 text-xs font-medium hover:text-white">{% if monitor.enabled %}Pause{% else %}Resume{% endif %}</button>
     </form>
-    <form method="post" action="/monitors/{{ monitor.id }}/delete/" onsubmit="return confirm('Delete this monitor? Its runs are kept.')">{% csrf_token %}
+    <form method="post" action="/monitors/{{ monitor.id }}/delete/" data-confirm="Delete this monitor? Its runs are kept.">{% csrf_token %}
       <button type="submit" class="px-3 py-1.5 rounded-lg bg-surface-overlay text-red-400 text-xs font-medium hover:text-red-300">Delete</button>
     </form>
   </div>

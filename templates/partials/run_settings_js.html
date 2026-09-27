@@ -1,23 +1,21 @@
 {% comment %}
-Behaviour for audit_models.html + audit_hyperparameters.html: no-key
-warnings, generation-config normalisation and submit-time JSON validation.
+Behaviour for run_settings.html: generation-config normalisation and
+submit-time JSON validation.
 {% endcomment %}
 <script>
-// Show "⚠ no key set" next to the label when the selected model's connection has no API key
-function updateNoKeyWarnings() {
-  [['target_model', 'no-key-target'], ['auditor_model', 'no-key-auditor'], ['judge_model', 'no-key-judge']].forEach(([name, warnId]) => {
-    const sel = document.querySelector(`select[name="${name}"]`);
-    const warn = document.getElementById(warnId);
-    if (!sel || !warn) return;
-    const opt = sel.selectedOptions[0];
-    warn.classList.toggle('hidden', !(opt && opt.dataset.hasKey === '0'));
-  });
+// Keep only real overrides: drop empty/null entries and retry values equal to
+// the engine defaults, so no-op keys aren't frozen into the manifest.
+function cleanGenConfig(obj) {
+  for (const [k, v] of Object.entries(obj)) {
+    if (v === null || v === '' || (typeof v === 'object' && !Array.isArray(v) && Object.keys(v).length === 0)) delete obj[k];
+  }
+  if (obj.max_retries === 2) delete obj.max_retries;
+  if (obj.retry_backoff === 0.5) delete obj.retry_backoff;
+  return obj;
 }
-document.querySelectorAll('select[name="target_model"], select[name="auditor_model"], select[name="judge_model"]').forEach(s => s.addEventListener('change', updateNoKeyWarnings));
-updateNoKeyWarnings();
 
 // Normalize a prefilled (cloned) generation-config textarea on page load: strip
-// form-managed keys (for old clones), drop empty/null entries and reformat.
+// form-managed keys, drop empty/null entries and reformat.
 // The blank-form template is left intact so every available key stays
 // visible; empty entries are still dropped on submit below.
 (function() {
@@ -27,15 +25,7 @@ updateNoKeyWarnings();
     let obj = JSON.parse(ta.value);
     if (typeof obj !== 'object' || obj === null || Array.isArray(obj)) return;
     delete obj.max_turns; delete obj.n_repetitions; delete obj.language;
-    for (const [k, v] of Object.entries(obj)) {
-      if (v === null || v === '' || (typeof v === 'object' && !Array.isArray(v) && Object.keys(v).length === 0)) {
-        delete obj[k];
-      }
-    }
-    // Drop retry defaults that match the engine's built-in values so they
-    // don't get frozen into the manifest as no-op overrides.
-    if (obj.max_retries === 2) delete obj.max_retries;
-    if (obj.retry_backoff === 0.5) delete obj.retry_backoff;
+    cleanGenConfig(obj);
     ta.value = Object.keys(obj).length ? JSON.stringify(obj, null, 2) : '{}';
   } catch (_) { /* leave as-is if not valid JSON yet */ }
 })();
@@ -53,16 +43,7 @@ document.querySelector('[name="gen_config_json"]')?.form?.addEventListener('subm
     try {
       const parsed = JSON.parse(fixed);
       if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) throw new Error('Must be a JSON object');
-      // Drop empty/null entries so the frozen manifest only stores real overrides.
-      for (const [k, v] of Object.entries(parsed)) {
-        if (v === null || v === '' || (typeof v === 'object' && !Array.isArray(v) && Object.keys(v).length === 0)) {
-          delete parsed[k];
-        }
-      }
-      // Drop retry defaults that match the engine's built-in values so they
-      // don't get frozen into the manifest as no-op overrides.
-      if (parsed.max_retries === 2) delete parsed.max_retries;
-      if (parsed.retry_backoff === 0.5) delete parsed.retry_backoff;
+      cleanGenConfig(parsed);
       ta.value = Object.keys(parsed).length ? JSON.stringify(parsed, null, 2) : '';
     }
     catch (err) {

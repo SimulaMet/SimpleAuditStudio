@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block title %}Compare — SimpleAudit{% endblock %}
 {% block content %}
-<h1 class="text-lg font-semibold text-gray-100 mb-6">Compare Audits</h1>
+<h1 class="text-lg font-semibold text-gray-100 mb-6">Compare Runs</h1>
 
 {% if error %}
 <div class="mb-4 text-sm text-red-300 bg-red-900/30 rounded-lg px-4 py-2">{{ error }}</div>
@@ -25,7 +25,7 @@
       {% endfor %}
     </div>
     {% else %}
-    <p class="text-sm text-gray-500">No completed audits to compare.</p>
+    <p class="text-sm text-gray-500">No completed runs to compare.</p>
     {% endif %}
   </div>
   <div class="flex items-center gap-3">
@@ -39,12 +39,12 @@
 
 {% if result %}
 {% if result.inputs %}
-<div class="mt-6 bg-surface-raised rounded-xl border border-gray-800 p-4">
+<div id="compare-inputs" class="scroll-mt-4 mt-6 bg-surface-raised rounded-xl border border-gray-800 p-4">
   <h2 class="text-sm font-semibold text-gray-300 mb-3">Input Parameters</h2>
   <table class="w-full text-sm">
     <thead><tr class="border-b border-gray-800">
       <th class="text-left px-3 py-2 text-xs text-gray-500 uppercase">Parameter</th>
-      {% for meta in result.run_meta %}<th class="text-left px-3 py-2 text-xs text-gray-500 uppercase"><a href="/runs/{{ meta.id }}/" class="hover:text-accent transition-colors">#{{ meta.id }}</a></th>{% endfor %}
+      {% for meta in result.run_meta %}{% include "partials/compare_run_header.html" %}{% endfor %}
     </tr></thead>
     <tbody>
       {% for row in result.inputs %}
@@ -61,7 +61,7 @@
   </table>
 </div>
 {% endif %}
-<div class="mt-6 bg-surface-raised rounded-xl border border-gray-800 p-4">
+<div id="compare-results" class="mt-6 bg-surface-raised rounded-xl border border-gray-800 p-4 scroll-mt-4">
   <div class="flex items-center justify-between flex-wrap gap-2 mb-3">
     <h2 class="text-sm font-semibold text-gray-300">Results{% if result.intersection_count is not None %} <span class="text-gray-500 font-normal">— Comparing {{ result.intersection_count }} common scenarios</span>{% endif %}</h2>
     <button onclick="exportCompareCSV()" class="px-3 py-1.5 rounded-lg bg-surface-overlay border border-gray-700 text-xs text-gray-300 hover:text-accent hover:border-accent/50 transition-colors">Export CSV</button>
@@ -77,12 +77,12 @@
   <table id="compare-results-table" class="w-full text-sm">
     <thead><tr class="border-b border-gray-800">
       <th class="text-left px-3 py-2 text-xs text-gray-500 uppercase">Scenario</th>
-      {% for meta in result.run_meta %}<th class="text-left px-3 py-2 text-xs text-gray-500 uppercase"><a href="/runs/{{ meta.id }}/" class="hover:text-accent transition-colors">#{{ meta.id }}</a></th>{% endfor %}
+      {% for meta in result.run_meta %}{% include "partials/compare_run_header.html" %}{% endfor %}
     </tr></thead>
     <tbody>
       {% for row in result.rows %}
       <tr class="border-b border-gray-800/50">
-        <td class="px-3 py-2"><a href="/scenarios/?scenario={{ row.scenario }}" class="text-gray-300 hover:text-accent transition-colors">{{ row.scenario }}</a></td>
+        <td class="px-3 py-2 text-gray-300">{{ row.scenario }}</td>
         {% for val in row.values %}
         <td class="px-3 py-2">
           {% if val == "pass" or val == "low" %}<span class="text-emerald-400">{{ val }}</span>
@@ -108,6 +108,12 @@
 {% endif %}
 
 <script>
+{% if result %}
+// Opened from a link (e.g. Compare on the dashboard): jump straight to the comparison.
+window.addEventListener('DOMContentLoaded', () => {
+  (document.getElementById('compare-inputs') || document.getElementById('compare-results')).scrollIntoView({ behavior: 'smooth', block: 'start' });
+});
+{% endif %}
 function submitCompareForm(form) {
   const checked = Array.from(form.querySelectorAll('input[name="runs[]"]:checked')).map(cb => cb.value);
   if (checked.length < 2) { alert('Select at least 2 runs to compare.'); return false; }
@@ -133,7 +139,7 @@ function exportCompareCSV() {
   const table = document.getElementById('compare-results-table');
   if (!table) return;
   const rows = Array.from(table.querySelectorAll('tr')).map(tr =>
-    Array.from(tr.querySelectorAll('th, td')).map(cell => '"' + cell.textContent.trim().replace(/"/g, '""') + '"').join(',')
+    Array.from(tr.querySelectorAll('th, td')).map(cell => '"' + cell.textContent.trim().replace(/\s+/g, ' ').replace(/"/g, '""') + '"').join(',')
   );
   const csv = rows.join('\n');
   const blob = new Blob([csv], {type: 'text/csv;charset=utf-8'});

@@ -1,145 +1,440 @@
 {% extends "base.html" %}
 {% block title %}Dashboard — SimpleAudit{% endblock %}
+{% block head %}
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/tabulator/6.4.0/css/tabulator_midnight.min.css"
+      integrity="sha512-44fw3GbtW8TKejbRODyMsQZhjkxko7ztMpATXFh+J8hzicPQ8RJ7WpT8QMJ8gEmZeghaF8tOU5XLQp1t36DGHQ==" crossorigin="anonymous" referrerpolicy="no-referrer">
+<style>
+  /* Match Tabulator's midnight theme to the app palette. */
+  #runs-grid.tabulator { background: transparent; border: 0; font-size: 13px; }
+  #runs-grid .tabulator-header { background: transparent; border-bottom: 1px solid #1f2937; color: #6b7280; }
+  #runs-grid .tabulator-header .tabulator-col { background: #1a1d27; border-right: 0; }
+  #runs-grid .tabulator-header .tabulator-col .tabulator-col-content { padding: 8px 10px; }
+  #runs-grid .tabulator-header .tabulator-col .tabulator-col-title { font-size: 11px; font-weight: 500; text-transform: uppercase; letter-spacing: .03em; }
+  #runs-grid .tabulator-header .tabulator-col.tabulator-sortable:hover { background: #242836; }
+  #runs-grid .tabulator-tableholder { background: transparent; }
+  #runs-grid .tabulator-row { background: #1a1d27; border-bottom: 1px solid rgb(31 41 55 / .6); color: #d1d5db; cursor: pointer; }
+  #runs-grid .tabulator-row:hover, #runs-grid .tabulator-row:hover .tabulator-frozen { background: #242836; }
+  #runs-grid .tabulator-row.tabulator-selected, #runs-grid .tabulator-row.tabulator-selected .tabulator-frozen { background: rgb(108 140 255 / .12); }
+  #runs-grid .tabulator-row .tabulator-cell { border-right: 0; padding: 9px 10px; }
+  #runs-grid .tabulator-frozen { background: #1a1d27; }
+  #runs-grid .tabulator-row-header, #runs-grid .tabulator-frozen.tabulator-frozen-left { border-right: 0 !important; border-bottom: 0 !important; }
+  #runs-grid .tabulator-footer { background: transparent; border-top: 1px solid #1f2937; color: #9ca3af; }
+  #runs-grid .tabulator-footer .tabulator-page { background: #242836; border-color: #374151; color: #d1d5db; border-radius: 6px; }
+  #runs-grid .tabulator-footer .tabulator-page.active { background: rgb(108 140 255 / .25); color: #c7d2fe; }
+  #runs-grid .tabulator-footer select { background: #242836; border-color: #374151; color: #d1d5db; border-radius: 6px; }
+  #runs-grid .tabulator-placeholder span { color: #6b7280; font-size: 13px; font-weight: 400; }
+  #runs-grid input[type="checkbox"] { accent-color: #6c8cff; }
+  .col-drag-over { box-shadow: inset 0 2px 0 #6c8cff; }
+</style>
+{% endblock %}
 {% block content %}
-<h1 class="text-lg font-semibold text-gray-100 mb-6">Dashboard</h1>
-
-<!-- Stats -->
-<div class="grid grid-cols-2 md:grid-cols-5 gap-3 mb-6">
-  <a href="/" class="bg-surface-raised rounded-xl border border-gray-800 p-4 text-center cursor-pointer hover:border-accent/40 hover:bg-surface-overlay transition-colors {% if not current_status %}border-accent/30{% endif %}">
-    <span class="text-2xl font-bold text-accent">{{ stats.total }}</span>
-    <p class="text-xs text-gray-500 mt-1 uppercase tracking-wide">Total</p>
-  </a>
-  <a href="/?status=active" class="bg-surface-raised rounded-xl border border-gray-800 p-4 text-center cursor-pointer hover:border-amber-500/40 hover:bg-surface-overlay transition-colors {% if current_status == 'active' %}border-amber-500/30{% endif %}">
-    <span class="text-2xl font-bold text-amber-400">{{ stats.active }}</span>
-    <p class="text-xs text-gray-500 mt-1 uppercase tracking-wide">Active</p>
-  </a>
-  <a href="/?status=completed" class="bg-surface-raised rounded-xl border border-gray-800 p-4 text-center cursor-pointer hover:border-emerald-500/40 hover:bg-surface-overlay transition-colors {% if current_status == 'completed' %}border-emerald-500/30{% endif %}">
-    <span class="text-2xl font-bold text-emerald-400">{{ stats.completed }}</span>
-    <p class="text-xs text-gray-500 mt-1 uppercase tracking-wide">Completed</p>
-  </a>
-  <a href="/?status=failed" class="bg-surface-raised rounded-xl border border-gray-800 p-4 text-center cursor-pointer hover:border-red-500/40 hover:bg-surface-overlay transition-colors {% if current_status == 'failed' %}border-red-500/30{% endif %}">
-    <span class="text-2xl font-bold text-red-400">{{ stats.failed }}</span>
-    <p class="text-xs text-gray-500 mt-1 uppercase tracking-wide">Failed</p>
-  </a>
-  <a href="/?status=archived" class="bg-surface-raised rounded-xl border border-gray-800 p-4 text-center cursor-pointer hover:border-gray-500/40 hover:bg-surface-overlay transition-colors {% if current_status == 'archived' %}border-gray-500/30{% endif %}">
-    <span class="text-2xl font-bold text-gray-400">{{ stats.archived }}</span>
-    <p class="text-xs text-gray-500 mt-1 uppercase tracking-wide">Archived</p>
-  </a>
+<div class="flex flex-wrap items-center justify-between gap-3 mb-4">
+  <h1 class="text-lg font-semibold text-gray-100">Dashboard</h1>
+  <a href="{% url 'new_experiment' %}" class="px-3 py-1.5 rounded-lg bg-accent text-white text-xs font-medium hover:bg-accent-hover">+ New Experiment</a>
 </div>
 
-<!-- Runs table -->
-<div class="bg-surface-raised rounded-xl border border-gray-800 p-4">
-  <form method="get" action="/">
-    <div class="flex items-center justify-between mb-3 flex-wrap gap-2">
-      <h2 class="text-sm font-semibold text-gray-300">Runs</h2>
-      <div class="flex items-center gap-2 flex-wrap">
-        <!-- Search input -->
-        <input type="hidden" name="status" value="{{ current_status }}">
-        <input type="text" name="q" placeholder="Search runs…" value="{{ search_query }}" aria-label="Search runs"
-               class="w-36 px-2 py-1 rounded-lg bg-surface-overlay border border-gray-700 text-xs text-gray-300 focus:outline-none focus:ring-2 focus:ring-accent/50">
-        <!-- Status filter tabs -->
-        <div class="flex gap-1 text-xs">
-          <a href="/{% if search_query %}?q={{ search_query|urlencode }}{% endif %}" class="px-2 py-1 rounded {% if not current_status %}bg-accent/20 text-accent{% else %}text-gray-500 hover:text-gray-300{% endif %}">All</a>
-          <a href="/?status=active{% if search_query %}&q={{ search_query|urlencode }}{% endif %}" class="px-2 py-1 rounded {% if current_status == 'active' %}bg-amber-900/40 text-amber-300{% else %}text-gray-500 hover:text-gray-300{% endif %}">Active</a>
-          <a href="/?status=completed{% if search_query %}&q={{ search_query|urlencode }}{% endif %}" class="px-2 py-1 rounded {% if current_status == 'completed' %}bg-emerald-900/40 text-emerald-300{% else %}text-gray-500 hover:text-gray-300{% endif %}">Done</a>
-          <a href="/?status=failed{% if search_query %}&q={{ search_query|urlencode }}{% endif %}" class="px-2 py-1 rounded {% if current_status == 'failed' %}bg-red-900/40 text-red-300{% else %}text-gray-500 hover:text-gray-300{% endif %}">Failed</a>
-          <a href="/?status=archived{% if search_query %}&q={{ search_query|urlencode }}{% endif %}" class="px-2 py-1 rounded {% if current_status == 'archived' %}bg-gray-700/60 text-gray-200{% else %}text-gray-500 hover:text-gray-300{% endif %}">Archived</a>
+<!-- Stat cards double as status filters -->
+<div class="grid grid-cols-3 lg:grid-cols-6 gap-3 mb-4" id="status-cards">
+  <button type="button" data-status="" class="stat-card bg-surface-raised rounded-xl border border-gray-800 p-3 text-center hover:bg-surface-overlay transition-colors" title="All runs except archived: active + completed + failed + cancelled">
+    <span class="text-2xl font-bold text-accent">{{ stats.total }}</span><p class="text-xs text-gray-500 mt-0.5 uppercase tracking-wide">All</p></button>
+  <button type="button" data-status="active" class="stat-card bg-surface-raised rounded-xl border border-gray-800 p-3 text-center hover:bg-surface-overlay transition-colors" title="Queued or running">
+    <span class="text-2xl font-bold text-amber-400">{{ stats.active }}</span><p class="text-xs text-gray-500 mt-0.5 uppercase tracking-wide">Active</p></button>
+  <button type="button" data-status="completed" class="stat-card bg-surface-raised rounded-xl border border-gray-800 p-3 text-center hover:bg-surface-overlay transition-colors" title="Finished runs">
+    <span class="text-2xl font-bold text-emerald-400">{{ stats.completed }}</span><p class="text-xs text-gray-500 mt-0.5 uppercase tracking-wide">Completed</p></button>
+  <button type="button" data-status="failed" class="stat-card bg-surface-raised rounded-xl border border-gray-800 p-3 text-center hover:bg-surface-overlay transition-colors" title="Runs that failed">
+    <span class="text-2xl font-bold text-red-400">{{ stats.failed }}</span><p class="text-xs text-gray-500 mt-0.5 uppercase tracking-wide">Failed</p></button>
+  <button type="button" data-status="cancelled" class="stat-card bg-surface-raised rounded-xl border border-gray-800 p-3 text-center hover:bg-surface-overlay transition-colors" title="Runs stopped before finishing">
+    <span class="text-2xl font-bold text-gray-300">{{ stats.cancelled }}</span><p class="text-xs text-gray-500 mt-0.5 uppercase tracking-wide">Cancelled</p></button>
+  <button type="button" data-status="archived" class="stat-card bg-surface-raised rounded-xl border border-gray-800 p-3 text-center hover:bg-surface-overlay transition-colors" title="Hidden from the default view; never deleted">
+    <span class="text-2xl font-bold text-gray-400">{{ stats.archived }}</span><p class="text-xs text-gray-500 mt-0.5 uppercase tracking-wide">Archived</p></button>
+</div>
+
+<div class="bg-surface-raised rounded-xl border border-gray-800">
+  <!-- Toolbar: search, filters, columns, export -->
+  <div class="flex flex-wrap items-center gap-2 p-3 border-b border-gray-800" id="toolbar">
+    <input type="search" id="f-q" placeholder="Search name, #id, set, model…" aria-label="Search runs"
+           class="w-52 px-2.5 py-1.5 rounded-lg bg-surface-overlay border border-gray-700 text-xs text-gray-200 focus:outline-none focus:ring-2 focus:ring-accent/50">
+    {% include "partials/multi_filter.html" with key="target" label="Target" items=filter_targets %}
+    {% include "partials/multi_filter.html" with key="set" label="Scenario set" items=filter_sets %}
+    {% if filter_experiments %}{% include "partials/multi_filter.html" with key="experiment" label="Experiment" items=filter_experiments %}{% endif %}
+    <div class="relative" data-pop>
+      <button type="button" data-pop-btn id="date-btn" aria-haspopup="true" aria-expanded="false" title="Filter by creation date" class="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-surface-overlay border border-gray-700 text-xs text-gray-300 hover:text-white whitespace-nowrap"><span id="date-label">Any time</span> <span class="text-gray-500">▾</span></button>
+      <div data-pop-menu class="hidden absolute top-full mt-1 z-30 rounded-lg border border-gray-700 bg-surface-raised shadow-xl p-2" style="width:15rem">
+        <div class="grid grid-cols-2 gap-1 mb-2">
+          <button type="button" data-days="1" class="px-2 py-1 rounded text-xs text-gray-300 bg-surface-overlay hover:text-white">Last 24 hours</button>
+          <button type="button" data-days="7" class="px-2 py-1 rounded text-xs text-gray-300 bg-surface-overlay hover:text-white">Last 7 days</button>
+          <button type="button" data-days="30" class="px-2 py-1 rounded text-xs text-gray-300 bg-surface-overlay hover:text-white">Last 30 days</button>
+          <button type="button" data-days="" class="px-2 py-1 rounded text-xs text-gray-300 bg-surface-overlay hover:text-white">Any time</button>
         </div>
-        <button type="submit" class="px-2 py-1 rounded-lg bg-surface-overlay text-gray-500 text-xs hover:text-gray-300 transition-colors" title="Search">⌕</button>
-        <a href="{% url 'dashboard_export' %}{% if current_status %}?status={{ current_status }}{% endif %}{% if search_query %}{% if not current_status %}?{% else %}&{% endif %}q={{ search_query|urlencode }}{% endif %}" class="px-2.5 py-1.5 rounded-lg bg-surface-overlay text-gray-400 text-xs font-medium hover:text-gray-200 transition-colors">Export CSV</a>
-        <a href="{% url 'new_experiment' %}" class="px-3 py-1.5 rounded-lg bg-accent text-white text-xs font-medium hover:bg-accent-hover">+ New Audit</a>
+        <label class="flex items-center justify-between gap-2 text-xs text-gray-500 mb-1">From
+          <input type="date" id="f-from" class="px-2 py-1 rounded-lg bg-surface-overlay border border-gray-700 text-xs text-gray-300"></label>
+        <label class="flex items-center justify-between gap-2 text-xs text-gray-500">To
+          <input type="date" id="f-to" class="px-2 py-1 rounded-lg bg-surface-overlay border border-gray-700 text-xs text-gray-300"></label>
       </div>
     </div>
-  </form>
-  {% if runs %}
-  <div class="overflow-x-auto">
-    <table class="w-full text-sm">
-      <thead>
-        <tr class="border-b border-gray-800">
-          <th class="text-left px-3 py-2 text-xs font-medium text-gray-500 uppercase">ID</th>
-          <th class="text-left px-3 py-2 text-xs font-medium text-gray-500 uppercase">Name</th>
-          <th class="text-left px-3 py-2 text-xs font-medium text-gray-500 uppercase">Scenario Set</th>
-          <th class="text-left px-3 py-2 text-xs font-medium text-gray-500 uppercase">Target Model</th>
-          <th class="text-left px-3 py-2 text-xs font-medium text-gray-500 uppercase">Auditor Model</th>
-          <th class="text-left px-3 py-2 text-xs font-medium text-gray-500 uppercase">Judge Model</th>
-          <th class="text-left px-3 py-2 text-xs font-medium text-gray-500 uppercase">Status</th>
-          <th class="text-left px-3 py-2 text-xs font-medium text-gray-500 uppercase">Progress</th>
-          <th class="text-left px-3 py-2 text-xs font-medium text-gray-500 uppercase">Pass Rate</th>
-          <th class="text-left px-3 py-2 text-xs font-medium text-gray-500 uppercase">Duration</th>
-          <th class="text-left px-3 py-2 text-xs font-medium text-gray-500 uppercase">
-            {% if current_sort == 'created_at' %}
-            <a href="/?sort=-created_at{% if current_status %}&status={{ current_status }}{% endif %}{% if search_query %}&q={{ search_query|urlencode }}{% endif %}" class="hover:text-gray-300">Created ↑</a>
-            {% else %}
-            <a href="/?sort=created_at{% if current_status %}&status={{ current_status }}{% endif %}{% if search_query %}&q={{ search_query|urlencode }}{% endif %}" class="hover:text-gray-300">Created ↓</a>
-            {% endif %}
-          </th>
-          <th class="text-right px-3 py-2 text-xs font-medium text-gray-500 uppercase">Actions</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for run in runs %}
-        <tr class="border-b border-gray-800/50 hover:bg-surface-overlay/50 cursor-pointer" onclick="location='/runs/{{ run.id }}/'">
-          <td class="px-3 py-2.5 font-medium text-gray-200">#{{ run.id }}</td>
-          <td class="px-3 py-2.5 text-gray-300 max-w-[16rem] truncate" title="{{ run.name }}">{{ run.name }}</td>
-          <td class="px-3 py-2.5 text-gray-300">{{ run.scenario_set_version.scenario_set.name|default:"—" }}</td>
-          <td class="px-3 py-2.5 text-gray-400 text-xs">{{ run.target_model.display_name|default:"—" }}</td>
-          <td class="px-3 py-2.5 text-gray-400 text-xs">{{ run.auditor_model.display_name|default:"—" }}</td>
-          <td class="px-3 py-2.5 text-gray-400 text-xs">{{ run.judge_model.display_name|default:"—" }}</td>
-          <td class="px-3 py-2.5">
-            {% if run.status == "completed" %}<span class="inline-flex px-2 py-0.5 rounded-full text-xs font-semibold bg-emerald-900/50 text-emerald-300">completed</span>
-            {% elif run.status == "failed" %}<span class="inline-flex px-2 py-0.5 rounded-full text-xs font-semibold bg-red-900/50 text-red-300">failed</span>
-            {% elif run.status == "cancelled" %}<span class="inline-flex px-2 py-0.5 rounded-full text-xs font-semibold bg-gray-800 text-gray-400">cancelled</span>
-            {% else %}<span class="inline-flex px-2 py-0.5 rounded-full text-xs font-semibold bg-amber-900/50 text-amber-300">{{ run.get_status_display }}</span>{% endif %}
-          </td>
-          <td class="px-3 py-2.5 text-gray-400 text-xs whitespace-nowrap">{% if run.total_scenarios > 0 %}{{ run.completed_scenarios }}/{{ run.total_scenarios }}{% with n_reps=run.generation_parameters_snapshot.n_repetitions|default:1 %}{% if n_reps > 1 %}<span class="text-gray-500">(x{{ n_reps }})</span>{% endif %}{% endwith %}{% else %}—{% endif %}</td>
-          <td class="px-3 py-2.5 text-gray-400 text-xs whitespace-nowrap">{% if run.status == "completed" or run.status == "failed" or run.status == "cancelled" %}{% if run.summary_metrics.pass_rate is not None %}{{ run.summary_metrics.pass_rate|floatformat:1 }}%{% elif run.completed_scenarios > 0 %}{% widthratio run.successful_scenarios run.completed_scenarios 100 %}%{% else %}—{% endif %}{% else %}—{% endif %}</td>
-          <td class="px-3 py-2.5 text-gray-400 text-xs whitespace-nowrap">{{ run.duration_display|default:"—" }}</td>
-          <td class="px-3 py-2.5 text-gray-500 text-xs">{{ run.created_at|date:"M j, H:i" }}</td>
-          <td class="px-3 py-2.5 text-right whitespace-nowrap" onclick="event.stopPropagation()">
-            {% if run.status != "completed" and run.status != "failed" and run.status != "cancelled" %}
-            <form method="post" action="/runs/{{ run.id }}/cancel/" class="inline mr-1" onsubmit="return confirm('Cancel run #{{ run.id }}?')">
-              {% csrf_token %}
-              <button type="submit" title="Cancel this run" aria-label="Cancel this run" class="inline-flex items-center justify-center w-7 h-7 rounded-md text-red-400 hover:text-red-300 hover:bg-red-900/30 transition-colors">
-                <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
-              </button>
-            </form>
-            {% endif %}
-            <a href="/experiments/new/?clone_from={{ run.id }}" title="Clone this run" aria-label="Clone this run" class="group/clone inline-flex items-center justify-center w-7 h-7 rounded-md text-gray-500 hover:text-accent hover:bg-surface-overlay transition-colors">
-              <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
-            </a>
-            <form method="post" action="/runs/{{ run.id }}/archive/" class="inline">
-              {% csrf_token %}
-              <button type="submit" title="{% if run.archived %}Unarchive this run{% else %}Archive this run{% endif %}" aria-label="{% if run.archived %}Unarchive this run{% else %}Archive this run{% endif %}" class="group/arch inline-flex items-center justify-center w-7 h-7 rounded-md text-gray-500 hover:text-gray-200 hover:bg-surface-overlay transition-colors">
-                {% if run.archived %}
-                <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg>
-                {% else %}
-                <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="21 8 21 21 3 21 3 8"/><rect x="1" y="3" width="22" height="5"/><line x1="10" y1="12" x2="14" y2="12"/></svg>
-                {% endif %}
-              </button>
-            </form>
-          </td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </div>
-  {% else %}
-  <p class="text-sm text-gray-500 py-8 text-center">No runs found.</p>
-  {% endif %}
+    <button type="button" id="f-clear" class="hidden text-xs text-gray-400 hover:text-accent whitespace-nowrap" title="Remove all filters">Clear filters</button>
 
-  <!-- Pagination -->
-  {% if is_paginated %}
-  <div class="flex items-center justify-between mt-4 pt-3 border-t border-gray-800">
-    <span class="text-xs text-gray-500">Page {{ page_obj.number }} of {{ paginator.num_pages }} ({{ paginator.count }} runs)</span>
-    <div class="flex gap-1">
-      {% if page_obj.has_previous %}
-      <a href="?page={{ page_obj.previous_page_number }}{% if current_status %}&status={{ current_status }}{% endif %}{% if search_query %}&q={{ search_query|urlencode }}{% endif %}{% if current_sort != '-created_at' %}&sort={{ current_sort }}{% endif %}" class="px-2 py-1 rounded text-xs bg-surface-overlay text-gray-400 hover:text-gray-200">← Prev</a>
-      {% endif %}
-      {% if page_obj.has_next %}
-      <a href="?page={{ page_obj.next_page_number }}{% if current_status %}&status={{ current_status }}{% endif %}{% if search_query %}&q={{ search_query|urlencode }}{% endif %}{% if current_sort != '-created_at' %}&sort={{ current_sort }}{% endif %}" class="px-2 py-1 rounded text-xs bg-surface-overlay text-gray-400 hover:text-gray-200">Next →</a>
-      {% endif %}
+    <div class="ml-auto flex items-center gap-2">
+      <span class="text-xs text-gray-500 whitespace-nowrap" id="row-total" aria-live="polite"></span>
+      <div class="relative" data-pop id="columns-pop">
+        <button type="button" data-pop-btn id="columns-btn" aria-haspopup="true" aria-expanded="false" title="Show, hide and reorder columns" class="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-surface-overlay border border-gray-700 text-xs text-gray-300 hover:text-white whitespace-nowrap">Columns <span class="text-gray-500">▾</span></button>
+        <div data-pop-menu id="columns-menu" class="hidden absolute top-full mt-1 z-30 rounded-lg border border-gray-700 bg-surface-raised shadow-xl p-2" style="width:16rem;right:0">
+          <p class="px-1 pb-1.5 text-[11px] text-gray-500">Tick to show · drag to reorder · saved to your account</p>
+          <ul id="columns-list" class="max-h-80 overflow-y-auto space-y-0.5"></ul>
+          <button type="button" id="columns-reset" class="mt-2 w-full text-xs text-gray-400 hover:text-accent py-1 border-t border-gray-800" title="Back to the default columns">Reset to default</button>
+        </div>
+      </div>
+      <a id="export-link" href="{% url 'runs_export' %}" class="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-surface-overlay border border-gray-700 text-xs text-gray-300 hover:text-white whitespace-nowrap" title="Download the runs matching the current filters as CSV">Export CSV</a>
     </div>
   </div>
-  {% endif %}
+
+  <div id="runs-grid"></div>
 </div>
+
+<!-- Bulk actions for selected rows -->
+<div id="bulk-bar" class="hidden sticky bottom-0 z-20 pb-4 pt-2 bg-gradient-to-t from-surface via-surface/90 to-transparent">
+  <div class="flex flex-wrap items-center gap-2 rounded-xl border border-gray-700 bg-surface-raised px-4 py-2.5 shadow-lg text-sm">
+    <span class="text-gray-200 mr-2" id="bulk-count"></span>
+    <button type="button" data-bulk="compare" class="px-3 py-1.5 rounded-lg bg-accent text-white text-xs font-medium hover:bg-accent-hover" title="Compare the selected runs scenario by scenario">Compare</button>
+    {% if can_write %}
+    <button type="button" data-bulk="archive" class="px-3 py-1.5 rounded-lg bg-surface-overlay text-gray-300 text-xs hover:text-white" title="Hide from the default view (never deletes)">Archive</button>
+    <button type="button" data-bulk="unarchive" class="px-3 py-1.5 rounded-lg bg-surface-overlay text-gray-300 text-xs hover:text-white" title="Show again in the default view">Unarchive</button>
+    <button type="button" data-bulk="cancel" class="px-3 py-1.5 rounded-lg bg-surface-overlay text-red-300 text-xs hover:text-red-200" title="Stop the selected runs that are still queued or running">Cancel runs</button>
+    {% endif %}
+    <button type="button" data-bulk="clear" class="ml-auto text-xs text-gray-400 hover:text-gray-200" title="Deselect all">Clear selection</button>
+  </div>
+</div>
+
+{{ column_layout|json_script:"column-layout" }}
+<script src="https://cdnjs.cloudflare.com/ajax/libs/tabulator/6.4.0/js/tabulator.min.js"
+        integrity="sha512-QEm/YyHse/1FVEczmITPosuIcPRjK1FmVsw7M5yoxogODzb3B/mao7WKabBLrM6jT8VCahLCsbsaGvtHkFmAQQ==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+<script>
+(function () {
+  const CAN_WRITE = {{ can_write|yesno:"true,false" }};
+  const LAYOUT_KEY = 'sa-dashboard-columns';
+
+  // ---------- Popovers (filters, dates, columns): one open at a time; outside click or Esc closes ----------
+  const pops = [...document.querySelectorAll('[data-pop]')];
+  function closePops(except) {
+    pops.forEach(p => { if (p !== except) { p.querySelector('[data-pop-menu]').classList.add('hidden'); p.querySelector('[data-pop-btn]').setAttribute('aria-expanded', false); } });
+  }
+  pops.forEach(p => p.querySelector('[data-pop-btn]').addEventListener('click', e => {
+    e.stopPropagation();
+    const menu = p.querySelector('[data-pop-menu]');
+    closePops(p);
+    const open = menu.classList.toggle('hidden') === false;
+    e.currentTarget.setAttribute('aria-expanded', open);
+    if (open) { p.dispatchEvent(new Event('pop-open')); menu.querySelector('input[type="search"]')?.focus(); }
+  }));
+  document.addEventListener('click', e => { if (!e.target.closest('[data-pop]')) closePops(); });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') closePops(); });
+
+  // ---------- Filters (kept in the URL so a view can be bookmarked or shared) ----------
+  const multis = [...document.querySelectorAll('[data-multi]')];
+  const url = new URL(location.href);
+  let status = url.searchParams.get('status') || '';
+  ['q', 'from', 'to'].forEach(k => { document.getElementById('f-' + k).value = url.searchParams.get(k) || ''; });
+  multis.forEach(m => {
+    const picked = new Set(url.searchParams.getAll(m.dataset.multi));
+    m.querySelectorAll('input[type="checkbox"]').forEach(cb => { cb.checked = picked.has(cb.value); });
+  });
+
+  function filterParams() {
+    const p = new URLSearchParams();
+    if (status) p.set('status', status);
+    ['q', 'from', 'to'].forEach(k => { const v = document.getElementById('f-' + k).value; if (v) p.set(k, v); });
+    multis.forEach(m => m.querySelectorAll('input[type="checkbox"]:checked').forEach(cb => p.append(m.dataset.multi, cb.value)));
+    return p;
+  }
+  const fmtDay = d => new Date(d + 'T00:00').toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  function syncFilterUI() {
+    const p = filterParams();
+    document.querySelectorAll('.stat-card').forEach(c => {
+      const on = c.dataset.status === status;
+      c.classList.toggle('border-accent/50', on);
+      c.classList.toggle('bg-surface-overlay', on);
+      c.setAttribute('aria-pressed', on);
+    });
+    // Button labels: "Target", "Target: GPT-4.1", "Target · 3"
+    multis.forEach(m => {
+      const picked = [...m.querySelectorAll('input[type="checkbox"]:checked')];
+      const names = picked.map(cb => cb.dataset.name);
+      m.querySelector('[data-multi-label]').textContent = !picked.length ? m.dataset.label : picked.length === 1 ? `${m.dataset.label}: ${names[0]}` : `${m.dataset.label} · ${picked.length}`;
+      m.querySelector('[data-pop-btn]').title = picked.length ? `${m.dataset.label}: ${names.join(', ')}` : `Filter by ${m.dataset.label.toLowerCase()}`;
+      m.querySelector('[data-pop-btn]').classList.toggle('!border-accent/60', picked.length > 0);
+    });
+    const from = p.get('from'), to = p.get('to');
+    document.getElementById('date-label').textContent = from && to ? `${fmtDay(from)} – ${fmtDay(to)}` : from ? `Since ${fmtDay(from)}` : to ? `Until ${fmtDay(to)}` : 'Any time';
+    document.getElementById('date-btn').classList.toggle('!border-accent/60', !!(from || to));
+    const hasFilters = [...p.keys()].some(k => k !== 'status');
+    document.getElementById('f-clear').classList.toggle('hidden', !hasFilters);
+    history.replaceState(null, '', p.toString() ? '?' + p : location.pathname);
+    document.getElementById('export-link').href = '{% url "runs_export" %}' + (p.toString() ? '?' + p : '');
+  }
+
+  // ---------- Cell formatters ----------
+  const STATUS = {
+    completed: 'bg-emerald-900/50 text-emerald-300', failed: 'bg-red-900/50 text-red-300',
+    cancelled: 'bg-gray-800 text-gray-400',
+  };
+  const badge = (cls, text) => `<span class="inline-flex px-2 py-0.5 rounded-full text-xs font-semibold ${cls}">${esc(text)}</span>`;
+  const reps = d => d.reps > 1 ? ` · ${d.reps}×` : '';
+
+  const fmt = {
+    run(cell) {
+      const d = cell.getData();
+      let html = `<a href="${d.url}" class="text-gray-100 font-medium hover:text-accent" title="${esc(d.name)} · Run #${d.id}">${esc(d.name)}</a> <span class="text-gray-500 text-xs">#${d.id}</span>`;
+      if (d.experiment) html += ` <a href="/experiments/${d.experiment.id}/" class="text-[11px] text-gray-400 hover:text-accent" title="Part of experiment “${esc(d.experiment.name)}”">⊞</a>`;
+      if (d.monitor) html += ` <a href="/monitors/${d.monitor.id}/" class="text-[11px] text-accent" title="Repeats as monitor “${esc(d.monitor.name)}”">↻</a>`;
+      if (d.archived) html += ` <span class="text-[10px] text-gray-500" title="Archived">archived</span>`;
+      return html;
+    },
+    status(cell) {
+      const d = cell.getData();
+      if (!d.active) return badge(STATUS[d.status] || 'bg-gray-800 text-gray-400', d.status_label.toLowerCase());
+      const pct = d.total ? Math.round(d.completed * 100 / d.total) : 0;
+      return `<div title="${d.completed} of ${d.total} scenarios finished${d.reps > 1 ? ` · each run ${d.reps} times` : ''}">
+        <div class="flex items-center justify-between gap-2 text-xs"><span class="text-amber-300">${esc(d.status_label.toLowerCase())}</span><span class="text-gray-400">${d.completed}/${d.total}${reps(d)}</span></div>
+        <div class="h-1 mt-1 rounded-full bg-gray-800 overflow-hidden"><div class="h-full bg-amber-400" style="width:${pct}%"></div></div></div>`;
+    },
+    passRate(cell) {
+      const d = cell.getData();
+      if (d.pass_rate === null) return '<span class="text-gray-600">—</span>';
+      const color = d.pass_rate >= 80 ? 'bg-emerald-400' : d.pass_rate >= 50 ? 'bg-amber-400' : 'bg-red-400';
+      return `<div class="flex items-center gap-2" title="${d.pass_rate}% of ${d.trials} judged trials rated pass">
+        <span class="w-10 text-right text-gray-100">${Math.round(d.pass_rate)}%</span>
+        <span class="flex-1 h-1 rounded-full bg-gray-800 overflow-hidden min-w-[2.5rem]"><span class="block h-full ${color}" style="width:${d.pass_rate}%"></span></span></div>`;
+    },
+    scenarios: cell => { const d = cell.getData(); return d.total ? `${d.completed}/${d.total}<span class="text-gray-500">${reps(d)}</span>` : '—'; },
+    target: cell => { const d = cell.getData(); return `<span title="${esc(d.target_id)}">${esc(d.target)}</span>`; },
+    time: cell => `<time data-local datetime="${cell.getValue()}">${esc(cell.getValue().slice(0, 16).replace('T', ' '))}</time>`,
+    link: kind => cell => { const v = cell.getValue(); return v ? `<a href="/${kind}s/${v.id}/" class="hover:text-accent">${esc(v.name)}</a>` : '—'; },
+    muted: cell => cell.getValue() ? esc(cell.getValue()) : '<span class="text-gray-600">—</span>',
+    actions(cell) {
+      const d = cell.getData();
+      const btn = (href, label, icon) => `<a href="${href}" class="inline-flex w-7 h-7 items-center justify-center rounded-md text-gray-500 hover:text-accent hover:bg-surface-overlay" aria-label="${label}" title="${label}">${icon}</a>`;
+      let html = btn(`/experiments/new/?clone_from=${d.id}`, 'Clone this run', '⧉');
+      if (CAN_WRITE && !d.monitor) html += btn(`/experiments/new/?clone_from=${d.id}&repeat=168#schedule-card`, 'Monitor this run for drift', '↻');
+      return html;
+    },
+  };
+
+  // Default columns; users can show, hide, reorder and resize (saved per user).
+  const columns = [
+    { title: 'Run', field: 'name', formatter: fmt.run, minWidth: 220, widthGrow: 3, frozen: true },
+    { title: 'Target', field: 'target', formatter: fmt.target, minWidth: 120 },
+    { title: 'Scenario set', field: 'scenario_set', minWidth: 150 },
+    { title: 'Status', field: 'status', formatter: fmt.status, minWidth: 130 },
+    { title: 'Pass rate', field: 'pass_rate', formatter: fmt.passRate, minWidth: 130, headerSort: false, headerTooltip: 'Share of judged trials rated pass' },
+    { title: 'Created', field: 'created_at', formatter: fmt.time, minWidth: 200 },
+    { title: 'Scenarios', field: 'completed', formatter: fmt.scenarios, visible: false, headerSort: false },
+    { title: 'Auditor', field: 'auditor', visible: false },
+    { title: 'Judge', field: 'judge', visible: false },
+    { title: 'Duration', field: 'duration', formatter: fmt.muted, visible: false, headerSort: false },
+    { title: 'Max turns', field: 'max_turns', visible: false, headerSort: false },
+    { title: 'Language', field: 'language', visible: false, headerSort: false },
+    { title: 'Repetitions', field: 'reps', visible: false, headerSort: false },
+    { title: 'Engine', field: 'engine', formatter: fmt.muted, visible: false, headerSort: false },
+    { title: 'Created by', field: 'created_by', formatter: fmt.muted, visible: false },
+    { title: 'Experiment', field: 'experiment', formatter: fmt.link('experiment'), visible: false, headerSort: false },
+    { title: 'Monitor', field: 'monitor', formatter: fmt.link('monitor'), visible: false, headerSort: false },
+    { title: 'Error', field: 'error', formatter: fmt.muted, visible: false, headerSort: false },
+    { title: '', field: 'actions', formatter: fmt.actions, headerSort: false, resizable: false, width: 76, hozAlign: 'right' },
+  ];
+  const FIXED = new Set(['name', 'actions']);   // always shown, not in the Columns menu
+
+  // ---------- Column layout: saved only when the user moves, resizes, shows or hides a column ----------
+  // Stored as [{field, visible, width?}] in this browser (instant) and on the account (other devices).
+  const validLayout = v => (Array.isArray(v) && v.length ? v : null);
+  function readLayout() {
+    try { const local = validLayout(JSON.parse(localStorage.getItem(LAYOUT_KEY))); if (local) return local; } catch (e) { /* private mode or bad JSON */ }
+    return validLayout(JSON.parse(document.getElementById('column-layout').textContent));
+  }
+  const userWidths = {};   // only widths the user dragged; others stay fluid
+  function applyLayout(defs, saved) {
+    if (!saved) return defs;
+    const byField = new Map(defs.map(c => [c.field, c]));
+    const moved = [];
+    saved.forEach(s => {
+      const col = byField.get(s.field);
+      if (!col || FIXED.has(s.field)) return;
+      col.visible = s.visible !== false;
+      if (s.width) { col.width = s.width; userWidths[s.field] = s.width; }
+      moved.push(col);
+      byField.delete(s.field);
+    });
+    // Run stays first, actions last; columns added since the layout was saved keep their default spot.
+    const rest = defs.filter(c => byField.has(c.field) && !FIXED.has(c.field));
+    return [byField.get('name'), ...moved, ...rest, byField.get('actions')];
+  }
+  let saveTimer = null;
+  function saveLayout() {
+    const data = table.getColumns().map(c => c.getField()).filter(f => f && !FIXED.has(f)).map(f => {
+      const entry = { field: f, visible: table.getColumn(f).isVisible() };
+      if (userWidths[f]) entry.width = userWidths[f];
+      return entry;
+    });
+    try { localStorage.setItem(LAYOUT_KEY, JSON.stringify(data)); } catch (e) { /* private mode */ }
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(() => fetch('{% url "preferences" %}', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CSRFToken': csrfToken() },
+      body: JSON.stringify({ key: 'dashboard_columns', value: data }),
+    }), 600);
+  }
+
+  const table = new Tabulator('#runs-grid', {
+    index: 'id',
+    columns: applyLayout(columns, readLayout()),
+    layout: 'fitColumns',
+    movableColumns: true,
+    placeholder: 'No runs match these filters.',
+    // Selection for everyone (Compare); archive/cancel buttons only for writers.
+    rowHeader: { formatter: 'rowSelection', titleFormatter: 'rowSelection', headerSort: false, resizable: false, frozen: true, width: 40, hozAlign: 'center', headerHozAlign: 'center' },
+    selectableRows: true,
+    ajaxURL: '{% url "runs_data" %}',
+    ajaxURLGenerator(base, config, params) {
+      const p = filterParams();
+      p.set('page', params.page || 1);
+      p.set('size', params.size || 25);
+      const s = (params.sort || [])[0];
+      if (s) { p.set('sort', s.field); p.set('dir', s.dir); }
+      return base + '?' + p;
+    },
+    ajaxResponse(u, params, response) {
+      document.getElementById('row-total').textContent = `${response.total} run${response.total === 1 ? '' : 's'}`;
+      return response;
+    },
+    pagination: true,
+    paginationMode: 'remote',
+    paginationSize: 25,
+    paginationSizeSelector: [10, 25, 50, 100],
+    paginationCounter: 'rows',
+    sortMode: 'remote',
+    initialSort: [{ column: 'created_at', dir: 'desc' }],
+  });
+
+  table.on('columnMoved', saveLayout);
+  table.on('columnVisibilityChanged', saveLayout);
+  table.on('columnResized', col => { userWidths[col.getField()] = Math.round(col.getWidth()); saveLayout(); });
+
+  // Open a run by clicking its row (links, checkboxes and buttons keep their own behaviour).
+  table.on('rowClick', (e, row) => {
+    if (e.target.closest('a, button, input, .tabulator-row-header, .tabulator-cell[tabulator-field="actions"]')) return;
+    if (e.metaKey || e.ctrlKey) window.open(row.getData().url, '_blank');
+    else location.href = row.getData().url;
+  });
+  table.on('renderComplete', () => window.renderLocalTimes && window.renderLocalTimes(document.getElementById('runs-grid')));
+
+  // ---------- Selection → bulk bar ----------
+  const bulkBar = document.getElementById('bulk-bar');
+  table.on('rowSelectionChanged', data => {
+    bulkBar.classList.toggle('hidden', !data.length);
+    document.getElementById('bulk-count').textContent = `${data.length} selected`;
+    const compare = bulkBar.querySelector('[data-bulk="compare"]');
+    compare.disabled = data.length < 2;
+    compare.classList.toggle('opacity-50', data.length < 2);
+    compare.title = data.length < 2 ? 'Select at least two runs to compare' : 'Compare the selected runs scenario by scenario';
+  });
+  bulkBar.addEventListener('click', async e => {
+    const action = e.target.closest('[data-bulk]')?.dataset.bulk;
+    if (!action) return;
+    const ids = table.getSelectedData().map(d => d.id);
+    if (action === 'clear') return table.deselectRow();
+    if (action === 'compare') { if (ids.length > 1) location.href = '/compare/?runs=' + ids.join(','); return; }
+    if (action === 'cancel' && !confirm(`Cancel the selected runs that are still queued or running?`)) return;
+    const resp = await fetch('{% url "runs_bulk" %}', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CSRFToken': csrfToken() },
+      body: JSON.stringify({ action, ids }),
+    });
+    if (!resp.ok) { alert('Could not ' + action + ': ' + (await resp.text()).slice(0, 200)); return; }
+    table.deselectRow();
+    table.setData();
+  });
+
+  // ---------- Filter events ----------
+  function applyFilters() { syncFilterUI(); table.setPage(1).catch(() => table.setData()); }
+  document.querySelectorAll('.stat-card').forEach(c => c.addEventListener('click', () => { status = c.dataset.status; applyFilters(); }));
+  let searchTimer = null;
+  document.getElementById('f-q').addEventListener('input', () => { clearTimeout(searchTimer); searchTimer = setTimeout(applyFilters, 300); });
+  ['f-from', 'f-to'].forEach(id => document.getElementById(id).addEventListener('change', applyFilters));
+  document.querySelectorAll('[data-days]').forEach(btn => btn.addEventListener('click', () => {
+    const days = btn.dataset.days;
+    const from = new Date(Date.now() - (Number(days) - 1) * 864e5);
+    document.getElementById('f-from').value = days ? from.toLocaleDateString('en-CA') : '';   // en-CA gives YYYY-MM-DD
+    document.getElementById('f-to').value = '';
+    closePops();
+    applyFilters();
+  }));
+  multis.forEach(m => {
+    m.addEventListener('change', e => { if (e.target.type === 'checkbox') applyFilters(); });
+    m.querySelector('[data-multi-search]').addEventListener('input', e => {
+      const q = e.target.value.toLowerCase();
+      m.querySelectorAll('li').forEach(li => { li.hidden = !li.textContent.toLowerCase().includes(q); });
+    });
+    m.querySelector('[data-multi-clear]').addEventListener('click', () => {
+      m.querySelectorAll('input[type="checkbox"]').forEach(cb => { cb.checked = false; });
+      applyFilters();
+    });
+  });
+  document.getElementById('f-clear').addEventListener('click', () => {
+    ['f-q', 'f-from', 'f-to'].forEach(id => { document.getElementById(id).value = ''; });
+    multis.forEach(m => m.querySelectorAll('input[type="checkbox"]').forEach(cb => { cb.checked = false; }));
+    applyFilters();
+  });
+  syncFilterUI();
+
+  // ---------- Columns menu: tick to show, drag to reorder ----------
+  const menu = document.getElementById('columns-menu'), list = document.getElementById('columns-list');
+  function renderColumnsMenu() {
+    list.innerHTML = '';
+    table.getColumns().filter(c => c.getField() && !FIXED.has(c.getField())).forEach(col => {
+      const li = document.createElement('li');
+      li.draggable = true;
+      li.dataset.field = col.getField();
+      li.className = 'flex items-center gap-2 px-1.5 py-1 rounded text-xs text-gray-300 hover:bg-surface-overlay cursor-grab';
+      li.innerHTML = `<span class="text-gray-600" aria-hidden="true">⠿</span><label class="flex items-center gap-2 flex-1 cursor-pointer"><input type="checkbox" ${col.isVisible() ? 'checked' : ''}> ${esc(col.getDefinition().title)}</label>`;
+      li.querySelector('input').addEventListener('change', e => { e.target.checked ? col.show() : col.hide(); table.redraw(); });
+      list.appendChild(li);
+    });
+  }
+  let dragged = null;
+  list.addEventListener('dragstart', e => { dragged = e.target.closest('li'); e.dataTransfer.effectAllowed = 'move'; });
+  list.addEventListener('dragover', e => {
+    e.preventDefault();
+    list.querySelectorAll('.col-drag-over').forEach(el => el.classList.remove('col-drag-over'));
+    e.target.closest('li')?.classList.add('col-drag-over');
+  });
+  list.addEventListener('drop', e => {
+    e.preventDefault();
+    const target = e.target.closest('li');
+    list.querySelectorAll('.col-drag-over').forEach(el => el.classList.remove('col-drag-over'));
+    if (!dragged || !target || dragged === target) return;
+    table.moveColumn(dragged.dataset.field, target.dataset.field, false);
+    renderColumnsMenu();
+  });
+  document.getElementById('columns-pop').addEventListener('pop-open', renderColumnsMenu);
+  document.getElementById('columns-reset').addEventListener('click', () => {
+    try { localStorage.removeItem(LAYOUT_KEY); } catch (e) { /* ignore */ }
+    fetch('{% url "preferences" %}', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CSRFToken': csrfToken() },
+      body: JSON.stringify({ key: 'dashboard_columns', value: null }),
+    }).finally(() => location.reload());
+  });
+  table.on('columnMoved', () => { if (!menu.classList.contains('hidden')) renderColumnsMenu(); });
+
+  // ---------- Live updates: refresh active rows in place every 10 s ----------
+  setInterval(async () => {
+    if (document.hidden || !table.getData().some(d => d.active)) return;
+    const p = filterParams();
+    p.set('page', table.getPage() || 1);
+    p.set('size', table.getPageSize() || 25);
+    const s = table.getSorters()[0];
+    if (s) { p.set('sort', s.field); p.set('dir', s.dir); }
+    try {
+      const resp = await fetch('{% url "runs_data" %}?' + p, { credentials: 'same-origin' });
+      if (resp.ok) table.updateData((await resp.json()).data);   // keeps selection and scroll
+    } catch (e) { /* offline: try next tick */ }
+  }, 10000);
+})();
+</script>
 {% endblock %}

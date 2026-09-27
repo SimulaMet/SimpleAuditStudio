@@ -19,12 +19,14 @@ logger = logging.getLogger("simpleaudit.audit")
 def _endpoint_snapshot(model: RegisteredModel) -> dict:
     """Build the frozen config snapshot from a RegisteredModel + its connection.
 
-    The JSON shape is byte-compatible with what infra/engine.py expects
-    (base_url, provider, model_id, secret_reference, api_key_direct, ...).
+    Never contains a raw API key (snapshots are visible to every workspace
+    member through the runs API). The worker resolves the key at execution time
+    from ``connection_id`` or ``secret_reference`` (``infra.engine.snapshot_api_key``).
     """
     conn = model.connection
     return {
         "id": model.id,
+        "connection_id": conn.id,
         "display_name": model.display_name,
         "provider": conn.provider,
         "base_url": conn.base_url,
@@ -33,7 +35,6 @@ def _endpoint_snapshot(model: RegisteredModel) -> dict:
         "capabilities": model.capabilities,
         "default_parameters": model.default_parameters,
         "secret_reference": conn.secret_reference,
-        "api_key_direct": conn.api_key_direct,
         "enabled": model.enabled and conn.enabled,
     }
 
@@ -198,3 +199,20 @@ def _record_submission_failure(run: AuditRun, reason: str) -> None:
     meta = dict(run.runtime_metadata or {})
     meta["submission"] = {"status": "pending", "reason": reason, "at": timezone.now().isoformat()}
     AuditRun.objects.filter(id=run.id).update(runtime_metadata=meta)
+
+
+def cancel_run(run: AuditRun, user) -> bool:
+    """Cancel a queued or running run; False when it had already finished.
+
+    Writes a terminal event so live progress ends right away; running scenarios
+    see the durable flag and stop at their next repetition.
+    """
+    from audits.events import append_event
+
+    if not run.is_active:
+        return False
+    run.status = AuditRun.Status.CANCELLED
+    run.finished_at = run.finished_at or timezone.now()
+    run.save(update_fields=["status", "finished_at"])
+    append_event(run.pk, "_run", "run_cancelled", {"by": user.username})
+    return True

@@ -84,7 +84,7 @@ class AuditRunFreezeTests(TestCase):
         assert run.git_commit == "deadbeef"
         assert run.total_scenarios == 1
         assert run.target_config_snapshot["secret_reference"] == "TARGET_KEY"
-        assert run.target_config_snapshot.get("api_key_direct", "") == ""
+        assert "api_key_direct" not in run.target_config_snapshot
         assert run.scenario_set_version_id == self.version.id
 
         detail = self.client.get(f"/api/projects/{self.project.id}/audit-runs/{run.id}/")

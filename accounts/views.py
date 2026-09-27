@@ -327,27 +327,6 @@ def update_or_remove_member(request, project_id, user_id):
     return Response(ProjectMembershipSerializer(membership).data)
 
 
-# ─── Legacy aliases (kept for backward compatibility) ────────────────────────
-
-
-@api_view(["GET"])
-@permission_classes([IsAuthenticated])
-def list_projects(request):
-    return list_workspaces(request)
-
-
-@api_view(["POST"])
-@permission_classes([IsAuthenticated])
-def create_project(request):
-    return create_workspace_view(request)
-
-
-@api_view(["GET"])
-@permission_classes([IsAuthenticated])
-def get_project(request, project_id):
-    return workspace_detail(request, project_id)
-
-
 def _get_project_or_404(project_id) -> Project:
     try:
         return Project.objects.get(pk=project_id)
