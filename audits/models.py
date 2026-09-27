@@ -103,9 +103,13 @@ class AuditSchedule(models.Model):
     # Same shape as AuditRun.generation_parameters_snapshot; copied into each run.
     generation_parameters = models.JSONField(default=dict, blank=True)
     interval_hours = models.PositiveIntegerField(default=168)
-    # Standard 5-field cron expression, evaluated in UTC. When set it replaces
-    # interval_hours as the timing rule.
+    # Standard 5-field cron expression, evaluated in ``timezone``. When set it
+    # replaces interval_hours as the timing rule.
     cron_expression = models.CharField(max_length=120, blank=True)
+    # IANA zone the cron expression and the requested first run are read in
+    # (e.g. "Europe/Oslo"); daylight-saving changes are followed. Stored
+    # datetimes (next_run_at, ...) are always UTC.
+    timezone = models.CharField(max_length=64, default="UTC")
     next_run_at = models.DateTimeField(db_index=True)
     last_run = models.ForeignKey("audits.AuditRun", on_delete=models.SET_NULL, null=True, blank=True, related_name="+")
     last_tick_at = models.DateTimeField(null=True, blank=True)
@@ -124,7 +128,7 @@ class AuditSchedule(models.Model):
     @property
     def interval_display(self) -> str:
         if self.cron_expression:
-            return f"cron {self.cron_expression} (UTC)"
+            return f"cron {self.cron_expression} ({self.timezone})"
         h = self.interval_hours
         if h % 168 == 0:
             n = h // 168
