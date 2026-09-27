@@ -1,0 +1,46 @@
+name: Docker build
+
+# Builds both images (no push) only when something that affects them changes,
+# so Dockerfile / dependency / settings breakage is caught before deploying.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "Dockerfile"
+      - "deploy/**"
+      - "docker-compose.yml"
+      - ".dockerignore"
+      - "pyproject.toml"
+      - "uv.lock"
+      - "config/settings.py"
+      - "infra/minimal_config.py"
+      - "simpleaudit_studio/**"
+      - ".github/workflows/docker.yml"
+  pull_request:
+    paths:
+      - "Dockerfile"
+      - "deploy/**"
+      - "docker-compose.yml"
+      - ".dockerignore"
+      - "pyproject.toml"
+      - "uv.lock"
+      - "config/settings.py"
+      - "infra/minimal_config.py"
+      - "simpleaudit_studio/**"
+      - ".github/workflows/docker.yml"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build HF Space / demo image
+        run: docker build -t simpleaudit-studio:ci .
+      - name: Build Compose image
+        run: docker build -f deploy/compose/Dockerfile -t simpleaudit-studio-compose:ci .
+      - name: Validate compose file
+        run: cp .env.example .env && docker compose config --quiet
