@@ -1412,6 +1412,14 @@ class AuditDetailView(ProjectMixin, DetailView):
         ctx["vi_names_json"] = json.dumps(
             {str(vi.pk): vi.scenario.title for vi in items.values()}
         )
+        # Live progress starts from each scenario's latest event and streams
+        # only newer ones, so page load stays cheap for big runs.
+        if run.status not in ("completed", "failed", "cancelled"):
+            from audits.events import progress_snapshot
+
+            snap_events, snap_last_id = progress_snapshot(run.id)
+            ctx["progress_snapshot_json"] = json.dumps(snap_events)
+            ctx["progress_last_event_id"] = snap_last_id
         ctx["set_id"] = set_id
         ctx["progress_pct"] = (run.completed_scenarios * 100 // run.total_scenarios) if run.total_scenarios else 0
         ctx["stages"] = ["queued", "preparing", "target_execution", "auditing", "judging", "aggregation", "completed"]
@@ -1437,6 +1445,10 @@ class AuditCancelView(ProjectMixin, View):
             if run.finished_at is None:
                 run.finished_at = timezone.now()
             run.save(update_fields=["status", "finished_at"])
+            # Terminal event so live progress ends; running scenarios stop at
+            # their next repetition (they poll the durable flag).
+            from audits.events import append_event
+            append_event(run.pk, "_run", "run_cancelled", {"by": request.user.username})
         return redirect(f"/audits/{run_id}/")
 
 
