@@ -58,7 +58,7 @@
   {% endif %}
 </div>
 
-<h2 class="text-sm font-semibold text-gray-300 mb-3">New schedule</h2>
+<h2 id="new-schedule" class="text-sm font-semibold text-gray-300 mb-3 scroll-mt-4">New schedule</h2>
 {% if not can_create %}
 <p class="text-sm text-gray-500 bg-surface-raised rounded-xl border border-gray-800 p-4 max-w-4xl">
   Creating schedules needs the admin or auditor role in this workspace. Schedules spend the workspace's API keys on a recurring basis.
@@ -75,6 +75,17 @@
 
 <form method="post" class="space-y-4 max-w-4xl">
   {% csrf_token %}
+  {% if from_run %}
+  <div class="bg-accent/10 border border-accent/30 rounded-xl p-4 text-sm text-gray-300">
+    <p>Prefilled from <a href="/audits/{{ from_run.id }}/" class="text-accent hover:underline">run #{{ from_run.id }}</a> ({{ from_run.name }}). Pick when it should repeat.</p>
+    <input type="hidden" name="baseline_run" value="{{ from_run.id }}">
+    <label class="mt-2 flex items-start gap-2">
+      <input type="checkbox" name="attach_baseline" value="1" {% if not form.baseline_run or form.attach_baseline %}checked{% endif %} class="mt-1">
+      <span>Use run #{{ from_run.id }} as the first point in the drift series
+        <span class="block text-xs text-gray-500">Only if the settings below still match that run; otherwise it stays a standalone audit.</span></span>
+    </label>
+  </div>
+  {% endif %}
   <div class="bg-surface-raised rounded-xl border border-gray-800 p-4 grid grid-cols-1 md:grid-cols-3 gap-4">
     <div>
       <label class="block text-xs font-medium text-gray-500 mb-1 uppercase tracking-wide">Name</label>
@@ -83,17 +94,28 @@
     </div>
     <div>
       <label class="block text-xs font-medium text-gray-500 mb-1 uppercase tracking-wide">Interval</label>
-      <select name="interval_hours" class="w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-accent/50">
+      <select name="interval_hours" id="interval-picker" class="w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-accent/50">
         {% for hours, label in interval_presets %}
-        <option value="{{ hours }}" {% if hours == 168 %}selected{% endif %}>{{ label }}</option>
+        <option value="{{ hours }}" {% if form.interval_hours %}{% if form.interval_hours == hours|stringformat:"d" %}selected{% endif %}{% elif hours == 168 %}selected{% endif %}>{{ label }}</option>
         {% endfor %}
+        <option value="cron" {% if form.interval_hours == "cron" %}selected{% endif %}>Custom cron expression…</option>
       </select>
     </div>
     <div>
       <label class="block text-xs font-medium text-gray-500 mb-1 uppercase tracking-wide">First run (UTC)</label>
       <input type="datetime-local" name="first_run_at" value="{{ form.first_run_at|default:'' }}"
              class="w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-accent/50">
-      <p class="mt-1 text-xs text-gray-600">Empty = within a minute.</p>
+      <p class="mt-1 text-xs text-gray-600" id="first-run-hint">Empty = within a minute.</p>
+    </div>
+    <div id="cron-field" class="md:col-span-3 {% if form.interval_hours != "cron" %}hidden{% endif %}">
+      <label class="block text-xs font-medium text-gray-500 mb-1 uppercase tracking-wide">Cron expression (UTC)</label>
+      <input type="text" name="cron_expression" placeholder="0 6 * * 1" value="{{ form.cron_expression|default:'' }}" spellcheck="false" autocomplete="off"
+             class="w-full md:w-80 px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-accent/50">
+      <p class="mt-1 text-xs text-gray-600">
+        Standard 5 fields: minute hour day-of-month month day-of-week, evaluated in UTC. If a run is still going when the next firing comes, that firing is skipped.
+        Examples: <code class="text-gray-400">0 6 * * 1</code> (Mondays 06:00), <code class="text-gray-400">30 2 * * *</code> (daily 02:30),
+        <code class="text-gray-400">0 */12 * * *</code> (every 12 hours), <code class="text-gray-400">0 9 1 * *</code> (1st of each month).
+      </p>
     </div>
   </div>
 
@@ -101,61 +123,64 @@
     <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
       <div>
         <label class="block text-xs font-medium text-gray-500 mb-1 uppercase tracking-wide">Scenario set</label>
-        <select name="scenario_set" required class="w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-accent/50">
+        <select name="scenario_set" id="schedule-set-picker" required class="w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-accent/50">
           {% for s in sets %}
-          <option value="{{ s.id }}">{{ s.name }} (v{{ s.versions.count }})</option>
+          <option value="{{ s.id }}" {% if clone.scenario_set_id == s.id %}selected{% endif %}>{{ s.name }} (v{{ s.versions.count }})</option>
           {% empty %}
           <option value="">No scenario sets available</option>
           {% endfor %}
         </select>
       </div>
-      <label class="flex items-start gap-2 text-sm text-gray-300 md:mt-6">
+      {% if clone.scenario_set_version_id %}
+      <div id="pinned-version" class="text-sm text-gray-300 md:mt-6">
+        <input type="hidden" name="scenario_set_version" value="{{ clone.scenario_set_version_id }}">
+        Pinned to the version {% if from_run %}run #{{ from_run.id }} used (v{{ from_run.scenario_set_version.version }}){% else %}selected earlier{% endif %}
+        <span class="block text-xs text-gray-500">Choosing another set switches to that set's latest version.</span>
+      </div>
+      {% endif %}
+      <label id="pin-latest" class="flex items-start gap-2 text-sm text-gray-300 md:mt-6 {% if clone.scenario_set_version_id %}hidden{% endif %}">
         <input type="checkbox" name="pin_version" value="1" checked class="mt-1">
         <span>Pin current version <span class="block text-xs text-gray-500">Recommended. Unpinned schedules follow the latest version, which resets the drift baseline whenever the set changes.</span></span>
       </label>
     </div>
   </div>
 
-  <div class="bg-surface-raised rounded-xl border border-gray-800 p-4">
-    <h3 class="text-sm font-semibold text-gray-300 mb-3">Models</h3>
-    <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-      {% include "partials/schedule_model_select.html" with role="target" label="Target" %}
-      {% include "partials/schedule_model_select.html" with role="auditor" label="Auditor" %}
-      {% include "partials/schedule_model_select.html" with role="judge" label="Judge" %}
-    </div>
-  </div>
+  {% include "partials/audit_models.html" %}
 
-  <div class="bg-surface-raised rounded-xl border border-gray-800 p-4">
-    <h3 class="text-sm font-semibold text-gray-300 mb-3">Hyperparameters</h3>
-    <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-      <div>
-        <label class="block text-xs font-medium text-gray-500 mb-1 uppercase tracking-wide">Max Turns</label>
-        <input type="number" name="max_turns" min="1" max="50" placeholder="5 (default)" value="{{ form.max_turns|default:'' }}"
-               class="w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-accent/50">
-      </div>
-      <div>
-        <label class="block text-xs font-medium text-gray-500 mb-1 uppercase tracking-wide">Language</label>
-        <input type="text" name="language" placeholder="English (default)" value="{{ form.language|default:'' }}"
-               class="w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-accent/50">
-      </div>
-      <div>
-        <label class="block text-xs font-medium text-gray-500 mb-1 uppercase tracking-wide">Repetitions</label>
-        <input type="number" name="n_repetitions" min="1" max="20" placeholder="3 recommended" value="{{ form.n_repetitions|default:'3' }}"
-               class="w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-accent/50">
-        <p class="mt-1 text-xs text-gray-600">More reps narrow the confidence band.</p>
-      </div>
-    </div>
-    <details class="mt-4">
-      <summary class="text-xs text-gray-400 cursor-pointer select-none">Generation config override (JSON)</summary>
-      <textarea name="gen_config_json" rows="5" spellcheck="false" placeholder='{"judge_params": {"temperature": 0}}'
-                class="mt-2 w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-accent/50 resize-y">{{ form.gen_config_json|default:'' }}</textarea>
-      <p class="text-xs text-gray-500">Same keys as New Audit. Tip: set <code>temperature: 0</code> for auditor and judge to reduce grader noise.</p>
-    </details>
-  </div>
+  {% include "partials/audit_hyperparameters.html" %}
 
-  <button type="submit" class="w-full px-4 py-2.5 rounded-lg bg-accent text-white text-sm font-medium hover:bg-accent-hover transition-colors">
+  <button type="submit" data-busy-label="Creating…" class="w-full px-4 py-2.5 rounded-lg bg-accent text-white text-sm font-medium hover:bg-accent-hover transition-colors disabled:opacity-60 disabled:cursor-not-allowed">
     Create Schedule
   </button>
 </form>
+<script>
+(function() {
+  const picker = document.getElementById('interval-picker');
+  const cronField = document.getElementById('cron-field');
+  const hint = document.getElementById('first-run-hint');
+  if (!picker || !cronField) return;
+  function sync() {
+    const isCron = picker.value === 'cron';
+    cronField.classList.toggle('hidden', !isCron);
+    cronField.querySelector('input').required = isCron;
+    hint.textContent = isCron ? 'Empty = next cron firing. Otherwise first firing at or after this time.' : 'Empty = within a minute.';
+  }
+  picker.addEventListener('change', sync);
+  sync();
+
+  // A set picked other than the source run's drops the pinned version.
+  const setPicker = document.getElementById('schedule-set-picker');
+  const pinned = document.getElementById('pinned-version');
+  if (setPicker && pinned) {
+    const originalSetId = setPicker.value;
+    setPicker.addEventListener('change', () => {
+      if (setPicker.value === originalSetId) return;
+      pinned.remove();
+      document.getElementById('pin-latest').classList.remove('hidden');
+    });
+  }
+})();
+</script>
+{% include "partials/audit_form_js.html" %}
 {% endif %}
 {% endblock %}
