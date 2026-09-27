@@ -35,21 +35,11 @@ RUN pip install uv \
     && uv sync --frozen --no-install-project --no-dev
 ENV PATH="/app/.venv/bin:$PATH"
 
-# --- Application code --------------------------------------------------------
-COPY . .
-
-# Collect static files so Django can serve them without DEBUG.
-RUN python manage.py collectstatic --noinput
-
-# --- Non-root user ------------------------------------------------------------
-RUN useradd --create-home appuser \
-    && mkdir -p /app/staticfiles \
-    && chown -R appuser:appuser /app
-USER appuser
-
 # --- Environment defaults for the Space --------------------------------------
 # SIMPLEAUDIT_MINIMAL=1 enables the minimal config path (SQLite + embedded Hatchet).
 # Override via HF Space Secrets for anything sensitive.
+# Must be set BEFORE collectstatic: Django settings select the DB engine from it,
+# and the postgres driver is an optional extra not installed in this image.
 ENV SIMPLEAUDIT_MINIMAL=1 \
     PORT=7860 \
     DJANGO_SECRET_KEY=hf-space-demo-secret-key-change-in-production \
@@ -62,6 +52,18 @@ ENV SIMPLEAUDIT_MINIMAL=1 \
     DEMO_MODE=true \
     DEMO_USERNAME=studio \
     DEMO_PASSWORD=admin123
+
+# --- Application code --------------------------------------------------------
+COPY . .
+
+# Collect static files so Django can serve them without DEBUG.
+RUN python manage.py collectstatic --noinput
+
+# --- Non-root user ------------------------------------------------------------
+RUN useradd --create-home appuser \
+    && mkdir -p /app/staticfiles \
+    && chown -R appuser:appuser /app
+USER appuser
 
 EXPOSE 7860
 
