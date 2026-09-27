@@ -1,0 +1,248 @@
+{% extends "base.html" %}
+{% block title %}Review experiment — SimpleAudit{% endblock %}
+{% block content %}
+<form method="post" id="review-form" class="max-w-5xl">
+  {% csrf_token %}
+  <input type="hidden" name="row_count" id="row-count" value="{{ row_count }}">
+  {# The original design, so "Back to design" restores every choice. #}
+  {% for key, value in design_post %}<input type="hidden" name="design__{{ key }}" value="{{ value }}">{% endfor %}
+
+  <div class="mb-4">
+    <button type="submit" name="action" value="edit" formnovalidate class="text-xs text-gray-500 hover:text-accent">← Back to design</button>
+  </div>
+
+  <h1 class="text-lg font-semibold text-gray-100 mb-1">Review experiment</h1>
+  <p class="text-sm text-gray-500 mb-5">Nothing has run yet. Untick runs you don't want, edit or duplicate any run, then launch.</p>
+
+  {% if error %}
+  <div class="mb-4 text-sm text-red-300 bg-red-900/30 rounded-lg px-4 py-2">{{ error }}</div>
+  {% endif %}
+
+  <div class="bg-surface-raised rounded-xl border border-gray-800 p-4 mb-4 space-y-4">
+    <div>
+      <label for="experiment-name" class="block text-xs font-medium text-gray-500 mb-1 uppercase tracking-wide">Experiment name</label>
+      <input id="experiment-name" type="text" name="experiment_name" maxlength="250" required value="{{ experiment_name }}"
+             class="w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-accent/50">
+    </div>
+    {% if fixed %}
+    <div>
+      <p class="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1.5">Same in every run</p>
+      <dl class="grid grid-cols-[auto,1fr] gap-x-3 gap-y-0.5 text-xs">
+        {% for label, value in fixed %}<dt class="text-gray-500">{{ label }}</dt><dd class="text-gray-300 truncate">{{ value }}</dd>{% endfor %}
+      </dl>
+    </div>
+    {% endif %}
+    {% if repeat %}
+    <div class="text-sm text-gray-300 bg-accent/10 border border-accent/30 rounded-lg px-3 py-2">
+      <p><span class="text-accent">↻ Repeats {{ repeat_label }}.</span>
+        {% if repeat.start == "at" %}Nothing runs now; the first runs start {{ repeat_first_local|date:"D M j, H:i" }} ({{ repeat.timezone }}).
+        {% else %}Runs start now, then repeat from {{ repeat_first_local|date:"D M j, H:i" }} ({{ repeat.timezone }}).{% endif %}</p>
+      <p class="text-xs text-gray-500 mt-0.5">Each selected run becomes a monitor, charted over time on the experiment page.</p>
+    </div>
+    {% endif %}
+    {% for w in design_warnings %}
+    <p class="text-xs text-amber-300 bg-amber-900/20 rounded-lg px-3 py-2">⚠ {{ w }}</p>
+    {% endfor %}
+  </div>
+
+  <div class="bg-surface-raised rounded-xl border border-gray-800 p-4 mb-4">
+    <div class="flex flex-wrap items-center justify-between gap-2 mb-3">
+      <h2 class="text-sm font-semibold text-gray-300">Runs</h2>
+      <div class="flex gap-2 text-xs">
+        <button type="button" data-select="all" class="px-2 py-1 rounded bg-surface-overlay text-gray-400 hover:text-gray-200">Select all</button>
+        <button type="button" data-select="none" class="px-2 py-1 rounded bg-surface-overlay text-gray-400 hover:text-gray-200">Select none</button>
+      </div>
+    </div>
+    <div class="overflow-x-auto">
+      <table class="w-full text-sm" id="runs-table">
+        <thead>
+          <tr class="border-b border-gray-800 text-xs text-gray-500 uppercase">
+            <th class="px-2 py-2 w-8"><span class="sr-only">Include</span></th>
+            {% for key, label in columns %}<th class="text-left px-2 py-2 font-medium">{{ label }}</th>{% endfor %}
+            <th class="text-left px-2 py-2 font-medium">Run name · settings</th>
+            <th class="px-2 py-2"><span class="sr-only">Actions</span></th>
+          </tr>
+        </thead>
+        {% for r in rows %}
+        <tbody data-row class="border-b border-gray-800/50">
+          <tr>
+            <td class="px-2 py-2 align-top">
+              <input type="hidden" name="run-{{ r.i }}-spec" value="{{ r.spec }}">
+              <input type="hidden" name="run-{{ r.i }}-duplicate" value="{% if r.duplicate %}1{% endif %}" data-duplicate-flag>
+              <input type="checkbox" name="run-{{ r.i }}-include" value="1" {% if r.include %}checked{% endif %} data-include aria-label="Include this run">
+            </td>
+            {% for v in r.cells %}<td class="px-2 py-2 align-top text-gray-200 whitespace-nowrap">{{ v }}</td>{% endfor %}
+            <td class="px-2 py-2 align-top min-w-[14rem]">
+              <input type="text" name="run-{{ r.i }}-name" value="{{ r.name }}" maxlength="250" aria-label="Run name"
+                     class="w-full px-2 py-1 rounded bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-2 focus:ring-accent/50">
+              <p class="mt-1 text-[11px] text-gray-500" data-settings-summary></p>
+              {% for w in r.warnings %}<p class="mt-1 text-[11px] text-amber-300">⚠ {{ w }}</p>{% endfor %}
+            </td>
+            <td class="px-2 py-2 align-top text-right whitespace-nowrap">
+              <button type="button" data-edit class="text-xs text-gray-400 hover:text-accent" aria-expanded="false">Edit</button>
+              <button type="button" data-duplicate class="ml-2 text-xs text-gray-400 hover:text-accent" title="Copy this run below, then change the copy">Duplicate</button>
+              <button type="button" data-remove class="ml-2 text-xs text-red-400 hover:text-red-300 {% if not r.duplicate %}hidden{% endif %}" title="Remove this copy">Remove</button>
+            </td>
+          </tr>
+          <tr data-edit-panel class="hidden">
+            <td></td>
+            <td colspan="{{ columns|length|add:2 }}" class="px-2 pb-3">
+              <div class="rounded-lg bg-surface-overlay/50 p-3 space-y-3">
+                <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <label class="text-[11px] text-gray-500 uppercase">Max turns
+                    <input type="number" min="1" max="50" name="run-{{ r.i }}-max_turns" value="{{ r.max_turns }}" placeholder="5 (default)" data-setting="max_turns"
+                           class="mt-1 w-full px-2 py-1 rounded bg-surface-overlay border border-gray-700 text-xs normal-case text-gray-200">
+                  </label>
+                  <label class="text-[11px] text-gray-500 uppercase">Language
+                    <input type="text" name="run-{{ r.i }}-language" value="{{ r.language }}" placeholder="English (default)" data-setting="language" list="review-languages"
+                           class="mt-1 w-full px-2 py-1 rounded bg-surface-overlay border border-gray-700 text-xs normal-case text-gray-200">
+                  </label>
+                  <label class="text-[11px] text-gray-500 uppercase">Repetitions
+                    <input type="number" min="1" max="20" name="run-{{ r.i }}-n_repetitions" value="{{ r.n_repetitions }}" placeholder="1" data-setting="n_repetitions"
+                           class="mt-1 w-full px-2 py-1 rounded bg-surface-overlay border border-gray-700 text-xs normal-case text-gray-200">
+                  </label>
+                </div>
+                <label class="block text-[11px] text-gray-500 uppercase">Generation config override (JSON) for this run
+                  <textarea name="run-{{ r.i }}-gen_config_json" rows="4" spellcheck="false" data-setting="gen_config" placeholder='{"target_params": {"temperature": 0}}'
+                            class="mt-1 w-full px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs font-mono normal-case text-gray-200 resize-y">{{ r.gen_config_json }}</textarea>
+                  <span class="block normal-case text-red-400 hidden" data-json-error></span>
+                </label>
+              </div>
+            </td>
+          </tr>
+        </tbody>
+        {% endfor %}
+      </table>
+      <datalist id="review-languages">
+        <option value="English"></option><option value="Norwegian"></option><option value="Spanish"></option><option value="French"></option>
+        <option value="German"></option><option value="Danish"></option><option value="Swedish"></option><option value="Finnish"></option>
+      </datalist>
+    </div>
+  </div>
+
+  <div class="sticky bottom-0 z-10 pb-4 pt-2 bg-gradient-to-t from-surface via-surface/90 to-transparent">
+    <div class="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-gray-700 bg-surface-raised px-4 py-3 shadow-lg">
+      <p class="text-sm text-gray-300" id="review-summary" aria-live="polite"></p>
+      <div class="flex gap-2">
+        <button type="submit" name="action" value="edit" formnovalidate class="px-3 py-2 rounded-lg bg-surface-overlay text-gray-300 text-sm hover:text-white">Back</button>
+        <button type="submit" name="action" value="launch" id="launch-btn" class="px-4 py-2 rounded-lg bg-accent text-white text-sm font-medium hover:bg-accent-hover disabled:opacity-60 disabled:cursor-not-allowed">Launch</button>
+      </div>
+    </div>
+  </div>
+</form>
+
+<script>
+(function() {
+  const form = document.getElementById('review-form');
+  const table = document.getElementById('runs-table');
+  const launch = document.getElementById('launch-btn');
+  const summary = document.getElementById('review-summary');
+  const rowCount = document.getElementById('row-count');
+  const MAX_RUNS = {{ max_runs }};
+  const REPEAT = "{% if repeat %}{{ repeat.start }}{% endif %}";
+
+  const rows = () => [...table.querySelectorAll('[data-row]')];
+
+  function settingsText(row) {
+    const v = k => (row.querySelector(`[data-setting="${k}"]`).value || '').trim();
+    const json = v('gen_config');
+    const custom = json && json !== '{}';
+    return `${v('max_turns') || '5'} turns · ${v('language') || 'English'} · ${v('n_repetitions') || 1}×` +
+           (custom ? ' · custom generation config' : '');
+  }
+
+  function update() {
+    const all = rows();
+    const n = all.filter(r => r.querySelector('[data-include]').checked).length;
+    all.forEach(r => {
+      r.classList.toggle('opacity-40', !r.querySelector('[data-include]').checked);
+      r.querySelector('[data-settings-summary]').textContent = settingsText(r);
+    });
+    const over = n > MAX_RUNS;
+    summary.innerHTML = over
+      ? `<span class="text-red-300">${n} runs selected: over the limit of ${MAX_RUNS}.</span>`
+      : `${n} of ${all.length} runs selected`;
+    const runsWord = n === 1 ? '1 run' : `${n} runs`;
+    launch.textContent = !REPEAT ? `Launch ${runsWord}`
+      : REPEAT === 'at' ? `Create ${n === 1 ? '1 monitor' : n + ' monitors'}`
+      : `Launch ${runsWord} + monitors`;
+    launch.disabled = n === 0 || over;
+  }
+
+  function togglePanel(row, open) {
+    const panel = row.querySelector('[data-edit-panel]');
+    const btn = row.querySelector('[data-edit]');
+    const show = open === undefined ? panel.classList.contains('hidden') : open;
+    panel.classList.toggle('hidden', !show);
+    btn.setAttribute('aria-expanded', show);
+    btn.textContent = show ? 'Done' : 'Edit';
+  }
+
+  function duplicate(row) {
+    const index = Number(rowCount.value);
+    const copy = row.cloneNode(true);
+    copy.querySelectorAll('[name]').forEach(el => { el.name = el.name.replace(/^run-\d+-/, `run-${index}-`); });
+    // Keep typed-but-unsaved values (cloneNode copies attributes, not live values).
+    row.querySelectorAll('input[type="text"], input[type="number"], textarea').forEach((src, k) => {
+      copy.querySelectorAll('input[type="text"], input[type="number"], textarea')[k].value = src.value;
+    });
+    copy.querySelector('[data-duplicate-flag]').value = '1';
+    copy.querySelector('[data-include]').checked = true;
+    const nameInput = copy.querySelector(`[name="run-${index}-name"]`);
+    nameInput.value = nameInput.value + ' (copy)';
+    copy.querySelector('[data-remove]').classList.remove('hidden');
+    rowCount.value = index + 1;
+    row.after(copy);
+    togglePanel(copy, true);
+    nameInput.focus();
+    nameInput.select();
+    update();
+  }
+
+  table.addEventListener('click', e => {
+    const row = e.target.closest('[data-row]');
+    if (!row) return;
+    if (e.target.matches('[data-edit]')) togglePanel(row);
+    else if (e.target.matches('[data-duplicate]')) duplicate(row);
+    // Defer removal until the click finishes (htmx listens on document).
+    else if (e.target.matches('[data-remove]')) setTimeout(() => { row.remove(); update(); });
+  });
+  table.addEventListener('change', update);
+  table.addEventListener('input', e => { if (e.target.matches('[data-setting]')) update(); });
+  form.querySelectorAll('[data-select]').forEach(btn => btn.addEventListener('click', () => {
+    rows().forEach(r => { r.querySelector('[data-include]').checked = btn.dataset.select === 'all'; });
+    update();
+  }));
+
+  form.addEventListener('submit', e => {
+    if (!e.submitter || e.submitter.value !== 'launch') return;
+    // Check every ticked run's JSON before sending; open the first bad one.
+    let firstBad = null;
+    rows().forEach(r => {
+      const ta = r.querySelector('[data-setting="gen_config"]');
+      const err = r.querySelector('[data-json-error]');
+      err.classList.add('hidden');
+      const raw = ta.value.trim();
+      if (!r.querySelector('[data-include]').checked || !raw) return;
+      try {
+        const parsed = JSON.parse(raw);
+        if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) throw new Error('must be a JSON object');
+      } catch (ex) {
+        err.textContent = 'Invalid JSON: ' + ex.message;
+        err.classList.remove('hidden');
+        firstBad = firstBad || r;
+      }
+    });
+    if (firstBad) {
+      e.preventDefault();
+      togglePanel(firstBad, true);
+      firstBad.querySelector('[data-setting="gen_config"]').focus();
+      return;
+    }
+    setTimeout(() => { launch.disabled = true; launch.textContent = 'Launching…'; });
+  });
+
+  update();
+})();
+</script>
+{% endblock %}

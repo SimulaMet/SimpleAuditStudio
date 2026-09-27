@@ -31,11 +31,11 @@
 <div class="bg-surface-raised rounded-xl border border-gray-800 p-4">
   <form method="get" action="/">
     <div class="flex items-center justify-between mb-3 flex-wrap gap-2">
-      <h2 class="text-sm font-semibold text-gray-300">Audit Runs</h2>
+      <h2 class="text-sm font-semibold text-gray-300">Runs</h2>
       <div class="flex items-center gap-2 flex-wrap">
         <!-- Search input -->
         <input type="hidden" name="status" value="{{ current_status }}">
-        <input type="text" name="q" placeholder="Search runs…" value="{{ search_query }}" aria-label="Search audit runs"
+        <input type="text" name="q" placeholder="Search runs…" value="{{ search_query }}" aria-label="Search runs"
                class="w-36 px-2 py-1 rounded-lg bg-surface-overlay border border-gray-700 text-xs text-gray-300 focus:outline-none focus:ring-2 focus:ring-accent/50">
         <!-- Status filter tabs -->
         <div class="flex gap-1 text-xs">
@@ -47,7 +47,7 @@
         </div>
         <button type="submit" class="px-2 py-1 rounded-lg bg-surface-overlay text-gray-500 text-xs hover:text-gray-300 transition-colors" title="Search">⌕</button>
         <a href="{% url 'dashboard_export' %}{% if current_status %}?status={{ current_status }}{% endif %}{% if search_query %}{% if not current_status %}?{% else %}&{% endif %}q={{ search_query|urlencode }}{% endif %}" class="px-2.5 py-1.5 rounded-lg bg-surface-overlay text-gray-400 text-xs font-medium hover:text-gray-200 transition-colors">Export CSV</a>
-        <a href="{% url 'new_audit' %}" class="px-3 py-1.5 rounded-lg bg-accent text-white text-xs font-medium hover:bg-accent-hover">+ New Audit</a>
+        <a href="{% url 'new_experiment' %}" class="px-3 py-1.5 rounded-lg bg-accent text-white text-xs font-medium hover:bg-accent-hover">+ New Audit</a>
       </div>
     </div>
   </form>
@@ -78,7 +78,7 @@
       </thead>
       <tbody>
         {% for run in runs %}
-        <tr class="border-b border-gray-800/50 hover:bg-surface-overlay/50 cursor-pointer" onclick="location='/audits/{{ run.id }}/'">
+        <tr class="border-b border-gray-800/50 hover:bg-surface-overlay/50 cursor-pointer" onclick="location='/runs/{{ run.id }}/'">
           <td class="px-3 py-2.5 font-medium text-gray-200">#{{ run.id }}</td>
           <td class="px-3 py-2.5 text-gray-300 max-w-[16rem] truncate" title="{{ run.name }}">{{ run.name }}</td>
           <td class="px-3 py-2.5 text-gray-300">{{ run.scenario_set_version.scenario_set.name|default:"—" }}</td>
@@ -97,19 +97,19 @@
           <td class="px-3 py-2.5 text-gray-500 text-xs">{{ run.created_at|date:"M j, H:i" }}</td>
           <td class="px-3 py-2.5 text-right whitespace-nowrap" onclick="event.stopPropagation()">
             {% if run.status != "completed" and run.status != "failed" and run.status != "cancelled" %}
-            <form method="post" action="/audits/{{ run.id }}/cancel/" class="inline mr-1" onsubmit="return confirm('Cancel run #{{ run.id }}?')">
+            <form method="post" action="/runs/{{ run.id }}/cancel/" class="inline mr-1" onsubmit="return confirm('Cancel run #{{ run.id }}?')">
               {% csrf_token %}
-              <button type="submit" title="Cancel this audit" aria-label="Cancel this audit" class="inline-flex items-center justify-center w-7 h-7 rounded-md text-red-400 hover:text-red-300 hover:bg-red-900/30 transition-colors">
+              <button type="submit" title="Cancel this run" aria-label="Cancel this run" class="inline-flex items-center justify-center w-7 h-7 rounded-md text-red-400 hover:text-red-300 hover:bg-red-900/30 transition-colors">
                 <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
               </button>
             </form>
             {% endif %}
-            <a href="/audits/new/?clone_from={{ run.id }}" title="Clone this audit" aria-label="Clone this audit" class="group/clone inline-flex items-center justify-center w-7 h-7 rounded-md text-gray-500 hover:text-accent hover:bg-surface-overlay transition-colors">
+            <a href="/experiments/new/?clone_from={{ run.id }}" title="Clone this run" aria-label="Clone this run" class="group/clone inline-flex items-center justify-center w-7 h-7 rounded-md text-gray-500 hover:text-accent hover:bg-surface-overlay transition-colors">
               <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
             </a>
-            <form method="post" action="/audits/{{ run.id }}/archive/" class="inline">
+            <form method="post" action="/runs/{{ run.id }}/archive/" class="inline">
               {% csrf_token %}
-              <button type="submit" title="{% if run.archived %}Unarchive this audit{% else %}Archive this audit{% endif %}" aria-label="{% if run.archived %}Unarchive this audit{% else %}Archive this audit{% endif %}" class="group/arch inline-flex items-center justify-center w-7 h-7 rounded-md text-gray-500 hover:text-gray-200 hover:bg-surface-overlay transition-colors">
+              <button type="submit" title="{% if run.archived %}Unarchive this run{% else %}Archive this run{% endif %}" aria-label="{% if run.archived %}Unarchive this run{% else %}Archive this run{% endif %}" class="group/arch inline-flex items-center justify-center w-7 h-7 rounded-md text-gray-500 hover:text-gray-200 hover:bg-surface-overlay transition-colors">
                 {% if run.archived %}
                 <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg>
                 {% else %}
@@ -124,7 +124,7 @@
     </table>
   </div>
   {% else %}
-  <p class="text-sm text-gray-500 py-8 text-center">No audits found.</p>
+  <p class="text-sm text-gray-500 py-8 text-center">No runs found.</p>
   {% endif %}
 
   <!-- Pagination -->

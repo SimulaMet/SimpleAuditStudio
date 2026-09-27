@@ -1,8 +1,8 @@
 {% extends "base.html" %}
-{% block title %}{{ scenario_name }} — {{ run.name }} (Audit #{{ run.id }}){% endblock %}
+{% block title %}{{ scenario_name }} — {{ run.name }} (Run #{{ run.id }}){% endblock %}
 {% block content %}
 <div class="mb-4">
-  <a href="{% url 'audit_detail' run.id %}" class="text-xs text-gray-500 hover:text-accent">← Back to {{ run.name }} (Audit #{{ run.id }})</a>
+  <a href="{% url 'run_detail' run.id %}" class="text-xs text-gray-500 hover:text-accent">← Back to {{ run.name }} (Run #{{ run.id }})</a>
 </div>
 
 <!-- Header -->
@@ -12,7 +12,7 @@
     {% include "partials/severity_badge.html" with sev=severity %}
     {% if is_repeated %}<span class="text-xs text-gray-500">{{ n_reps }}× · {{ agreement_rate|floatformat:0 }}% agree</span>{% endif %}
   </div>
-  <a href="{% url 'audit_export' run.id %}?format=json" class="px-3 py-1.5 rounded-lg bg-surface-overlay text-gray-400 text-xs font-medium hover:text-gray-200 transition-colors">Export JSON</a>
+  <a href="{% url 'run_export' run.id %}?format=json" class="px-3 py-1.5 rounded-lg bg-surface-overlay text-gray-400 text-xs font-medium hover:text-gray-200 transition-colors">Export JSON</a>
 </div>
 
 {% if error %}

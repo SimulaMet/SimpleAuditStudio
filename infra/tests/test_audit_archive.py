@@ -36,7 +36,7 @@ class AuditArchiveTest(TestCase):
 
         resp = self.client.get("/")
         self.assertEqual(resp.status_code, 200)
-        self.assertNotIn(f"/audits/{self.run.id}/", resp.content.decode())
+        self.assertNotIn(f"/runs/{self.run.id}/", resp.content.decode())
 
     def test_archived_run_visible_under_archived_filter(self):
         self.run.archived = True
@@ -44,20 +44,20 @@ class AuditArchiveTest(TestCase):
 
         resp = self.client.get("/?status=archived")
         self.assertEqual(resp.status_code, 200)
-        self.assertIn(f"/audits/{self.run.id}/", resp.content.decode())
+        self.assertIn(f"/runs/{self.run.id}/", resp.content.decode())
 
     def test_unarchived_run_visible_in_default_dashboard(self):
         resp = self.client.get("/")
         self.assertEqual(resp.status_code, 200)
-        self.assertIn(f"/audits/{self.run.id}/", resp.content.decode())
+        self.assertIn(f"/runs/{self.run.id}/", resp.content.decode())
 
     def test_archive_toggle_via_post(self):
-        resp = self.client.post(f"/audits/{self.run.id}/archive/")
+        resp = self.client.post(f"/runs/{self.run.id}/archive/")
         self.assertEqual(resp.status_code, 302)
         self.run.refresh_from_db()
         self.assertTrue(self.run.archived)
 
-        resp = self.client.post(f"/audits/{self.run.id}/archive/")
+        resp = self.client.post(f"/runs/{self.run.id}/archive/")
         self.assertEqual(resp.status_code, 302)
         self.run.refresh_from_db()
         self.assertFalse(self.run.archived)
@@ -71,7 +71,7 @@ class AuditArchiveTest(TestCase):
         other_client.session["project_id"] = self.project.pk
         other_client.session.save()
 
-        resp = other_client.post(f"/audits/{self.run.id}/archive/")
+        resp = other_client.post(f"/runs/{self.run.id}/archive/")
         self.assertIn(resp.status_code, (302, 403, 404))
         self.run.refresh_from_db()
         self.assertFalse(self.run.archived)
@@ -79,14 +79,14 @@ class AuditArchiveTest(TestCase):
     def test_dashboard_rows_have_clone_and_archive_actions(self):
         resp = self.client.get("/")
         html = resp.content.decode()
-        self.assertIn(f"/audits/new/?clone_from={self.run.id}", html)
-        self.assertIn(f"/audits/{self.run.id}/archive/", html)
+        self.assertIn(f"/experiments/new/?clone_from={self.run.id}", html)
+        self.assertIn(f"/runs/{self.run.id}/archive/", html)
 
     def test_archived_run_detail_still_accessible(self):
         self.run.archived = True
         self.run.save(update_fields=["archived"])
 
-        resp = self.client.get(f"/audits/{self.run.id}/")
+        resp = self.client.get(f"/runs/{self.run.id}/")
         self.assertEqual(resp.status_code, 200)
 
     def test_progress_column_shows_repetition_count(self):
