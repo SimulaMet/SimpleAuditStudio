@@ -31,12 +31,12 @@ import threading as _threading
 from datetime import timedelta
 
 from django.conf import settings
-from django.db import transaction
 from django.utils import timezone
 from hatchet_sdk import ClientConfig, Context, Hatchet, Worker
 from hatchet_sdk.config import ClientTLSConfig
 from pydantic import BaseModel
 
+from infra.db import retry_if_locked, with_fresh_connection
 from infra.simpleaudit_package import resolve_engine_provenance
 
 logger = logging.getLogger(__name__)
@@ -79,6 +79,21 @@ MAX_SCENARIO_ATTEMPTS = SCENARIO_RETRIES + 1
 # concurrency key on the task and the durable result checks), so resuming a
 # run that is merely slow or queued behind other runs is harmless.
 RESUME_STALE_MINUTES = 10
+
+# Errors a retry cannot fix (wrong URL, model id or key): the first failure is final.
+_PERMANENT_ERROR_MARKERS = (
+    "NotFoundError", "AuthenticationError", "PermissionDeniedError", "BadRequestError",
+    "Error code: 400", "Error code: 401", "Error code: 403", "Error code: 404",
+    "invalid_api_key", "model_not_found",
+)
+
+
+def _is_permanent_error(text: str) -> bool:
+    return any(marker in (text or "") for marker in _PERMANENT_ERROR_MARKERS)
+
+
+class ScenarioAttemptFailed(RuntimeError):
+    """Raised after a provisional failure is recorded, so Hatchet retries the task."""
 
 _ACTIVE_STATUSES = (
     "queued", "preparing", "target_execution", "auditing", "judging",
@@ -302,11 +317,10 @@ def _scenario_execute_impl(workflow_input: ScenarioInput, ctx: Context) -> dict:
     # instead of burning model calls on a scenario that keeps crashing.
     attempt = _attempt_count(run_id, version_item_id) + 1
     if attempt > MAX_SCENARIO_ATTEMPTS:
-        with transaction.atomic():
-            upsert_scenario_result(
-                run_id, version_item_id, status="failed", attempts=attempt - 1,
-                result={"error": f"Gave up after {attempt - 1} attempts"},
-            )
+        upsert_scenario_result(
+            run_id, version_item_id, status="failed", attempts=attempt - 1,
+            result={"error": f"Gave up after {attempt - 1} attempts"},
+        )
         _sync_run_counters(run_id)
         append_event(run_id, version_item_id, "scenario_failed", {"error": f"Gave up after {attempt - 1} attempts"})
         _maybe_finalize(run_id)
@@ -541,10 +555,12 @@ def _scenario_execute_impl(workflow_input: ScenarioInput, ctx: Context) -> dict:
         if _has_terminal_result(run_id, version_item_id, completed_only=True):
             # A concurrent duplicate already succeeded; its result stands.
             return {"status": "skipped_existing"}
-        final = attempt >= MAX_SCENARIO_ATTEMPTS
+        final = attempt >= MAX_SCENARIO_ATTEMPTS or _is_permanent_error(str(exc))
         append_event(run_id, version_item_id, "scenario_failed", {"error": str(exc), "final": final})
-        with transaction.atomic():
-            upsert_scenario_result(run_id, version_item_id, status="failed", attempts=attempt, result={"error": str(exc)})
+        upsert_scenario_result(
+            run_id, version_item_id, status="failed",
+            attempts=MAX_SCENARIO_ATTEMPTS if final else attempt, result={"error": str(exc)},
+        )
         _sync_run_counters(run_id)
         if not final:
             raise
@@ -557,18 +573,24 @@ def _scenario_execute_impl(workflow_input: ScenarioInput, ctx: Context) -> dict:
         return {"status": "skipped_existing"}
 
     failed = severity.upper() == "ERROR"
-    with transaction.atomic():
-        upsert_scenario_result(
-            run_id, version_item_id, status="failed" if failed else "completed", attempts=attempt, result=result_payload
-        )
+    error = str((result_payload.get("judgment") or {}).get("error") or result_payload.get("summary") or "") if failed else ""
+    # A failed attempt is final on the last attempt or for errors a retry can't fix;
+    # otherwise it is provisional, stored as failed with attempts < max (so not terminal).
+    final = not failed or attempt >= MAX_SCENARIO_ATTEMPTS or _is_permanent_error(error)
+    upsert_scenario_result(
+        run_id, version_item_id, status="failed" if failed else "completed",
+        attempts=MAX_SCENARIO_ATTEMPTS if failed and final else attempt, result=result_payload,
+    )
     _sync_run_counters(run_id)
 
-    append_event(
-        run_id,
-        version_item_id,
-        "scenario_completed" if not failed else "scenario_failed",
-        {"attempt": attempt, "severity": severity},
-    )
+    payload = {"attempt": attempt, "severity": severity}
+    if failed:
+        payload.update(error=error, final=final)
+    append_event(run_id, version_item_id, "scenario_failed" if failed else "scenario_completed", payload)
+    if not final:
+        # Without this the task "succeeds", Hatchet never retries, and the run
+        # waits for the idle sweeper (RESUME_STALE_MINUTES) to resubmit it.
+        raise ScenarioAttemptFailed(f"attempt {attempt} failed: {error}")
     _maybe_finalize(run_id)
     return {"status": "failed" if failed else "completed", "attempt": attempt, "severity": severity}
 
@@ -609,6 +631,7 @@ def _has_terminal_result(run_id: str, version_item_id: str, completed_only: bool
     return qs.filter(version_item_id=str(version_item_id)).exists()
 
 
+@retry_if_locked
 def _sync_run_counters(run_id: str) -> None:
     """Recompute the run's counters from the durable result rows.
 
@@ -635,6 +658,7 @@ def _provenance_mismatch(run) -> bool:
     return bool(run.git_commit and WORKER_GIT_COMMIT and run.git_commit != WORKER_GIT_COMMIT)
 
 
+@retry_if_locked
 def _maybe_finalize(run_id: str) -> str | None:
     """Complete the run once every pinned scenario has a final result.
 
@@ -660,6 +684,18 @@ def _maybe_finalize(run_id: str) -> str | None:
             status=AuditRun.Status.FAILED, error_code="SIMPLEAUDIT_VERSION_MISMATCH", finished_at=timezone.now(),
         ):
             append_event(run_id, "_run", "run_failed", {"code": "SIMPLEAUDIT_VERSION_MISMATCH"})
+        return "failed"
+    from audits.events import ScenarioResult
+
+    if not ScenarioResult.objects.filter(run_id=run.pk, status="completed").exists():
+        # Every scenario failed (usually a wrong URL, model id or key): the run failed.
+        first = ScenarioResult.objects.filter(run_id=run.pk).order_by("id").values_list("result", flat=True).first() or {}
+        error = str((first.get("judgment") or {}).get("error") or first.get("error") or first.get("summary") or "")
+        if AuditRun.objects.filter(pk=run.pk, status__in=_ACTIVE_STATUSES).update(
+            status=AuditRun.Status.FAILED, error_code="ALL_SCENARIOS_FAILED", completed_scenarios=done,
+            error_message=f"Every scenario failed. First error: {error}"[:2000], finished_at=timezone.now(),
+        ):
+            append_event(run_id, "_run", "run_failed", {"code": "ALL_SCENARIOS_FAILED", "error": error})
         return "failed"
     if AuditRun.objects.filter(pk=run.pk, status__in=_ACTIVE_STATUSES).update(
         status=AuditRun.Status.COMPLETED, finished_at=timezone.now(), completed_scenarios=done,
@@ -762,6 +798,7 @@ def _run_finalize_impl(workflow_input: FinalizeInput, ctx: Context) -> dict:
     return {"status": status, "scenarios": done}
 
 
+@retry_if_locked
 def _mark_run_failed(run_id: str, code: str) -> None:
     from audits.models import AuditRun
 
@@ -824,7 +861,7 @@ def _register_tasks(client: Hatchet) -> None:
         # handled by per-request HTTP timeouts, engine retries, and the
         # stuck-run sweeper instead.
         execution_timeout=timedelta(days=365),
-    )(_scenario_execute_impl)
+    )(with_fresh_connection(_scenario_execute_impl))
     # Legacy: no longer submitted (runs finalize inline when their last scenario
     # lands, with the sweeper as backstop). Kept registered so finalize tasks
     # already queued in Hatchet from older submissions still resolve.
@@ -833,7 +870,7 @@ def _register_tasks(client: Hatchet) -> None:
         input_validator=FinalizeInput,
         execution_timeout="60s",
         retries=0,
-    )(_run_finalize_impl)
+    )(with_fresh_connection(_run_finalize_impl))
     _tasks_client_id = id(client)
 
 
@@ -966,8 +1003,11 @@ def _stuck_run_sweeper(interval: int = 60, stale_minutes: int = RESUME_STALE_MIN
     import time
 
     logger.info("Run sweeper started (interval=%ds, resume after %dmin idle)", interval, stale_minutes)
+    from django.db import close_old_connections
+
     while True:
         time.sleep(interval)
+        close_old_connections()   # this thread lives forever; recycle dead or aged connections
         try:
             _sweep_once(stale_minutes)
         except Exception as exc:  # noqa: BLE001 - sweeper must never crash
