@@ -1,0 +1,65 @@
+{% comment %}
+Target / auditor / judge pickers. Shared by New Audit and Schedules.
+Context: connections, clone (optional prefill with *_model_id).
+{% endcomment %}
+<div class="bg-surface-raised rounded-xl border border-gray-800 p-4">
+  <div class="flex items-center justify-between mb-3">
+    <h3 class="text-sm font-semibold text-gray-300">Models</h3>
+    <a href="{% url 'models' %}" target="_blank" class="text-xs text-accent hover:text-accent-hover hover:underline">＋ New</a>
+  </div>
+  <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+    <div>
+      <label class="block text-xs font-medium text-gray-500 mb-1 uppercase tracking-wide">Target <span id="no-key-target" class="text-yellow-500 normal-case hidden">⚠ no key set</span></label>
+      <select name="target_model" required class="w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-accent/50">
+        {% for conn in connections %}
+          {% if conn.models.all %}
+          <optgroup label="{{ conn.name }}">
+            {% for m in conn.models.all %}
+            <option value="{{ m.id }}" data-has-key="{% if m.has_key %}1{% else %}0{% endif %}" {% if clone and clone.target_model_id == m.id %}selected{% endif %}>{{ m.display_name }} ({{ m.model_id }})</option>
+            {% endfor %}
+          </optgroup>
+          {% endif %}
+        {% empty %}
+        <option value="">No models registered</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div>
+      <label class="block text-xs font-medium text-gray-500 mb-1 uppercase tracking-wide">Auditor <span id="no-key-auditor" class="text-yellow-500 normal-case hidden">⚠ no key set</span></label>
+      <select name="auditor_model" required class="w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-accent/50">
+        {% for conn in connections %}
+          {% if conn.models.all %}
+          <optgroup label="{{ conn.name }}">
+            {% for m in conn.models.all %}
+            <option value="{{ m.id }}" data-has-key="{% if m.has_key %}1{% else %}0{% endif %}" {% if clone and clone.auditor_model_id == m.id %}selected{% endif %}>{{ m.display_name }} ({{ m.model_id }})</option>
+            {% endfor %}
+          </optgroup>
+          {% endif %}
+        {% empty %}
+        <option value="">No models registered</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div>
+      <label class="block text-xs font-medium text-gray-500 mb-1 uppercase tracking-wide">Judge <span id="no-key-judge" class="text-yellow-500 normal-case hidden">⚠ no key set</span></label>
+      <select name="judge_model" required class="w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-accent/50">
+        {% for conn in connections %}
+          {% if conn.models.all %}
+          <optgroup label="{{ conn.name }}">
+            {% for m in conn.models.all %}
+            <option value="{{ m.id }}" data-has-key="{% if m.has_key %}1{% else %}0{% endif %}" {% if clone and clone.judge_model_id == m.id %}selected{% endif %}>{{ m.display_name }} ({{ m.model_id }})</option>
+            {% endfor %}
+          </optgroup>
+          {% endif %}
+        {% empty %}
+        <option value="">No models registered</option>
+        {% endfor %}
+      </select>
+    </div>
+  </div>
+  {% if not connections %}
+  <p class="mt-2 text-xs text-gray-500">
+    No models yet? <a href="{% url 'models' %}" target="_blank" class="text-accent hover:underline">Register a model connection →</a>
+  </p>
+  {% endif %}
+</div>

@@ -1,0 +1,82 @@
+{% comment %}
+Behaviour for audit_models.html + audit_hyperparameters.html: no-key
+warnings, generation-config normalisation and submit-time JSON validation.
+{% endcomment %}
+<script>
+// Show "⚠ no key set" next to the label when the selected model's connection has no API key
+function updateNoKeyWarnings() {
+  [['target_model', 'no-key-target'], ['auditor_model', 'no-key-auditor'], ['judge_model', 'no-key-judge']].forEach(([name, warnId]) => {
+    const sel = document.querySelector(`select[name="${name}"]`);
+    const warn = document.getElementById(warnId);
+    if (!sel || !warn) return;
+    const opt = sel.selectedOptions[0];
+    warn.classList.toggle('hidden', !(opt && opt.dataset.hasKey === '0'));
+  });
+}
+document.querySelectorAll('select[name="target_model"], select[name="auditor_model"], select[name="judge_model"]').forEach(s => s.addEventListener('change', updateNoKeyWarnings));
+updateNoKeyWarnings();
+
+// Normalize a prefilled (cloned) generation-config textarea on page load: strip
+// form-managed keys (for old clones), drop empty/null entries and reformat.
+// The blank-form template is left intact so every available key stays
+// visible; empty entries are still dropped on submit below.
+(function() {
+  const ta = document.querySelector('[name="gen_config_json"]');
+  if (!ta || !ta.dataset.prefilled || !ta.value.trim()) return;
+  try {
+    let obj = JSON.parse(ta.value);
+    if (typeof obj !== 'object' || obj === null || Array.isArray(obj)) return;
+    delete obj.max_turns; delete obj.n_repetitions; delete obj.language;
+    for (const [k, v] of Object.entries(obj)) {
+      if (v === null || v === '' || (typeof v === 'object' && !Array.isArray(v) && Object.keys(v).length === 0)) {
+        delete obj[k];
+      }
+    }
+    // Drop retry defaults that match the engine's built-in values so they
+    // don't get frozen into the manifest as no-op overrides.
+    if (obj.max_retries === 2) delete obj.max_retries;
+    if (obj.retry_backoff === 0.5) delete obj.retry_backoff;
+    ta.value = Object.keys(obj).length ? JSON.stringify(obj, null, 2) : '{}';
+  } catch (_) { /* leave as-is if not valid JSON yet */ }
+})();
+
+// Validate JSON on submit (tolerates Python-style single-quoted dicts) and
+// disable the submit button while the form is in flight to prevent duplicate
+// submissions. The button's data-busy-label is shown while submitting.
+document.querySelector('[name="gen_config_json"]')?.form?.addEventListener('submit', function(e) {
+  const ta = this.querySelector('[name="gen_config_json"]');
+  const errEl = document.getElementById('gen-config-error');
+  if (ta && ta.value.trim()) {
+    let raw = ta.value.trim();
+    // Auto-fix common Python-dict → JSON issues: single quotes, True/False/None
+    let fixed = raw.replace(/'/g, '"').replace(/\bTrue\b/g, 'true').replace(/\bFalse\b/g, 'false').replace(/\bNone\b/g, 'null');
+    try {
+      const parsed = JSON.parse(fixed);
+      if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) throw new Error('Must be a JSON object');
+      // Drop empty/null entries so the frozen manifest only stores real overrides.
+      for (const [k, v] of Object.entries(parsed)) {
+        if (v === null || v === '' || (typeof v === 'object' && !Array.isArray(v) && Object.keys(v).length === 0)) {
+          delete parsed[k];
+        }
+      }
+      // Drop retry defaults that match the engine's built-in values so they
+      // don't get frozen into the manifest as no-op overrides.
+      if (parsed.max_retries === 2) delete parsed.max_retries;
+      if (parsed.retry_backoff === 0.5) delete parsed.retry_backoff;
+      ta.value = Object.keys(parsed).length ? JSON.stringify(parsed, null, 2) : '';
+    }
+    catch (err) {
+      e.preventDefault();
+      errEl.textContent = 'Invalid JSON: ' + err.message + ' (use double quotes for keys/values)';
+      errEl.classList.remove('hidden');
+      return;
+    }
+  }
+  errEl.classList.add('hidden');
+  const btn = this.querySelector('button[type="submit"][data-busy-label]');
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = btn.dataset.busyLabel;
+  }
+});
+</script>

@@ -3,7 +3,7 @@
 Run:
     SIMPLEAUDIT_LOCAL_SQLITE=1 uv run manage.py test infra.tests.test_audit_schedules
 """
-from datetime import timedelta
+from datetime import UTC, timedelta
 from unittest import mock
 
 from django.test import Client, TestCase
@@ -379,3 +379,152 @@ class LaunchPermissionTests(ScheduleTestBase):
         })
         self.assertContains(resp, "Insufficient project role")
         self.assertFalse(AuditRun.objects.exists())
+
+
+class CronScheduleTests(ScheduleTestBase):
+    def test_validate_cron_accepts_and_normalises(self):
+        from audits.scheduling import validate_cron
+
+        self.assertEqual(validate_cron("  0   6 * *  1 "), "0 6 * * 1")
+        self.assertEqual(validate_cron("0 */6 * * *"), "0 */6 * * *")
+        # No minimum frequency for cron schedules.
+        self.assertEqual(validate_cron("* * * * *"), "* * * * *")
+        self.assertEqual(validate_cron("0 0,1 * * *"), "0 0,1 * * *")
+
+    def test_validate_cron_rejects_bad_syntax(self):
+        from audits.scheduling import validate_cron
+
+        for expr, msg in [
+            ("61 * * * *", "Invalid cron"),
+            ("0 6 * *", "5 fields"),
+            ("0 0 30 2 *", "Invalid cron"),  # Feb 30 never fires
+        ]:
+            with self.subTest(expr=expr), self.assertRaisesMessage(ValueError, msg):
+                validate_cron(expr)
+
+    def test_tick_moves_to_next_cron_firing(self):
+        from datetime import datetime
+
+        now = datetime(2026, 9, 27, 10, 0, tzinfo=UTC)  # a Sunday
+        s = self._schedule(cron_expression="0 6 * * 1", next_run_at=now - timedelta(days=8))
+        self.assertEqual(len(run_due_schedules(now=now)), 1)
+        s.refresh_from_db()
+        self.assertEqual(s.next_run_at, datetime(2026, 9, 28, 6, 0, tzinfo=UTC))
+
+    def test_create_cron_schedule_via_form(self):
+        client = Client()
+        client.login(username=self.user.username, password="pw")
+        payload = {
+            "name": "Monday",
+            "interval_hours": "cron",
+            "cron_expression": "0 6 * * 1",
+            "first_run_at": "2030-01-01T00:00",  # a Tuesday
+            "scenario_set": self.sset.id,
+            "target_model": self.model.id,
+            "auditor_model": self.model.id,
+            "judge_model": self.model.id,
+        }
+        self.assertEqual(client.post("/schedules/", payload).status_code, 302)
+        s = AuditSchedule.objects.get(name="Monday")
+        self.assertEqual(s.cron_expression, "0 6 * * 1")
+        self.assertEqual(s.next_run_at.isoformat(), "2030-01-07T06:00:00+00:00")
+        self.assertIn("cron 0 6 * * 1", s.interval_display)
+
+        payload.update(name="Every 5 min", cron_expression="*/5 * * * *", first_run_at="")
+        self.assertEqual(client.post("/schedules/", payload).status_code, 302)
+        self.assertTrue(AuditSchedule.objects.filter(name="Every 5 min").exists())
+
+        payload.update(name="Bad", cron_expression="0 25 * * *")
+        self.assertContains(client.post("/schedules/", payload), "Invalid cron")
+
+
+class RepeatOnScheduleTests(ScheduleTestBase):
+    """'Repeat on schedule' from an audit detail page."""
+
+    def setUp(self):
+        super().setUp()
+        self.client = Client()
+        self.client.login(username=self.user.username, password="pw")
+        self.run = AuditRunFactory(
+            project=self.project,
+            scenario_set_version=self.v1,
+            target_model=self.model,
+            auditor_model=self.model,
+            judge_model=self.model,
+            generation_parameters_snapshot={"max_turns": 3, "judge_params": {"temperature": 0}},
+        )
+        # A newer version exists: the schedule must still pin the run's v1.
+        ScenarioSetVersionFactory(scenario_set=self.sset, version=2)
+
+    def _payload(self, **extra):
+        data = {
+            "name": "Drift",
+            "interval_hours": "168",
+            "scenario_set": self.sset.id,
+            "scenario_set_version": self.v1.id,
+            "target_model": self.model.id,
+            "auditor_model": self.model.id,
+            "judge_model": self.model.id,
+            "max_turns": "3",
+            "gen_config_json": '{"judge_params": {"temperature": 0}}',
+            "baseline_run": self.run.id,
+            "attach_baseline": "1",
+        }
+        data.update(extra)
+        return data
+
+    def test_detail_page_offers_repeat_to_writers_only(self):
+        page = self.client.get(f"/audits/{self.run.id}/")
+        self.assertContains(page, f"/schedules/?from_run={self.run.id}")
+        self.assertContains(page, "Repeat on schedule")
+
+        viewer = UserFactory()
+        viewer.set_password("pw")
+        viewer.save()
+        MembershipFactory(user=viewer, project=self.project, role="viewer")
+        other = Client()
+        other.login(username=viewer.username, password="pw")
+        self.assertNotContains(other.get(f"/audits/{self.run.id}/"), "Repeat on schedule")
+
+    def test_detail_page_links_existing_schedule(self):
+        s = self._schedule(name="Weekly GPT")
+        self.run.schedule = s
+        self.run.save()
+        page = self.client.get(f"/audits/{self.run.id}/")
+        self.assertContains(page, f"/schedules/{s.id}/")
+        self.assertContains(page, "Weekly GPT")
+        self.assertNotContains(page, "Repeat on schedule")
+
+    def test_prefill_from_run(self):
+        page = self.client.get(f"/schedules/?from_run={self.run.id}")
+        self.assertContains(page, f'name="scenario_set_version" value="{self.v1.id}"')
+        self.assertContains(page, f'name="baseline_run" value="{self.run.id}"')
+        self.assertContains(page, f"{self.model.display_name} · {self.sset.name} drift")
+        self.assertContains(page, "&quot;temperature&quot;: 0")
+
+    def test_create_pins_run_version_and_attaches_baseline(self):
+        resp = self.client.post("/schedules/", self._payload())
+        s = AuditSchedule.objects.get(name="Drift")
+        self.assertRedirects(resp, f"/schedules/{s.id}/", fetch_redirect_response=False)
+        self.assertEqual(s.scenario_set_version_id, self.v1.id)
+        self.run.refresh_from_db()
+        self.assertEqual(self.run.schedule_id, s.id)
+        self.assertEqual(s.last_run_id, self.run.id)
+
+    def test_changed_settings_do_not_attach_baseline(self):
+        self.client.post("/schedules/", self._payload(max_turns="7"))
+        self.run.refresh_from_db()
+        self.assertIsNone(self.run.schedule_id)
+
+    def test_unchecked_attach_leaves_run_standalone(self):
+        payload = self._payload()
+        del payload["attach_baseline"]
+        self.client.post("/schedules/", payload)
+        self.run.refresh_from_db()
+        self.assertIsNone(self.run.schedule_id)
+
+    def test_version_from_other_set_rejected(self):
+        other_version = ScenarioSetVersionFactory(scenario_set=ScenarioSetFactory(project=self.project))
+        resp = self.client.post("/schedules/", self._payload(scenario_set_version=other_version.id))
+        self.assertContains(resp, "does not belong to the selected set")
+        self.assertFalse(AuditSchedule.objects.exists())
