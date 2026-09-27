@@ -1,0 +1,117 @@
+{% extends "base.html" %}
+{% block title %}{{ schedule.name }} — Schedules — SimpleAudit{% endblock %}
+{% block content %}
+<div class="flex items-start justify-between flex-wrap gap-3 mb-4">
+  <div class="min-w-0">
+    <a href="{% url 'schedules' %}" class="text-xs text-gray-500 hover:text-gray-300">← Schedules</a>
+    <h1 class="text-lg font-semibold text-gray-100 break-words">
+      {{ schedule.name }}
+      {% if not schedule.enabled %}<span class="ml-1 align-middle inline-flex px-2 py-0.5 rounded-full text-xs bg-gray-800 text-gray-400">paused</span>{% endif %}
+    </h1>
+    <p class="text-xs text-gray-500 mt-1">
+      {{ schedule.target_model.display_name }} · {{ schedule.scenario_set.name }}
+      {% if schedule.scenario_set_version %}v{{ schedule.scenario_set_version.version }} (pinned){% else %}(latest){% endif %}
+      · auditor {{ schedule.auditor_model.display_name }} · judge {{ schedule.judge_model.display_name }}
+      · {{ schedule.interval_display }}{% if schedule.enabled %} · next {{ schedule.next_run_at|date:"M j, H:i" }} UTC{% endif %}
+    </p>
+  </div>
+  {% if can_manage %}
+  <div class="flex gap-2 flex-wrap">
+    <form method="post" action="/schedules/{{ schedule.id }}/run-now/">{% csrf_token %}
+      <button type="submit" class="px-3 py-1.5 rounded-lg bg-accent text-white text-xs font-medium hover:bg-accent-hover">Run now</button>
+    </form>
+    <form method="post" action="/schedules/{{ schedule.id }}/toggle/">{% csrf_token %}
+      <button type="submit" class="px-3 py-1.5 rounded-lg bg-surface-overlay text-gray-300 text-xs font-medium hover:text-white">{% if schedule.enabled %}Pause{% else %}Resume{% endif %}</button>
+    </form>
+    <form method="post" action="/schedules/{{ schedule.id }}/delete/" onsubmit="return confirm('Delete this schedule? Its audit runs are kept.')">{% csrf_token %}
+      <button type="submit" class="px-3 py-1.5 rounded-lg bg-surface-overlay text-red-400 text-xs font-medium hover:text-red-300">Delete</button>
+    </form>
+  </div>
+  {% else %}
+  <p class="text-xs text-gray-500">Created by {{ schedule.created_by.username|default:"deleted user" }}. Only a workspace admin or the creator can change it.</p>
+  {% endif %}
+</div>
+
+{% if schedule.last_error %}
+<div class="mb-4 text-sm text-yellow-300 bg-yellow-900/20 rounded-lg px-4 py-2">Last tick: {{ schedule.last_error }}</div>
+{% endif %}
+
+<div class="bg-surface-raised rounded-xl border border-gray-800 p-4 mb-6">
+  <div class="flex items-center justify-between flex-wrap gap-2 mb-2">
+    <h2 class="text-sm font-semibold text-gray-300">Pass rate over time</h2>
+    {% if drops %}<span class="text-xs px-2 py-0.5 rounded-full bg-red-900/50 text-red-300">{{ drops }} significant drop{{ drops|pluralize }}</span>{% endif %}
+  </div>
+  {% if chart %}
+  <div class="overflow-x-auto">
+    <svg viewBox="0 0 {{ chart.width }} {{ chart.height }}" class="w-full min-w-[480px] h-auto" role="img" aria-label="Pass rate per run with 95% confidence band">
+      {% for g in chart.grid %}
+      <line x1="{{ chart.pad }}" x2="{{ chart.right }}" y1="{{ g.y }}" y2="{{ g.y }}" stroke="currentColor" class="text-gray-800" stroke-width="1"/>
+      <text x="{{ chart.pad|add:'-6' }}" y="{{ g.y }}" dy="3" text-anchor="end" font-size="10" fill="currentColor" class="text-gray-500">{{ g.label }}</text>
+      {% endfor %}
+      <polygon points="{{ chart.band }}" fill="currentColor" class="text-accent" fill-opacity="0.15"/>
+      <polyline points="{{ chart.line }}" fill="none" stroke="currentColor" class="text-accent" stroke-width="2"/>
+      {% for d in chart.dots %}
+      <a href="/audits/{{ d.p.run.id }}/">
+        {% if d.p.version_changed %}<line x1="{{ d.x }}" x2="{{ d.x }}" y1="{{ chart.pad }}" y2="{{ chart.height|add:'-32' }}" stroke="currentColor" class="text-gray-600" stroke-dasharray="3 3"/>{% endif %}
+        <circle cx="{{ d.x }}" cy="{{ d.y }}" r="{% if d.p.change %}6{% else %}4{% endif %}" fill="currentColor"
+                class="{% if d.p.change == 'drop' %}text-red-400{% elif d.p.change == 'rise' %}text-emerald-400{% else %}text-accent{% endif %}">
+          <title>#{{ d.p.run.id }} · {{ d.p.run.created_at|date:"M j, H:i" }} · {{ d.p.k }}/{{ d.p.n }} pass{% if d.p.change %} · significant {{ d.p.change }}{% endif %}</title>
+        </circle>
+      </a>
+      {% endfor %}
+    </svg>
+  </div>
+  <p class="text-xs text-gray-500 mt-2">
+    Shaded band: 95% Wilson interval (each repetition counts as a trial). Red/green dots: two-proportion z-test against the pooled previous {{ baseline_window }} completed runs, |z| ≥ 1.96.
+    Dashed line: scenario set version changed (baseline resets). Errored trials are excluded.
+  </p>
+  {% else %}
+  <p class="text-sm text-gray-500 py-8 text-center">No judged results yet. The chart appears after the first run completes.</p>
+  {% endif %}
+</div>
+
+<div class="bg-surface-raised rounded-xl border border-gray-800 p-4">
+  <h2 class="text-sm font-semibold text-gray-300 mb-3">Runs</h2>
+  {% if points %}
+  <div class="overflow-x-auto">
+    <table class="w-full text-sm">
+      <thead>
+        <tr class="border-b border-gray-800">
+          <th class="text-left px-3 py-2 text-xs font-medium text-gray-500 uppercase">Run</th>
+          <th class="text-left px-3 py-2 text-xs font-medium text-gray-500 uppercase">Started</th>
+          <th class="text-left px-3 py-2 text-xs font-medium text-gray-500 uppercase">Status</th>
+          <th class="text-left px-3 py-2 text-xs font-medium text-gray-500 uppercase">Pass rate</th>
+          <th class="text-left px-3 py-2 text-xs font-medium text-gray-500 uppercase">95% CI</th>
+          <th class="text-left px-3 py-2 text-xs font-medium text-gray-500 uppercase">Trials</th>
+          <th class="text-left px-3 py-2 text-xs font-medium text-gray-500 uppercase">vs baseline</th>
+          <th class="text-right px-3 py-2 text-xs font-medium text-gray-500 uppercase"></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for p in points %}
+        <tr class="border-b border-gray-800/50 hover:bg-surface-overlay/50 cursor-pointer" onclick="location='/audits/{{ p.run.id }}/'">
+          <td class="px-3 py-2.5 text-gray-200 font-medium">#{{ p.run.id }} <span class="text-xs text-gray-500">v{{ p.version }}</span></td>
+          <td class="px-3 py-2.5 text-gray-400 text-xs whitespace-nowrap">{{ p.run.created_at|date:"M j, H:i" }}</td>
+          <td class="px-3 py-2.5 text-gray-400 text-xs">{{ p.run.status }}</td>
+          <td class="px-3 py-2.5 text-gray-200 text-xs">{% if p.rate is not None %}{% widthratio p.k p.n 100 %}%{% else %}—{% endif %}</td>
+          <td class="px-3 py-2.5 text-gray-400 text-xs whitespace-nowrap">{% if p.lo is not None %}{{ p.lo|floatformat:2 }}–{{ p.hi|floatformat:2 }}{% else %}—{% endif %}</td>
+          <td class="px-3 py-2.5 text-gray-400 text-xs">{{ p.n }}{% if p.errors %} <span class="text-yellow-500">+{{ p.errors }} err</span>{% endif %}</td>
+          <td class="px-3 py-2.5 text-xs whitespace-nowrap">
+            {% if p.change == "drop" %}<span class="text-red-400">▼ drop (z={{ p.z|floatformat:2 }})</span>
+            {% elif p.change == "rise" %}<span class="text-emerald-400">▲ rise (z={{ p.z|floatformat:2 }})</span>
+            {% elif p.z is not None %}<span class="text-gray-500">no change (z={{ p.z|floatformat:2 }})</span>
+            {% else %}<span class="text-gray-600">—</span>{% endif %}
+          </td>
+          <td class="px-3 py-2.5 text-right" onclick="event.stopPropagation()">
+            {% if p.prev_run_id %}<a href="/compare/?runs={{ p.prev_run_id }},{{ p.run.id }}" class="text-xs text-accent hover:underline">Compare ←</a>{% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="text-sm text-gray-500 py-6 text-center">No runs yet.</p>
+  {% endif %}
+</div>
+{% endblock %}
