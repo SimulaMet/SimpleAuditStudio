@@ -46,7 +46,7 @@ class MembershipFactory(DjangoModelFactory):
         model = ProjectMembership
     user = factory.SubFactory(UserFactory)
     project = factory.SubFactory(ProjectFactory)
-    role = "owner"
+    role = "admin"
 
 
 class ScenarioFactory(DjangoModelFactory):

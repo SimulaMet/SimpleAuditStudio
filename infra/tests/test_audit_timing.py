@@ -23,7 +23,7 @@ class AuditTimingDisplayTest(TestCase):
         self.user.set_password(pw)
         self.user.save()
         self.project = ProjectFactory()
-        MembershipFactory(user=self.user, project=self.project, role="owner")
+        MembershipFactory(user=self.user, project=self.project, role="admin")
         self.client = Client(SERVER_NAME="localhost")
         self.client.login(username=self.user.username, password=pw)
         self.client.session["project_id"] = self.project.pk

@@ -2,6 +2,7 @@
 import csv
 import hashlib
 import io
+import itertools
 import json
 import logging
 import os
@@ -11,7 +12,7 @@ from django.contrib.auth import login, logout
 from django.contrib.auth.forms import AuthenticationForm
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.db.models import ProtectedError, RestrictedError
-from django.http import HttpResponse, JsonResponse
+from django.http import HttpResponse, HttpResponseForbidden, JsonResponse
 from django.shortcuts import get_object_or_404, redirect
 from django.utils import timezone
 from django.views.generic import DetailView, ListView, TemplateView, View
@@ -634,11 +635,15 @@ class NewAuditView(ProjectMixin, TemplateView):
             .prefetch_related("models")
             .order_by("name")
         )
+        from audits.scheduling import has_write_role
+
+        kw.setdefault("error", None)
         kw.update(
             sets=ScenarioSet.objects.filter(project=p),
             connections=connections,
             clone=clone,
-            error=None,
+            # Same rule as launching a run: admin or auditor (superusers too).
+            can_launch=has_write_role(self.request.user, p),
         )
         return super().get_context_data(**kw)
 
@@ -695,6 +700,239 @@ class NewAuditView(ProjectMixin, TemplateView):
             return redirect(f"/audits/{run.id}/")
         except Exception as e:  # noqa: BLE001 - surface any creation failure to the user
             return self.render_to_response(self.get_context_data(error=str(e)))
+
+
+# ─── Schedules (recurring audits / drift) ────────────────────────────────────
+
+_INTERVAL_PRESETS = [(6, "Every 6 hours"), (24, "Daily"), (72, "Every 3 days"), (168, "Weekly"), (336, "Every 2 weeks")]
+
+
+class SchedulesView(ProjectMixin, TemplateView):
+    template_name = "schedules.html"
+
+    def get_context_data(self, **kw):
+        from audits.models import AuditSchedule
+        from audits.scheduling import (
+            MAX_SCHEDULES_PER_PROJECT,
+            can_manage_schedule,
+            has_write_role,
+        )
+        from model_registry.models import ModelConnection
+
+        p = self.request.project
+        schedules = list(
+            AuditSchedule.objects.filter(project=p).select_related(
+                "project", "scenario_set", "scenario_set_version", "target_model", "auditor_model", "judge_model",
+                "last_run", "created_by",
+            )
+        )
+        for s in schedules:
+            s.can_manage = can_manage_schedule(self.request.user, s)
+        kw.setdefault("error", None)
+        kw.setdefault("form", {})
+        kw.update(
+            schedules=schedules,
+            sets=ScenarioSet.objects.filter(project=p).prefetch_related("versions"),
+            connections=ModelConnection.objects.filter(project=p).prefetch_related("models").order_by("name"),
+            interval_presets=_INTERVAL_PRESETS,
+            can_create=has_write_role(self.request.user, p) and not (p.archived and not self.request.user.is_superuser),
+            at_cap=len(schedules) >= MAX_SCHEDULES_PER_PROJECT,
+            max_schedules=MAX_SCHEDULES_PER_PROJECT,
+        )
+        return super().get_context_data(**kw)
+
+    def post(self, request, *args, **kwargs):
+        from datetime import datetime, timedelta
+
+        from audits.models import AuditSchedule
+        from audits.scheduling import (
+            MAX_INTERVAL_HOURS,
+            MAX_SCHEDULES_PER_PROJECT,
+            MIN_INTERVAL_HOURS,
+            has_write_role,
+        )
+        from audits.services import _generation_parameters
+        from model_registry.models import RegisteredModel
+
+        p = request.project
+        blocked = _require_writable_project(request)
+        if blocked:
+            return blocked
+        if not has_write_role(request.user, p):
+            return HttpResponseForbidden("Admin or auditor role required to create schedules.")
+        form = request.POST
+        try:
+            if AuditSchedule.objects.filter(project=p).count() >= MAX_SCHEDULES_PER_PROJECT:
+                raise ValueError(
+                    f"This workspace already has {MAX_SCHEDULES_PER_PROJECT} schedules (the limit). Delete one first."
+                )
+            name = (form.get("name") or "").strip()
+            if not name:
+                raise ValueError("Name is required.")
+            sset = ScenarioSet.objects.get(pk=form["scenario_set"], project=p)
+            pinned = None
+            if form.get("pin_version"):
+                pinned = sset.versions.order_by("-version").first()
+                if pinned is None:
+                    raise ValueError("This scenario set has no published version to pin.")
+            interval_hours = int(form.get("interval_hours") or 168)
+            if not MIN_INTERVAL_HOURS <= interval_hours <= MAX_INTERVAL_HOURS:
+                raise ValueError(f"Interval must be between {MIN_INTERVAL_HOURS} hours and 90 days.")
+            first_raw = (form.get("first_run_at") or "").strip()
+            if first_raw:
+                first = timezone.make_aware(datetime.fromisoformat(first_raw))
+            else:
+                # A minute out: the next sweeper pass picks it up.
+                first = timezone.now() + timedelta(minutes=1)
+
+            max_turns_raw = (form.get("max_turns") or "").strip()
+            n_reps_raw = (form.get("n_repetitions") or "").strip()
+            n_reps = int(n_reps_raw) if n_reps_raw else None
+            gen_config = None
+            gen_json_raw = (form.get("gen_config_json") or "").strip()
+            if gen_json_raw and gen_json_raw != "{}":
+                gen_config = json.loads(gen_json_raw)
+                if not isinstance(gen_config, dict):
+                    raise ValueError("Generation config must be a JSON object.")
+
+            models_ = {
+                role: RegisteredModel.objects.get(pk=form[f"{role}_model"], project=p)
+                for role in ("target", "auditor", "judge")
+            }
+            AuditSchedule.objects.create(
+                project=p,
+                name=name,
+                scenario_set=sset,
+                scenario_set_version=pinned,
+                target_model=models_["target"],
+                auditor_model=models_["auditor"],
+                judge_model=models_["judge"],
+                generation_parameters=_generation_parameters(
+                    max_turns_override=int(max_turns_raw) if max_turns_raw else None,
+                    language_override=(form.get("language") or "").strip() or None,
+                    n_repetitions_override=n_reps if n_reps and n_reps > 1 else None,
+                    gen_config_override=gen_config or None,
+                ),
+                interval_hours=interval_hours,
+                next_run_at=first,
+                created_by=request.user,
+            )
+            messages.success(request, f"Schedule '{name}' created. First run {first:%Y-%m-%d %H:%M} UTC.")
+            return redirect("/schedules/")
+        except Exception as e:  # noqa: BLE001 - surface any validation failure to the user
+            return self.render_to_response(self.get_context_data(error=str(e), form=form))
+
+
+def _drift_chart(points: list[dict], width: int = 720, height: int = 220, pad: int = 32) -> dict:
+    """Pre-computed SVG geometry for the pass-rate series with its 95% CI band."""
+    plotted = [p for p in points if p["rate"] is not None]
+    if not plotted:
+        return {}
+    inner_w, inner_h = width - 2 * pad, height - 2 * pad
+    step = inner_w / max(len(plotted) - 1, 1)
+
+    def y(v):
+        return round(pad + (1 - v) * inner_h, 1)
+
+    dots, upper, lower = [], [], []
+    for i, p in enumerate(plotted):
+        x = round(pad + (i * step if len(plotted) > 1 else inner_w / 2), 1)
+        dots.append({"x": x, "y": y(p["rate"]), "p": p})
+        upper.append(f"{x},{y(p['hi'])}")
+        lower.append(f"{x},{y(p['lo'])}")
+    return {
+        "width": width,
+        "height": height,
+        "line": " ".join(f"{d['x']},{d['y']}" for d in dots),
+        "band": " ".join(upper + lower[::-1]),
+        "dots": dots,
+        "grid": [{"y": y(v), "label": f"{int(v * 100)}%"} for v in (0, 0.25, 0.5, 0.75, 1)],
+        "pad": pad,
+        "right": width - pad,
+    }
+
+
+class ScheduleDetailView(ProjectMixin, TemplateView):
+    template_name = "schedule_detail.html"
+
+    def get_context_data(self, **kw):
+        from audits.models import AuditSchedule
+        from audits.scheduling import BASELINE_WINDOW, can_manage_schedule, drift_series
+
+        schedule = get_object_or_404(
+            AuditSchedule.objects.select_related(
+                "scenario_set", "scenario_set_version", "target_model", "auditor_model", "judge_model"
+            ),
+            pk=kw["schedule_id"],
+            project=self.request.project,
+        )
+        points = drift_series(schedule)
+        for prev, cur in itertools.pairwise(points):
+            cur["prev_run_id"] = prev["run"].id
+        kw.update(
+            schedule=schedule,
+            points=list(reversed(points)),
+            chart=_drift_chart(points),
+            baseline_window=BASELINE_WINDOW,
+            can_manage=can_manage_schedule(self.request.user, schedule),
+            drops=sum(1 for p in points if p["change"] == "drop"),
+        )
+        return super().get_context_data(**kw)
+
+
+class ScheduleActionView(ProjectMixin, View):
+    """POST /schedules/<id>/<action>/ — toggle | run-now | delete."""
+
+    def post(self, request, schedule_id, action):
+        from audits.models import AuditSchedule
+        from audits.scheduling import (
+            can_manage_schedule,
+            launch_schedule,
+            owner_authorized,
+        )
+
+        blocked = _require_writable_project(request)
+        if blocked:
+            return blocked
+        schedule = get_object_or_404(
+            AuditSchedule.objects.select_related("project", "created_by"), pk=schedule_id, project=request.project
+        )
+        if not can_manage_schedule(request.user, schedule):
+            return HttpResponseForbidden("Only a workspace admin or the schedule's creator can do this.")
+        if action == "toggle" and not schedule.enabled and not owner_authorized(schedule):
+            messages.error(
+                request,
+                "Cannot resume: the schedule's creator no longer has admin or auditor role. Recreate it under your account.",
+            )
+        elif action == "toggle":
+            schedule.enabled = not schedule.enabled
+            if schedule.enabled and schedule.next_run_at < timezone.now():
+                from audits.scheduling import advance
+
+                schedule.next_run_at = advance(schedule.next_run_at, schedule.interval_hours, timezone.now())
+            schedule.save(update_fields=["enabled", "next_run_at", "updated_at"])
+            messages.success(request, f"Schedule '{schedule.name}' {'resumed' if schedule.enabled else 'paused'}.")
+        elif action == "run-now":
+            last = schedule.last_run
+            if last and last.status not in (AuditRun.Status.COMPLETED, AuditRun.Status.FAILED, AuditRun.Status.CANCELLED):
+                messages.error(request, f"Run #{last.id} from this schedule is still {last.status}.")
+            else:
+                try:
+                    run = launch_schedule(schedule)
+                except Exception as e:  # noqa: BLE001 - surface creation failure to the user
+                    messages.error(request, f"Could not launch: {e}")
+                else:
+                    schedule.last_run = run
+                    schedule.last_error = ""
+                    schedule.save(update_fields=["last_run", "last_error", "updated_at"])
+                    submit_audit_run(run)
+                    return redirect(f"/audits/{run.id}/")
+        elif action == "delete":
+            name = schedule.name
+            schedule.delete()
+            messages.success(request, f"Schedule '{name}' deleted. Its runs are kept.")
+            return redirect("/schedules/")
+        return redirect(request.META.get("HTTP_REFERER") or f"/schedules/{schedule_id}/")
 
 
 # ─── Queue ───────────────────────────────────────────────────────────────────
@@ -1188,7 +1426,7 @@ class ModelsView(ProjectMixin, TemplateView):
                 except (ProtectedError, RestrictedError):
                     # AuditRun pins models via RESTRICT FKs; deleting a model
                     # referenced by an audit run would break the immutable record.
-                    error = f"Cannot delete '{rm.display_name}': it is referenced by audit runs."
+                    error = f"Cannot delete '{rm.display_name}': it is referenced by audit runs or schedules."
         return self.render_to_response(self.get_context_data(error=error))
 
 
@@ -1211,7 +1449,7 @@ class ConnectionDeleteView(ProjectMixin, View):
                 # RestrictedError for RESTRICT and ProtectedError for PROTECT.
                 messages.error(
                     request,
-                    "Cannot delete: this connection's models are referenced by audit runs.",
+                    "Cannot delete: this connection's models are referenced by audit runs or schedules.",
                 )
         return redirect("/models/")
 

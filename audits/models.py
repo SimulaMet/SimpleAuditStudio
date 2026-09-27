@@ -51,6 +51,10 @@ class AuditRun(models.Model):
     # Soft-hide from the dashboard/queue. Never deletes data; the frozen
     # manifest and results stay fully accessible via the detail page.
     archived = models.BooleanField(default=False, db_index=True)
+    # Set when the run was launched by a recurring AuditSchedule (drift series).
+    schedule = models.ForeignKey(
+        "audits.AuditSchedule", on_delete=models.SET_NULL, null=True, blank=True, related_name="runs"
+    )
     created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -75,3 +79,52 @@ class AuditRun(models.Model):
             return f"{minutes}m {secs}s"
         hours, mins = divmod(minutes, 60)
         return f"{hours}h {mins}m"
+
+
+class AuditSchedule(models.Model):
+    """A recurring audit: the same frozen experiment re-run on a fixed interval.
+
+    Each tick creates an ordinary AuditRun (linked back via ``AuditRun.schedule``)
+    so every point in the drift series is a fully reproducible experiment record.
+    Pin the scenario set version, auditor and judge to keep the series comparable;
+    ``scenario_set_version`` left empty means "latest published version at tick".
+    """
+
+    project = models.ForeignKey("accounts.Project", on_delete=models.CASCADE, related_name="audit_schedules")
+    name = models.CharField(max_length=250)
+    enabled = models.BooleanField(default=True)
+    scenario_set = models.ForeignKey("scenarios.ScenarioSet", on_delete=models.CASCADE, related_name="audit_schedules")
+    scenario_set_version = models.ForeignKey(
+        "scenarios.ScenarioSetVersion", on_delete=models.RESTRICT, null=True, blank=True, related_name="audit_schedules"
+    )
+    target_model = models.ForeignKey("model_registry.RegisteredModel", on_delete=models.RESTRICT, related_name="target_audit_schedules")
+    auditor_model = models.ForeignKey("model_registry.RegisteredModel", on_delete=models.RESTRICT, related_name="auditor_audit_schedules")
+    judge_model = models.ForeignKey("model_registry.RegisteredModel", on_delete=models.RESTRICT, related_name="judge_audit_schedules")
+    # Same shape as AuditRun.generation_parameters_snapshot; copied into each run.
+    generation_parameters = models.JSONField(default=dict, blank=True)
+    interval_hours = models.PositiveIntegerField(default=168)
+    next_run_at = models.DateTimeField(db_index=True)
+    last_run = models.ForeignKey("audits.AuditRun", on_delete=models.SET_NULL, null=True, blank=True, related_name="+")
+    last_tick_at = models.DateTimeField(null=True, blank=True)
+    last_error = models.TextField(blank=True)
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "core_audit_schedule"
+        ordering = ["name"]
+
+    def __str__(self) -> str:
+        return f"{self.name} (every {self.interval_hours}h)"
+
+    @property
+    def interval_display(self) -> str:
+        h = self.interval_hours
+        if h % 168 == 0:
+            n = h // 168
+            return "weekly" if n == 1 else f"every {n} weeks"
+        if h % 24 == 0:
+            n = h // 24
+            return "daily" if n == 1 else f"every {n} days"
+        return "hourly" if h == 1 else f"every {h} hours"

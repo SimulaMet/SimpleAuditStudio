@@ -1,0 +1,161 @@
+{% extends "base.html" %}
+{% block title %}Schedules — SimpleAudit{% endblock %}
+{% block content %}
+<h1 class="text-lg font-semibold text-gray-100 mb-2">Schedules</h1>
+<p class="text-sm text-gray-500 mb-6 max-w-3xl">
+  Re-run the same audit on a fixed interval to track drift in a model's behaviour over time.
+  Pin the scenario set version and use a fixed-weights auditor and judge so changes in the series come from the target, not the grader.
+</p>
+
+<div class="bg-surface-raised rounded-xl border border-gray-800 p-4 mb-6">
+  <h2 class="text-sm font-semibold text-gray-300 mb-3">Active schedules</h2>
+  {% if schedules %}
+  <div class="overflow-x-auto">
+    <table class="w-full text-sm">
+      <thead>
+        <tr class="border-b border-gray-800">
+          <th class="text-left px-3 py-2 text-xs font-medium text-gray-500 uppercase">Name</th>
+          <th class="text-left px-3 py-2 text-xs font-medium text-gray-500 uppercase">Target</th>
+          <th class="text-left px-3 py-2 text-xs font-medium text-gray-500 uppercase">Scenario set</th>
+          <th class="text-left px-3 py-2 text-xs font-medium text-gray-500 uppercase">Interval</th>
+          <th class="text-left px-3 py-2 text-xs font-medium text-gray-500 uppercase">Next run (UTC)</th>
+          <th class="text-left px-3 py-2 text-xs font-medium text-gray-500 uppercase">Last run</th>
+          <th class="text-right px-3 py-2 text-xs font-medium text-gray-500 uppercase">Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for s in schedules %}
+        <tr class="border-b border-gray-800/50 hover:bg-surface-overlay/50 cursor-pointer" onclick="location='/schedules/{{ s.id }}/'">
+          <td class="px-3 py-2.5 text-gray-200 font-medium">
+            {{ s.name }}
+            {% if not s.enabled %}<span class="ml-1 inline-flex px-2 py-0.5 rounded-full text-xs bg-gray-800 text-gray-400">paused</span>{% endif %}
+            {% if s.last_error %}<span class="ml-1 text-yellow-500" title="{{ s.last_error }}">⚠</span>{% endif %}
+          </td>
+          <td class="px-3 py-2.5 text-gray-400 text-xs">{{ s.target_model.display_name }}</td>
+          <td class="px-3 py-2.5 text-gray-400 text-xs">{{ s.scenario_set.name }} {% if s.scenario_set_version %}<span class="text-gray-500">(v{{ s.scenario_set_version.version }} pinned)</span>{% else %}<span class="text-gray-500">(latest)</span>{% endif %}</td>
+          <td class="px-3 py-2.5 text-gray-400 text-xs">{{ s.interval_display }}</td>
+          <td class="px-3 py-2.5 text-gray-400 text-xs whitespace-nowrap">{% if s.enabled %}{{ s.next_run_at|date:"M j, H:i" }}{% else %}—{% endif %}</td>
+          <td class="px-3 py-2.5 text-xs whitespace-nowrap">{% if s.last_run %}<a href="/audits/{{ s.last_run.id }}/" onclick="event.stopPropagation()" class="text-accent hover:underline">#{{ s.last_run.id }}</a> <span class="text-gray-500">{{ s.last_run.status }}</span>{% else %}<span class="text-gray-600">—</span>{% endif %}</td>
+          <td class="px-3 py-2.5 text-right whitespace-nowrap" onclick="event.stopPropagation()">
+            {% if s.can_manage %}
+            <form method="post" action="/schedules/{{ s.id }}/run-now/" class="inline">{% csrf_token %}
+              <button type="submit" class="px-2 py-1 rounded text-xs text-gray-400 hover:text-accent hover:bg-surface-overlay">Run now</button>
+            </form>
+            <form method="post" action="/schedules/{{ s.id }}/toggle/" class="inline">{% csrf_token %}
+              <button type="submit" class="px-2 py-1 rounded text-xs text-gray-400 hover:text-gray-200 hover:bg-surface-overlay">{% if s.enabled %}Pause{% else %}Resume{% endif %}</button>
+            </form>
+            {% else %}
+            <span class="text-xs text-gray-600" title="Only a workspace admin or the creator can change this schedule">by {{ s.created_by.username|default:"deleted user" }}</span>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="text-sm text-gray-500 py-6 text-center">No schedules yet. Create one below.</p>
+  {% endif %}
+</div>
+
+<h2 class="text-sm font-semibold text-gray-300 mb-3">New schedule</h2>
+{% if not can_create %}
+<p class="text-sm text-gray-500 bg-surface-raised rounded-xl border border-gray-800 p-4 max-w-4xl">
+  Creating schedules needs the admin or auditor role in this workspace. Schedules spend the workspace's API keys on a recurring basis.
+  Ask a workspace admin, or <a href="{% url 'workspaces' %}?new=1" class="text-accent hover:underline">create your own workspace</a>.
+</p>
+{% elif at_cap %}
+<p class="text-sm text-gray-500 bg-surface-raised rounded-xl border border-gray-800 p-4 max-w-4xl">
+  This workspace has reached the limit of {{ max_schedules }} schedules. Delete one to create another.
+</p>
+{% else %}
+{% if error %}
+<div class="mb-4 text-sm text-red-300 bg-red-900/30 rounded-lg px-4 py-2">{{ error }}</div>
+{% endif %}
+
+<form method="post" class="space-y-4 max-w-4xl">
+  {% csrf_token %}
+  <div class="bg-surface-raised rounded-xl border border-gray-800 p-4 grid grid-cols-1 md:grid-cols-3 gap-4">
+    <div>
+      <label class="block text-xs font-medium text-gray-500 mb-1 uppercase tracking-wide">Name</label>
+      <input type="text" name="name" required maxlength="250" placeholder="e.g. GPT weekly safety" value="{{ form.name|default:'' }}"
+             class="w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-accent/50">
+    </div>
+    <div>
+      <label class="block text-xs font-medium text-gray-500 mb-1 uppercase tracking-wide">Interval</label>
+      <select name="interval_hours" class="w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-accent/50">
+        {% for hours, label in interval_presets %}
+        <option value="{{ hours }}" {% if hours == 168 %}selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div>
+      <label class="block text-xs font-medium text-gray-500 mb-1 uppercase tracking-wide">First run (UTC)</label>
+      <input type="datetime-local" name="first_run_at" value="{{ form.first_run_at|default:'' }}"
+             class="w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-accent/50">
+      <p class="mt-1 text-xs text-gray-600">Empty = within a minute.</p>
+    </div>
+  </div>
+
+  <div class="bg-surface-raised rounded-xl border border-gray-800 p-4">
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+      <div>
+        <label class="block text-xs font-medium text-gray-500 mb-1 uppercase tracking-wide">Scenario set</label>
+        <select name="scenario_set" required class="w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-accent/50">
+          {% for s in sets %}
+          <option value="{{ s.id }}">{{ s.name }} (v{{ s.versions.count }})</option>
+          {% empty %}
+          <option value="">No scenario sets available</option>
+          {% endfor %}
+        </select>
+      </div>
+      <label class="flex items-start gap-2 text-sm text-gray-300 md:mt-6">
+        <input type="checkbox" name="pin_version" value="1" checked class="mt-1">
+        <span>Pin current version <span class="block text-xs text-gray-500">Recommended. Unpinned schedules follow the latest version, which resets the drift baseline whenever the set changes.</span></span>
+      </label>
+    </div>
+  </div>
+
+  <div class="bg-surface-raised rounded-xl border border-gray-800 p-4">
+    <h3 class="text-sm font-semibold text-gray-300 mb-3">Models</h3>
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+      {% include "partials/schedule_model_select.html" with role="target" label="Target" %}
+      {% include "partials/schedule_model_select.html" with role="auditor" label="Auditor" %}
+      {% include "partials/schedule_model_select.html" with role="judge" label="Judge" %}
+    </div>
+  </div>
+
+  <div class="bg-surface-raised rounded-xl border border-gray-800 p-4">
+    <h3 class="text-sm font-semibold text-gray-300 mb-3">Hyperparameters</h3>
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+      <div>
+        <label class="block text-xs font-medium text-gray-500 mb-1 uppercase tracking-wide">Max Turns</label>
+        <input type="number" name="max_turns" min="1" max="50" placeholder="5 (default)" value="{{ form.max_turns|default:'' }}"
+               class="w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-accent/50">
+      </div>
+      <div>
+        <label class="block text-xs font-medium text-gray-500 mb-1 uppercase tracking-wide">Language</label>
+        <input type="text" name="language" placeholder="English (default)" value="{{ form.language|default:'' }}"
+               class="w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-accent/50">
+      </div>
+      <div>
+        <label class="block text-xs font-medium text-gray-500 mb-1 uppercase tracking-wide">Repetitions</label>
+        <input type="number" name="n_repetitions" min="1" max="20" placeholder="3 recommended" value="{{ form.n_repetitions|default:'3' }}"
+               class="w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-accent/50">
+        <p class="mt-1 text-xs text-gray-600">More reps narrow the confidence band.</p>
+      </div>
+    </div>
+    <details class="mt-4">
+      <summary class="text-xs text-gray-400 cursor-pointer select-none">Generation config override (JSON)</summary>
+      <textarea name="gen_config_json" rows="5" spellcheck="false" placeholder='{"judge_params": {"temperature": 0}}'
+                class="mt-2 w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-accent/50 resize-y">{{ form.gen_config_json|default:'' }}</textarea>
+      <p class="text-xs text-gray-500">Same keys as New Audit. Tip: set <code>temperature: 0</code> for auditor and judge to reduce grader noise.</p>
+    </details>
+  </div>
+
+  <button type="submit" class="w-full px-4 py-2.5 rounded-lg bg-accent text-white text-sm font-medium hover:bg-accent-hover transition-colors">
+    Create Schedule
+  </button>
+</form>
+{% endif %}
+{% endblock %}
