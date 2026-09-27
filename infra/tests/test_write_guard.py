@@ -48,7 +48,7 @@ class AuditorWriteTests(_Base):
         self.assertTrue(ScenarioSet.objects.filter(project=self.project, name="Allowed").exists())
 
     def test_connection_base_url_is_validated(self):
-        resp = self.client.post("/models/", {"action": "add_connection", "conn_name": "Bad", "conn_base_url": "not a url"})
+        resp = self.client.post("/models/", {"action": "add_connection", "conn_name": "Bad", "conn_base_url": "not a url"}, follow=True)
         self.assertContains(resp, "Base URL must be an http(s) URL")
         self.assertFalse(ModelConnection.objects.filter(project=self.project).exists())
         self.client.post("/models/", {"action": "add_connection", "conn_name": "Ok", "conn_base_url": "http://mock-model:8080/v1"})
@@ -70,3 +70,47 @@ class PingConnectionScopeTests(_Base):
         with mock.patch("model_registry.services.httpx.get", return_value=fake):
             resp = self.client.get(f"/api/models/ping-connection/{conn.id}/")
         self.assertEqual(resp.json()["status"], "up")
+
+
+class ModelsPageTests(_Base):
+    role = "admin"
+
+    def test_bulk_add_skips_existing_and_redirects(self):
+        from model_registry.models import RegisteredModel
+
+        conn = ModelConnectionFactory(project=self.project)
+        RegisteredModel.objects.create(connection=conn, project=self.project, model_id="a", display_name="a")
+        resp = self.client.post("/models/", {"action": "add_models", "conn_id": conn.id, "model_id": ["a", "b", "c"]})
+        self.assertEqual(resp.status_code, 302)   # redirect after save: refresh won't resubmit
+        self.assertEqual(sorted(conn.models.values_list("model_id", flat=True)), ["a", "b", "c"])
+        page = self.client.get(resp.url)
+        self.assertContains(page, "Added 2 models")
+
+    def test_key_mode_switches_clear_the_other_source(self):
+        conn = ModelConnectionFactory(project=self.project, api_key_direct="sk-old", secret_reference="")
+        data = {"action": "edit_connection", "conn_id": conn.id, "conn_name": conn.name,
+                "conn_base_url": "https://api.example.com/v1", "conn_enabled": "1"}
+        self.client.post("/models/", {**data, "key_mode": "stored", "conn_api_key": ""})
+        conn.refresh_from_db()
+        self.assertEqual(conn.api_key_direct, "sk-old")   # blank keeps the stored key
+        resp = self.client.post("/models/", {**data, "key_mode": "env", "conn_secret_ref": ""}, follow=True)
+        self.assertContains(resp, "Enter the environment variable")
+        conn.refresh_from_db()
+        self.assertEqual(conn.api_key_direct, "sk-old")   # rejected: nothing changed
+        self.client.post("/models/", {**data, "key_mode": "env", "conn_secret_ref": "MY_KEY"})
+        conn.refresh_from_db()
+        self.assertEqual((conn.api_key_direct, conn.secret_reference), ("", "MY_KEY"))
+        self.client.post("/models/", {**data, "key_mode": "none"})
+        conn.refresh_from_db()
+        self.assertEqual((conn.api_key_direct, conn.secret_reference), ("", ""))
+
+    def test_used_model_shows_lock_not_delete(self):
+        from infra.tests.factories import AuditRunFactory, RegisteredModelFactory
+
+        conn = ModelConnectionFactory(project=self.project)
+        used = RegisteredModelFactory(connection=conn, project=self.project)
+        AuditRunFactory(project=self.project, target_model=used)
+        page = self.client.get("/models/").content.decode()
+        self.assertIn("1 run", page)
+        self.assertNotIn(f'value="{used.id}">\n                <button title="Remove model"', page)
+        self.assertIn("kept for reproducibility", page)

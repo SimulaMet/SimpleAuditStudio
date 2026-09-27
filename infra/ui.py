@@ -1632,26 +1632,36 @@ class ScenarioImportView(ProjectMixin, View):
 # ─── Models ──────────────────────────────────────────────────────────────────
 
 class ModelsView(ProjectMixin, TemplateView):
+    """Model registry: connections (server + key) and the models each one serves."""
+
     template_name = "models.html"
 
     def get_context_data(self, **kw):
-        from django.db.models import Q
-
         from model_registry.models import ModelConnection
+        from model_registry.services import PROVIDER_PRESETS, model_usage_counts
 
         p = self.request.project
-        q = (self.request.GET.get("q") or "").strip()
-
-        connections = ModelConnection.objects.filter(project=p).prefetch_related("models")
-        if q:
-            connections = connections.filter(
-                Q(name__icontains=q) | Q(base_url__icontains=q) | Q(models__display_name__icontains=q)
-            ).distinct()
-        connections = connections.order_by("name")
-
+        connections = list(ModelConnection.objects.filter(project=p).prefetch_related("models").order_by("name"))
+        usage = model_usage_counts(p)
+        for conn in connections:
+            conn.model_list = sorted(conn.models.all(), key=lambda m: (m.display_name or m.model_id).lower())
+            for m in conn.model_list:
+                m.usage = usage.get(m.id, 0)
+            conn.in_use = any(m.usage for m in conn.model_list)
+        # What the edit dialog needs (never the key itself).
+        conn_data = {
+            c.pk: {
+                "name": c.name, "provider": c.provider, "base_url": c.base_url, "secret_ref": c.secret_reference,
+                "key_mode": "stored" if c.api_key_direct else "env" if c.secret_reference else "none",
+                "enabled": c.enabled,
+            }
+            for c in connections
+        }
         kw.update(
             connections=connections,
-            search_query=q,
+            conn_data=conn_data,
+            model_total=sum(len(c.model_list) for c in connections),
+            provider_presets=PROVIDER_PRESETS,
         )
         return super().get_context_data(**kw)
 
@@ -1662,76 +1672,85 @@ class ModelsView(ProjectMixin, TemplateView):
         if blocked:
             return blocked
         p = request.project
-        action = request.POST.get("action")
-        error = None
+        post = request.POST
+        action = post.get("action")
+        anchor = ""
 
-        # ── Connection actions ──────────────────────────────────────────────
+        def fail(msg):
+            messages.error(request, msg)
+            return redirect(f"/models/{anchor}")
+
         if action in ("add_connection", "edit_connection"):
-            error = _base_url_error(request.POST.get("conn_base_url", ""))
-        if not error and action == "add_connection":
-            name = request.POST.get("conn_name", "").strip()
-            base_url = request.POST.get("conn_base_url", "").strip()
-            if not name:
-                error = "Connection name is required."
+            name = post.get("conn_name", "").strip()
+            base_url = post.get("conn_base_url", "").strip()
+            error = _base_url_error(base_url) or (None if name else "Connection name is required.")
+            if action == "add_connection":
+                conn = ModelConnection(project=p, created_by=request.user, enabled=True)
             else:
-                ModelConnection.objects.create(
-                    project=p,
-                    name=name,
-                    base_url=base_url,
-                    provider=request.POST.get("conn_provider", "openai"),
-                    secret_reference=request.POST.get("conn_secret_ref", "").strip(),
-                    api_key_direct=request.POST.get("conn_api_key", "").strip(),
-                    enabled=True,
-                    created_by=request.user,
-                )
-        elif not error and action == "edit_connection":
-            conn = ModelConnection.objects.filter(pk=request.POST.get("conn_id"), project=p).first()
-            if not conn:
-                error = "Connection not found."
+                conn = ModelConnection.objects.filter(pk=post.get("conn_id"), project=p).first()
+                if conn is None:
+                    return fail("Connection not found.")
+                conn.enabled = post.get("conn_enabled") == "1"
+                anchor = f"#conn-{conn.pk}"
+            if error:
+                return fail(error)
+            if ModelConnection.objects.filter(project=p, name=name).exclude(pk=conn.pk).exists():
+                return fail(f"A connection named “{name}” already exists.")
+            conn.name, conn.base_url = name, base_url
+            conn.provider = post.get("conn_provider") or "openai"
+            # Where the key comes from: stored on the connection, an env var, or none.
+            key_mode = post.get("key_mode", "stored")
+            if key_mode == "env":
+                ref = post.get("conn_secret_ref", "").strip()
+                if not ref:
+                    return fail("Enter the environment variable that holds the API key.")
+                conn.secret_reference, conn.api_key_direct = ref, ""
+            elif key_mode == "none":
+                conn.secret_reference, conn.api_key_direct = "", ""
             else:
-                conn.name = request.POST.get("conn_name", conn.name).strip()
-                conn.base_url = request.POST.get("conn_base_url", conn.base_url).strip()
-                conn.provider = request.POST.get("conn_provider", conn.provider)
-                conn.secret_reference = request.POST.get("conn_secret_ref", "").strip()
-                new_key = request.POST.get("conn_api_key", "").strip()
-                if new_key:
+                conn.secret_reference = ""
+                new_key = post.get("conn_api_key", "").strip()
+                if new_key:   # blank keeps the stored key
                     conn.api_key_direct = new_key
-                conn.enabled = request.POST.get("conn_enabled") == "1"
-                conn.save()
-        elif action == "add_model":
-            conn = ModelConnection.objects.filter(pk=request.POST.get("model_conn_id"), project=p).first()
-            if not conn:
-                error = "Connection not found."
+            conn.save()
+            anchor = f"#conn-{conn.pk}"
+            messages.success(request, f"Connection “{conn.name}” saved.")
+        elif action == "add_models":
+            conn = ModelConnection.objects.filter(pk=post.get("conn_id"), project=p).first()
+            if conn is None:
+                return fail("Connection not found.")
+            anchor = f"#conn-{conn.pk}"
+            ids = [m.strip() for m in post.getlist("model_id") if m.strip()][:200]
+            if not ids:
+                return fail("Enter a model ID or pick models to add.")
+            label = post.get("model_display_name", "").strip() if len(ids) == 1 else ""
+            existing = set(conn.models.values_list("model_id", flat=True))
+            new = [RegisteredModel(connection=conn, project=p, model_id=m, display_name=label or m, enabled=True)
+                   for m in dict.fromkeys(ids) if m not in existing]
+            RegisteredModel.objects.bulk_create(new)
+            skipped = len(set(ids)) - len(new)
+            messages.success(request, f"Added {len(new)} model{'s' if len(new) != 1 else ''} to {conn.name}."
+                             + (f" {skipped} already there." if skipped else ""))
+        elif action in ("edit_model", "delete_model"):
+            rm = RegisteredModel.objects.select_related("connection").filter(pk=post.get("rm_id"), project=p).first()
+            if rm is None:
+                return fail("Model not found.")
+            anchor = f"#conn-{rm.connection_id}"
+            if action == "edit_model":
+                new_id = post.get("model_id_new", "").strip() or rm.model_id
+                if new_id != rm.model_id and RegisteredModel.objects.filter(connection=rm.connection, model_id=new_id).exists():
+                    return fail(f"“{new_id}” is already registered on {rm.connection.name}.")
+                rm.model_id = new_id
+                rm.display_name = post.get("model_display_name", "").strip() or new_id
+                rm.save(update_fields=["model_id", "display_name"])
             else:
-                model_id = request.POST.get("model_id", "").strip()
-                display_name = request.POST.get("model_display_name", model_id).strip()
-                if not model_id:
-                    error = "Model ID is required."
-                else:
-                    RegisteredModel.objects.update_or_create(
-                        connection=conn, model_id=model_id,
-                        defaults={"project": p, "display_name": display_name, "enabled": True},
-                    )
-        elif action == "edit_model":
-            rm = RegisteredModel.objects.filter(pk=request.POST.get("rm_id"), project=p).first()
-            if rm:
-                new_name = request.POST.get("model_display_name", "").strip()
-                new_id = request.POST.get("model_id_new", "").strip()
-                if new_name:
-                    rm.display_name = new_name
-                if new_id and new_id != rm.model_id:
-                    rm.model_id = new_id
-                rm.save()
-        elif action == "delete_model":
-            rm = RegisteredModel.objects.filter(pk=request.POST.get("rm_id"), project=p).first()
-            if rm:
                 try:
                     rm.delete()
+                    messages.success(request, f"Removed {rm.display_name or rm.model_id}.")
                 except (ProtectedError, RestrictedError):
-                    # AuditRun pins models via RESTRICT FKs; deleting a model
-                    # referenced by an audit run would break the immutable record.
-                    error = f"Cannot delete '{rm.display_name}': it is referenced by audit runs or monitors."
-        return self.render_to_response(self.get_context_data(error=error))
+                    # Runs pin models (RESTRICT FKs); deleting would break their records.
+                    return fail(f"Can't delete “{rm.display_name}”: runs or monitors use it. Kept for reproducibility.")
+        return redirect(f"/models/{anchor}")
 
 
 class ConnectionDeleteView(ProjectMixin, View):

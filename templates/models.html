@@ -1,268 +1,422 @@
 {% extends "base.html" %}
 {% block title %}Models — SimpleAudit{% endblock %}
+{% block head %}
+<style>
+  dialog.sa-dialog::backdrop { background: rgb(0 0 0 / .6); backdrop-filter: blur(2px); }
+  dialog.sa-dialog { color: inherit; }
+  .conn-card:target { outline: 2px solid rgb(108 140 255 / .6); outline-offset: 2px; }
+</style>
+{% endblock %}
 {% block content %}
-<h1 class="text-lg font-semibold text-gray-100 mb-6">Model Registry</h1>
-{% if error %}
-<div class="mb-4 text-sm text-red-300 bg-red-900/30 rounded-lg px-4 py-2">{{ error }}</div>
-{% endif %}
-
-<!-- ═══ CONNECTIONS ═══════════════════════════════════════════════════════ -->
-<div class="bg-surface-raised rounded-xl border border-gray-800 p-4 mb-6">
-  <div class="flex items-center justify-between flex-wrap gap-3 mb-3">
-    <h2 class="text-sm font-semibold text-gray-300">Connections</h2>
-    <form method="get" class="flex gap-2">
-      <input type="text" name="q" value="{{ search_query }}" placeholder="Search…" aria-label="Search connections and models"
-             class="px-3 py-1.5 rounded-lg bg-surface-overlay border border-gray-700 text-xs w-48 focus:outline-none focus:ring-2 focus:ring-accent/50">
-      <button type="submit" class="px-3 py-1.5 rounded-lg bg-surface-overlay border border-gray-700 text-xs text-gray-400 hover:text-accent transition-colors">Search</button>
-      {% if search_query %}<a href="{% url 'models' %}" class="px-2 py-1.5 text-xs text-gray-600 hover:text-accent" aria-label="Clear search" title="Clear search">✕</a>{% endif %}
-    </form>
+<div class="flex flex-wrap items-start justify-between gap-3 mb-5">
+  <div>
+    <h1 class="text-lg font-semibold text-gray-100">Models</h1>
+    <p class="text-sm text-gray-500 mt-0.5 max-w-2xl">
+      {{ connections|length }} connection{{ connections|length|pluralize }} · {{ model_total }} model{{ model_total|pluralize }}.
+      A connection is one server and its API key; register the models it serves to use them as target, auditor or judge.
+    </p>
   </div>
+  <div class="flex items-center gap-2">
+    {% if connections %}
+    <input type="search" id="model-search" placeholder="Filter connections and models…" aria-label="Filter connections and models"
+           class="w-60 px-2.5 py-1.5 rounded-lg bg-surface-overlay border border-gray-700 text-xs text-gray-200 focus:outline-none focus:ring-2 focus:ring-accent/50">
+    <button type="button" id="check-all" title="Ping every connection and check which models it serves"
+            class="px-3 py-1.5 rounded-lg bg-surface-overlay border border-gray-700 text-xs text-gray-300 hover:text-white whitespace-nowrap">Check all</button>
+    {% endif %}
+    <button type="button" data-write data-conn-open="new"
+            class="px-3 py-1.5 rounded-lg bg-accent text-white text-xs font-medium hover:bg-accent-hover whitespace-nowrap">+ Add connection</button>
+  </div>
+</div>
 
-  {% if connections %}
-  <div class="space-y-3 mb-4">
-    {% for conn in connections %}
-    <div id="conn-{{ conn.id }}" class="rounded-lg border border-gray-800/60 p-3 scroll-mt-6 target:border-accent/70 target:ring-2 target:ring-accent/30">
-      <div class="flex items-center justify-between flex-wrap gap-2">
-        <div class="flex items-center gap-3 flex-wrap">
-          <span class="font-medium text-gray-200 text-sm">{{ conn.name }}</span>
-          <span class="text-xs text-gray-500">{{ conn.provider }} · {{ conn.base_url }}</span>
-          {% if conn.has_key %}<span class="text-xs text-emerald-500">🔑 key set</span>{% else %}<span class="text-xs text-yellow-500">⚠ no key</span>{% endif %}
-          <span class="text-xs text-gray-600">{{ conn.models.count }} model(s)</span>
+{% if connections %}
+<div class="space-y-4" id="conn-list">
+  {% for conn in connections %}
+  <section id="conn-{{ conn.id }}" class="conn-card bg-surface-raised rounded-xl border border-gray-800 scroll-mt-6 {% if not conn.enabled %}opacity-70{% endif %}"
+           data-conn="{{ conn.id }}" data-search="{{ conn.name|lower }} {{ conn.base_url|lower }} {{ conn.provider|lower }}">
+    <!-- Connection header -->
+    <header class="flex flex-wrap items-center gap-3 px-4 py-3 border-b border-gray-800">
+      <span class="w-9 h-9 shrink-0 rounded-lg bg-accent/15 text-accent font-semibold flex items-center justify-center uppercase" aria-hidden="true">{{ conn.name|slice:":1" }}</span>
+      <div class="min-w-0 flex-1">
+        <div class="flex flex-wrap items-center gap-2">
+          <h2 class="text-sm font-semibold text-gray-100">{{ conn.name }}</h2>
+          <span class="px-1.5 py-0.5 rounded bg-gray-800 text-[10px] text-gray-400 uppercase tracking-wide">{{ conn.provider }}</span>
+          {% if not conn.enabled %}<span class="px-1.5 py-0.5 rounded bg-gray-800 text-[10px] text-gray-400" title="Its models can't be picked for new runs">disabled</span>{% endif %}
+          {% if conn.api_key_direct %}<span class="text-[11px] text-emerald-400" title="API key stored on this connection (never shown)">● key stored</span>
+          {% elif conn.secret_reference %}<span class="text-[11px] text-sky-300" title="Read from the worker's environment at run time">● env {{ conn.secret_reference }}</span>
+          {% else %}<span class="text-[11px] text-gray-500" title="Requests are sent without an API key (fine for local servers)">○ no key</span>{% endif %}
+          <span class="conn-status hidden text-[11px] px-1.5 py-0.5 rounded" aria-live="polite"></span>
         </div>
-        <div class="flex items-center gap-2">
-          <button onclick="pingConnection({{ conn.id }}, [{% for m in conn.models.all %}{{ m.id }}{% if not forloop.last %},{% endif %}{% endfor %}])"
-                  class="text-xs text-gray-500 hover:text-emerald-400 transition-colors" title="Ping this server and check all models">check</button>
-          <span id="conn-status-{{ conn.id }}" class="hidden text-[10px] px-1.5 py-0.5 rounded"></span>
-          <button data-write onclick="document.getElementById('edit-conn-{{ conn.id }}').classList.toggle('hidden')"
-                  class="text-xs text-gray-500 hover:text-accent transition-colors">Edit</button>
-          <form method="post" data-write action="{% url 'connection_delete' conn.id %}" data-confirm="Delete connection “{{ conn.name }}” and all its models?">
-            {% csrf_token %}
-            <button title="Delete connection and its models" aria-label="Delete connection" class="text-xs text-gray-600 hover:text-red-400">✕</button>
-          </form>
-        </div>
+        <p class="text-xs text-gray-500 font-mono truncate mt-0.5" title="{{ conn.base_url }}">{{ conn.base_url }}</p>
       </div>
+      <div class="flex items-center gap-1.5">
+        <button type="button" data-check="{{ conn.id }}" title="Ping the server and check which registered models it serves"
+                class="px-2.5 py-1 rounded-lg text-xs text-gray-300 bg-surface-overlay hover:text-white">Check</button>
+        <button type="button" data-write data-discover="{{ conn.id }}" title="List the models this server offers and pick ones to add"
+                class="px-2.5 py-1 rounded-lg text-xs text-gray-300 bg-surface-overlay hover:text-white">+ Models</button>
+        <button type="button" data-write data-conn-open="{{ conn.id }}" title="Edit connection" aria-label="Edit connection {{ conn.name }}"
+                class="w-7 h-7 rounded-lg text-gray-400 hover:text-accent hover:bg-surface-overlay">✎</button>
+        {% if conn.in_use %}
+        <span class="w-7 h-7 inline-flex items-center justify-center text-gray-600 cursor-help" title="Can't delete: runs or monitors use its models"><svg class="w-3.5 h-3.5" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 1a3.5 3.5 0 0 0-3.5 3.5V6H4a1.5 1.5 0 0 0-1.5 1.5v6A1.5 1.5 0 0 0 4 15h8a1.5 1.5 0 0 0 1.5-1.5v-6A1.5 1.5 0 0 0 12 6h-.5V4.5A3.5 3.5 0 0 0 8 1Zm2 5H6V4.5a2 2 0 1 1 4 0V6Z"/></svg></span>
+        {% else %}
+        <form method="post" data-write action="{% url 'connection_delete' conn.id %}" data-confirm="Delete connection “{{ conn.name }}” and its {{ conn.model_list|length }} model{{ conn.model_list|length|pluralize }}?">
+          {% csrf_token %}
+          <button title="Delete connection and its models" aria-label="Delete connection {{ conn.name }}" class="w-7 h-7 rounded-lg text-gray-500 hover:text-red-400 hover:bg-surface-overlay">✕</button>
+        </form>
+        {% endif %}
+      </div>
+    </header>
 
-      <!-- Models under this connection -->
-      {% if conn.models.all %}
-      <div class="mt-2 pl-3 border-l-2 border-gray-800 space-y-1">
-        {% for m in conn.models.all %}
-        <div class="text-xs text-gray-400 group">
-          <div class="flex items-center justify-between">
-            <span class="flex items-center gap-1.5">
-              <span id="model-dot-{{ m.id }}" class="hidden w-2 h-2 rounded-full"></span>
-              <span id="model-label-{{ m.id }}">{{ m.display_name|default:m.model_id }}{% if m.display_name %} <span class="text-gray-600">({{ m.model_id }})</span>{% endif %}</span>
-            </span>
-            <div data-write class="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-              <button type="button" onclick="editModel({{ m.id }})"
-                      class="text-gray-600 hover:text-accent px-1" title="Edit name / ID" aria-label="Edit {{ m.display_name|default:m.model_id }}">✎</button>
-              <form method="post" data-confirm="Remove {{ m.display_name|default:m.model_id }}?">
+    <!-- Models -->
+    {% if conn.model_list %}
+    <table class="w-full text-sm">
+      <thead>
+        <tr class="text-[11px] uppercase tracking-wide text-gray-500">
+          <th class="text-left font-medium px-4 py-2 w-8"><span class="sr-only">Availability</span></th>
+          <th class="text-left font-medium px-2 py-2">Name</th>
+          <th class="text-left font-medium px-2 py-2">Model ID</th>
+          <th class="text-right font-medium px-2 py-2">Used by</th>
+          <th class="px-4 py-2 w-24"><span class="sr-only">Actions</span></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for m in conn.model_list %}
+        <tr class="model-row border-t border-gray-800/60 hover:bg-surface-overlay/40 group" data-model="{{ m.id }}" data-model-id="{{ m.model_id }}"
+            data-search="{{ m.display_name|lower }} {{ m.model_id|lower }}">
+          <td class="px-4 py-2"><span class="model-dot inline-block w-2 h-2 rounded-full bg-gray-700" title="Not checked yet — press Check"></span></td>
+          <td class="px-2 py-2 text-gray-200">
+            <span class="model-view">{{ m.display_name|default:m.model_id }}</span>
+            <form method="post" class="model-edit hidden flex gap-2 items-center">
+              {% csrf_token %}
+              <input type="hidden" name="action" value="edit_model">
+              <input type="hidden" name="rm_id" value="{{ m.id }}">
+              <input type="text" name="model_display_name" value="{{ m.display_name }}" placeholder="Display name" aria-label="Display name"
+                     class="w-40 px-2 py-1 rounded bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-1 focus:ring-accent/50">
+              <input type="text" name="model_id_new" value="{{ m.model_id }}" placeholder="Model ID" aria-label="Model ID" required
+                     class="w-48 px-2 py-1 rounded bg-surface-overlay border border-gray-700 text-xs font-mono focus:outline-none focus:ring-1 focus:ring-accent/50">
+              <button class="px-2 py-1 rounded bg-accent/20 text-accent text-xs hover:bg-accent/30">Save</button>
+              <button type="button" data-edit-cancel class="px-2 py-1 rounded text-gray-500 text-xs hover:text-gray-300">Cancel</button>
+            </form>
+          </td>
+          <td class="px-2 py-2 text-xs text-gray-400 font-mono model-view">{{ m.model_id }}</td>
+          <td class="px-2 py-2 text-xs text-right model-view {% if m.usage %}text-gray-300{% else %}text-gray-600{% endif %}"
+              title="Runs and monitors that use this model as target, auditor or judge">{% if m.usage %}{{ m.usage }} run{{ m.usage|pluralize }}{% else %}unused{% endif %}</td>
+          <td class="px-4 py-2 text-right whitespace-nowrap model-view">
+            <span data-write class="opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
+              <button type="button" data-edit title="Rename or change the model ID" aria-label="Edit {{ m.display_name|default:m.model_id }}"
+                      class="w-7 h-7 rounded text-gray-500 hover:text-accent">✎</button>
+              {% if m.usage %}
+              <span class="inline-flex w-7 h-7 items-center justify-center text-gray-600 cursor-help" title="Used by {{ m.usage }} run{{ m.usage|pluralize }} — kept for reproducibility"><svg class="w-3.5 h-3.5" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 1a3.5 3.5 0 0 0-3.5 3.5V6H4a1.5 1.5 0 0 0-1.5 1.5v6A1.5 1.5 0 0 0 4 15h8a1.5 1.5 0 0 0 1.5-1.5v-6A1.5 1.5 0 0 0 12 6h-.5V4.5A3.5 3.5 0 0 0 8 1Zm2 5H6V4.5a2 2 0 1 1 4 0V6Z"/></svg></span>
+              {% else %}
+              <form method="post" class="inline" data-confirm="Remove {{ m.display_name|default:m.model_id }}?">
                 {% csrf_token %}
                 <input type="hidden" name="action" value="delete_model">
                 <input type="hidden" name="rm_id" value="{{ m.id }}">
-                <button class="text-gray-600 hover:text-red-400 px-1" title="Delete model" aria-label="Delete {{ m.display_name|default:m.model_id }}">✕</button>
+                <button title="Remove model" aria-label="Remove {{ m.display_name|default:m.model_id }}" class="w-7 h-7 rounded text-gray-500 hover:text-red-400">✕</button>
               </form>
-            </div>
-          </div>
-          <!-- Inline edit form (hidden by default) -->
-          <form id="edit-model-{{ m.id }}" method="post" class="hidden mt-1 flex gap-2 items-center">
-            {% csrf_token %}
-            <input type="hidden" name="action" value="edit_model">
-            <input type="hidden" name="rm_id" value="{{ m.id }}">
-            <input type="text" name="model_display_name" value="{{ m.display_name }}" placeholder="Display name" aria-label="Edit display name"
-                   class="flex-1 px-2 py-1 rounded bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-1 focus:ring-accent/50">
-            <input type="text" name="model_id_new" value="{{ m.model_id }}" placeholder="Model ID" aria-label="Edit model ID"
-                   class="w-32 px-2 py-1 rounded bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-1 focus:ring-accent/50">
-            <button class="px-2 py-1 rounded bg-accent/20 text-accent text-xs hover:bg-accent/30">Save</button>
-            <button type="button" onclick="cancelEdit({{ m.id }})"
-                    class="px-2 py-1 rounded text-gray-500 text-xs hover:text-gray-300">Cancel</button>
-          </form>
-        </div>
+              {% endif %}
+            </span>
+          </td>
+        </tr>
         {% endfor %}
-      </div>
-      {% endif %}
-
-      <!-- Add model to this connection -->
-      <form method="post" data-write class="mt-2 pl-3 flex gap-2 items-end">
-        {% csrf_token %}
-        <input type="hidden" name="action" value="add_model">
-        <input type="hidden" name="model_conn_id" value="{{ conn.id }}">
-        <div class="flex-1">
-          <label class="block text-xs text-gray-600 mb-0.5">Add model ID</label>
-          <input type="text" name="model_id" list="discovered-{{ conn.id }}" placeholder="e.g. Qwen3.8-27B"
-                 class="w-full px-2 py-1.5 rounded-lg bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-2 focus:ring-accent/50">
-          <datalist id="discovered-{{ conn.id }}"></datalist>
-        </div>
-        <div class="flex-1">
-          <label class="block text-xs text-gray-600 mb-0.5">Display name (optional)</label>
-          <input type="text" name="model_display_name" placeholder="auto = model ID"
-                 class="w-full px-2 py-1.5 rounded-lg bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-2 focus:ring-accent/50">
-        </div>
-        {# Only the id goes to the browser: the server uses the stored key (never render keys into the page). #}
-        <button type="button" onclick="discoverForConn({{ conn.id }})" title="Discover models from this connection" aria-label="Discover models"
-                class="px-2 py-1.5 rounded-lg bg-surface-overlay border border-gray-700 text-xs text-gray-400 hover:text-accent hover:border-accent/50 whitespace-nowrap">🔍</button>
-        <button class="px-3 py-1.5 rounded-lg bg-surface-overlay border border-gray-700 text-xs text-gray-300 hover:bg-accent/20 hover:text-accent whitespace-nowrap">+ Add</button>
-      </form>
-
-      <!-- Edit connection form -->
-      <div id="edit-conn-{{ conn.id }}" class="hidden mt-3 pt-3 border-t border-gray-800/60">
-        <form method="post" class="grid grid-cols-1 md:grid-cols-3 gap-3">
-          {% csrf_token %}
-          <input type="hidden" name="action" value="edit_connection">
-          <input type="hidden" name="conn_id" value="{{ conn.id }}">
-          <div>
-            <label class="block text-xs text-gray-500 mb-1">Name</label>
-            <input type="text" name="conn_name" value="{{ conn.name }}" required
-                   class="w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-accent/50">
-          </div>
-          <div>
-            <label class="block text-xs text-gray-500 mb-1">Base URL</label>
-            <input type="url" name="conn_base_url" value="{{ conn.base_url }}" required
-                   class="w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-accent/50">
-          </div>
-          <div>
-            <label class="block text-xs text-gray-500 mb-1">Provider</label>
-            <select name="conn_provider" class="w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-accent/50">
-              <option value="openai"{% if conn.provider == "openai" %} selected{% endif %}>openai</option>
-              <option value="anthropic"{% if conn.provider == "anthropic" %} selected{% endif %}>anthropic</option>
-              <option value="google"{% if conn.provider == "google" %} selected{% endif %}>google</option>
-            </select>
-          </div>
-          <div>
-            <label class="block text-xs text-gray-500 mb-1">API Key (env var)</label>
-            <input type="text" name="conn_secret_ref" value="{{ conn.secret_reference }}" placeholder="MY_API_KEY"
-                   class="w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-accent/50">
-          </div>
-          <div>
-            <label class="block text-xs text-gray-500 mb-1">API Key (direct)</label>
-            <input type="password" name="conn_api_key" placeholder="sk-... (leave blank to keep)" autocomplete="off"
-                   class="w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-accent/50">
-          </div>
-          <div class="flex items-end gap-3">
-            <label class="flex items-center gap-2 text-xs text-gray-400">
-              <input type="checkbox" name="conn_enabled" value="1" {% if conn.enabled %}checked{% endif %} class="rounded"> Enabled
-            </label>
-            <button class="px-4 py-2 rounded-lg bg-accent text-white text-sm font-medium hover:bg-accent-hover ml-auto">Save</button>
-          </div>
-        </form>
-      </div>
-    </div>
+      </tbody>
+    </table>
+    {% else %}
+    <p class="px-4 py-5 text-sm text-gray-500">No models yet. <button type="button" data-write data-discover="{{ conn.id }}" class="text-accent hover:underline">Add models</button> from this server.</p>
+    {% endif %}
+  </section>
+  {% endfor %}
+  <p id="filter-empty" class="hidden text-sm text-gray-500 text-center py-6">Nothing matches this filter.</p>
+</div>
+{% else %}
+<!-- Empty state -->
+<div class="bg-surface-raised rounded-xl border border-gray-800 p-8 text-center">
+  <p class="text-base text-gray-200 font-medium">Connect your first model server</p>
+  <p class="text-sm text-gray-500 mt-1 mb-5">Any OpenAI-compatible API works: hosted providers or a local server.</p>
+  <div class="flex flex-wrap justify-center gap-2" data-write>
+    {% for key, label, provider, url, env in provider_presets %}
+    <button type="button" data-conn-open="new" data-preset="{{ key }}"
+            class="px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm text-gray-200 hover:border-accent/60 hover:text-white">{{ label }}</button>
     {% endfor %}
   </div>
-  {% else %}
-  <p class="text-sm text-gray-500 mb-4">No connections registered.</p>
-  {% endif %}
+</div>
+{% endif %}
 
-  <!-- Add connection form -->
-  <form method="post" data-write class="pt-3 border-t border-gray-800">
+<!-- Add / edit connection -->
+<dialog id="conn-dialog" class="sa-dialog w-[min(34rem,calc(100vw-2rem))] rounded-xl border border-gray-700 bg-surface-raised p-0 shadow-2xl">
+  <form method="post" class="p-5 space-y-4" id="conn-form">
     {% csrf_token %}
     <input type="hidden" name="action" value="add_connection">
-    <div class="grid grid-cols-1 md:grid-cols-3 gap-3 mb-3">
-      <div>
-        <label class="block text-xs text-gray-500 mb-1">Connection Name</label>
-        <input type="text" name="conn_name" placeholder="Simulachat" required
-               class="w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-accent/50">
-      </div>
-      <div>
-        <label class="block text-xs text-gray-500 mb-1">Base URL</label>
-        <input type="url" name="conn_base_url" placeholder="https://api.example.com/v1" required
-               class="w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-accent/50">
-      </div>
-      <div>
-        <label class="block text-xs text-gray-500 mb-1">Provider</label>
-        <select name="conn_provider" class="w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-accent/50">
-          <option value="openai">openai</option>
-          <option value="anthropic">anthropic</option>
-          <option value="google">google</option>
-        </select>
-      </div>
-      <div>
-        <label class="block text-xs text-gray-500 mb-1">API Key (env var)</label>
-        <input type="text" name="conn_secret_ref" placeholder="SIMULACHAT_API_KEY"
-               class="w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-accent/50">
-      </div>
-      <div>
-        <label class="block text-xs text-gray-500 mb-1">API Key (direct)</label>
-        <input type="password" name="conn_api_key" placeholder="sk-..." autocomplete="off"
-               class="w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-accent/50">
+    <input type="hidden" name="conn_id" value="">
+    <div class="flex items-center justify-between">
+      <h2 class="text-base font-semibold text-gray-100" id="conn-dialog-title">Add connection</h2>
+      <button type="button" data-dialog-close aria-label="Close" title="Close" class="w-7 h-7 rounded text-gray-500 hover:text-gray-200">✕</button>
+    </div>
+    <div>
+      <p class="block text-xs text-gray-500 mb-1.5">Start from</p>
+      <div class="flex flex-wrap gap-1.5" id="preset-chips">
+        {% for key, label, provider, url, env in provider_presets %}
+        <button type="button" data-preset-chip="{{ key }}" class="px-2 py-1 rounded-md bg-surface-overlay border border-gray-700 text-xs text-gray-300 hover:text-white aria-pressed:border-accent aria-pressed:text-white">{{ label }}</button>
+        {% endfor %}
       </div>
     </div>
-    <button class="px-4 py-2 rounded-lg bg-accent text-white text-sm font-medium hover:bg-accent-hover">+ Add Connection</button>
+    <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+      <label class="sm:col-span-2 block text-xs text-gray-500">Name
+        <input type="text" name="conn_name" required placeholder="e.g. OpenAI"
+               class="mt-1 w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm text-gray-100 focus:outline-none focus:ring-2 focus:ring-accent/50"></label>
+      <label class="block text-xs text-gray-500">Provider
+        <select name="conn_provider" class="mt-1 w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm text-gray-100">
+          {% for key, label, provider, url, env in provider_presets %}{% ifchanged provider %}<option value="{{ provider }}">{{ provider }}</option>{% endifchanged %}{% endfor %}
+        </select></label>
+    </div>
+    <label class="block text-xs text-gray-500">Base URL
+      <input type="url" name="conn_base_url" required placeholder="https://api.example.com/v1"
+             class="mt-1 w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm font-mono text-gray-100 focus:outline-none focus:ring-2 focus:ring-accent/50">
+      <span class="block mt-1 text-[11px] text-gray-600">Usually ends in <code>/v1</code>. We call <code>&lt;base URL&gt;/models</code> to discover models.</span></label>
+    <fieldset>
+      <legend class="text-xs text-gray-500 mb-1.5">API key</legend>
+      <div class="inline-flex rounded-lg border border-gray-700 p-0.5 text-xs" role="radiogroup">
+        <label class="px-3 py-1 rounded-md cursor-pointer has-[:checked]:bg-accent/20 has-[:checked]:text-white text-gray-400"><input type="radio" name="key_mode" value="stored" class="sr-only" checked> Store key</label>
+        <label class="px-3 py-1 rounded-md cursor-pointer has-[:checked]:bg-accent/20 has-[:checked]:text-white text-gray-400"><input type="radio" name="key_mode" value="env" class="sr-only"> Environment variable</label>
+        <label class="px-3 py-1 rounded-md cursor-pointer has-[:checked]:bg-accent/20 has-[:checked]:text-white text-gray-400"><input type="radio" name="key_mode" value="none" class="sr-only"> None</label>
+      </div>
+      <div class="mt-2" data-key-pane="stored">
+        <input type="password" name="conn_api_key" autocomplete="off" placeholder="sk-…" aria-label="API key"
+               class="w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm font-mono text-gray-100 focus:outline-none focus:ring-2 focus:ring-accent/50">
+        <span class="block mt-1 text-[11px] text-gray-600" data-key-hint>Stored in the database, never shown again or copied into run records.</span>
+      </div>
+      <div class="mt-2 hidden" data-key-pane="env">
+        <input type="text" name="conn_secret_ref" placeholder="OPENAI_API_KEY" aria-label="Environment variable name"
+               class="w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm font-mono text-gray-100 focus:outline-none focus:ring-2 focus:ring-accent/50">
+        <span class="block mt-1 text-[11px] text-gray-600">Read from the worker's environment when a run starts. Best for production.</span>
+      </div>
+      <p class="mt-2 hidden text-[11px] text-gray-600" data-key-pane="none">No key is sent — fine for local servers like Ollama or vLLM.</p>
+    </fieldset>
+    <p class="hidden text-[11px] text-amber-300 bg-amber-900/20 rounded px-2 py-1.5" id="key-drop-warning">Saving deletes the stored API key for this connection.</p>
+    <label class="hidden items-center gap-2 text-xs text-gray-400" data-edit-only>
+      <input type="checkbox" name="conn_enabled" value="1" checked class="accent-accent"> Enabled — its models can be picked for new runs</label>
+    <div class="flex justify-end gap-2 pt-1">
+      <button type="button" data-dialog-close class="px-3 py-2 rounded-lg text-sm text-gray-400 hover:text-gray-200">Cancel</button>
+      <button type="submit" class="px-4 py-2 rounded-lg bg-accent text-white text-sm font-medium hover:bg-accent-hover" id="conn-submit">Add connection</button>
+    </div>
   </form>
-</div>
+</dialog>
 
+<!-- Add models (discover + manual) -->
+<dialog id="models-dialog" class="sa-dialog w-[min(36rem,calc(100vw-2rem))] rounded-xl border border-gray-700 bg-surface-raised p-0 shadow-2xl">
+  <form method="post" class="p-5 space-y-3" id="models-form">
+    {% csrf_token %}
+    <input type="hidden" name="action" value="add_models">
+    <input type="hidden" name="conn_id" value="">
+    <div class="flex items-center justify-between">
+      <h2 class="text-base font-semibold text-gray-100">Add models to <span id="models-dialog-conn"></span></h2>
+      <button type="button" data-dialog-close aria-label="Close" title="Close" class="w-7 h-7 rounded text-gray-500 hover:text-gray-200">✕</button>
+    </div>
+    <div id="discover-box">
+      <div class="flex items-center gap-2 mb-2">
+        <input type="search" id="discover-filter" placeholder="Filter available models…" aria-label="Filter available models"
+               class="flex-1 px-2.5 py-1.5 rounded-lg bg-surface-overlay border border-gray-700 text-xs text-gray-200 focus:outline-none focus:ring-2 focus:ring-accent/50">
+        <button type="button" id="discover-all" class="text-xs text-gray-400 hover:text-accent whitespace-nowrap">Select shown</button>
+      </div>
+      <p id="discover-status" class="text-xs text-gray-500 py-6 text-center">Asking the server which models it offers…</p>
+      <ul id="discover-list" class="hidden max-h-72 overflow-y-auto space-y-0.5 pr-1"></ul>
+    </div>
+    <details class="group">
+      <summary class="text-xs text-gray-400 hover:text-gray-200 cursor-pointer select-none">Add one by ID instead</summary>
+      <div class="mt-2 grid grid-cols-1 sm:grid-cols-2 gap-2">
+        <input type="text" id="manual-id" placeholder="Model ID, e.g. gpt-4o-mini" aria-label="Model ID"
+               class="px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm font-mono text-gray-100 focus:outline-none focus:ring-2 focus:ring-accent/50">
+        <input type="text" name="model_display_name" id="manual-name" placeholder="Display name (optional)" aria-label="Display name"
+               class="px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm text-gray-100 focus:outline-none focus:ring-2 focus:ring-accent/50">
+      </div>
+    </details>
+    <div class="flex items-center justify-end gap-2 pt-1">
+      <button type="button" data-dialog-close class="px-3 py-2 rounded-lg text-sm text-gray-400 hover:text-gray-200">Cancel</button>
+      <button type="submit" id="models-submit" disabled class="px-4 py-2 rounded-lg bg-accent text-white text-sm font-medium hover:bg-accent-hover disabled:opacity-40 disabled:cursor-not-allowed">Add models</button>
+    </div>
+  </form>
+</dialog>
+
+{{ provider_presets|json_script:"provider-presets" }}
+{{ conn_data|json_script:"conn-data" }}
 <script>
-async function discoverForConn(connId) {
-  const btn = event.currentTarget;
-  const datalist = document.getElementById('discovered-' + connId);
-  btn.textContent = '⏳';
-  btn.disabled = true;
-  try {
-    const body = new URLSearchParams({ connection_id: connId });
-    const resp = await fetch('{% url "models_discover" %}', { method: 'POST', headers: {'X-CSRFToken': csrfToken()}, body });
-    const data = await resp.json();
-    if (!resp.ok) throw new Error(data.error || 'Request failed');
-    datalist.innerHTML = '';
-    data.models.forEach(m => {
-      const opt = document.createElement('option');
-      opt.value = m;
-      datalist.appendChild(opt);
+(function () {
+  const PRESETS = JSON.parse(document.getElementById('provider-presets').textContent)
+    .map(([key, label, provider, url, env]) => ({ key, label, provider, url, env }));
+  const CONNS = JSON.parse(document.getElementById('conn-data').textContent);
+  const $ = (sel, root = document) => root.querySelector(sel);
+  const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
+  document.addEventListener('click', e => { if (e.target.closest('[data-dialog-close]')) e.target.closest('dialog').close(); });
+  $$('dialog.sa-dialog').forEach(d => d.addEventListener('click', e => { if (e.target === d) d.close(); }));   // backdrop
+
+  // ---------- Filter ----------
+  const search = $('#model-search');
+  search?.addEventListener('input', () => {
+    const q = search.value.trim().toLowerCase();
+    let shown = 0;
+    $$('[data-conn]').forEach(card => {
+      const connHit = card.dataset.search.includes(q);
+      let rowHits = 0;
+      $$('.model-row', card).forEach(row => { const hit = !q || connHit || row.dataset.search.includes(q); row.hidden = !hit; rowHits += hit; });
+      card.hidden = !(connHit || rowHits);
+      shown += !card.hidden;
     });
-    btn.textContent = `✓ ${data.models.length}`;
-    // Focus the input so user sees the dropdown
-    const input = datalist.previousElementSibling;
-    if (input) input.focus();
-  } catch (e) {
-    alert('Discover failed: ' + e.message);
-    btn.textContent = '🔍';
-  } finally {
-    btn.disabled = false;
-  }
-}
-function editModel(id) {   // the form is already prefilled server-side
-  document.getElementById('model-label-' + id).classList.add('hidden');
-  const form = document.getElementById('edit-model-' + id);
-  form.classList.remove('hidden');
-  form.querySelector('[name="model_display_name"]').focus();
-}
-function cancelEdit(id) {
-  document.getElementById('edit-model-' + id).classList.add('hidden');
-  document.getElementById('model-label-' + id).classList.remove('hidden');
-}
-async function pingConnection(connId, modelPks) {
-  const badge = document.getElementById('conn-status-' + connId);
-  badge.classList.remove('hidden');
-  badge.textContent = 'checking…';
-  badge.className = 'text-[10px] px-1.5 py-0.5 rounded bg-surface-overlay text-gray-400';
-  // Pulse only this connection's model dots
-  modelPks.forEach(pk => {
-    const d = document.getElementById('model-dot-' + pk);
-    if (d) { d.classList.remove('hidden'); d.className = 'w-2 h-2 rounded-full bg-amber-500 animate-pulse'; }
+    $('#filter-empty').classList.toggle('hidden', shown > 0);
   });
-  try {
-    const resp = await fetch('/api/models/ping-connection/' + connId + '/', { headers: { Accept: 'application/json' } });
-    const data = await resp.json();
+
+  // ---------- Connection dialog ----------
+  const connDialog = $('#conn-dialog'), connForm = $('#conn-form');
+  let storedKeyMode = null;   // key source of the connection being edited
+  function setKeyMode(mode) {
+    connForm.querySelector(`[name="key_mode"][value="${mode}"]`).checked = true;
+    $$('[data-key-pane]', connForm).forEach(p => p.classList.toggle('hidden', p.dataset.keyPane !== mode));
+    connForm.elements.conn_secret_ref.required = mode === 'env';
+    $('#key-drop-warning').classList.toggle('hidden', !(storedKeyMode === 'stored' && mode !== 'stored'));
+  }
+  connForm.addEventListener('change', e => { if (e.target.name === 'key_mode') setKeyMode(e.target.value); });
+  function applyPreset(key) {
+    const p = PRESETS.find(x => x.key === key);
+    if (!p) return;
+    $$('[data-preset-chip]', connForm).forEach(c => c.setAttribute('aria-pressed', c.dataset.presetChip === key));
+    const f = connForm.elements;
+    if (!f.conn_name.value || PRESETS.some(x => x.label === f.conn_name.value)) f.conn_name.value = p.key === 'custom' ? '' : p.label;
+    f.conn_provider.value = p.provider;
+    f.conn_base_url.value = p.url;
+    f.conn_secret_ref.value = p.env;
+    setKeyMode(p.url.startsWith('http://localhost') ? 'none' : 'stored');
+    (p.url ? f.conn_name : f.conn_base_url).focus();
+  }
+  connForm.addEventListener('click', e => { const chip = e.target.closest('[data-preset-chip]'); if (chip) applyPreset(chip.dataset.presetChip); });
+  function openConn(id, preset) {
+    connForm.reset();
+    const f = connForm.elements, c = CONNS[id];
+    const editing = id !== 'new' && c;
+    storedKeyMode = editing ? c.key_mode : null;
+    f.action.value = editing ? 'edit_connection' : 'add_connection';
+    f.conn_id.value = editing ? id : '';
+    $('#conn-dialog-title').textContent = editing ? `Edit ${c.name}` : 'Add connection';
+    $('#conn-submit').textContent = editing ? 'Save' : 'Add connection';
+    $('[data-edit-only]', connForm).classList.toggle('hidden', !editing);
+    $('[data-edit-only]', connForm).classList.toggle('flex', !!editing);
+    $('#preset-chips').parentElement.classList.toggle('hidden', !!editing);
+    $$('[data-preset-chip]', connForm).forEach(ch => ch.setAttribute('aria-pressed', 'false'));
+    if (editing) {
+      if (![...f.conn_provider.options].some(o => o.value === c.provider)) f.conn_provider.add(new Option(c.provider, c.provider));
+      f.conn_name.value = c.name; f.conn_provider.value = c.provider; f.conn_base_url.value = c.base_url;
+      f.conn_secret_ref.value = c.secret_ref; f.conn_enabled.checked = c.enabled;
+      setKeyMode(c.key_mode);
+      f.conn_api_key.placeholder = c.key_mode === 'stored' ? '•••••••• (leave blank to keep the stored key)' : 'sk-…';
+    } else {
+      setKeyMode('stored');
+      f.conn_api_key.placeholder = 'sk-…';
+      if (preset) applyPreset(preset);
+    }
+    connDialog.showModal();
+    if (!preset) (editing ? f.conn_base_url : f.conn_name).focus();
+  }
+  document.addEventListener('click', e => {
+    const b = e.target.closest('[data-conn-open]');
+    if (b) openConn(b.dataset.connOpen, b.dataset.preset);
+  });
+
+  // ---------- Inline model edit ----------
+  document.addEventListener('click', e => {
+    const row = e.target.closest('.model-row');
+    if (!row) return;
+    if (e.target.closest('[data-edit]')) {
+      $$('.model-view', row).forEach(el => el.classList.add('hidden'));
+      $('.model-edit', row).classList.remove('hidden');
+      $('.model-edit [name="model_display_name"]', row).focus();
+    } else if (e.target.closest('[data-edit-cancel]')) {
+      $$('.model-view', row).forEach(el => el.classList.remove('hidden'));
+      $('.model-edit', row).classList.add('hidden');
+    }
+  });
+
+  // ---------- Check (ping) ----------
+  async function check(connId) {
+    const card = $(`[data-conn="${connId}"]`), badge = $('.conn-status', card);
+    const dots = $$('.model-dot', card);
+    badge.className = 'conn-status text-[11px] px-1.5 py-0.5 rounded bg-surface-overlay text-gray-400';
+    badge.textContent = 'checking…';
+    dots.forEach(d => { d.className = 'model-dot inline-block w-2 h-2 rounded-full bg-amber-400 animate-pulse'; });
+    let data;
+    try {
+      data = await (await fetch(`/api/models/ping-connection/${connId}/`, { headers: { Accept: 'application/json' } })).json();
+    } catch (err) { data = { status: 'error', detail: 'unreachable' }; }
     if (data.status === 'up') {
-      badge.textContent = 'online · ' + data.found + '/' + data.total + ' models';
-      badge.className = 'text-[10px] px-1.5 py-0.5 rounded bg-emerald-900/30 text-emerald-400';
-      (data.models || []).forEach(mk => {
-        const dot = document.getElementById('model-dot-' + mk.id);
-        if (dot) {
-          dot.className = 'w-2 h-2 rounded-full ' + (mk.found ? 'bg-emerald-500' : 'bg-red-500');
-          dot.title = mk.found ? 'Available' : 'Not found on server';
-        }
+      badge.className = 'conn-status text-[11px] px-1.5 py-0.5 rounded bg-emerald-900/40 text-emerald-300';
+      badge.textContent = `online · ${data.found}/${data.total} available`;
+      const found = Object.fromEntries((data.models || []).map(m => [m.id, m.found]));
+      $$('.model-row', card).forEach(row => {
+        const ok = found[row.dataset.model];
+        const dot = $('.model-dot', row);
+        dot.className = 'model-dot inline-block w-2 h-2 rounded-full ' + (ok ? 'bg-emerald-400' : 'bg-red-400');
+        dot.title = ok ? 'The server offers this model' : 'The server does not list this model — check the ID';
       });
     } else {
+      badge.className = 'conn-status text-[11px] px-1.5 py-0.5 rounded bg-red-900/40 text-red-300';
       badge.textContent = data.detail || 'error';
-      badge.className = 'text-[10px] px-1.5 py-0.5 rounded bg-red-900/30 text-red-400';
-      modelPks.forEach(pk => {
-        const d = document.getElementById('model-dot-' + pk);
-        if (d) { d.className = 'w-2 h-2 rounded-full bg-red-500'; d.title = 'Server unreachable'; }
-      });
+      badge.title = data.detail || '';
+      dots.forEach(d => { d.className = 'model-dot inline-block w-2 h-2 rounded-full bg-red-400'; d.title = 'Server unreachable'; });
     }
-  } catch (e) {
-    badge.textContent = 'unreachable';
-    badge.className = 'text-[10px] px-1.5 py-0.5 rounded bg-red-900/30 text-red-400';
   }
-}
+  document.addEventListener('click', e => { const b = e.target.closest('[data-check]'); if (b) check(b.dataset.check); });
+  $('#check-all')?.addEventListener('click', () => $$('[data-conn]').forEach(c => check(c.dataset.conn)));
+
+  // ---------- Add models: discover + pick ----------
+  const modelsDialog = $('#models-dialog'), modelsForm = $('#models-form');
+  const list = $('#discover-list'), status = $('#discover-status'), submit = $('#models-submit');
+  function refreshSubmit() {
+    const n = $$('input[name="model_id"]:checked', list).length + ($('#manual-id').value.trim() ? 1 : 0);
+    submit.disabled = n === 0;
+    submit.textContent = n ? `Add ${n} model${n === 1 ? '' : 's'}` : 'Add models';
+  }
+  async function openModels(connId) {
+    const card = $(`[data-conn="${connId}"]`);
+    const have = new Set($$('.model-row', card).map(r => r.dataset.modelId));
+    modelsForm.reset();
+    modelsForm.elements.conn_id.value = connId;
+    $('#models-dialog-conn').textContent = CONNS[connId].name;
+    list.innerHTML = ''; list.classList.add('hidden');
+    status.classList.remove('hidden'); status.textContent = 'Asking the server which models it offers…';
+    refreshSubmit();
+    modelsDialog.showModal();
+    try {
+      const resp = await fetch('{% url "models_discover" %}', {
+        method: 'POST', headers: { 'X-CSRFToken': csrfToken() }, body: new URLSearchParams({ connection_id: connId }),
+      });
+      const data = await resp.json();
+      if (!resp.ok) throw new Error(data.error || `HTTP ${resp.status}`);
+      if (!data.models.length) { status.textContent = 'The server listed no models. Add one by ID below.'; modelsForm.querySelector('details').open = true; return; }
+      list.innerHTML = data.models.map(id => {
+        const added = have.has(id);
+        return `<li><label class="flex items-center gap-2 px-2 py-1 rounded text-xs ${added ? 'text-gray-600' : 'text-gray-300 hover:bg-surface-overlay cursor-pointer'}" data-search="${esc(id.toLowerCase())}">
+          <input type="checkbox" name="model_id" value="${esc(id)}" ${added ? 'disabled checked' : ''} class="accent-accent">
+          <span class="font-mono truncate">${esc(id)}</span>${added ? '<span class="ml-auto text-[10px]">added</span>' : ''}</label></li>`;
+      }).join('');
+      status.classList.add('hidden'); list.classList.remove('hidden');
+      $('#discover-filter').focus();
+    } catch (err) {
+      status.innerHTML = `Couldn't list models: ${esc(err.message)}.<br>Check the base URL and key, or add a model by ID below.`;
+      modelsForm.querySelector('details').open = true;
+    }
+  }
+  document.addEventListener('click', e => { const b = e.target.closest('[data-discover]'); if (b) openModels(b.dataset.discover); });
+  list.addEventListener('change', refreshSubmit);
+  $('#manual-id').addEventListener('input', refreshSubmit);
+  $('#discover-filter').addEventListener('input', e => {
+    const q = e.target.value.trim().toLowerCase();
+    $$('li', list).forEach(li => { li.hidden = !li.firstElementChild.dataset.search.includes(q); });
+  });
+  $('#discover-all').addEventListener('click', () => {
+    $$('li:not([hidden]) input:not(:disabled)', list).forEach(cb => { cb.checked = true; });
+    refreshSubmit();
+  });
+  modelsForm.addEventListener('submit', () => {
+    // Already-added models are shown ticked but disabled (not submitted); add the manual ID if typed.
+    const manual = $('#manual-id').value.trim();
+    if (manual) modelsForm.insertAdjacentHTML('beforeend', `<input type="hidden" name="model_id" value="${esc(manual)}">`);
+  });
+})();
 </script>
 {% endblock %}
