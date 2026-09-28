@@ -83,7 +83,7 @@ def _cleanup_stale_embedded_pg(data_dir: str) -> None:
             pid_file, pid,
         )
         pid_file.unlink(missing_ok=True)
-    except Exception:  # noqa: BLE001 - cleanup must never block startup
+    except Exception:  # cleanup must never block startup
         logger.warning("Could not clean up stale embedded Postgres lock", exc_info=True)
 
 
@@ -100,12 +100,12 @@ def _kill_stale_sidecars() -> None:
     try:
         out = subprocess.run(
             ["ps", "-axo", "pid=,ppid=,command="],
-            capture_output=True, text=True, timeout=10,
+            capture_output=True, text=True, timeout=10, check=False,
         ).stdout
     except FileNotFoundError:
         # Minimal containers (e.g. HF Spaces) may lack `ps`; skip silently.
         return
-    except Exception:  # noqa: BLE001
+    except Exception:
         logger.warning("Could not enumerate processes for stale sidecar cleanup", exc_info=True)
         return
 

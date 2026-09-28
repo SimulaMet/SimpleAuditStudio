@@ -26,8 +26,8 @@ from model_registry.models import ModelConnection
 from model_registry.services import (
     admin_workspaces,
     can_edit_connection,
-    visible_connections_for,
     visible_connection_ids_for,
+    visible_connections_for,
 )
 
 
@@ -137,7 +137,6 @@ class ModelsPageSharingTests(TestCase):
 
     def test_consumer_sees_shared_connection_readonly(self):
         page = self._page_as(self.consumer_user, self.consumer_ws)
-        body = page.content.decode()
         self.assertContains(page, "Public OpenAI")
         self.assertContains(page, "Shared generously for the whole team")
         self.assertContains(page, "read-only")
@@ -214,7 +213,6 @@ class PickerSharingTests(TestCase):
 
     def test_picker_lists_shared_model_with_label(self):
         page = self.client.get("/experiments/new/")
-        body = page.content.decode()
         self.assertContains(page, "Shared GPT")
         self.assertContains(page, "⇄ shared")
         # The model checkbox is present and usable.

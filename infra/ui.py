@@ -658,7 +658,10 @@ class NewExperimentView(ProjectMixin, TemplateView):
     def get_context_data(self, **kw):
         from audits.experiments import MAX_RUNS_PER_EXPERIMENT
         from audits.monitors import has_write_role
-        from model_registry.services import connection_share_label, visible_connections_for
+        from model_registry.services import (
+            connection_share_label,
+            visible_connections_for,
+        )
 
         p = self.request.project
         source = _run_from_query(self.request, "clone_from")
@@ -1675,8 +1678,6 @@ class ModelsView(ProjectMixin, TemplateView):
     template_name = "models.html"
 
     def get_context_data(self, **kw):
-        from django.db.models import Prefetch
-
         from model_registry.models import ModelConnection
         from model_registry.services import (
             PROVIDER_PRESETS,
