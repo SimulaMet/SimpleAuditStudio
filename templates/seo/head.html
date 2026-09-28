@@ -11,8 +11,6 @@
 <meta property="og:description" content="{{ seo_description|default:'SimpleAudit Studio is a self-hostable platform for running reproducible AI model audits.' }}">
 <meta property="og:url" content="{{ request.build_absolute_uri }}">
 <meta property="og:image" content="{{ og_image_url }}">
-{# Dimensions let Facebook precache the image synchronously, so shares of new
-     URLs include it immediately (no "Inferred Property" warning). #}
 <meta property="og:image:width" content="{{ og_image_width|default:1200 }}">
 <meta property="og:image:height" content="{{ og_image_height|default:630 }}">
 <meta property="og:image:alt" content="{{ og_image_alt|default:'SimpleAudit Studio logo' }}">
