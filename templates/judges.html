@@ -5,8 +5,8 @@
   <div>
     <h1 class="text-lg font-semibold text-gray-100">Judges</h1>
     <p class="text-sm text-gray-500 mt-0.5 max-w-2xl">
-      A judge grades each conversation: a model plus a rubric, a judge prompt and the probe prompt the auditor follows.
-      Editing a judge saves a new version; runs keep the version they used.
+      A judge is how conversations are graded: a rubric, the judge prompt and the probe prompt the auditor follows.
+      You pick the model that grades on New Experiment, so one judge works with any model. Editing a judge saves a new version; runs keep the version they used.
     </p>
   </div>
   <div class="flex flex-wrap items-center gap-2 w-full sm:w-auto">
@@ -23,7 +23,7 @@
 <div class="grid grid-cols-1 lg:grid-cols-2 gap-4" id="judge-list">
   {% for j in judges %}
   <section class="bg-surface-raised rounded-xl border border-gray-800 flex flex-col min-w-0"
-           data-judge data-search="{{ j.name|lower }} {{ j.description|lower }} {{ j.current.rubric_name|lower }} {{ j.current.model.display_name|lower }}">
+           data-judge data-search="{{ j.name|lower }} {{ j.description|lower }} {{ j.current.rubric_name|lower }}">
     <header class="flex items-start gap-3 px-4 pt-4">
       <span class="w-9 h-9 shrink-0 rounded-lg bg-accent/15 text-accent flex items-center justify-center" aria-hidden="true">⚖</span>
       <div class="min-w-0 flex-1">
@@ -36,11 +36,6 @@
     </header>
     {% if j.current %}
     <dl class="grid grid-cols-[auto,1fr] gap-x-3 gap-y-1 px-4 py-3 text-xs">
-      <dt class="text-gray-500">Model</dt>
-      <dd class="min-w-0 truncate text-gray-300" title="{{ j.current.model.connection.name }} · {{ j.current.model.model_id }}">
-        {{ j.current.model.display_name }}{% if not j.current.model.has_key %} <span class="text-yellow-500">· no key set</span>{% endif %}
-        {% if not j.current.model.enabled or not j.current.model.connection.enabled %} <span class="text-yellow-500">· disabled</span>{% endif %}
-      </dd>
       <dt class="text-gray-500">Rubric</dt>
       <dd class="min-w-0 truncate text-gray-300">{{ j.current.rubric_name }} <span class="text-gray-500">· {{ j.current.output_label }}</span></dd>
       <dt class="text-gray-500">Prompts</dt>
@@ -77,21 +72,12 @@
 {% else %}
 <div class="bg-surface-raised rounded-xl border border-gray-800 p-8 text-center">
   <p class="text-base text-gray-200 font-medium">Set up your judges</p>
-  <p class="text-sm text-gray-500 mt-1 mb-5 max-w-lg mx-auto">Start with one judge per SimpleAudit rubric (safety, harm, helpfulness, factuality, abstention, checklist), all graded by one model. You can change each one later.</p>
-  {% if models %}
-  <form method="post" data-write class="flex flex-wrap justify-center items-center gap-2">
+  <p class="text-sm text-gray-500 mt-1 mb-5 max-w-lg mx-auto">Start with one judge per SimpleAudit rubric (safety, harm, helpfulness, factuality, abstention, checklist). You can edit or clone each one later.</p>
+  <form method="post" data-write class="flex justify-center">
     {% csrf_token %}<input type="hidden" name="action" value="starters">
-    <label class="text-xs text-gray-500">Judge model
-      <select name="model_id" class="ml-1 px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm text-gray-100">
-        {% for m in models %}<option value="{{ m.id }}">{{ m.connection.name }} · {{ m.display_name }}</option>{% endfor %}
-      </select>
-    </label>
     <button class="px-4 py-2 rounded-lg bg-accent text-white text-sm font-medium hover:bg-accent-hover" title="Create the starter judges">Create starter judges</button>
   </form>
   <p class="text-xs text-gray-600 mt-4">Or <a href="{% url 'judge_new' %}" class="text-accent hover:underline">create one judge</a> from any rubric.</p>
-  {% else %}
-  <p class="text-sm text-gray-400">Judges need a model. <a href="{% url 'models' %}" class="text-accent hover:underline">Add a model first →</a></p>
-  {% endif %}
 </div>
 {% endif %}
 

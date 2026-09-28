@@ -97,7 +97,7 @@ def _clean(text: str | None, default: str) -> str:
     return "" if text == default.strip() else text
 
 
-def save_version(judge: Judge, *, model, rubric: str, probe_prompt: str = "", judge_prompt: str = "",
+def save_version(judge: Judge, *, rubric: str, probe_prompt: str = "", judge_prompt: str = "",
                  note: str = "", user=None) -> tuple[JudgeVersion, bool]:
     """Save a new version of ``judge`` when the versioned content changed.
 
@@ -107,11 +107,8 @@ def save_version(judge: Judge, *, model, rubric: str, probe_prompt: str = "", ju
     """
     if rubric not in rubrics():
         raise ValueError(f"Unknown rubric “{rubric}”.")
-    if model.project_id != judge.project_id:
-        raise ValueError("The judge model must belong to this workspace.")
     info = rubrics()[rubric]
     content = {
-        "model_id": model.pk,
         "rubric": rubric,
         "probe_prompt": _clean(probe_prompt, info["probe_prompt"]),
         "judge_prompt": _clean(judge_prompt, info["judge_prompt"]),
@@ -124,14 +121,14 @@ def save_version(judge: Judge, *, model, rubric: str, probe_prompt: str = "", ju
             return latest, False
         number = (judge.versions.aggregate(n=Max("version"))["n"] or 0) + 1
         version = JudgeVersion.objects.create(
-            judge=judge, version=number, model=model, rubric=rubric,
+            judge=judge, version=number, rubric=rubric,
             probe_prompt=content["probe_prompt"], judge_prompt=content["judge_prompt"],
             note=note.strip()[:250], created_by=user,
         )
     return version, True
 
 
-def create_judge(*, project, name: str, model, rubric: str = "", description: str = "", probe_prompt: str = "",
+def create_judge(*, project, name: str, rubric: str = "", description: str = "", probe_prompt: str = "",
                  judge_prompt: str = "", user=None, note: str = "") -> Judge:
     name = name.strip()
     if not name:
@@ -140,7 +137,7 @@ def create_judge(*, project, name: str, model, rubric: str = "", description: st
         raise ValueError(f"A judge named “{name}” already exists.")
     with transaction.atomic():
         judge = Judge.objects.create(project=project, name=name[:250], description=description.strip(), created_by=user)
-        save_version(judge, model=model, rubric=rubric, probe_prompt=probe_prompt, judge_prompt=judge_prompt,
+        save_version(judge, rubric=rubric, probe_prompt=probe_prompt, judge_prompt=judge_prompt,
                      note=note or "Created", user=user)
     return judge
 
@@ -163,7 +160,6 @@ def clone_judge(version: JudgeVersion, *, name: str = "", user=None) -> Judge:
         project=src.project,
         name=name.strip() or unique_name(src.project, f"{src.name} copy"),
         description=src.description,
-        model=version.model,
         rubric=version.rubric,
         probe_prompt=version.probe_prompt or rubric(version.rubric)["probe_prompt"],
         judge_prompt=version.judge_prompt or rubric(version.rubric)["judge_prompt"],
@@ -172,8 +168,8 @@ def clone_judge(version: JudgeVersion, *, name: str = "", user=None) -> Judge:
     )
 
 
-def ensure_starter_judges(project, model, user=None) -> list[str]:
-    """Create one judge per starter rubric using ``model`` (idempotent by name)."""
+def ensure_starter_judges(project, user=None) -> list[str]:
+    """Create one judge per starter rubric (idempotent by name)."""
     made = []
     for key in STARTER_RUBRICS:
         if key not in rubrics():
@@ -181,16 +177,24 @@ def ensure_starter_judges(project, model, user=None) -> list[str]:
         name = rubrics()[key]["name"].removesuffix(" Judge")
         if Judge.objects.filter(project=project, name=name).exists():
             continue
-        create_judge(project=project, name=name, model=model, rubric=key,
+        create_judge(project=project, name=name, rubric=key,
                      description=rubrics()[key]["description"], user=user)
         made.append(name)
     return made
 
 
-def default_judge_version(project) -> JudgeVersion | None:
-    """The judge used when a caller names only a model (API): newest version of the first judge."""
-    judge = Judge.objects.filter(project=project).order_by("name").first()
-    return judge.latest if judge else None
+DEFAULT_JUDGE_NAME = "Safety"
+
+
+def default_judge_version(project, user=None) -> JudgeVersion:
+    """The judge used when none is picked (API, quick runs): the Safety judge's
+    latest version, created from SimpleAudit's safety rubric if missing."""
+    judge = Judge.objects.filter(project=project, name=DEFAULT_JUDGE_NAME).first()
+    if judge is None or judge.latest is None:
+        judge = create_judge(project=project, name=unique_name(project, DEFAULT_JUDGE_NAME),
+                             rubric="safety" if "safety" in rubrics() else "",
+                             description=rubric("safety")["description"], user=user)
+    return judge.latest
 
 
 def judge_snapshot(version: JudgeVersion) -> dict:

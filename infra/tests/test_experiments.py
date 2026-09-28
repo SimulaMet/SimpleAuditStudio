@@ -56,6 +56,7 @@ class _ExperimentBase(TestCase):
             "scenario_set": [self.set_a.id],
             "target_model": [self.t1.id, self.t2.id],
             "auditor_model": [self.judge.id],
+            "judge_model": [self.judge.id],
             "judge": [judge_for(self.judge).id],
             "max_turns": "3, 5",
             "language": "",
@@ -163,9 +164,9 @@ class ExperimentFlowTests(_ExperimentBase):
 
     def test_confound_and_self_grading_warnings(self):
         review = self.client.post(
-            "/experiments/new/", self._design(judge=[judge_for(self.judge).id, judge_for(self.t1).id], max_turns="")
+            "/experiments/new/", self._design(judge_model=[self.judge.id, self.t1.id], max_turns="")
         )
-        self.assertContains(review, "Target and judge both vary")
+        self.assertContains(review, "Target and judge model both vary")
         self.assertContains(review, "grades itself")
 
     def test_viewer_cannot_launch(self):
@@ -278,7 +279,7 @@ class ReviewEditingTests(_ExperimentBase):
 
     def test_design_page_has_search_and_chips(self):
         page = self.client.get("/experiments/new/")
-        self.assertContains(page, 'placeholder="Search target models…"')
+        self.assertContains(page, 'aria-label="Search target choices"')
         self.assertContains(page, 'placeholder="Search scenario sets…"')
         self.assertContains(page, 'data-chip-suggestions="English,Norwegian')
         self.assertContains(page, 'type="hidden" name="language"')
@@ -293,7 +294,7 @@ class ReviewWarningTests(_ExperimentBase):
 
     def test_row_specific_warning_stays_on_its_row(self):
         review = self.client.post(
-            "/experiments/new/", self._design(judge=[judge_for(self.judge).id, judge_for(self.t1).id], target_model=[self.t1.id], max_turns="")
+            "/experiments/new/", self._design(judge_model=[self.judge.id, self.t1.id], target_model=[self.t1.id], max_turns="")
         )
         rows = review.context["rows"]
         self.assertEqual(sum("grades itself" in " ".join(r["warnings"]) for r in rows), 1)
@@ -402,7 +403,7 @@ class JudgeAndSystemPromptTests(_ExperimentBase):
     def test_several_judges_become_a_factor(self):
         from judges.services import create_judge
 
-        strict = create_judge(project=self.project, name="Strict", model=self.t2, rubric="harm").latest
+        strict = create_judge(project=self.project, name="Strict", rubric="harm").latest
         review = self.client.post("/experiments/new/", self._design(
             target_model=[self.t1.id], max_turns="", judge=[judge_for(self.judge).id, strict.id]))
         self.assertEqual([k for k, _ in review.context["columns"]], ["judge"])
@@ -412,9 +413,9 @@ class JudgeAndSystemPromptTests(_ExperimentBase):
         self.assertEqual(exp.factors, ["judge"])
         runs = {r.judge_version_id: r for r in exp.runs.all()}
         self.assertEqual(set(runs), {judge_for(self.judge).id, strict.id})
-        # The run freezes the judge version's model, rubric and prompts.
+        # The run freezes the judge version's rubric and prompts.
         snap = runs[strict.id].judge_config_snapshot
-        self.assertEqual(runs[strict.id].judge_model_id, self.t2.id)
+        self.assertEqual(runs[strict.id].judge_model_id, self.judge.id)
         self.assertEqual((snap["judge"]["rubric"], snap["judge"]["name"], snap["judge"]["version"]), ("harm", "Strict", 1))
         self.assertTrue(snap["judge"]["judge_prompt"])   # resolved from the rubric
 
@@ -453,3 +454,14 @@ class JudgeAndSystemPromptTests(_ExperimentBase):
         self.assertNotIn("system_prompt", page.context["clone"]["generation_json"])
         row = next(j for j in page.context["judges"] if j.id == run.judge_version.judge_id)
         self.assertEqual(row.ticked, {str(run.judge_version_id)})
+
+    def test_one_judge_with_several_judge_models(self):
+        """Same rubric, different graders: no cloning needed."""
+        review = self.client.post("/experiments/new/", self._design(
+            target_model=[self.t1.id], max_turns="", judge_model=[self.judge.id, self.t2.id]))
+        self.assertEqual([k for k, _ in review.context["columns"]], ["judge_model"])
+        self.client.post("/experiments/new/", self._review_to_launch_payload(review))
+        exp = Experiment.objects.get()
+        self.assertEqual(exp.factors, ["judge_model"])
+        self.assertEqual({r.judge_model_id for r in exp.runs.all()}, {self.judge.id, self.t2.id})
+        self.assertEqual({r.judge_version_id for r in exp.runs.all()}, {judge_for(self.judge).id})

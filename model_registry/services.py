@@ -63,7 +63,7 @@ def http_error_detail(exc: Exception) -> str:
 
 
 def model_usage_counts(project) -> dict[int, int]:
-    """Runs, monitors and judge versions that reference each model."""
+    """Runs and monitors that reference each model (as target, auditor or judge)."""
     from collections import Counter
 
     from django.db.models import Count
@@ -73,13 +73,9 @@ def model_usage_counts(project) -> dict[int, int]:
     counts: Counter = Counter()
     for qs, roles in (
         (AuditRun.objects.filter(project=project), ("target_model", "auditor_model", "judge_model")),
-        (Monitor.objects.filter(project=project), ("target_model", "auditor_model")),   # judges: via versions
+        (Monitor.objects.filter(project=project), ("target_model", "auditor_model", "judge_model")),
     ):
         for role in roles:
             for row in qs.values(role).annotate(n=Count("id")):
                 counts[row[role]] += row["n"]
-    from judges.models import JudgeVersion
-
-    for row in JudgeVersion.objects.filter(judge__project=project).values("model").annotate(n=Count("id")):
-        counts[row["model"]] += row["n"]
     return dict(counts)

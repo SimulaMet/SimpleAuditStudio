@@ -182,6 +182,7 @@ def launch_monitor(monitor: Monitor, *, now=None) -> AuditRun:
         scenario_set_version=version,
         target_model=monitor.target_model,
         auditor_model=monitor.auditor_model,
+        judge_model=monitor.judge_model,
         judge=resolve_judge(monitor),
         max_turns_override=overrides["max_turns"],
         language_override=overrides["language"],
@@ -274,6 +275,7 @@ def run_matches_monitor(run: AuditRun, monitor: Monitor) -> bool:
         and run.scenario_set_version_id == version.id
         and run.target_model_id == monitor.target_model_id
         and run.auditor_model_id == monitor.auditor_model_id
+        and run.judge_model_id == monitor.judge_model_id
         and run.judge_version_id == getattr(resolve_judge(monitor), "pk", None)
         and (run.generation_parameters_snapshot or {}) == (monitor.generation_parameters or {})
     )
@@ -304,6 +306,7 @@ def create_monitor(*, project, user, name: str, run: dict, repeat: dict, experim
         scenario_set_version=None if getattr(run["version"], "follow_latest", False) else run["version"],
         target_model=run["target"],
         auditor_model=run["auditor"],
+        judge_model=run["judge_model"],
         judge=run["judge"].judge,
         # Pinned unless the judge was picked as "Always latest".
         judge_version=None if getattr(run["judge"], "follow_latest", False) else run["judge"],
@@ -477,11 +480,11 @@ def drift_series(monitor: Monitor) -> list[dict]:
             "z": None,
             "change": "",
             "version": run.scenario_set_version.version,
-            "judge_version": run.judge_version_id,
-            # Other scenarios or another judge version: not comparable with before.
+            "judge": (run.judge_version_id, run.judge_model_id),
+            # Other scenarios, judge version or judge model: not comparable with before.
             "version_changed": bool(points) and (
                 points[-1]["version"] != run.scenario_set_version.version
-                or points[-1]["judge_version"] != run.judge_version_id
+                or points[-1]["judge"] != (run.judge_version_id, run.judge_model_id)
             ),
         }
         if c["n"]:

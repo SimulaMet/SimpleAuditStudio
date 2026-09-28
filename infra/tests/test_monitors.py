@@ -70,6 +70,7 @@ class MonitorTestBase(TestCase):
             "scenario_set_version": self.v1,
             "target_model": self.model,
             "auditor_model": self.model,
+            "judge_model": self.model,
             "judge": judge_for(self.model).judge,
             "judge_version": judge_for(self.model),
             "generation_parameters": {"max_turns": 3, "n_repetitions": 2, "judge_params": {"temperature": 0}},
@@ -221,6 +222,7 @@ class _ClientMixin:
             "scenario_set": [self.sset.id],
             "target_model": [self.model.id],
             "auditor_model": [self.model.id],
+            "judge_model": [self.model.id],
             "judge": [judge_for(self.model).id],
             "max_turns": "3",
             "n_repetitions": "2",
@@ -272,7 +274,7 @@ class MonitorPagesTests(_ClientMixin, MonitorTestBase):
         m = self._monitor(
             project=other_set.project, scenario_set=other_set, scenario_set_version=None,
             target_model=other_model, auditor_model=other_model,
-            judge=judge_for(other_model).judge, judge_version=judge_for(other_model),
+            judge_model=other_model, judge=judge_for(other_model).judge, judge_version=judge_for(other_model),
         )
         self.assertEqual(self.client.get(f"/monitors/{m.id}/").status_code, 404)
         self.assertEqual(self.client.post(f"/monitors/{m.id}/delete/").status_code, 404)
@@ -356,6 +358,7 @@ class LaunchPermissionTests(MonitorTestBase):
             "scenario_set": self.sset.id,
             "target_model": self.model.id,
             "auditor_model": self.model.id,
+            "judge_model": self.model.id,
             "judge": judge_for(self.model).id,
         }, follow=True)
         self.assertContains(resp, "Admin or auditor role required")

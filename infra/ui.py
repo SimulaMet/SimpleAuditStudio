@@ -565,6 +565,7 @@ def _clone_from_run(source: AuditRun) -> dict:
         "scenario_set_version_id": source.scenario_set_version_id,
         "target_model_id": source.target_model_id,
         "auditor_model_id": source.auditor_model_id,
+        "judge_model_id": source.judge_model_id,
         "judge_version_id": source.judge_version_id,
         "max_turns": params.get("max_turns", ""),
         "language": params.get("language", ""),
@@ -586,6 +587,7 @@ def _design_selection(post=None, clone=None) -> dict:
             "versions": post.getlist("scenario_version"),
             "target": post.getlist("target_model"),
             "auditor": post.getlist("auditor_model"),
+            "judge_model": post.getlist("judge_model"),
             "judge": post.getlist("judge"),
         }
     if clone:
@@ -595,9 +597,10 @@ def _design_selection(post=None, clone=None) -> dict:
             "versions": [str(clone["scenario_set_version_id"])],
             "target": [str(clone["target_model_id"])],
             "auditor": [str(clone["auditor_model_id"])],
+            "judge_model": [str(clone["judge_model_id"])],
             "judge": [str(clone["judge_version_id"])],
         }
-    return {"sets": [], "versions": [], "target": [], "auditor": [], "judge": []}
+    return {"sets": [], "versions": [], "target": [], "auditor": [], "judge_model": [], "judge": []}
 
 
 def ex_repeat(repeat: dict) -> str:
@@ -696,6 +699,7 @@ class NewExperimentView(ProjectMixin, TemplateView):
             model_roles=[
                 ("target", "Target", "The model under test.", sel["target"]),
                 ("auditor", "Auditor", "Plays the user and probes the target.", sel["auditor"]),
+                ("judge", "Judge model", "Grades each conversation.", sel["judge_model"]),
             ],
             judges=_judge_picker(p, sel["judge"]),
             max_runs=MAX_RUNS_PER_EXPERIMENT,
@@ -752,6 +756,7 @@ class NewExperimentView(ProjectMixin, TemplateView):
             "version": spec["scenario_set"],
             "target": spec["target"],
             "auditor": spec["auditor"],
+            "judge_model": spec["judge_model"],
             "judge": spec["judge"],
             "max_turns": spec["max_turns"],
             "language": spec["language"],
@@ -769,6 +774,7 @@ class NewExperimentView(ProjectMixin, TemplateView):
                         scenario_set_version=run_spec["version"],
                         target_model=run_spec["target"],
                         auditor_model=run_spec["auditor"],
+                        judge_model=run_spec["judge_model"],
                         judge=run_spec["judge"],
                         max_turns_override=run_spec["max_turns"],
                         language_override=run_spec["language"],
@@ -806,12 +812,12 @@ class NewExperimentView(ProjectMixin, TemplateView):
                      duplicate=False):
         from audits import experiments as ex
 
-        spec = {"scenario_set": spec_objs["version"], **{r: spec_objs[r] for r in ("target", "auditor", "judge")}}
+        spec = {"scenario_set": spec_objs["version"], **{r: spec_objs[r] for r in ("target", "auditor", "judge_model", "judge")}}
         return {
             "i": i,
             "spec": ex.spec_to_row(spec),
             "name": name,
-            "values": {k: ex.factor_value_label(k, spec[k]) for k in ("scenario_set", "target", "auditor", "judge")},
+            "values": {k: ex.factor_value_label(k, spec[k]) for k in ("scenario_set", "target", "auditor", "judge_model", "judge")},
             "max_turns": max_turns or "",
             "language": language or "",
             "n_repetitions": n_reps or "",
@@ -830,7 +836,7 @@ class NewExperimentView(ProjectMixin, TemplateView):
         columns = [
             (key, label)
             for key, label in ex.DESIGN_AXES.items()
-            if key in ("scenario_set", "target", "auditor", "judge") and len({r["values"][key] for r in rows}) > 1
+            if key in ("scenario_set", "target", "auditor", "judge_model", "judge") and len({r["values"][key] for r in rows}) > 1
         ]
         fixed = [
             (label, rows[0]["values"][key])
@@ -869,7 +875,8 @@ class NewExperimentView(ProjectMixin, TemplateView):
         rows = [
             self._row_context(
                 i,
-                {"version": spec["scenario_set"], "target": spec["target"], "auditor": spec["auditor"], "judge": spec["judge"]},
+                {"version": spec["scenario_set"], "target": spec["target"], "auditor": spec["auditor"],
+                 "judge_model": spec["judge_model"], "judge": spec["judge"]},
                 name=ex.spec_label(spec, factors),
                 max_turns=spec["max_turns"],
                 language=spec["language"],
@@ -906,9 +913,9 @@ class NewExperimentView(ProjectMixin, TemplateView):
             {spec["v"] for spec in specs.values()}
         )
         models = RegisteredModel.objects.select_related("connection").filter(project=project).in_bulk(
-            {spec[k] for spec in specs.values() for k in ("t", "a")}
+            {spec[k] for spec in specs.values() for k in ("t", "a", "jm")}
         )
-        judges = JudgeVersion.objects.select_related("judge", "model__connection").filter(
+        judges = JudgeVersion.objects.select_related("judge").filter(
             judge__project=project
         ).in_bulk({spec["j"] for spec in specs.values()})
 
@@ -931,6 +938,7 @@ class NewExperimentView(ProjectMixin, TemplateView):
                 "version": version,
                 "target": lookup(models, spec["t"], RegisteredModel),
                 "auditor": lookup(models, spec["a"], RegisteredModel),
+                "judge_model": lookup(models, spec["jm"], RegisteredModel),
                 "judge": judge,
             }
             name = (post.get(f"run-{i}-name") or "").strip() or f"Run {i + 1}"
@@ -1140,7 +1148,7 @@ def _judge_picker(project, selected: list[str]) -> list:
 
     judges = list(
         Judge.objects.filter(project=project).order_by("name").prefetch_related(
-            Prefetch("versions", queryset=JudgeVersion.objects.select_related("model__connection").order_by("-version"))
+            Prefetch("versions", queryset=JudgeVersion.objects.order_by("-version"))
         )
     )
     if not selected and judges and judges[0].versions.all():
@@ -1184,7 +1192,7 @@ class MonitorsView(ProjectMixin, TemplateView):
         p = self.request.project
         monitors = list(
             Monitor.objects.filter(project=p).select_related(
-                "project", "scenario_set", "scenario_set_version", "target_model", "auditor_model", "judge", "judge_version",
+                "project", "scenario_set", "scenario_set_version", "target_model", "auditor_model", "judge_model", "judge", "judge_version",
                 "last_run", "created_by", "experiment",
             )
         )
@@ -1237,7 +1245,7 @@ class MonitorDetailView(ProjectMixin, TemplateView):
 
         monitor = get_object_or_404(
             Monitor.objects.select_related(
-                "scenario_set", "scenario_set_version", "target_model", "auditor_model", "judge", "judge_version"
+                "scenario_set", "scenario_set_version", "target_model", "auditor_model", "judge_model", "judge", "judge_version"
             ),
             pk=kw["monitor_id"],
             project=self.request.project,

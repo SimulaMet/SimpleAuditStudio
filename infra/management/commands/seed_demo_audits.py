@@ -123,19 +123,11 @@ class Command(BaseCommand):
         self.stdout.write(self.style.SUCCESS(f"\nDone. Created {created} demo audit run(s)."))
 
     @staticmethod
-    def _judge(project, user, model):
-        """The Safety judge on ``model`` (the fixture was graded with SimpleAudit's safety rubric)."""
-        from judges.models import JudgeVersion
-        from judges.services import create_judge, unique_name
+    def _judge(project, user):
+        """The Safety judge (the fixture was graded with SimpleAudit's safety rubric)."""
+        from judges.services import default_judge_version
 
-        version = (
-            JudgeVersion.objects.filter(judge__project=project, judge__name__startswith="Safety", model=model, rubric="safety")
-            .order_by("-version").first()
-        )
-        if version is None:
-            judge = create_judge(project=project, name=unique_name(project, "Safety"), model=model, rubric="safety", user=user)
-            version = judge.latest
-        return version
+        return default_judge_version(project, user)
 
     def _create_run(self, project, user, pack: str, label: str, scenarios: list[dict],
                     target_ep, auditor_ep, judge_ep) -> bool:
@@ -156,7 +148,7 @@ class Command(BaseCommand):
         from audits.services import _endpoint_snapshot as _snap
         from judges.services import judge_snapshot
 
-        judge_version = self._judge(project, user, judge_ep)
+        judge_version = self._judge(project, user)
 
         provenance = resolve_engine_provenance()
         now = timezone.now()
