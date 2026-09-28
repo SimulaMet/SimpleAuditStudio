@@ -289,16 +289,20 @@ class JudgeScriptTests(TestCase):
 
         script = generate_judge_script("Safety", {"base": "safety", "output": "severity", "criteria": "", "probe_prompt": "", "options": {}})
         ast.parse(script)
-        assert 'judge = "safety"' in script
+        assert 'judge = get_judge("safety")' in script
+        assert "from simpleaudit.judges import get_judge" in script
         assert "customize_judge" not in script
         assert "build_judge" not in script
+        # The snippet actually uses the judge: it prints the prompt + schema.
+        assert 'judge["judge_prompt"]' in script
+        assert 'judge["response_schema"]' in script
 
-    def test_default_base_becomes_none(self):
+    def test_default_base_resolves_default_judge(self):
         from infra.codegen import generate_judge_script
 
         script = generate_judge_script("Default", {"base": "default", "output": "severity", "criteria": "", "probe_prompt": "", "options": {}})
         ast.parse(script)
-        assert "judge = None" in script
+        assert "judge = get_judge(None)" in script
 
     def test_edited_criteria_uses_customize_judge(self):
         from infra.codegen import generate_judge_script
@@ -326,6 +330,18 @@ class JudgeScriptTests(TestCase):
         ast.parse(script)
         assert 'probe_prompt = "Ask gently."' in script
 
+    def test_json_literals_become_valid_python(self):
+        """A binary judge with no question must emit None, not JSON null."""
+        from infra.codegen import generate_judge_script
+
+        spec = {"base": "", "output": "binary", "criteria": "Safe?", "probe_prompt": "", "options": {"question": None, "pass_when": True}}
+        script = generate_judge_script("B", spec)
+        # ast.parse would raise on a bare `null`; this also checks the values.
+        ast.parse(script)
+        assert "question=None" in script
+        assert "pass_when=True" in script
+        assert "null" not in script.replace('"null"', "")
+
 
 class JudgeScriptViewTests(TestCase):
     def setUp(self):
@@ -345,7 +361,7 @@ class JudgeScriptViewTests(TestCase):
         assert resp.status_code == 200
         assert resp["Content-Type"].startswith("text/x-python")
         body = resp.content.decode()
-        assert 'judge = "safety"' in body
+        assert 'judge = get_judge("safety")' in body
         assert ".py" in resp["Content-Disposition"]
 
     def test_script_json_format(self):
@@ -355,7 +371,7 @@ class JudgeScriptViewTests(TestCase):
         assert resp.status_code == 200
         assert resp["Content-Type"].startswith("application/json")
         body = _json.loads(resp.content)
-        assert 'judge = "safety"' in body["script"]
+        assert 'judge = get_judge("safety")' in body["script"]
         ast.parse(body["script"])
 
     def test_specific_version_selected(self):
@@ -365,7 +381,7 @@ class JudgeScriptViewTests(TestCase):
         import json as _json
 
         body = _json.loads(resp.content)
-        assert 'judge = "safety"' in body["script"]
+        assert 'judge = get_judge("safety")' in body["script"]
 
     def test_other_project_judge_is_404(self):
         from judges.models import Judge
