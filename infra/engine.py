@@ -169,11 +169,72 @@ def _auditor_kwargs_from_snapshot(snapshot: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _merge(*dicts: dict | None) -> dict | None:
+    merged: dict[str, Any] = {}
+    for d in dicts:
+        if d:
+            merged.update(d)
+    return merged or None
+
+
+def auditor_kwargs(*, target: dict, auditor: dict, judge: dict, generation: dict | None = None) -> tuple[dict, str]:
+    """``ModelAuditor`` constructor kwargs from the three frozen snapshots, plus the language.
+
+    The single place that maps a run onto the engine, used by both the
+    single-repetition path and the multi-repetition ``AuditExperiment`` path.
+
+    Generation config keys: ``params`` (all roles), ``target_params`` /
+    ``judge_params`` / ``auditor_params`` are per-request generation params
+    (temperature, top_p, max_tokens, ...), merged over each endpoint's own
+    defaults. ``target_kwargs`` / ``auditor_kwargs`` / ``judge_kwargs`` are
+    client constructor kwargs (timeout, headers, ...).
+    """
+    gen = dict(generation or {})
+    target_cfg = _auditor_kwargs_from_snapshot(target)
+    auditor_cfg = _auditor_kwargs_from_snapshot(auditor)
+    judge_cfg = _auditor_kwargs_from_snapshot(judge)
+    # Fail fast with a clear, actionable error if a required secret is unset,
+    # rather than letting any_llm raise an opaque MissingApiKeyError later.
+    _validate_secrets(("target", target), ("auditor", auditor), ("judge", judge))
+
+    kwargs = {
+        "model": target_cfg["model"],
+        "provider": target_cfg["provider"],
+        "base_url": target_cfg["base_url"],
+        "api_key": target_cfg["api_key"],
+        "target_kwargs": _merge(target_cfg["kwargs"], gen.get("target_kwargs")),
+        "auditor_model": auditor_cfg["model"],
+        "auditor_provider": auditor_cfg["provider"],
+        "auditor_base_url": auditor_cfg["base_url"],
+        "auditor_api_key": auditor_cfg["api_key"],
+        "auditor_kwargs": _merge(auditor_cfg["kwargs"], gen.get("auditor_kwargs")),
+        "judge_model": judge_cfg["model"],
+        "judge_provider": judge_cfg["provider"],
+        "judge_base_url": judge_cfg["base_url"],
+        "judge_api_key": judge_cfg["api_key"],
+        "judge_kwargs": _merge(judge_cfg["kwargs"], gen.get("judge_kwargs")),
+        "params": _merge(target_cfg["gen_params"], gen.get("params")),
+        "target_params": _merge(target_cfg["gen_params"], gen.get("target_params")),
+        "judge_params": _merge(judge_cfg["gen_params"], gen.get("judge_params")),
+        "auditor_params": _merge(auditor_cfg["gen_params"], gen.get("auditor_params")),
+        "max_turns": int(gen.get("max_turns") or 5),
+        "max_retries": int(gen.get("max_retries") or 2),
+        "retry_backoff": float(gen.get("retry_backoff") or 0.5),
+        "system_prompt": gen.get("system_prompt") or None,
+        "probe_prompt": gen.get("probe_prompt") or None,
+        "judge_prompt": gen.get("judge_prompt") or None,
+        "json_format": True,
+        "show_progress": False,
+        "verbose": False,
+    }
+    return kwargs, gen.get("language") or "English"
+
+
 def build_model_auditor(*, target: dict, auditor: dict, judge: dict, generation: dict | None = None):
     """Construct a ModelAuditor from three frozen endpoint snapshots.
 
-    Returns the configured ``ModelAuditor`` instance. Raises ``EngineError`` if
-    the engine cannot be imported.
+    Returns ``(instance, language)``. Raises ``EngineError`` if the engine
+    cannot be imported or the auditor cannot be built.
     """
     _ensure_engine_available()
     try:
@@ -181,98 +242,9 @@ def build_model_auditor(*, target: dict, auditor: dict, judge: dict, generation:
     except Exception as exc:
         raise EngineError(f"Failed to import SimpleAudit ModelAuditor: {exc}") from exc
 
-    gen = dict(generation or {})
-    target_cfg = _auditor_kwargs_from_snapshot(target)
-    auditor_cfg = _auditor_kwargs_from_snapshot(auditor)
-    judge_cfg = _auditor_kwargs_from_snapshot(judge)
-
-    # Fail fast with a clear, actionable error if a required secret is unset,
-    # rather than letting any_llm raise an opaque MissingApiKeyError below.
-    _validate_secrets(
-        ("target", target), ("auditor", auditor), ("judge", judge)
-    )
-
-    # Generation parameters come from the frozen audit profile snapshot.
-    max_turns = int(gen.get("max_turns") or 5)
-    language = gen.get("language") or "English"
-    max_retries = int(gen.get("max_retries") or 2)
-    retry_backoff = float(gen.get("retry_backoff") or 0.5)
-    system_prompt = gen.get("system_prompt") or None
-    probe_prompt = gen.get("probe_prompt") or None
-    judge_prompt = gen.get("judge_prompt") or None
-
-    # SimpleAudit 0.1.13+ supports per-request generation params via
-    # params / target_params / judge_params / auditor_params. These are
-    # merged and passed directly into the LLM API call kwargs (temperature,
-    # top_p, max_tokens, etc.). Constructor kwargs (timeout, headers, etc.)
-    # still go through target_kwargs / auditor_kwargs / judge_kwargs.
-    #
-    # The generation config override JSON uses this structure:
-    #   {"params": {...}, "target_params": {...}, "judge_params": {...},
-    #    "auditor_params": {...}, "target_kwargs": {...}, ...}
-    #
-    # Keys under *_params → per-request generation params (any provider key)
-    # Keys under *_kwargs → client constructor kwargs (timeout, headers, etc.)
-
-    def _role_kwargs(cfg: dict[str, Any], gen_override: dict | None = None) -> dict[str, Any] | None:
-        """Merge endpoint-level kwargs with generation-config constructor overrides."""
-        raw = dict(cfg.get("kwargs") or {})
-        if gen_override:
-            raw.update(gen_override)
-        return raw or None
-
-    # Per-request generation params: merge endpoint-level gen_params with
-    # the audit profile's generation config overrides.
-    def _merge_gen_params(endpoint_gen: dict | None, profile_gen: dict | None) -> dict | None:
-        merged = {}
-        if endpoint_gen:
-            merged.update(endpoint_gen)
-        if profile_gen:
-            merged.update(profile_gen)
-        return merged or None
-
-    gen_params = _merge_gen_params(target_cfg.get("gen_params"), gen.get("params"))
-    gen_target_params = _merge_gen_params(target_cfg.get("gen_params"), gen.get("target_params"))
-    gen_judge_params = _merge_gen_params(judge_cfg.get("gen_params"), gen.get("judge_params"))
-    gen_auditor_params = _merge_gen_params(auditor_cfg.get("gen_params"), gen.get("auditor_params"))
-
-    # Constructor kwargs overrides
-    target_ctor_kwargs = gen.get("target_kwargs") or None
-    auditor_ctor_kwargs = gen.get("auditor_kwargs") or None
-    judge_ctor_kwargs = gen.get("judge_kwargs") or None
-
+    kwargs, language = auditor_kwargs(target=target, auditor=auditor, judge=judge, generation=generation)
     try:
-        instance = ModelAuditor(
-            model=target_cfg["model"],
-            provider=target_cfg["provider"],
-            base_url=target_cfg["base_url"],
-            api_key=target_cfg["api_key"],
-            target_kwargs=_role_kwargs(target_cfg, target_ctor_kwargs),
-            auditor_model=auditor_cfg["model"],
-            auditor_provider=auditor_cfg["provider"],
-            auditor_base_url=auditor_cfg["base_url"],
-            auditor_api_key=auditor_cfg["api_key"],
-            auditor_kwargs=_role_kwargs(auditor_cfg, auditor_ctor_kwargs),
-            judge_model=judge_cfg["model"],
-            judge_provider=judge_cfg["provider"],
-            judge_base_url=judge_cfg["base_url"],
-            judge_api_key=judge_cfg["api_key"],
-            judge_kwargs=_role_kwargs(judge_cfg, judge_ctor_kwargs),
-            params=gen_params,
-            target_params=gen_target_params,
-            judge_params=gen_judge_params,
-            auditor_params=gen_auditor_params,
-            max_turns=max_turns,
-            max_retries=max_retries,
-            retry_backoff=retry_backoff,
-            system_prompt=system_prompt,
-            probe_prompt=probe_prompt,
-            judge_prompt=judge_prompt,
-            show_progress=False,
-            verbose=False,
-        )
-    except EngineError:
-        raise
+        instance = ModelAuditor(**kwargs)
     except Exception as exc:
         raise EngineError(f"Failed to construct ModelAuditor: {type(exc).__name__}: {exc}") from exc
     return instance, language
@@ -317,14 +289,15 @@ def run_scenario(
                 on_turn=on_turn,
             )
         )
-    except EngineError:
-        raise
     except Exception as exc:
         raise EngineError(f"Scenario execution crashed: {type(exc).__name__}: {exc}") from exc
 
     payload = result.to_dict()
     payload["_language"] = language
     return payload
+
+
+_SEV_RANK = {"ERROR": 6, "critical": 5, "high": 4, "medium": 3, "low": 2, "pass": 1}
 
 
 def run_scenario_repeated(
@@ -361,138 +334,42 @@ def run_scenario_repeated(
     ``(rep_index, rep_result_dict)`` — useful for emitting progress events.
     If ``cancel_event`` is set, remaining reps are skipped.
     """
-    gen = dict(generation or {})
-    language = gen.get("language") or "English"
+    _ensure_engine_available()
+    try:
+        from simpleaudit.experiment import AuditExperiment
+    except Exception as exc:
+        raise EngineError(f"Failed to import SimpleAudit AuditExperiment: {exc}") from exc
 
-    # Build the scenario dict in the format the engine expects
-    scenario: dict[str, Any] = {
-        "name": name,
-        "description": description,
-    }
+    kwargs, language = auditor_kwargs(target=target, auditor=auditor, judge=judge, generation=generation)
+    max_turns = kwargs["max_turns"]
+    scenario: dict[str, Any] = {"name": name, "description": description}
     if expected_behavior:
         scenario["expected_behavior"] = expected_behavior
     if test_prompt:
         scenario["test_prompt"] = test_prompt
 
-    # Build a single-model AuditExperiment configured from the frozen snapshots.
-    # This reuses the engine's _merge_common + ModelAuditor construction path,
-    # including its retry logic and error handling.
-    _ensure_engine_available()
-    try:
-        from simpleaudit.experiment import AuditExperiment
-    except ImportError:
-        # Fallback: older engine versions without AuditExperiment.run_scenario_reps
-        return _run_scenario_repeated_fallback(
-            name=name, description=description,
-            expected_behavior=expected_behavior, test_prompt=test_prompt,
-            target=target, auditor=auditor, judge=judge,
-            generation=generation, n_repetitions=n_repetitions,
-            on_rep_done=on_rep_done,
-        )
+    # The model entry carries every ModelAuditor kwarg (target, auditor and
+    # judge alike): AuditExperiment passes it through _merge_common to
+    # ModelAuditor(**entry), and entry values win over experiment-level ones.
+    model_entry = {k: v for k, v in kwargs.items() if v is not None}
+    model_entry["label"] = f"{kwargs['model']} (platform)"
 
-    # Construct the model config from the frozen target snapshot
-    target_cfg = _auditor_kwargs_from_snapshot(target)
-    auditor_cfg = _auditor_kwargs_from_snapshot(auditor)
-    judge_cfg = _auditor_kwargs_from_snapshot(judge)
-
-    _validate_secrets(("target", target), ("auditor", auditor), ("judge", judge))
-
-    max_turns = int(gen.get("max_turns") or 5)
-    max_retries = int(gen.get("max_retries") or 2)
-    retry_backoff = float(gen.get("retry_backoff") or 0.5)
-    system_prompt = gen.get("system_prompt") or None
-    probe_prompt = gen.get("probe_prompt") or None
-    judge_prompt = gen.get("judge_prompt") or None
-
-    # Merge endpoint-level gen_params with profile-level overrides
-    def _merge_gen(endpoint_gen: dict | None, profile_gen: dict | None) -> dict | None:
-        merged = {}
-        if endpoint_gen:
-            merged.update(endpoint_gen)
-        if profile_gen:
-            merged.update(profile_gen)
-        return merged or None
-
-    gen_params = _merge_gen(target_cfg.get("gen_params"), gen.get("params"))
-    gen_target_params = _merge_gen(target_cfg.get("gen_params"), gen.get("target_params"))
-    gen_judge_params = _merge_gen(judge_cfg.get("gen_params"), gen.get("judge_params"))
-    gen_auditor_params = _merge_gen(auditor_cfg.get("gen_params"), gen.get("auditor_params"))
-
-    def _role_kwargs(cfg: dict[str, Any], gen_override: dict | None = None) -> dict[str, Any] | None:
-        raw = dict(cfg.get("kwargs") or {})
-        if gen_override:
-            raw.update(gen_override)
-        return raw or None
-
-    target_ctor_kwargs = gen.get("target_kwargs") or None
-    auditor_ctor_kwargs = gen.get("auditor_kwargs") or None
-    judge_ctor_kwargs = gen.get("judge_kwargs") or None
-
-    # Single-model experiment: the model entry carries the target config,
-    # while judge/auditor are set at the experiment level.
-    # All keys here flow through _merge_common → ModelAuditor(**merged).
-    model_entry: dict[str, Any] = {
-        "model": target_cfg["model"],
-        "provider": target_cfg["provider"],
-        "base_url": target_cfg["base_url"],
-        "api_key": target_cfg["api_key"],
-        "label": f"{target_cfg['model']} (platform)",
-        # Constructor kwargs for the any_llm client (timeout, headers, etc.)
-        "kwargs": _role_kwargs(target_cfg, target_ctor_kwargs),
-        # Per-request generation params (temperature, top_p, max_tokens, etc.)
-        "params": gen_params,
-        "target_params": gen_target_params,
-        "judge_params": gen_judge_params,
-        "auditor_params": gen_auditor_params,
-        # Retry config from the frozen generation profile
-        "max_retries": max_retries,
-        "retry_backoff": retry_backoff,
-        # System prompt (if configured)
-        "system_prompt": system_prompt,
-    }
-    # Remove None values — ModelAuditor treats None differently from absent
-    # for some fields (e.g., params=None means "no override" which is fine,
-    # but we want to be explicit).
-    model_entry = {k: v for k, v in model_entry.items() if v is not None}
-
-    # Track rep completions via callback.
-    # NOTE: The engine's on_rep_done receives an AuditResults collection
-    # (one per rep). For single-scenario execution it always contains exactly
-    # one AuditResult. We extract that single result for the platform's
-    # per-rep storage format.
-    #
-    # IMPORTANT: The outer on_rep_done (from the worker) may do Django ORM
-    # calls, which CANNOT run inside asyncio.run()'s event loop. So we collect
-    # results here and emit events AFTER asyncio.run() returns.
+    # The engine's on_rep_done receives an AuditResults collection with one
+    # result (single scenario). Collect here and emit AFTER asyncio.run()
+    # returns: the outer callback does Django ORM calls, which cannot run
+    # inside the event loop.
     reps: list[dict[str, Any]] = []
 
     def _on_rep_done(label: str, rep_index: int, total: int, result) -> None:
-        if result is None:
+        if not result:
             return
-        # result is AuditResults (collection); extract the single scenario result
-        single = result[0] if hasattr(result, '__getitem__') and len(result) > 0 else None
-        if single is None:
-            return
-        payload = single.to_dict()
+        payload = result[0].to_dict()
         payload["_rep_index"] = rep_index
         reps.append(payload)
-        # Do NOT call on_rep_done here — it may hit the DB from an async context.
-        # Events are emitted after asyncio.run() completes (see below).
 
-    # Constructor kwargs for judge/auditor clients go in the model entry dict
-    # because AuditExperiment.__init__ doesn't accept them directly — they flow
-    # through _merge_common → ModelAuditor(**merged).
-    judge_kw = _role_kwargs(auditor_cfg, judge_ctor_kwargs)
-    if judge_kw:
-        model_entry["judge_kwargs"] = judge_kw
-    auditor_kw = _role_kwargs(auditor_cfg, auditor_ctor_kwargs)
-    if auditor_kw:
-        model_entry["auditor_kwargs"] = auditor_kw
-
-    # The engine consults ``rep_is_done(label, i)`` right before starting rep
-    # ``i`` — the only hook that fires at every rep boundary with the exact
-    # index. Use it to signal rep starts; always return False so no rep is
-    # skipped. on_rep_started must be async-safe (no Django ORM calls).
+    # ``rep_is_done(label, i)`` is consulted right before rep ``i`` starts —
+    # the only hook that fires at every rep boundary. Use it to signal rep
+    # starts; never skip. on_rep_started must be async-safe (no ORM calls).
     def _rep_is_done(label: str, rep_index: int) -> bool:
         if on_rep_started:
             on_rep_started(rep_index)
@@ -501,24 +378,14 @@ def run_scenario_repeated(
     try:
         experiment = AuditExperiment(
             models=[model_entry],
-            judge_model=auditor_cfg["model"],
-            judge_provider=auditor_cfg["provider"],
-            judge_base_url=auditor_cfg["base_url"],
-            judge_api_key=auditor_cfg["api_key"],
-            auditor_model=auditor_cfg["model"],
-            auditor_provider=auditor_cfg["provider"],
-            auditor_base_url=auditor_cfg["base_url"],
-            auditor_api_key=auditor_cfg["api_key"],
-            probe_prompt=probe_prompt,
-            judge_prompt=judge_prompt,
-            json_format=True,
-            verbose=False,
-            show_progress=False,
             n_repetitions=n_repetitions,
             on_rep_done=_on_rep_done,
             rep_is_done=_rep_is_done,
             cancel_event=cancel_event,
-            max_retries_per_rep=max_retries,
+            max_retries_per_rep=kwargs["max_retries"],
+            json_format=True,
+            verbose=False,
+            show_progress=False,
         )
     except Exception as exc:
         raise EngineError(f"Failed to construct AuditExperiment: {type(exc).__name__}: {exc}") from exc
@@ -526,104 +393,28 @@ def run_scenario_repeated(
     try:
         results = asyncio.run(
             experiment.run_scenario_reps(
-                model_index=0,
-                scenario=scenario,
-                max_turns=max_turns,
-                language=language,
-                on_turn=on_turn,
+                model_index=0, scenario=scenario, max_turns=max_turns, language=language, on_turn=on_turn,
             )
         )
-    except EngineError:
-        raise
     except Exception as exc:
         raise EngineError(f"Scenario execution crashed: {type(exc).__name__}: {exc}") from exc
 
-    # If the callback didn't fire (e.g., all reps were cached/skipped),
-    # fall back to the returned results list.
+    # If the callback didn't fire (e.g. all reps cached), use the returned list.
     if not reps and results:
         for i, r in enumerate(results):
             payload = r.to_dict()
             payload["_rep_index"] = i
             reps.append(payload)
 
-    # Emit progress events NOW (safe: we're back in sync context).
     if on_rep_done:
         for rep in reps:
             on_rep_done(rep.get("_rep_index", 0), rep)
 
-    # --- Aggregate stability stats ---
-    severities = [r.get("severity", "") for r in reps]
     sev_counts: dict[str, int] = {}
-    for s in severities:
-        sev_counts[s] = sev_counts.get(s, 0) + 1
-
-    _SEV_RANK = {"ERROR": 6, "critical": 5, "high": 4, "medium": 3, "low": 2, "pass": 1}
-    modal_severity = max(sev_counts.keys(), key=lambda s: (sev_counts[s], _SEV_RANK.get(s, 0))) if sev_counts else "ERROR"
-    agreement_rate = sev_counts[modal_severity] / len(reps) if reps else 0.0
-
-    return {
-        "reps": reps,
-        "aggregated_severity": modal_severity,
-        "agreement_rate": round(agreement_rate, 4),
-        "severity_distribution": sev_counts,
-        "n_repetitions": len(reps),
-        "_language": language,
-    }
-
-
-
-def _run_scenario_repeated_fallback(
-    *,
-    name: str,
-    description: str,
-    expected_behavior: list[str] | None,
-    test_prompt: str | None,
-    target: dict,
-    auditor: dict,
-    judge: dict,
-    generation: dict | None = None,
-    n_repetitions: int = 1,
-    on_rep_done: callable | None = None,
-) -> dict[str, Any]:
-    """Fallback for engine versions without AuditExperiment.run_scenario_reps."""
-    gen = dict(generation or {})
-    reps: list[dict[str, Any]] = []
-    language = None
-
-    for i in range(n_repetitions):
-        auditor_instance, language = build_model_auditor(
-            target=target, auditor=auditor, judge=judge, generation=gen
-        )
-        try:
-            result = asyncio.run(
-                auditor_instance.run_scenario(
-                    name=name,
-                    description=description,
-                    expected_behavior=expected_behavior,
-                    test_prompt=test_prompt,
-                    language=language,
-                )
-            )
-        except EngineError:
-            raise
-        except Exception as exc:
-            raise EngineError(f"Scenario execution crashed (rep {i+1}): {type(exc).__name__}: {exc}") from exc
-
-        rep_payload = result.to_dict()
-        rep_payload["_language"] = language
-        rep_payload["_rep_index"] = i
-        reps.append(rep_payload)
-
-        if on_rep_done:
-            on_rep_done(i, rep_payload)
-
-    severities = [r.get("severity", "") for r in reps]
-    sev_counts: dict[str, int] = {}
-    for s in severities:
-        sev_counts[s] = sev_counts.get(s, 0) + 1
-
-    _SEV_RANK = {"ERROR": 6, "critical": 5, "high": 4, "medium": 3, "low": 2, "pass": 1}
-    modal_severity = max(sev_counts.keys(), key=lambda s: (sev_counts[s], _SEV_RANK.get(s, 0))) if sev_counts else "ERROR"
+    for rep in reps:
+        sev = rep.get("severity", "")
+        sev_counts[sev] = sev_counts.get(sev, 0) + 1
+    modal_severity = max(sev_counts, key=lambda s: (sev_counts[s], _SEV_RANK.get(s, 0))) if sev_counts else "ERROR"
     agreement_rate = sev_counts[modal_severity] / len(reps) if reps else 0.0
 
     return {
