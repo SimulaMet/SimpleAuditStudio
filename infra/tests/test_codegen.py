@@ -279,3 +279,98 @@ class RunScriptViewTests(TestCase):
         assert other.project_id != self.run.project_id
         resp = self.client.get(f"/runs/{other.id}/script/")
         assert resp.status_code == 404
+
+
+class JudgeScriptTests(TestCase):
+    """The standalone judge snippet (infra.codegen.generate_judge_script)."""
+
+    def test_unedited_library_judge_by_name(self):
+        from infra.codegen import generate_judge_script
+
+        script = generate_judge_script("Safety", {"base": "safety", "output": "severity", "criteria": "", "probe_prompt": "", "options": {}})
+        ast.parse(script)
+        assert 'judge = "safety"' in script
+        assert "customize_judge" not in script
+        assert "build_judge" not in script
+
+    def test_default_base_becomes_none(self):
+        from infra.codegen import generate_judge_script
+
+        script = generate_judge_script("Default", {"base": "default", "output": "severity", "criteria": "", "probe_prompt": "", "options": {}})
+        ast.parse(script)
+        assert "judge = None" in script
+
+    def test_edited_criteria_uses_customize_judge(self):
+        from infra.codegen import generate_judge_script
+
+        script = generate_judge_script("Safety+", {"base": "safety", "output": "severity", "criteria": "Check X.", "probe_prompt": "", "options": {}})
+        ast.parse(script)
+        assert "customize_judge(" in script
+        assert "from simpleaudit.judges import customize_judge" in script
+        assert '"Check X."' in script
+
+    def test_own_criteria_uses_build_judge(self):
+        from infra.codegen import generate_judge_script
+
+        spec = {"base": "", "output": "score", "criteria": "Rate clarity.", "probe_prompt": "", "options": {"dimensions": ["clarity", "tone"]}}
+        script = generate_judge_script("Clarity", spec)
+        ast.parse(script)
+        assert "build_judge(" in script
+        assert "from simpleaudit.judges import build_judge" in script
+        assert '"clarity"' in script and '"tone"' in script
+
+    def test_probe_prompt_emitted_when_set(self):
+        from infra.codegen import generate_judge_script
+
+        script = generate_judge_script("P", {"base": "safety", "output": "severity", "criteria": "", "probe_prompt": "Ask gently.", "options": {}})
+        ast.parse(script)
+        assert 'probe_prompt = "Ask gently."' in script
+
+
+class JudgeScriptViewTests(TestCase):
+    def setUp(self):
+        from accounts.models import ProjectMembership, User
+        from judges.models import Judge
+
+        self.judge = Judge.objects.create(project=ProjectFactory(), name="Safety")
+        self.v1 = JudgeVersionFactory(judge=self.judge, version=1, base="safety")
+        self.user = User.objects.create_user(username="alice", password="pw-12345")
+        ProjectMembership.objects.create(
+            project=self.judge.project, user=self.user, role=ProjectMembership.Role.AUDITOR
+        )
+        self.client.login(username="alice", password="pw-12345")
+
+    def test_script_download(self):
+        resp = self.client.get(f"/judges/{self.judge.id}/script/")
+        assert resp.status_code == 200
+        assert resp["Content-Type"].startswith("text/x-python")
+        body = resp.content.decode()
+        assert 'judge = "safety"' in body
+        assert ".py" in resp["Content-Disposition"]
+
+    def test_script_json_format(self):
+        import json as _json
+
+        resp = self.client.get(f"/judges/{self.judge.id}/script/?format=json")
+        assert resp.status_code == 200
+        assert resp["Content-Type"].startswith("application/json")
+        body = _json.loads(resp.content)
+        assert 'judge = "safety"' in body["script"]
+        ast.parse(body["script"])
+
+    def test_specific_version_selected(self):
+        JudgeVersionFactory(judge=self.judge, version=2, base="", output="binary", criteria="Pass?", options={"question": "ok?", "pass_when": True})
+        # Latest is v2 (own criteria); ?v=1 targets the library judge.
+        resp = self.client.get(f"/judges/{self.judge.id}/script/?v=1&format=json")
+        import json as _json
+
+        body = _json.loads(resp.content)
+        assert 'judge = "safety"' in body["script"]
+
+    def test_other_project_judge_is_404(self):
+        from judges.models import Judge
+
+        other = Judge.objects.create(project=ProjectFactory(), name="Other")
+        JudgeVersionFactory(judge=other, version=1, base="safety")
+        resp = self.client.get(f"/judges/{other.id}/script/")
+        assert resp.status_code == 404

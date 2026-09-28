@@ -15,6 +15,9 @@
   {% endif %}
   <a href="{% url 'judge_new' %}?clone={{ shown.id }}" data-write title="Start a new judge prefilled from v{{ shown.version }}; nothing is saved until you create it"
      class="px-3 py-1.5 rounded-lg bg-surface-overlay border border-gray-700 text-xs text-gray-300 hover:text-white">Clone v{{ shown.version }}</a>
+  <button type="button" onclick="openJudgeScriptModal()" title="Copy or download a standalone Python snippet that builds this judge with the simpleaudit library" aria-label="Run script" class="inline-flex items-center justify-center w-8 h-8 rounded-lg bg-surface-overlay text-gray-400 hover:text-accent transition-colors">
+    <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
+  </button>
   {% if judge_in_use %}
   <span data-write class="px-3 py-1.5 rounded-lg border border-gray-800 text-xs text-gray-600 cursor-help" title="Can't delete: runs or monitors use this judge. Kept for reproducibility.">Delete</span>
   {% else %}
@@ -328,4 +331,18 @@
   if (location.hash === '#criteria' && !readOnly) document.getElementById('criteria').focus();
 })();
 </script>
+
+{% if shown %}
+{% include "partials/text_file_modal.html" %}
+<script>
+function openJudgeScriptModal() {
+  TextFileModal.open({
+    url: '{% url "judge_script" judge.id %}?v={{ shown.version }}&format=json',
+    filename: '{{ judge.name|slugify }}_judge.py',
+    title: 'Run script',
+    description: 'A standalone Python snippet that builds this judge with the <code class="text-gray-400">simpleaudit</code> library — same criteria, format and probe prompt as v{{ shown.version }}. Drop it into any script.',
+  });
+}
+</script>
+{% endif %}
 {% endblock %}
