@@ -11,12 +11,16 @@ def sha256_text(text: str) -> str:
     return "sha256:" + hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
-def scenario_revision_hash(*, description: str, expected_behavior, test_prompt: str, metadata: dict) -> str:
+def scenario_revision_hash(*, description: str, expected_behavior, test_prompt: str, metadata: dict,
+                           severity_ceiling: str = "", documents=None, file_uri=None) -> str:
     execution_metadata = metadata.get("execution") if isinstance(metadata, dict) else None
     payload = {
         "description": description or "",
         "expected_behavior": expected_behavior or [],
         "test_prompt": test_prompt or "",
+        "severity_ceiling": severity_ceiling or "",
+        "documents": documents or [],
+        "file_uri": file_uri,
         "execution_metadata": execution_metadata,
     }
     return sha256_text(canonical_json(payload))

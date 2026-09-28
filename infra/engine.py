@@ -273,6 +273,11 @@ def run_scenario(
     judge: dict,
     generation: dict | None = None,
     on_turn: callable | None = None,
+    severity_ceiling: str = "",
+    documents: list | None = None,
+    file_uri=None,
+    category: str = "",
+    metadata: dict | None = None,
 ) -> dict[str, Any]:
     """Execute one scenario through the real engine and return a serializable result.
 
@@ -297,6 +302,11 @@ def run_scenario(
                 description=description,
                 expected_behavior=expected_behavior,
                 test_prompt=test_prompt,
+                severity=severity_ceiling or None,
+                documents=documents or None,
+                file_uri=file_uri,
+                category=category or None,
+                metadata=metadata or {},
                 language=language,
                 on_turn=on_turn,
             )
@@ -327,6 +337,11 @@ def run_scenario_repeated(
     on_turn: callable | None = None,
     on_rep_started: callable | None = None,
     cancel_event: asyncio.Event | None = None,
+    severity_ceiling: str = "",
+    documents: list | None = None,
+    file_uri=None,
+    category: str = "",
+    metadata: dict | None = None,
 ) -> dict[str, Any]:
     """Execute one scenario N times using AuditExperiment.run_scenario_reps().
 
@@ -359,6 +374,16 @@ def run_scenario_repeated(
         scenario["expected_behavior"] = expected_behavior
     if test_prompt:
         scenario["test_prompt"] = test_prompt
+    if severity_ceiling:
+        scenario["severity"] = severity_ceiling
+    if documents:
+        scenario["documents"] = documents
+    if file_uri:
+        scenario["file_uri"] = file_uri
+    if category:
+        scenario["category"] = category
+    if metadata:
+        scenario["metadata"] = metadata
 
     # The model entry carries every ModelAuditor kwarg (target, auditor and
     # judge alike): AuditExperiment passes it through _merge_common to

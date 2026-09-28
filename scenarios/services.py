@@ -29,7 +29,9 @@ def require_project_role(user, project: Project, *roles):
 
 
 @transaction.atomic
-def create_scenario(*, project: Project, user, key: str, title: str, description: str, expected_behavior, test_prompt: str = "", metadata: dict | None = None, category: str = "", tags: list | None = None) -> Scenario:
+def create_scenario(*, project: Project, user, key: str, title: str, description: str, expected_behavior,
+                    test_prompt: str = "", severity_ceiling: str = "", documents=None, file_uri=None,
+                    metadata: dict | None = None, category: str = "", tags: list | None = None) -> Scenario:
     require_project_role(user, project, ProjectMembership.Role.ADMIN, ProjectMembership.Role.AUDITOR)
     normalized_key = slugify(key) or slugify(title)
     if not normalized_key:
@@ -43,32 +45,48 @@ def create_scenario(*, project: Project, user, key: str, title: str, description
         tags=tags or [],
         created_by=user,
     )
-    _create_revision(scenario=scenario, user=user, description=description, expected_behavior=expected_behavior, test_prompt=test_prompt, metadata=metadata or {})
+    _create_revision(scenario=scenario, user=user, description=description, expected_behavior=expected_behavior,
+                     test_prompt=test_prompt, severity_ceiling=severity_ceiling, documents=documents or [],
+                     file_uri=file_uri, metadata=metadata or {})
     return scenario
 
 
 @transaction.atomic
-def update_scenario_content(*, scenario: Scenario, user, description: str, expected_behavior, test_prompt: str = "", metadata: dict | None = None) -> ScenarioRevision:
+def update_scenario_content(*, scenario: Scenario, user, description: str, expected_behavior,
+                            test_prompt: str = "", severity_ceiling: str = "", documents=None, file_uri=None,
+                            metadata: dict | None = None) -> ScenarioRevision:
     require_project_role(user, scenario.project, ProjectMembership.Role.ADMIN, ProjectMembership.Role.AUDITOR)
     latest = ScenarioRevision.objects.filter(scenario=scenario).order_by("-revision").first()
     new_metadata = metadata if metadata is not None else (latest.metadata if latest else {})
+    new_ceiling = severity_ceiling or ""
+    new_documents = documents if documents is not None else (latest.documents if latest else [])
+    new_file_uri = file_uri if file_uri is not None else (latest.file_uri if latest else None)
     if (
         latest
         and latest.description == description
         and latest.expected_behavior == expected_behavior
         and latest.test_prompt == test_prompt
+        and latest.severity_ceiling == new_ceiling
+        and latest.documents == new_documents
+        and latest.file_uri == new_file_uri
         and latest.metadata == new_metadata
     ):
         return latest
-    return _create_revision(scenario=scenario, user=user, description=description, expected_behavior=expected_behavior, test_prompt=test_prompt, metadata=new_metadata)
+    return _create_revision(scenario=scenario, user=user, description=description, expected_behavior=expected_behavior,
+                            test_prompt=test_prompt, severity_ceiling=new_ceiling, documents=new_documents,
+                            file_uri=new_file_uri, metadata=new_metadata)
 
 
-def _create_revision(*, scenario: Scenario, user, description: str, expected_behavior, test_prompt: str, metadata: dict) -> ScenarioRevision:
+def _create_revision(*, scenario: Scenario, user, description: str, expected_behavior, test_prompt: str,
+                     severity_ceiling: str = "", documents=None, file_uri=None, metadata: dict) -> ScenarioRevision:
     next_revision = ScenarioRevision.objects.filter(scenario=scenario).count() + 1
     content_hash = scenario_revision_hash(
         description=description,
         expected_behavior=expected_behavior,
         test_prompt=test_prompt,
+        severity_ceiling=severity_ceiling,
+        documents=documents or [],
+        file_uri=file_uri,
         metadata=metadata,
     )
     return ScenarioRevision.objects.create(
@@ -77,6 +95,9 @@ def _create_revision(*, scenario: Scenario, user, description: str, expected_beh
         description=description,
         expected_behavior=expected_behavior,
         test_prompt=test_prompt,
+        severity_ceiling=severity_ceiling or "",
+        documents=documents or [],
+        file_uri=file_uri,
         metadata=metadata,
         content_hash=content_hash,
         created_by=user,

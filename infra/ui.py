@@ -1355,7 +1355,7 @@ class ScenariosView(ProjectMixin, TemplateView):
 
 
 def _create_revision(scenario, description: str, user, expected_behavior: list | None = None, test_prompt: str = "",
-                     severity: str = "", documents=None, file_uri=None) -> ScenarioRevision:
+                     severity_ceiling: str = "", documents=None, file_uri=None) -> ScenarioRevision:
     """Create the next revision for a scenario."""
     rev = scenario.revisions.count() + 1
     eb = expected_behavior or []
@@ -1363,9 +1363,9 @@ def _create_revision(scenario, description: str, user, expected_behavior: list |
     return ScenarioRevision.objects.create(
         scenario=scenario, revision=rev, description=description,
         expected_behavior=eb, test_prompt=test_prompt,
-        severity=severity or "", documents=docs, file_uri=file_uri,
+        severity_ceiling=severity_ceiling or "", documents=docs, file_uri=file_uri,
         content_hash=scenario_revision_hash(description=description, expected_behavior=eb, test_prompt=test_prompt,
-                                            severity=severity or "", documents=docs, file_uri=file_uri, metadata={}),
+                                            severity_ceiling=severity_ceiling or "", documents=docs, file_uri=file_uri, metadata={}),
         created_by=user,
     )
 
@@ -1449,7 +1449,7 @@ class ScenarioCreateView(ProjectMixin, View):
         desc = request.POST.get("description", "")
         expected_behavior_raw = request.POST.get("expected_behavior", "").strip()
         expected_behavior = [line.strip() for line in expected_behavior_raw.splitlines() if line.strip()] if expected_behavior_raw else []
-        severity = request.POST.get("severity", "").strip().lower()
+        severity_ceiling = request.POST.get("severity_ceiling", "").strip().lower()
         documents_raw = request.POST.get("documents", "").strip()
         documents = json.loads(documents_raw) if documents_raw else []
         file_uri_raw = request.POST.get("file_uri", "").strip()
@@ -1462,7 +1462,7 @@ class ScenarioCreateView(ProjectMixin, View):
                 defaults={"title": name, "category": category},
             )
             _create_revision(scenario, desc, request.user, expected_behavior=expected_behavior,
-                             severity=severity, documents=documents, file_uri=file_uri)
+                             severity_ceiling=severity_ceiling, documents=documents, file_uri=file_uri)
             # Auto-publish new version including this scenario
             if set_id:
                 sset = ScenarioSet.objects.filter(pk=set_id, project=request.project).first()
@@ -1485,7 +1485,7 @@ class ScenarioEditView(ProjectMixin, View):
             desc = request.POST.get("description", "")
             expected_behavior_raw = request.POST.get("expected_behavior", "").strip()
             expected_behavior = [line.strip() for line in expected_behavior_raw.splitlines() if line.strip()] if expected_behavior_raw else []
-            severity = request.POST.get("severity", "").strip().lower()
+            severity_ceiling = request.POST.get("severity_ceiling", "").strip().lower()
             documents_raw = request.POST.get("documents", "").strip()
             documents = json.loads(documents_raw) if documents_raw else []
             file_uri_raw = request.POST.get("file_uri", "").strip()
@@ -1501,13 +1501,13 @@ class ScenarioEditView(ProjectMixin, View):
                 latest_rev is None
                 or latest_rev.description != desc
                 or (latest_rev.expected_behavior or []) != expected_behavior
-                or latest_rev.severity != severity
+                or latest_rev.severity_ceiling != severity_ceiling
                 or (latest_rev.documents or []) != documents
                 or latest_rev.file_uri != file_uri
             )
             if content_changed:
                 _create_revision(scenario, desc, request.user, expected_behavior=expected_behavior,
-                                 severity=severity, documents=documents, file_uri=file_uri)
+                                 severity_ceiling=severity_ceiling, documents=documents, file_uri=file_uri)
                 if set_id:
                     sset = ScenarioSet.objects.filter(pk=set_id, project=request.project).first()
                     if sset:
