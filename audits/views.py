@@ -17,6 +17,7 @@ from audits.services import cancel_run, create_audit_run, submit_audit_run
 from infra.exceptions import StableAPIError
 from infra.middleware import set_correlation_context
 from judges.models import Judge, JudgeVersion
+from judges.services import default_judge_version
 from model_registry.models import RegisteredModel
 from scenarios.models import ScenarioSetVersion
 
@@ -121,14 +122,15 @@ def create_audit_run_view(request, project_id):
         scenario_set_version = ScenarioSetVersion.objects.get(id=data["scenario_set_version_id"], scenario_set__project=project)
         target_model = RegisteredModel.objects.get(id=data["target_model_id"], project=project)
         auditor_model = RegisteredModel.objects.get(id=data["auditor_model_id"], project=project)
+        judge_model = RegisteredModel.objects.get(id=data["judge_model_id"], project=project)
         if data.get("judge_version_id"):
-            judge = JudgeVersion.objects.select_related("judge", "model__connection").get(
-                id=data["judge_version_id"], judge__project=project
-            )
-        else:
+            judge = JudgeVersion.objects.select_related("judge").get(id=data["judge_version_id"], judge__project=project)
+        elif data.get("judge_id"):
             judge = Judge.objects.get(id=data["judge_id"], project=project).latest
             if judge is None:
                 raise JudgeVersion.DoesNotExist
+        else:
+            judge = default_judge_version(project, request.user)
     except (ScenarioSetVersion.DoesNotExist, RegisteredModel.DoesNotExist, Judge.DoesNotExist,
             JudgeVersion.DoesNotExist) as exc:
         raise StableAPIError(detail="Audit input not found in project.", code="audit_input_not_found", http_status=404) from exc
@@ -140,6 +142,7 @@ def create_audit_run_view(request, project_id):
         scenario_set_version=scenario_set_version,
         target_model=target_model,
         auditor_model=auditor_model,
+        judge_model=judge_model,
         judge=judge,
     )
 

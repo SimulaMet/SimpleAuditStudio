@@ -72,6 +72,7 @@ class AuditSubmissionTest(TestCase):
                 scenario_set_version=self.version,
                 target_model=self.target,
                 auditor_model=self.auditor,
+                judge_model=self.judge,
                 judge=judge_for(self.judge),
             )
 

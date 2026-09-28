@@ -24,6 +24,7 @@ DESIGN_AXES = {
     "scenario_set": "Scenario set",
     "target": "Target",
     "auditor": "Auditor",
+    "judge_model": "Judge model",
     "judge": "Judge",
     "max_turns": "Max turns",
     "language": "Language",
@@ -31,9 +32,12 @@ DESIGN_AXES = {
 # Everything an experiment can compare: the design axes plus per-run edits
 # made on the review screen (repetitions, system prompt, generation config).
 FACTORS = {**DESIGN_AXES, "n_repetitions": "Repetitions", "system_prompt": "System prompt", "params": "Parameters"}
-# Axes whose values are registered models; "judge" values are JudgeVersions.
-_MODEL_ROLES = ("target", "auditor")
-_ROLE_AXES = ("target", "auditor", "judge")
+# Axes whose values are registered models (axis -> form field and label);
+# "judge" values are JudgeVersions.
+_MODEL_AXES = {"target": ("target_model", "target"), "auditor": ("auditor_model", "auditor"),
+               "judge_model": ("judge_model", "judge")}
+_MODEL_ROLES = tuple(_MODEL_AXES)
+_ROLE_AXES = ("target", "auditor", "judge_model", "judge")
 # Generation keys with their own form fields (not "parameters").
 _FORM_KEYS = ("max_turns", "language", "n_repetitions", "system_prompt")
 
@@ -111,15 +115,15 @@ def parse_design(post, project) -> dict:
     )
 
     models = {}
-    for role in _MODEL_ROLES:
-        ids = [m for m in post.getlist(f"{role}_model") if m]
+    for axis, (field, label) in _MODEL_AXES.items():
+        ids = [m for m in post.getlist(field) if m]
         if not ids:
-            raise DesignError(f"Pick at least one {role} model.")
+            raise DesignError(f"Pick at least one {label} model.")
         found = {str(m.pk): m for m in RegisteredModel.objects.filter(project=project, pk__in=ids).select_related("connection")}
         missing = [i for i in ids if i not in found]
         if missing:
-            raise DesignError(f"A selected {role} model is not in this workspace.")
-        models[role] = [found[i] for i in dict.fromkeys(ids)]
+            raise DesignError(f"A selected {label} model is not in this workspace.")
+        models[axis] = [found[i] for i in dict.fromkeys(ids)]
 
     # Judges: version ids, and/or "latest:<judge id>" (always latest: unpinned,
     # so repeating runs follow new versions).
@@ -129,13 +133,13 @@ def parse_design(post, project) -> dict:
     follow_ids = [v.split(":", 1)[1] for v in raw if v.startswith("latest:")]
     pinned_ids = [v for v in raw if not v.startswith("latest:")]
     judges = list(
-        JudgeVersion.objects.filter(pk__in=pinned_ids, judge__project=project).select_related("judge", "model__connection")
+        JudgeVersion.objects.filter(pk__in=pinned_ids, judge__project=project).select_related("judge")
     )
     follow = list(Judge.objects.filter(pk__in=follow_ids, project=project))
     if len(judges) != len(pinned_ids) or len(follow) != len(follow_ids):
         raise DesignError("A selected judge is not in this workspace.")
     for judge in follow:
-        latest = judge.versions.select_related("judge", "model__connection").order_by("-version").first()
+        latest = judge.versions.select_related("judge").order_by("-version").first()
         if latest is None:
             raise DesignError(f"Judge “{judge.name}” has no version.")
         latest.follow_latest = True
@@ -176,6 +180,7 @@ def parse_design(post, project) -> dict:
         "scenario_set": versions,
         "target": models["target"],
         "auditor": models["auditor"],
+        "judge_model": models["judge_model"],
         "judge": judges,
         "max_turns": max_turns,
         "language": languages,
@@ -239,10 +244,9 @@ def spec_label(spec: dict, factors: list[str]) -> str:
 
 def spec_warnings(spec: dict) -> list[str]:
     warnings = []
-    judge_model = spec["judge"].model
-    if judge_model.pk == spec["target"].pk:
-        warnings.append("The judge uses the target model: it grades itself.")
-    for role, model in (("Target", spec["target"]), ("Auditor", spec["auditor"]), ("Judge", judge_model)):
+    if spec["judge_model"].pk == spec["target"].pk:
+        warnings.append("Judge model is the target model: it grades itself.")
+    for role, model in (("Target", spec["target"]), ("Auditor", spec["auditor"]), ("Judge", spec["judge_model"])):
         if not model.has_key:
             warnings.append(f"{role} model has no API key set.")
         elif not (model.enabled and model.connection.enabled):
@@ -314,6 +318,7 @@ def spec_to_row(spec: dict) -> str:
         "f": 1 if is_follow(spec["scenario_set"]) else 0,
         "t": spec["target"].pk,
         "a": spec["auditor"].pk,
+        "jm": spec["judge_model"].pk,
         "j": spec["judge"].pk,
         "jf": 1 if is_follow(spec["judge"]) else 0,
     })
@@ -322,7 +327,7 @@ def spec_to_row(spec: dict) -> str:
 def launch_experiment(*, project, user, name: str, runs: list[dict], repeat: dict | None = None) -> Experiment:
     """Create the Experiment and its frozen runs, then submit them.
 
-    ``runs`` items: {"name", "version", "target", "auditor", "judge",
+    ``runs`` items: {"name", "version", "target", "auditor", "judge_model", "judge",
     "max_turns", "language", "n_repetitions", "gen_config"}. With ``repeat``
     (see audits.monitors.parse_repeat) each run setup also gets a Monitor
     linked to the experiment; runs start now unless repeat["start"] is "at".
@@ -354,6 +359,7 @@ def launch_experiment(*, project, user, name: str, runs: list[dict], repeat: dic
                 scenario_set_version=r["version"],
                 target_model=r["target"],
                 auditor_model=r["auditor"],
+                judge_model=r["judge_model"],
                 judge=r["judge"],
                 max_turns_override=r["max_turns"],
                 language_override=r["language"],
@@ -389,6 +395,7 @@ def run_factor_values(run: AuditRun) -> dict:
         "scenario_set": f"{run.scenario_set_version.scenario_set.name} v{run.scenario_set_version.version}",
         "target": frozen_name(run, "target"),
         "auditor": frozen_name(run, "auditor"),
+        "judge_model": frozen_name(run, "judge"),
         "judge": frozen_judge(run)["label"],
         "max_turns": str(params.get("max_turns") or "default"),
         "language": params.get("language") or "default",

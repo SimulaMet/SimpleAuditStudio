@@ -31,9 +31,8 @@ class AuditRun(models.Model):
     scenario_set_version = models.ForeignKey("scenarios.ScenarioSetVersion", on_delete=models.RESTRICT, related_name="audit_runs")
     target_model = models.ForeignKey("model_registry.RegisteredModel", on_delete=models.RESTRICT, related_name="target_audit_runs")
     auditor_model = models.ForeignKey("model_registry.RegisteredModel", on_delete=models.RESTRICT, related_name="auditor_audit_runs")
-    # The judge (model + rubric + prompts) the run was graded with.
+    # How the run is graded (rubric + prompts) and the model that grades.
     judge_version = models.ForeignKey("judges.JudgeVersion", on_delete=models.RESTRICT, related_name="audit_runs")
-    # The judge version's model, kept on the run for model-level queries and protection.
     judge_model = models.ForeignKey("model_registry.RegisteredModel", on_delete=models.RESTRICT, related_name="judge_audit_runs")
     target_config_snapshot = models.JSONField()
     auditor_config_snapshot = models.JSONField()
@@ -114,6 +113,7 @@ class Monitor(models.Model):
     )
     target_model = models.ForeignKey("model_registry.RegisteredModel", on_delete=models.RESTRICT, related_name="target_monitors")
     auditor_model = models.ForeignKey("model_registry.RegisteredModel", on_delete=models.RESTRICT, related_name="auditor_monitors")
+    judge_model = models.ForeignKey("model_registry.RegisteredModel", on_delete=models.RESTRICT, related_name="judge_monitors")
     judge = models.ForeignKey("judges.Judge", on_delete=models.RESTRICT, related_name="monitors")
     # Empty = the judge's newest version at each tick ("always latest").
     judge_version = models.ForeignKey(

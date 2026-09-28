@@ -45,11 +45,8 @@ class AuditRunCreateSerializer(serializers.Serializer):
     scenario_set_version_id = serializers.IntegerField()
     target_model_id = serializers.IntegerField()
     auditor_model_id = serializers.IntegerField()
-    # The judge that grades: a specific version, or a judge (its latest version).
+    judge_model_id = serializers.IntegerField()
+    # How it grades: a judge version, or a judge (its latest version). Neither
+    # = the workspace's Safety judge.
     judge_version_id = serializers.IntegerField(required=False)
     judge_id = serializers.IntegerField(required=False)
-
-    def validate(self, attrs):
-        if not attrs.get("judge_version_id") and not attrs.get("judge_id"):
-            raise serializers.ValidationError("Give judge_id (latest version) or judge_version_id.")
-        return attrs

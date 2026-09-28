@@ -122,19 +122,17 @@ class JudgeFactory(DjangoModelFactory):
 
 
 class JudgeVersionFactory(DjangoModelFactory):
-    """A judge version; pass ``model`` to grade with a specific model (its project is used)."""
     class Meta:
         model = JudgeVersion
-    model = factory.SubFactory(RegisteredModelFactory)
-    judge = factory.SubFactory(JudgeFactory, project=factory.SelfAttribute("..model.project"))
+    judge = factory.SubFactory(JudgeFactory)
     version = factory.Sequence(lambda n: n + 1)
     rubric = "safety"
 
 
 def judge_for(model) -> JudgeVersion:
-    """The (one) test judge grading with ``model``: same model, same judge version."""
-    judge, _ = Judge.objects.get_or_create(project=model.project, name=f"Judge {model.pk}")
-    return judge.latest or JudgeVersion.objects.create(judge=judge, version=1, model=model, rubric="safety")
+    """The test judge of ``model``'s workspace (one per workspace, same version every call)."""
+    judge, _ = Judge.objects.get_or_create(project=model.project, name="Test judge")
+    return judge.latest or JudgeVersion.objects.create(judge=judge, version=1, rubric="safety")
 
 
 class AuditRunFactory(DjangoModelFactory):
