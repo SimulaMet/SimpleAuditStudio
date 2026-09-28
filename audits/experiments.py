@@ -119,10 +119,19 @@ def parse_design(post, project) -> dict:
         ids = [m for m in post.getlist(field) if m]
         if not ids:
             raise DesignError(f"Pick at least one {label} model.")
-        found = {str(m.pk): m for m in RegisteredModel.objects.filter(project=project, pk__in=ids).select_related("connection")}
+        # A model is usable when it belongs to this workspace OR its connection
+        # is shared into this workspace (public / admin-shared / explicit).
+        from model_registry.services import visible_connection_ids_for
+
+        allowed_conn_ids = set(visible_connection_ids_for(project))
+        found = {
+            str(m.pk): m
+            for m in RegisteredModel.objects.filter(pk__in=ids).select_related("connection")
+            if m.project_id == project.id or m.connection_id in allowed_conn_ids
+        }
         missing = [i for i in ids if i not in found]
         if missing:
-            raise DesignError(f"A selected {label} model is not in this workspace.")
+            raise DesignError(f"A selected {label} model isn't available in this workspace.")
         models[axis] = [found[i] for i in dict.fromkeys(ids)]
 
     # Judges: version ids, and/or "latest:<judge id>" (always latest: unpinned,

@@ -23,7 +23,15 @@ Field names match the single-select partial so one-run posts look the same.
       <div data-filter-list class="h-60 overflow-y-auto rounded-lg border border-gray-800 bg-surface-overlay/40 divide-y divide-gray-800/60">
         {% for conn in connections %}
           {% if conn.models.all %}
-          <p data-filter-group="{{ conn.pk }}"{% if conn.description %} title="{{ conn.description }}"{% endif %} class="px-2.5 pt-2 pb-1 text-[10px] uppercase tracking-wide text-gray-600">{{ conn.name }}</p>
+          <p data-filter-group="{{ conn.pk }}" title="{% if conn.description %}{{ conn.description }}{% else %}{{ conn.share_label }}{% endif %}"
+             class="px-2.5 pt-2 pb-1 text-[10px] uppercase tracking-wide text-gray-600 flex items-center gap-1.5">
+            <span>{{ conn.name }}</span>
+            {% if conn.is_shared %}
+            <span class="normal-case px-1 py-0.5 rounded bg-violet-900/40 text-violet-300" title="{{ conn.share_label }} — from {{ conn.project.name }}. Uses that workspace's API key.">⇄ shared</span>
+            {% else %}
+            <span class="normal-case px-1 py-0.5 rounded bg-gray-800 text-gray-500" title="{{ conn.share_label }}">this workspace</span>
+            {% endif %}
+          </p>
           {% for m in conn.models.all %}
           <label data-filter-item data-group="{{ conn.pk }}"{% if m.description %} title="{{ m.description }}"{% endif %} class="flex items-start gap-2 px-2.5 py-1.5 text-sm cursor-pointer hover:bg-surface-overlay">
             <input type="checkbox" name="{{ role }}_model" value="{{ m.id }}" class="mt-0.5 accent-[currentColor]"

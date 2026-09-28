@@ -40,10 +40,19 @@
         <div class="flex flex-wrap items-center gap-2">
           <h2 class="text-sm font-semibold text-gray-100">{{ conn.name }}</h2>
           <span class="px-1.5 py-0.5 rounded bg-gray-800 text-[10px] text-gray-400 uppercase tracking-wide">{{ conn.provider }}</span>
+          {% if conn.is_shared %}
+          <span class="px-1.5 py-0.5 rounded bg-violet-900/40 text-violet-300 text-[10px]" title="{{ conn.share_label }} — shared into this workspace by {{ conn.project.name }}. Read-only here.">⇄ shared · {{ conn.project.name }}</span>
+          {% else %}
+          <span class="px-1.5 py-0.5 rounded bg-gray-800 text-[10px] text-gray-400" title="{{ conn.share_label }}">⌂ this workspace</span>
+          {% endif %}
           {% if not conn.enabled %}<span class="px-1.5 py-0.5 rounded bg-gray-800 text-[10px] text-gray-400" title="Its models can't be picked for new runs">disabled</span>{% endif %}
-          {% if conn.api_key_direct %}<span class="text-[11px] text-emerald-400" title="API key stored on this connection (never shown)">● key stored</span>
-          {% elif conn.secret_reference %}<span class="text-[11px] text-sky-300" title="Read from the worker's environment at run time">● env {{ conn.secret_reference }}</span>
-          {% else %}<span class="text-[11px] text-gray-500" title="Requests are sent without an API key (fine for local servers)">○ no key</span>{% endif %}
+          {% if conn.can_edit %}
+            {% if conn.api_key_direct %}<span class="text-[11px] text-emerald-400" title="API key stored on this connection (never shown)">● key stored</span>
+            {% elif conn.secret_reference %}<span class="text-[11px] text-sky-300" title="Read from the worker's environment at run time">● env {{ conn.secret_reference }}</span>
+            {% else %}<span class="text-[11px] text-gray-500" title="Requests are sent without an API key (fine for local servers)">○ no key</span>{% endif %}
+          {% else %}
+            <span class="text-[11px] text-gray-500" title="Shared connection — the owner manages its key">🔒 owner-managed key</span>
+          {% endif %}
           <span class="conn-status hidden text-[11px] px-1.5 py-0.5 rounded" aria-live="polite"></span>
         </div>
         {% if conn.description %}<p class="text-xs text-gray-400 mt-0.5 line-clamp-2 whitespace-pre-line" title="{{ conn.description }}">{{ conn.description }}</p>{% endif %}
@@ -52,6 +61,7 @@
       <div class="flex items-center gap-1.5 w-full sm:w-auto justify-end">
         <button type="button" data-check="{{ conn.id }}" title="Ping the server and check which registered models it serves"
                 class="px-2.5 py-1 rounded-lg text-xs text-gray-300 bg-surface-overlay hover:text-white">Check</button>
+        {% if conn.can_edit %}
         <button type="button" data-write data-discover="{{ conn.id }}" title="List the models this server offers and pick ones to add"
                 class="px-2.5 py-1 rounded-lg text-xs text-gray-300 bg-surface-overlay hover:text-white">+ Models</button>
         <button type="button" data-write data-conn-open="{{ conn.id }}" title="Edit connection" aria-label="Edit connection {{ conn.name }}"
@@ -63,6 +73,9 @@
           {% csrf_token %}
           <button title="Delete connection and its models" aria-label="Delete connection {{ conn.name }}" class="w-7 h-7 rounded-lg text-gray-500 hover:text-red-400 hover:bg-surface-overlay">✕</button>
         </form>
+        {% endif %}
+        {% else %}
+        <span class="text-[11px] text-gray-600 px-1" title="Shared connections are read-only in this workspace — only {{ conn.project.name }} can edit them">read-only</span>
         {% endif %}
       </div>
     </header>
@@ -108,6 +121,7 @@
           <td class="px-2 py-2 text-xs text-right model-view align-top {% if m.usage %}text-gray-300{% else %}text-gray-600{% endif %}"
               title="Runs and monitors that use this model as target, auditor or judge">{% if m.usage %}{{ m.usage }} run{{ m.usage|pluralize }}{% else %}unused{% endif %}</td>
           <td class="px-4 py-1 text-right whitespace-nowrap model-view align-top">
+            {% if conn.can_edit %}
             <span data-write class="opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
               <button type="button" data-edit title="Edit name, model ID or description" aria-label="Edit {{ m.display_name|default:m.model_id }}"
                       class="w-7 h-7 rounded text-gray-500 hover:text-accent">✎</button>
@@ -122,6 +136,9 @@
               </form>
               {% endif %}
             </span>
+            {% else %}
+            <span class="text-[11px] text-gray-600" title="Shared connection — only {{ conn.project.name }} can edit its models">—</span>
+            {% endif %}
           </td>
         </tr>
         {% endfor %}
@@ -180,8 +197,37 @@
         </select></label>
     </div>
     <label class="block text-xs text-gray-500">Description <span class="text-gray-600">(optional)</span>
-      <textarea name="conn_description" rows="2" maxlength="1000" placeholder="e.g. Team OpenAI account, billed to project X"
-                class="mt-1 w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm text-gray-100 focus:outline-none focus:ring-2 focus:ring-accent/50"></textarea></label>
+      <textarea name="conn_description" rows="2" maxlength="1000" placeholder="e.g. Team OpenAI account, billed to project X — explain why this is shared so generously"
+                class="mt-1 w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm text-gray-100 focus:outline-none focus:ring-2 focus:ring-accent/50"></textarea>
+      <span class="block mt-1 text-[11px] text-gray-600">Shown to every workspace that can see this connection. Use it to say what it is and why you're sharing it.</span></label>
+    <fieldset id="sharing-fieldset">
+      <legend class="text-xs text-gray-500 mb-1.5">Sharing</legend>
+      <div class="space-y-1.5">
+        {% for value, label in visibility_choices %}
+        <label class="flex items-start gap-2 text-xs cursor-pointer">
+          <input type="radio" name="conn_visibility" value="{{ value }}" class="mt-0.5 accent-accent" {% if value == 'workspace' %}checked{% endif %}>
+          <span class="text-gray-300">{{ label }}</span>
+        </label>
+        {% endfor %}
+      </div>
+      <p class="mt-1.5 text-[11px] text-gray-600" data-share-hint>Only this workspace can see or use this connection.</p>
+      <div class="mt-2 hidden" data-share-pane="admins">
+        <p class="text-[11px] text-gray-500 mb-1">Share with specific workspaces you administer:</p>
+        <div class="max-h-40 overflow-y-auto rounded-lg border border-gray-800 bg-surface-overlay/40 divide-y divide-gray-800/60">
+          {% for ws in share_targets %}
+          <label class="flex items-center gap-2 px-2.5 py-1.5 text-xs cursor-pointer hover:bg-surface-overlay">
+            <input type="checkbox" name="conn_shared_with" value="{{ ws.id }}" class="accent-accent">
+            <span class="text-gray-300">{{ ws.name }}</span>
+          </label>
+          {% empty %}
+          <p class="px-2.5 py-2 text-[11px] text-gray-600">No other workspaces where you're an admin yet.</p>
+          {% endfor %}
+        </div>
+      </div>
+      <div class="mt-2 hidden" data-share-pane="public">
+        <p class="text-[11px] text-gray-500 mb-1">Every workspace on this instance can pick its models. The owner's API key pays for everyone's usage — share only what you're comfortable with.</p>
+      </div>
+    </fieldset>
     <label class="block text-xs text-gray-500">Base URL
       <input type="url" name="conn_base_url" required placeholder="https://api.example.com/v1"
              class="mt-1 w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm font-mono text-gray-100 focus:outline-none focus:ring-2 focus:ring-accent/50">
@@ -289,7 +335,22 @@
     connForm.elements.conn_secret_ref.required = mode === 'env';
     $('#key-drop-warning').classList.toggle('hidden', !(storedKeyMode === 'stored' && mode !== 'stored'));
   }
-  connForm.addEventListener('change', e => { if (e.target.name === 'key_mode') setKeyMode(e.target.value); });
+  connForm.addEventListener('change', e => {
+    if (e.target.name === 'key_mode') setKeyMode(e.target.value);
+    if (e.target.name === 'conn_visibility') setShareLevel(e.target.value);
+  });
+  // Sharing level: show the matching hint/pane and toggle the explicit picker.
+  const SHARE_HINTS = {
+    workspace: "Only this workspace can see or use this connection.",
+    admins: "Pick which workspaces you administer may use these models. The owner's API key pays for their usage.",
+    public: "Every workspace on this instance can pick its models. The owner's API key pays for everyone's usage — share only what you're comfortable with.",
+  };
+  function setShareLevel(level) {
+    $$('[data-share-pane]', connForm).forEach(p => p.classList.toggle('hidden', p.dataset.sharePane !== level));
+    const hint = $('[data-share-hint]', connForm);
+    if (hint) hint.textContent = SHARE_HINTS[level] || '';
+    hint?.classList.toggle('hidden', level === 'workspace');
+  }
   function applyPreset(key) {
     const p = PRESETS.find(x => x.key === key);
     if (!p) return;
@@ -316,12 +377,23 @@
     $('[data-edit-only]', connForm).classList.toggle('flex', !!editing);
     $('#preset-chips').parentElement.classList.toggle('hidden', !!editing);
     $$('[data-preset-chip]', connForm).forEach(ch => ch.setAttribute('aria-pressed', 'false'));
+    // Reset sharing controls to defaults before filling.
+    $$('[name="conn_visibility"]', connForm).forEach(r => r.checked = r.value === 'workspace');
+    $$('[name="conn_shared_with"]', connForm).forEach(cb => cb.checked = false);
+    setShareLevel('workspace');
     if (editing) {
       if (![...f.conn_provider.options].some(o => o.value === c.provider)) f.conn_provider.add(new Option(c.provider, c.provider));
       f.conn_name.value = c.name; f.conn_description.value = c.description; f.conn_provider.value = c.provider; f.conn_base_url.value = c.base_url;
       f.conn_secret_ref.value = c.secret_ref; f.conn_enabled.checked = c.enabled;
       setKeyMode(c.key_mode);
       f.conn_api_key.placeholder = c.key_mode === 'stored' ? '•••••••• (leave blank to keep the stored key)' : 'sk-…';
+      // Restore sharing level + explicit workspaces.
+      const vis = c.visibility || 'workspace';
+      const visRadio = connForm.querySelector(`[name="conn_visibility"][value="${vis}"]`);
+      if (visRadio) visRadio.checked = true;
+      setShareLevel(vis);
+      const shared = new Set(c.shared_with || []);
+      $$('[name="conn_shared_with"]', connForm).forEach(cb => { cb.checked = shared.has(cb.value); });
     } else {
       setKeyMode('stored');
       f.conn_api_key.placeholder = 'sk-…';
