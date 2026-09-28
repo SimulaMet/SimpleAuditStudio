@@ -52,36 +52,44 @@ Set the API key in the connection form (leave blank for local servers that don't
 
 ## 🛠️ Local Development
 
-For contributors working on the codebase, use [uv](https://docs.astral.sh/uv/) — no manual venv steps, no Makefile. Two verbs cover everything:
+Needs Python 3.11+ and [uv](https://docs.astral.sh/uv/). No Docker, no Makefile.
 
-- **`uv sync`** — create/update `.venv` from `pyproject.toml` + `uv.lock`
-- **`uv run <cmd>`** — run any command inside `.venv` (auto-syncs first if the lockfile changed)
-
-### Setup (one time)
+### Setup (once)
 
 ```bash
 git clone https://github.com/SushantGautam/SimpleAuditStudio
 cd SimpleAuditStudio
-cp .env.local.example .env          # minimal local config (SQLite + mock models)
-
-uv sync --extra dev --extra postgres   # create .venv + install all deps
-uv run manage.py setup_local           # migrate + create admin (studio / BOOTSTRAP_PASSWORD from .env) + seed data
+cp .env.local.example .env        # SQLite + embedded queue; admin is studio / BOOTSTRAP_PASSWORD
+uv sync --extra dev               # create .venv with app + dev tools
+uv run manage.py setup_local      # migrate, create admin + workspace, seed scenario packs & models
 ```
-
-`setup_local` chains the three idempotent first-run steps (migrate → bootstrap admin → seed scenario packs & model connections) into one command. Re-run it any time — it skips what already exists.
 
 ### Daily work
 
 ```bash
-uv run manage.py dev_server --embedded   # easiest: web UI + API + audit worker, zero-Docker → http://localhost:8000
+uv run manage.py dev_server --embedded    # web UI + API + worker + embedded Hatchet → http://localhost:8000
 ```
 
-Other options:
+Every start applies migrations and makes sure the admin (a superuser) and default workspace exist, so pulling new code needs no extra steps. Keep in mind:
+
+- Only one `dev_server --embedded` (or `uvx simpleaudit-studio`) can run at a time: they share the embedded queue database.
+- The web server reloads on code changes; the worker does not. Restart `dev_server` after changing `infra/worker.py` or `infra/engine.py`.
+
+### Tests and lint
+
 ```bash
-uv run manage.py runserver               # web UI + API only (no worker)
-uv run manage.py dev_server              # web UI + worker, uses .env (edit POSTGRES_*/HATCHET_* to point at your infra)
-SIMPLEAUDIT_LOCAL_SQLITE=1 uv run manage.py test infra   # tests
+SIMPLEAUDIT_LOCAL_SQLITE=1 uv run manage.py test infra --exclude-tag embedded_hatchet
+uv run ruff check .
 ```
+
+### Other setups
+
+```bash
+uv run manage.py dev_server --no-worker   # web UI + API only
+uv run manage.py dev_server               # use the Postgres + Hatchet configured in .env (see .env.example)
+```
+
+See [docs/deployment.md](docs/deployment.md) for every environment variable and management command.
 
 ## 🐳 Self-Hosting
 
