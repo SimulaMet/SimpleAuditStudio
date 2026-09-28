@@ -1,0 +1,29 @@
+{% comment %}
+The "What changed" modal for versioned things (scenario sets, judges), wired by
+VersionDiff.modal(id, render) in static/js/version-diff.js. Include
+partials/version_diff_js.html once per page.
+Context: id, title; versions (optional: adds From / to pickers, objects with
+.version, newest first); confirm (optional: label of a confirm button, which
+has data-diff-confirm).
+{% endcomment %}
+<div id="{{ id }}" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4" role="dialog" aria-modal="true" aria-labelledby="{{ id }}-title">
+  <div class="bg-surface border border-gray-700 rounded-xl shadow-2xl w-full max-w-3xl max-h-[85vh] flex flex-col">
+    <div class="flex flex-wrap items-center gap-2 px-5 py-3 border-b border-gray-800">
+      <h3 id="{{ id }}-title" class="text-sm font-semibold text-gray-200 mr-auto">{{ title }}</h3>
+      {% if versions %}
+      <label class="text-xs text-gray-500">From
+        <select data-diff-from class="ml-1 px-2 py-1 rounded bg-surface-overlay border border-gray-700 text-xs text-gray-200">{% for v in versions %}<option value="{{ v.version }}">v{{ v.version }}</option>{% endfor %}</select></label>
+      <label class="text-xs text-gray-500">to
+        <select data-diff-to class="ml-1 px-2 py-1 rounded bg-surface-overlay border border-gray-700 text-xs text-gray-200">{% for v in versions %}<option value="{{ v.version }}">v{{ v.version }}</option>{% endfor %}</select></label>
+      {% endif %}
+      <button type="button" data-diff-close class="ml-2 text-gray-500 hover:text-gray-300 text-lg leading-none" aria-label="Close" title="Close">&times;</button>
+    </div>
+    <div data-diff-body class="flex-1 overflow-y-auto px-5 py-4 text-xs"></div>
+    {% if confirm %}
+    <div class="flex justify-end gap-2 px-5 py-3 border-t border-gray-800">
+      <button type="button" data-diff-close class="px-4 py-1.5 rounded text-xs bg-gray-800 text-gray-300 hover:bg-gray-700">Cancel</button>
+      <button type="button" data-diff-confirm class="px-4 py-1.5 rounded text-xs bg-amber-700 text-white hover:bg-amber-600 font-medium">{{ confirm }}</button>
+    </div>
+    {% endif %}
+  </div>
+</div>

@@ -148,3 +148,41 @@ def publish_scenario_set_version(*, scenario_set: ScenarioSet, user, scenario_id
             position=item["position"],
         )
     return version
+
+
+def _version_contents(version: ScenarioSetVersion) -> dict[str, dict]:
+    """Scenario key -> what a version holds for it (title, revision, content)."""
+    return {
+        item.scenario.key: {
+            "key": item.scenario.key,
+            "title": item.scenario.title,
+            "revision": item.revision.revision,
+            "description": item.revision.description,
+            "expected_behavior": item.revision.expected_behavior or [],
+        }
+        for item in version.items.select_related("scenario", "revision")
+    }
+
+
+def version_diff(old: ScenarioSetVersion, new: ScenarioSetVersion) -> dict:
+    """What changed from ``old`` to ``new``: scenarios added, removed and changed
+    (description or expected behaviour), and how many stayed the same.
+
+    Changed entries carry both sides: ``{"key", "title", "from": {...}, "to": {...}}``.
+    """
+    before, after = _version_contents(old), _version_contents(new)
+    added, removed, changed, unchanged = [], [], [], 0
+    for key in sorted(before.keys() | after.keys()):
+        a, b = before.get(key), after.get(key)
+        if a is None:
+            added.append(b)
+        elif b is None:
+            removed.append(a)
+        elif (a["description"], a["expected_behavior"]) != (b["description"], b["expected_behavior"]):
+            changed.append({"key": key, "title": b["title"], "from": a, "to": b})
+        else:
+            unchanged += 1
+    return {
+        "from_version": old.version, "to_version": new.version,
+        "added": added, "removed": removed, "changed": changed, "unchanged_count": unchanged,
+    }

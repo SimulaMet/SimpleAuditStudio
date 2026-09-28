@@ -189,8 +189,10 @@ def auditor_kwargs(*, target: dict, auditor: dict, judge: dict, generation: dict
     defaults. ``target_kwargs`` / ``auditor_kwargs`` / ``judge_kwargs`` are
     client constructor kwargs (timeout, headers, ...).
     """
+    from judges.services import library_judge
+
     gen = dict(generation or {})
-    grading = judge.get("judge") or {}
+    spec = (judge.get("judge") or {}).get("spec") or {}
     target_cfg = _auditor_kwargs_from_snapshot(target)
     auditor_cfg = _auditor_kwargs_from_snapshot(auditor)
     judge_cfg = _auditor_kwargs_from_snapshot(judge)
@@ -222,13 +224,10 @@ def auditor_kwargs(*, target: dict, auditor: dict, judge: dict, generation: dict
         "max_retries": int(gen.get("max_retries") or 2),
         "retry_backoff": float(gen.get("retry_backoff") or 0.5),
         "system_prompt": gen.get("system_prompt") or None,
-        # The frozen judge: a SimpleAudit rubric (brings its output schema,
-        # post-processing and default prompts) plus any prompts the judge
-        # overrides. Prompts left at the rubric default are not passed: an
-        # explicit judge prompt takes the engine's custom-prompt path.
-        "judge": grading.get("rubric") or None,
-        "probe_prompt": (grading.get("probe_prompt") or None) if grading.get("custom_probe_prompt") else None,
-        "judge_prompt": (grading.get("judge_prompt") or None) if grading.get("custom_judge_prompt") else None,
+        # The frozen judge, built from its spec: an unedited SimpleAudit
+        # judge by name, else a composed config (criteria + output format).
+        "judge": library_judge(spec) if spec else None,
+        "probe_prompt": spec.get("probe_prompt") or None,
         "json_format": True,
         "show_progress": False,
         "verbose": False,

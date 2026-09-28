@@ -170,7 +170,7 @@ def seed_default_model_connections(project, user) -> list[str]:
 
 
 def seed_default_judges(project, user) -> list[str]:
-    """Create the starter judges (one per general-purpose rubric) if missing."""
+    """Create SimpleAudit's judges in ``project`` if missing."""
     from judges.services import ensure_starter_judges
 
     made = ensure_starter_judges(project, user)

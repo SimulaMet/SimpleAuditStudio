@@ -6,7 +6,7 @@ from .models import Judge, JudgeVersion
 class JudgeVersionInline(admin.TabularInline):
     model = JudgeVersion
     extra = 0
-    fields = ("version", "model", "rubric", "note", "created_at")
+    fields = ("version", "base", "output", "note", "created_at")
     readonly_fields = fields
     can_delete = False
 

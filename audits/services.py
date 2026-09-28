@@ -84,20 +84,21 @@ def frozen_name(run: AuditRun, role: str, *, with_id: bool = False) -> str:
 
 
 def frozen_judge(run: AuditRun) -> dict:
-    """The judge a run was graded with (name, version, rubric, prompts), from its snapshot."""
+    """The judge a run was graded with (name, version, base, texts), from its snapshot."""
     grading = (run.judge_config_snapshot or {}).get("judge") or {}
     return {
         "judge_id": grading.get("judge_id"),
         "name": grading.get("name") or "Judge",
         "version": grading.get("version"),
         "label": f"{grading.get('name') or 'Judge'} v{grading.get('version') or '?'}",
-        "rubric": grading.get("rubric", ""),
-        "rubric_name": grading.get("rubric_name") or "SimpleAudit default",
+        "base_name": grading.get("base_name", ""),
         "output": grading.get("output") or "severity",
-        "probe_prompt": grading.get("probe_prompt", ""),
+        "output_label": grading.get("output_label") or "Severity",
+        "criteria": grading.get("criteria", ""),
         "judge_prompt": grading.get("judge_prompt", ""),
+        "probe_prompt": grading.get("probe_prompt", ""),
+        "custom_criteria": grading.get("custom_criteria", False),
         "custom_probe_prompt": grading.get("custom_probe_prompt", False),
-        "custom_judge_prompt": grading.get("custom_judge_prompt", False),
         "model": frozen_name(run, "judge"),
     }
 
@@ -155,7 +156,7 @@ def create_audit_run(
     This does not enqueue work yet. The durable job system integration will add
     workflow submission after the Phase 4 spike validates the selected system.
 
-    ``judge`` is a ``JudgeVersion`` (rubric + prompts); ``judge_model`` grades with it.
+    ``judge`` is a ``JudgeVersion`` (criteria, output format, probe prompt); ``judge_model`` grades with it.
     """
     from judges.services import judge_snapshot
 

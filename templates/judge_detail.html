@@ -5,16 +5,35 @@
 <div class="flex flex-wrap items-center justify-between gap-3 mt-1 mb-4">
   <div class="flex flex-wrap items-center gap-2 min-w-0">
     <h1 class="text-lg font-semibold text-gray-100 truncate">{% if judge %}{{ judge.name }}{% else %}New judge{% endif %}</h1>
-    {% if shown %}<span class="px-1.5 py-0.5 rounded bg-gray-800 text-[11px] text-gray-400">v{{ shown.version }}{% if shown == latest %} · latest{% endif %}</span>{% endif %}
+    {% if shown %}{% include "partials/version_badge.html" with number=shown.version latest=shown_is_latest count=versions|length %}{% endif %}
   </div>
   {% if shown %}
-  <form method="post" action="{% url 'judges' %}" data-write>
-    {% csrf_token %}<input type="hidden" name="action" value="clone"><input type="hidden" name="version_id" value="{{ shown.id }}">
-    <button title="Make a new judge starting from v{{ shown.version }}" class="px-3 py-1.5 rounded-lg bg-surface-overlay border border-gray-700 text-xs text-gray-300 hover:text-white">Clone v{{ shown.version }}</button>
+  <div class="flex flex-wrap items-center gap-2">
+  {% if previous %}
+  <button type="button" data-diff-open="{{ previous.version }}:{{ shown.version }}" title="See what changed from v{{ previous.version }} to v{{ shown.version }}"
+          class="px-3 py-1.5 rounded-lg bg-surface-overlay border border-gray-700 text-xs text-gray-300 hover:text-white">Changes from v{{ previous.version }}</button>
+  {% endif %}
+  <a href="{% url 'judge_new' %}?clone={{ shown.id }}" data-write title="Start a new judge prefilled from v{{ shown.version }}; nothing is saved until you create it"
+     class="px-3 py-1.5 rounded-lg bg-surface-overlay border border-gray-700 text-xs text-gray-300 hover:text-white">Clone v{{ shown.version }}</a>
+  {% if judge_in_use %}
+  <span data-write class="px-3 py-1.5 rounded-lg border border-gray-800 text-xs text-gray-600 cursor-help" title="Can't delete: runs or monitors use this judge. Kept for reproducibility.">Delete</span>
+  {% else %}
+  <form method="post" action="{% url 'judges' %}" data-write data-confirm="Delete judge “{{ judge.name }}” and its {{ versions|length }} version{{ versions|length|pluralize }}? No run or monitor uses it.">
+    {% csrf_token %}<input type="hidden" name="action" value="delete"><input type="hidden" name="judge_id" value="{{ judge.id }}">
+    <button title="Delete this judge and all its versions" class="px-3 py-1.5 rounded-lg bg-red-900/30 text-xs text-red-400 hover:bg-red-900/50">Delete</button>
   </form>
+  {% endif %}
+  </div>
   {% endif %}
 </div>
 
+{% if cloning %}
+<p class="mb-4 text-xs text-gray-300 bg-accent/10 border border-accent/30 rounded-lg px-3 py-2">
+  Prefilled from <a href="{% url 'judge_detail' cloning.judge_id %}?v={{ cloning.version }}" class="text-accent hover:underline">{{ cloning.label }}</a>. Nothing is saved until you click <strong>Create judge</strong>.
+  {% if clone_base.equivalent %}It's now your own criteria in the <strong>{{ start_label }}</strong> format, which grades the same way{% if clone_base.dimensions %} (dimensions: {{ clone_base.dimensions|join:", " }}){% endif %}. Edit anything.
+  {% elif clone_base %}{{ clone_base.name }} reports extra fields ({{ clone_base.fields|join:", " }}), so the copy keeps its output format; edit the criteria freely, or pick a format under “Your own criteria”.{% endif %}
+</p>
+{% endif %}
 {% if shown and shown != latest %}
 <p class="mb-4 text-xs text-amber-300 bg-amber-900/20 rounded-lg px-3 py-2">
   Viewing v{{ shown.version }} (latest is <a href="?v={{ latest.version }}" class="underline">v{{ latest.version }}</a>). Saving creates a new version from these values.
@@ -29,39 +48,76 @@
         <input type="text" name="name" value="{{ form.name }}" required maxlength="250" placeholder="e.g. Strict medical safety"
                class="mt-1 w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm text-gray-100 focus:outline-none focus:ring-2 focus:ring-accent/50"></label>
       <label class="block text-xs text-gray-500">Description <span class="text-gray-600">(optional)</span>
-        <textarea name="description" rows="2" maxlength="2000" placeholder="What this judge checks and when to use it"
+        <textarea name="description" id="description" rows="2" maxlength="2000" placeholder="What this judge checks and when to use it"
                   class="mt-1 w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm text-gray-100 focus:outline-none focus:ring-2 focus:ring-accent/50">{{ form.description }}</textarea></label>
 
       <div class="border-t border-gray-800 pt-4 space-y-4">
-        <p class="text-[11px] text-gray-500">Rubric and prompts are versioned: changing them saves a new version. Name and description are not. The model that grades is picked per run on New Experiment.</p>
+        <p class="text-[11px] text-gray-500">Criteria, output format and probe prompt are versioned: changing them saves a new version. Name and description are not. The model that grades is picked per run on New Experiment.</p>
         <div>
-          <label class="block text-xs text-gray-500">Rubric
-            <select name="rubric" id="rubric-select" class="mt-1 w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm text-gray-100">
-              {% for r in rubrics %}<option value="{{ r.key }}" {% if r.key == form.rubric %}selected{% endif %}>{{ r.name }} — {{ r.output_label }}</option>{% endfor %}
+          <label class="block text-xs text-gray-500">Start from
+            <select name="start" id="start-select" class="mt-1 w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm text-gray-100">
+              <optgroup label="A SimpleAudit judge (keeps its output format)">
+                {% for b in bases %}<option value="{{ b.key }}" {% if b.key == form.start %}selected{% endif %}>{{ b.name }} — {{ b.output_label }}</option>{% endfor %}
+              </optgroup>
+              <optgroup label="Your own criteria, in a ready-made format">
+                {% for f in formats %}<option value="format:{{ f.key }}" {% if form.start == "format:"|add:f.key %}selected{% endif %}>{{ f.label }}</option>{% endfor %}
+              </optgroup>
             </select></label>
-          <p class="mt-1.5 text-xs text-gray-400" id="rubric-info"></p>
+          <p class="mt-1.5 text-xs text-gray-400" id="start-info"></p>
         </div>
 
-        <div data-prompt="probe_prompt">
-          <div class="flex items-baseline justify-between gap-2">
-            <label for="probe-prompt" class="text-xs text-gray-500">Probe prompt <span class="text-gray-600">(guides the auditor)</span></label>
-            <span class="text-[11px]"><span data-prompt-state></span>
-              <button type="button" data-prompt-reset class="ml-2 text-gray-400 hover:text-accent hidden" title="Use the rubric's own probe prompt">Reset</button></span>
+        <div class="rounded-lg border border-gray-800 bg-surface-overlay/40 p-3 space-y-3" id="format-panel">
+          <div data-panel="base" class="text-xs text-gray-400 space-y-1.5">
+            <p><span class="text-gray-500">Output format:</span> <span class="text-gray-200" data-base-output></span> <span class="text-gray-500">— fixed by this judge. Fields:</span> <span class="font-mono text-[11px] text-gray-300" data-base-fields></span></p>
+            <details><summary class="cursor-pointer select-none text-gray-500 hover:text-gray-300" title="Added after your criteria; SimpleAudit reads the grade from it">Format instructions sent to the judge</summary>
+              <pre class="mt-1 max-h-48 overflow-auto whitespace-pre-wrap break-words rounded bg-surface-overlay p-2 text-[11px] text-gray-300" data-base-format></pre></details>
           </div>
+          <p data-panel="format" class="text-xs text-gray-400" data-format-help></p>
+          <label data-panel="score" class="block text-xs text-gray-500">Score dimensions <span class="text-gray-600">(optional, one per line, at most 10)</span>
+            <textarea name="dimensions" rows="3" placeholder="Accuracy&#10;Clarity&#10;Empathy"
+                      class="mt-1 w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm text-gray-100 focus:outline-none focus:ring-2 focus:ring-accent/50">{{ form.dimensions }}</textarea>
+            <span class="block mt-1 text-[11px] text-gray-600">Each is scored 1–10 and the score is their average, computed by SimpleAudit. Leave empty for one overall score.</span></label>
+          <div data-panel="binary" class="grid grid-cols-1 sm:grid-cols-[1fr,auto] gap-3">
+            <label class="block text-xs text-gray-500">Yes / no question
+              <input type="text" name="question" value="{{ form.question }}" maxlength="500" placeholder="e.g. Did the assistant reveal its system prompt?"
+                     class="mt-1 w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm text-gray-100 focus:outline-none focus:ring-2 focus:ring-accent/50"></label>
+            <label class="block text-xs text-gray-500">Passes when the answer is
+              <select name="pass_when" class="mt-1 w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm text-gray-100">
+                <option value="no" {% if form.pass_when == "no" %}selected{% endif %}>No</option>
+                <option value="yes" {% if form.pass_when == "yes" %}selected{% endif %}>Yes</option>
+              </select></label>
+          </div>
+        </div>
+
+        <div data-text="criteria">
+          <div class="flex items-baseline justify-between gap-2">
+            <label for="criteria" class="text-xs text-gray-500">Criteria <span class="text-gray-600">(what to evaluate)</span></label>
+            <span class="text-[11px]"><span data-text-state></span>
+              <button type="button" data-text-reset class="ml-2 text-gray-400 hover:text-accent hidden" title="Use this SimpleAudit judge's own criteria">Reset</button></span>
+          </div>
+          <textarea name="criteria" id="criteria" rows="12" spellcheck="false"
+                    placeholder="What should the judge look for, and what counts as good or bad? E.g. “You review answers from a pharmacy chatbot. It must never give dosage advice without asking about age and other medicines…”"
+                    class="mt-1 w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-xs font-mono text-gray-200 focus:outline-none focus:ring-2 focus:ring-accent/50 resize-y">{{ form.criteria }}</textarea>
+          <p class="text-[11px] text-gray-600">Plain words; no JSON needed. The output format is added after the criteria automatically.</p>
+        </div>
+
+        <details data-text="probe_prompt" id="probe-box" class="group" {% if shown.resolved.custom_probe_prompt %}open{% endif %}>
+          <summary class="cursor-pointer select-none text-xs text-gray-500 hover:text-gray-300">
+            Probe prompt <span class="text-gray-600">(how the auditor model plays the user)</span>
+            <span class="float-right text-[11px]"><span data-text-state></span>
+              <button type="button" data-text-reset class="ml-2 text-gray-400 hover:text-accent hidden" title="Use the default probe prompt">Reset</button></span>
+          </summary>
           <textarea name="probe_prompt" id="probe-prompt" rows="8" spellcheck="false"
                     class="mt-1 w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-xs font-mono text-gray-200 focus:outline-none focus:ring-2 focus:ring-accent/50 resize-y">{{ form.probe_prompt }}</textarea>
           <p class="text-[11px] text-gray-600"><code>{language}</code> is replaced with the run's language.</p>
-        </div>
-        <div data-prompt="judge_prompt">
-          <div class="flex items-baseline justify-between gap-2">
-            <label for="judge-prompt" class="text-xs text-gray-500">Judge prompt <span class="text-gray-600">(how to grade)</span></label>
-            <span class="text-[11px]"><span data-prompt-state></span>
-              <button type="button" data-prompt-reset class="ml-2 text-gray-400 hover:text-accent hidden" title="Use the rubric's own judge prompt">Reset</button></span>
-          </div>
-          <textarea name="judge_prompt" id="judge-prompt" rows="12" spellcheck="false"
-                    class="mt-1 w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-xs font-mono text-gray-200 focus:outline-none focus:ring-2 focus:ring-accent/50 resize-y">{{ form.judge_prompt }}</textarea>
-          <p class="text-[11px] text-gray-600">Keep the JSON output format the rubric asks for: results are read from it.</p>
-        </div>
+        </details>
+
+        <details id="preview-box" class="group">
+          <summary class="cursor-pointer select-none text-xs text-gray-500 hover:text-gray-300" title="Exactly what the judge model receives as its instructions">Full judge prompt <span class="text-gray-600">(preview)</span></summary>
+          <p class="mt-1 text-[11px] text-red-400 hidden" id="preview-error"></p>
+          <pre class="mt-1 max-h-72 overflow-auto whitespace-pre-wrap break-words rounded bg-surface-overlay p-2 text-[11px] text-gray-300" id="preview-text"></pre>
+        </details>
+        {% if cloning %}<input type="hidden" name="clone" value="{{ cloning.id }}"><input type="hidden" name="note" value="{{ form.note }}">{% endif %}
         {% if judge %}
         <label class="block text-xs text-gray-500">What changed? <span class="text-gray-600">(optional, shown in the history)</span>
           <input type="text" name="note" maxlength="250" value="{{ form.note|default:'' }}" placeholder="e.g. Stricter on medical advice"
@@ -72,7 +128,7 @@
     {% if can_write %}
     <div class="flex justify-end gap-2">
       <a href="{% if judge %}{% url 'judge_detail' judge.id %}{% else %}{% url 'judges' %}{% endif %}" class="px-3 py-2 rounded-lg text-sm text-gray-400 hover:text-gray-200">Cancel</a>
-      <button type="submit" class="px-4 py-2 rounded-lg bg-accent text-white text-sm font-medium hover:bg-accent-hover" title="{% if judge %}Save; rubric or prompt changes create a new version{% else %}Create the judge{% endif %}">{% if judge %}Save{% else %}Create judge{% endif %}</button>
+      <button type="submit" class="px-4 py-2 rounded-lg bg-accent text-white text-sm font-medium hover:bg-accent-hover" title="{% if judge %}Save; changes to criteria, format or probe prompt create a new version{% else %}Create the judge{% endif %}">{% if judge %}Save{% else %}Create judge{% endif %}</button>
     </div>
     {% endif %}
   </form>
@@ -83,17 +139,33 @@
       <h2 class="text-sm font-semibold text-gray-300 mb-2">Versions</h2>
       <ol class="space-y-1">
         {% for v in versions %}
-        <li>
+        <li class="relative">
           <a href="?v={{ v.version }}" {% if v == shown %}aria-current="true"{% endif %}
              class="block rounded-lg px-2.5 py-2 text-xs {% if v == shown %}bg-accent/15{% else %}hover:bg-surface-overlay{% endif %}">
             <span class="flex items-baseline justify-between gap-2">
               <span class="{% if v == shown %}text-accent font-medium{% else %}text-gray-200{% endif %}">v{{ v.version }}{% if forloop.first %} · latest{% endif %}</span>
-              <span class="text-gray-500 shrink-0" title="{{ v.created_at|date:'M j, Y, H:i' }} UTC">{{ v.created_at|date:"M j, Y" }}</span>
+              <span class="text-gray-500 shrink-0 pr-9" title="{{ v.created_at|date:'M j, Y, H:i' }} UTC">{{ v.created_at|date:"M j, Y" }}</span>
             </span>
-            <span class="block text-gray-500 truncate">{{ v.rubric_name }}{% if v.probe_prompt or v.judge_prompt %} · custom prompts{% endif %}</span>
+            <span class="block text-gray-500 truncate" title="{{ v.summary }}">{{ v.summary }}</span>
             {% if v.note %}<span class="block text-gray-400 truncate" title="{{ v.note }}">{{ v.note }}</span>{% endif %}
-            <span class="block text-gray-600">{% if v.run_count %}{{ v.run_count }} run{{ v.run_count|pluralize }}{% else %}no runs{% endif %}{% if v.created_by %} · {{ v.created_by.username }}{% endif %}</span>
+            <span class="block text-gray-600 {% if v.previous_number %}pr-16{% endif %}">{% if v.run_count %}{{ v.run_count }} run{{ v.run_count|pluralize }}{% else %}no runs{% endif %}{% if v.monitor_count %} · {{ v.monitor_count }} monitor{{ v.monitor_count|pluralize }}{% endif %}{% if v.created_by %} · {{ v.created_by.username }}{% endif %}</span>
           </a>
+          <div class="absolute right-2 top-1.5 flex items-center gap-1" data-write>
+            <a href="?v={{ v.version }}#criteria" title="Edit starting from v{{ v.version }}; saving creates a new version" aria-label="Edit from v{{ v.version }}"
+               class="text-xs text-gray-500 hover:text-accent">✎</a>
+            {% if versions|length > 1 and not v.run_count and not v.monitor_count %}
+            <form method="post" action="{% url 'judges' %}" data-confirm="Delete {{ judge.name }} v{{ v.version }}? No run or monitor uses it. Other versions keep their numbers.">
+              {% csrf_token %}<input type="hidden" name="action" value="delete_version"><input type="hidden" name="version_id" value="{{ v.id }}">
+              <button title="Delete v{{ v.version }}: no run or monitor uses it" aria-label="Delete v{{ v.version }}" class="text-xs text-gray-600 hover:text-red-400">✕</button>
+            </form>
+            {% else %}
+            <span class="text-xs text-gray-700 cursor-help" title="{% if versions|length == 1 %}The only version: delete the judge instead{% else %}Used by runs or monitors, so it is kept{% endif %}" aria-hidden="true">✕</span>
+            {% endif %}
+          </div>
+          {% if v.previous_number %}
+          <button type="button" data-diff-open="{{ v.previous_number }}:{{ v.version }}" title="See what changed from v{{ v.previous_number }} to v{{ v.version }}"
+                  class="absolute right-2 bottom-1.5 px-1.5 py-0.5 rounded text-[11px] text-gray-400 hover:text-accent hover:bg-surface-overlay">Changes</button>
+          {% endif %}
         </li>
         {% endfor %}
       </ol>
@@ -103,64 +175,157 @@
       <h2 class="text-sm font-semibold text-gray-300 mb-2">Monitors</h2>
       <ul class="space-y-1 text-xs">
         {% for m in monitors %}<li><a href="{% url 'monitor_detail' m.id %}" class="text-gray-300 hover:text-accent">{{ m.name }}</a>
-          <span class="text-gray-500">· {% if m.judge_version_id %}pinned v{{ m.judge_version.version }}{% else %}always latest{% endif %}</span></li>{% endfor %}
+          · {% include "partials/pinned_version.html" with version=m.judge_version %}</li>{% endfor %}
       </ul>
     </div>
     {% endif %}
     {% endif %}
     <div class="bg-surface-raised rounded-xl border border-gray-800 p-4 text-xs text-gray-400 space-y-2">
       <h2 class="text-sm font-semibold text-gray-300">How judging works</h2>
-      <p>The <strong class="text-gray-300">auditor</strong> model plays the user, following the probe prompt. After the conversation, the <strong class="text-gray-300">judge model</strong> (picked per run) grades it with the judge prompt.</p>
-      <p>The rubric also sets the result format (severity, score or yes/no) and any post-processing, so keep its JSON format when editing prompts.</p>
+      <p>The <strong class="text-gray-300">auditor</strong> model plays the user, following the probe prompt. After the conversation, the <strong class="text-gray-300">judge model</strong> (picked per run) grades it.</p>
+      <p>The judge prompt is your <strong class="text-gray-300">criteria</strong> followed by the <strong class="text-gray-300">output format</strong>. The format says what JSON to return, and SimpleAudit turns it into a severity. You only write the criteria.</p>
+      <p>Start from a SimpleAudit judge to keep its format (for example Harm's category field), or pick a ready-made format: severity, score 1–10 with your own dimensions, or a yes/no question.</p>
     </div>
   </aside>
 </div>
 
-{{ rubrics|json_script:"rubric-data" }}
+{% if versions|length > 1 %}
+{% include "partials/version_diff_modal.html" with id="judge-diff" title="What changed" versions=versions %}
+{% include "partials/version_diff_js.html" %}
+{{ diff_versions|json_script:"diff-data" }}
 <script>
 (function () {
-  const RUBRICS = Object.fromEntries(JSON.parse(document.getElementById('rubric-data').textContent).map(r => [r.key, r]));
+  const VERSIONS = Object.fromEntries(JSON.parse(document.getElementById('diff-data').textContent).map(v => [v.version, v]));
+  const meta = v => `<span class="block"><span class="text-gray-300">v${v.version}</span> <span class="text-gray-500">· ${esc(v.created)}${v.note ? ' · ' + esc(v.note) : ''}</span></span>`;
+  const diff = VersionDiff.modal('judge-diff', api => {
+    const a = VERSIONS[api.from.value], b = VERSIONS[api.to.value];
+    const rows = a.fields.map((f, i) => ({ ...f, from: f.value, to: b.fields[i].value }));
+    const changes = VersionDiff.fields(rows);
+    api.body.innerHTML = `<p class="mb-3">${meta(a)}<span class="block">→ ${meta(b)}</span></p>` + (
+      a === b ? '<p class="text-gray-400">Pick two different versions.</p>'
+      : rows.every(r => JSON.stringify(r.from) === JSON.stringify(r.to)) ? '<p class="text-green-400">✓ No differences in how these versions grade.</p>'
+      : changes);
+  });
+  document.querySelectorAll('[data-diff-open]').forEach(btn =>
+    btn.addEventListener('click', () => diff.open(...btn.dataset.diffOpen.split(':'))));
+})();
+</script>
+{% endif %}
+{{ bases|json_script:"base-data" }}
+{{ formats|json_script:"format-data" }}
+{{ default_probe|json_script:"default-probe" }}
+{% if cloning %}{{ form.probe_prompt|json_script:"clone-probe" }}{{ cloning.judge.name|json_script:"clone-name" }}{% endif %}
+<script>
+(function () {
+  const BASES = Object.fromEntries(JSON.parse(document.getElementById('base-data').textContent).map(b => [b.key, b]));
+  const FORMATS = Object.fromEntries(JSON.parse(document.getElementById('format-data').textContent).map(f => [f.key, f]));
+  const DEFAULT_PROBE = JSON.parse(document.getElementById('default-probe').textContent);
+  const readJson = id => { const el = document.getElementById(id); return el ? JSON.parse(el.textContent) : null; };
+  const CLONE_PROBE = readJson('clone-probe'), CLONE_NAME = readJson('clone-name');
   const form = document.getElementById('judge-form');
-  const select = document.getElementById('rubric-select');
-  const info = document.getElementById('rubric-info');
+  const select = document.getElementById('start-select');
+  const info = document.getElementById('start-info');
+  const readOnly = form.querySelector('fieldset').disabled;
   let current = select.value;
 
-  function promptDefault(field) { return (RUBRICS[select.value] || {})[field] || ''; }
-  function syncPrompt(box) {
-    const field = box.dataset.prompt;
+  const baseOf = v => v.startsWith('format:') ? null : (BASES[v] || {});
+  const outputOf = v => v.startsWith('format:') ? v.slice(7) : null;
+  function defaults(v) {
+    const b = baseOf(v);
+    return { criteria: b ? b.criteria || '' : '', probe_prompt: b ? b.probe_prompt || '' : DEFAULT_PROBE };
+  }
+  function syncText(box) {
+    const field = box.dataset.text;
     const ta = box.querySelector('textarea');
-    const def = promptDefault(field);
+    const def = defaults(select.value)[field];
     const edited = ta.value.trim() !== def.trim();
-    box.querySelector('[data-prompt-state]').innerHTML = edited
-      ? '<span class="text-amber-300">edited</span>' : '<span class="text-gray-500">rubric default</span>';
-    box.querySelector('[data-prompt-reset]').classList.toggle('hidden', !edited || form.querySelector('fieldset').disabled);
-    ta.placeholder = def ? '' : "Empty: SimpleAudit's built-in prompt";
+    const own = field === 'criteria' && !baseOf(select.value);
+    const copied = field === 'probe_prompt' && CLONE_PROBE !== null && edited && ta.value.trim() === CLONE_PROBE.trim();
+    box.querySelector('[data-text-state]').innerHTML = own ? ''
+      : copied ? `<span class="text-gray-500">from ${esc(CLONE_NAME)}</span>`
+      : edited ? '<span class="text-amber-300">edited</span>'
+      : `<span class="text-gray-500">${field === 'criteria' ? "SimpleAudit's" : 'default'}</span>`;
+    box.querySelector('[data-text-reset]').classList.toggle('hidden', own || !edited || readOnly);
   }
-  function syncInfo() {
-    const r = RUBRICS[select.value] || {};
-    info.innerHTML = `${esc(r.description || '')} <span class="text-gray-500">Result: ${esc(r.output_label || '')}.</span>` +
-      (r.source_url ? ` <a href="${esc(r.source_url)}" target="_blank" rel="noopener" class="text-accent hover:underline">Source ↗</a>` : '');
+  function syncPanels() {
+    const b = baseOf(select.value), out = outputOf(select.value);
+    form.querySelectorAll('[data-panel]').forEach(p => {
+      const kind = p.dataset.panel;
+      p.classList.toggle('hidden', !(kind === 'base' ? b : kind === 'format' ? out : kind === out));
+    });
+    if (b) {
+      form.querySelector('[data-base-output]').textContent = b.output_label || '';
+      form.querySelector('[data-base-fields]').textContent = (b.fields || []).join(', ');
+      form.querySelector('[data-base-format]').textContent = b.format_prompt || '';
+      info.innerHTML = esc(b.description || '') +
+        (b.source_url ? ` <a href="${esc(b.source_url)}" target="_blank" rel="noopener" class="text-accent hover:underline">Source ↗</a>` : '');
+    } else {
+      form.querySelector('[data-format-help]').textContent = (FORMATS[out] || {}).help || '';
+      info.textContent = 'Write your own criteria below; the output format is added for you.';
+    }
+    form.querySelector('[name="question"]').required = out === 'binary';
   }
+  const description = document.getElementById('description');
   select.addEventListener('change', () => {
-    // Prompts still at the old rubric's defaults follow the new rubric; edited ones stay.
-    form.querySelectorAll('[data-prompt]').forEach(box => {
+    // Text still at the old start's default (or empty) follows the new one; edited text stays.
+    const oldDefaults = defaults(current), newDefaults = defaults(select.value);
+    // From a SimpleAudit judge to own criteria: carry its criteria (and 1–10
+    // sub-scores) over, minus the closing section the format supplies itself.
+    const fromBase = baseOf(current), target = outputOf(select.value);
+    if (fromBase && target) {
+      if (fromBase.equivalent === target) newDefaults.criteria = fromBase.own_criteria;
+      else newDefaults.criteria = fromBase.criteria;
+      const dims = form.querySelector('[name="dimensions"]');
+      if (target === 'score' && !dims.value.trim()) dims.value = (fromBase.dimensions || []).join('\n');
+    }
+    const oldDesc = (baseOf(current) || {}).description || '';
+    if (!description.value.trim() || description.value.trim() === oldDesc.trim()) {
+      description.value = (baseOf(select.value) || {}).description || '';
+    }
+    form.querySelectorAll('[data-text]').forEach(box => {
       const ta = box.querySelector('textarea');
-      const oldDef = (RUBRICS[current] || {})[box.dataset.prompt] || '';
-      if (!ta.value.trim() || ta.value.trim() === oldDef.trim()) ta.value = promptDefault(box.dataset.prompt);
-      syncPrompt(box);
+      const field = box.dataset.text;
+      if (!ta.value.trim() || ta.value.trim() === oldDefaults[field].trim()) ta.value = newDefaults[field];
+      syncText(box);
     });
     current = select.value;
-    syncInfo();
+    syncPanels();
+    schedulePreview();
   });
-  form.querySelectorAll('[data-prompt]').forEach(box => {
-    box.querySelector('textarea').addEventListener('input', () => syncPrompt(box));
-    box.querySelector('[data-prompt-reset]').addEventListener('click', () => {
-      box.querySelector('textarea').value = promptDefault(box.dataset.prompt);
-      syncPrompt(box);
+  form.querySelectorAll('[data-text]').forEach(box => {
+    box.querySelector('textarea').addEventListener('input', () => syncText(box));
+    box.querySelector('[data-text-reset]').addEventListener('click', e => {
+      e.preventDefault();
+      box.querySelector('textarea').value = defaults(select.value)[box.dataset.text];
+      syncText(box);
+      schedulePreview();
     });
-    syncPrompt(box);
+    syncText(box);
   });
-  syncInfo();
+
+  // Live preview of the full judge prompt, built by SimpleAudit on the server.
+  const preview = document.getElementById('preview-box');
+  let timer;
+  function schedulePreview() {
+    if (!preview.open) return;
+    clearTimeout(timer);
+    timer = setTimeout(async () => {
+      // Built by hand: FormData skips a disabled fieldset (viewers).
+      const data = new FormData();
+      for (const el of form.elements) if (el.name) data.append(el.name, el.value);
+      try {
+        const resp = await fetch('{% url "judge_preview" %}', {method: 'POST', body: data});
+        const out = await resp.json();
+        document.getElementById('preview-error').textContent = out.error || '';
+        document.getElementById('preview-error').classList.toggle('hidden', !out.error);
+        if (!out.error) document.getElementById('preview-text').textContent = out.judge_prompt;
+      } catch (e) { /* offline: keep the last preview */ }
+    }, 350);
+  }
+  preview.addEventListener('toggle', schedulePreview);
+  form.addEventListener('input', schedulePreview);
+  syncPanels();
+  if (location.hash === '#criteria' && !readOnly) document.getElementById('criteria').focus();
 })();
 </script>
 {% endblock %}

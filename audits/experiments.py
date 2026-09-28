@@ -227,7 +227,7 @@ def factor_value_label(key: str, value) -> str:
     if key == "scenario_set":
         if is_follow(value):
             return f"{value.scenario_set.name} (always latest, now v{value.version})"
-        return f"{value.scenario_set.name} v{value.version}"
+        return value.label
     if key == "judge":
         if is_follow(value):
             return f"{value.judge.name} (always latest, now v{value.version})"
@@ -392,7 +392,7 @@ def launch_experiment(*, project, user, name: str, runs: list[dict], repeat: dic
 def run_factor_values(run: AuditRun) -> dict:
     params = run.generation_parameters_snapshot or {}
     return {
-        "scenario_set": f"{run.scenario_set_version.scenario_set.name} v{run.scenario_set_version.version}",
+        "scenario_set": run.scenario_set_version.label,
         "target": frozen_name(run, "target"),
         "auditor": frozen_name(run, "auditor"),
         "judge_model": frozen_name(run, "judge"),

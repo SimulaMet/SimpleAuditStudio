@@ -1,0 +1,4 @@
+{% comment %}
+Which version a monitor runs: "v3 · pinned", or "always latest" (the newest
+version at each run). Context: version (a version object, or None).
+{% endcomment %}{% if version %}<span class="text-gray-500 whitespace-nowrap" title="Pinned: every run uses v{{ version.version }}">v{{ version.version }} · pinned</span>{% else %}<span class="text-gray-500 whitespace-nowrap" title="Each run uses the newest version saved at that time">always latest</span>{% endif %}
