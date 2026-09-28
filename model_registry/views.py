@@ -2,7 +2,6 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
-from accounts.services import ensure_project_access
 from infra.exceptions import StableAPIError
 from model_registry.models import ModelConnection
 from model_registry.services import fetch_remote_model_ids, http_error_detail
@@ -11,9 +10,20 @@ from model_registry.services import fetch_remote_model_ids, http_error_detail
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def ping_connection(request, conn_pk):
-    """Ping a connection's /models endpoint and check all registered models against it."""
+    """Ping a connection's /models endpoint and check all registered models against it.
+
+    Allowed for the owning workspace and for any workspace the connection is
+    shared into (public / admin-shared / explicit). Pinging only reads the
+    remote model list — it never exposes the API key.
+    """
+    from model_registry.services import visible_connection_ids_for
+
     conn = ModelConnection.objects.select_related("project").filter(pk=conn_pk).first()
-    if not conn or not ensure_project_access(request.user, conn.project):
+    if conn is None:
+        raise StableAPIError(detail="Connection not found.", code="conn_not_found", http_status=404)
+    # The caller must be working in a workspace that can see this connection.
+    active_project = getattr(request, "project", None)
+    if active_project is None or conn.id not in visible_connection_ids_for(active_project):
         raise StableAPIError(detail="Connection not found.", code="conn_not_found", http_status=404)
     try:
         server_ids = set(fetch_remote_model_ids(conn))
