@@ -39,6 +39,50 @@ def _endpoint_snapshot(model: RegisteredModel) -> dict:
     }
 
 
+ROLES = ("target", "auditor", "judge")
+
+
+def frozen_model(run: AuditRun, role: str) -> dict:
+    """The model a run actually used for ``role``, from its frozen snapshot.
+
+    Models and connections can be renamed or re-pointed after a run, so pages
+    show the snapshot, not the live record. ``changes`` lists what differs in
+    the live record now (for an "edited since this run" note).
+    """
+    snap = getattr(run, f"{role}_config_snapshot") or {}
+    live = getattr(run, f"{role}_model", None)
+    view = {
+        "role": role,
+        "display_name": snap.get("display_name") or snap.get("model_id") or (live.display_name if live else "—"),
+        "model_id": snap.get("model_id") or (live.model_id if live else ""),
+        "base_url": snap.get("base_url", ""),
+        "provider": snap.get("provider", ""),
+        "connection_id": snap.get("connection_id") or (live.connection_id if live else None),
+        "changes": [],
+    }
+    if live is not None and snap:
+        conn = live.connection
+        for label, then, now in (
+            ("name", view["display_name"], live.display_name),
+            ("model ID", view["model_id"], live.model_id),
+            ("base URL", view["base_url"], conn.base_url),
+            ("provider", view["provider"], conn.provider),
+        ):
+            if then and now and then != now:
+                view["changes"].append(f"{label} is now “{now}”")
+    return view
+
+
+def frozen_name(run: AuditRun, role: str, *, with_id: bool = False) -> str:
+    """Display name (optionally "Name (model-id)") of the model the run used, from its snapshot."""
+    m = frozen_model(run, role) if with_id else None
+    if m:
+        return f"{m['display_name']} ({m['model_id']})" if m["model_id"] and m["model_id"] != m["display_name"] else m["display_name"]
+    snap = getattr(run, f"{role}_config_snapshot") or {}
+    live = getattr(run, f"{role}_model", None)
+    return snap.get("display_name") or snap.get("model_id") or (live.display_name if live else "—")
+
+
 # Keys managed by dedicated form fields — stripped from JSON override to avoid confusion.
 _FORM_MANAGED_KEYS = {"max_turns", "n_repetitions", "language"}
 
