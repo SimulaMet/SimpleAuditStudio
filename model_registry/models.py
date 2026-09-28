@@ -13,6 +13,7 @@ class ModelConnection(models.Model):
     """A provider endpoint: one base URL + auth that serves multiple models."""
     project = models.ForeignKey("accounts.Project", on_delete=models.CASCADE, related_name="model_connections")
     name = models.CharField(max_length=250)
+    description = models.TextField(blank=True, default="")
     provider = models.CharField(max_length=120, default="openai")
     base_url = models.URLField()
     secret_reference = models.CharField(max_length=250, blank=True)
@@ -43,6 +44,7 @@ class RegisteredModel(models.Model):
     project = models.ForeignKey("accounts.Project", on_delete=models.CASCADE, related_name="registered_models")
     display_name = models.CharField(max_length=250)
     model_id = models.CharField(max_length=250)
+    description = models.TextField(blank=True, default="")
     model_revision = models.CharField(max_length=250, blank=True)
     capabilities = models.JSONField(default=dict, blank=True)
     default_parameters = models.JSONField(default=dict, blank=True)

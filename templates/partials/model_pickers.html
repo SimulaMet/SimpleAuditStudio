@@ -23,14 +23,15 @@ Field names match the single-select partial so one-run posts look the same.
       <div data-filter-list class="h-60 overflow-y-auto rounded-lg border border-gray-800 bg-surface-overlay/40 divide-y divide-gray-800/60">
         {% for conn in connections %}
           {% if conn.models.all %}
-          <p data-filter-group="{{ conn.pk }}" class="px-2.5 pt-2 pb-1 text-[10px] uppercase tracking-wide text-gray-600">{{ conn.name }}</p>
+          <p data-filter-group="{{ conn.pk }}"{% if conn.description %} title="{{ conn.description }}"{% endif %} class="px-2.5 pt-2 pb-1 text-[10px] uppercase tracking-wide text-gray-600">{{ conn.name }}</p>
           {% for m in conn.models.all %}
-          <label data-filter-item data-group="{{ conn.pk }}" class="flex items-start gap-2 px-2.5 py-1.5 text-sm cursor-pointer hover:bg-surface-overlay">
+          <label data-filter-item data-group="{{ conn.pk }}"{% if m.description %} title="{{ m.description }}"{% endif %} class="flex items-start gap-2 px-2.5 py-1.5 text-sm cursor-pointer hover:bg-surface-overlay">
             <input type="checkbox" name="{{ role }}_model" value="{{ m.id }}" class="mt-0.5 accent-[currentColor]"
                    {% if m.id|stringformat:"d" in chosen %}checked{% endif %}>
             <span class="min-w-0">
               <span class="text-gray-200 block truncate">{{ m.display_name }}</span>
               <span class="text-[11px] text-gray-500 block truncate">{{ m.model_id }}{% if not m.has_key %} · <span class="text-yellow-500">no key set</span>{% endif %}</span>
+              {% if m.description %}<span class="text-[11px] text-gray-500/80 italic block truncate">{{ m.description }}</span>{% endif %}
             </span>
           </label>
           {% endfor %}

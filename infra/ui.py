@@ -1631,6 +1631,9 @@ class ScenarioImportView(ProjectMixin, View):
 
 # ─── Models ──────────────────────────────────────────────────────────────────
 
+DESCRIPTION_MAX = 1000
+
+
 class ModelsView(ProjectMixin, TemplateView):
     """Model registry: connections (server + key) and the models each one serves."""
 
@@ -1651,7 +1654,7 @@ class ModelsView(ProjectMixin, TemplateView):
         # What the edit dialog needs (never the key itself).
         conn_data = {
             c.pk: {
-                "name": c.name, "provider": c.provider, "base_url": c.base_url, "secret_ref": c.secret_reference,
+                "name": c.name, "description": c.description, "provider": c.provider, "base_url": c.base_url, "secret_ref": c.secret_reference,
                 "key_mode": "stored" if c.api_key_direct else "env" if c.secret_reference else "none",
                 "enabled": c.enabled,
             }
@@ -1697,6 +1700,7 @@ class ModelsView(ProjectMixin, TemplateView):
             if ModelConnection.objects.filter(project=p, name=name).exclude(pk=conn.pk).exists():
                 return fail(f"A connection named “{name}” already exists.")
             conn.name, conn.base_url = name, base_url
+            conn.description = post.get("conn_description", "").strip()[:DESCRIPTION_MAX]
             conn.provider = post.get("conn_provider") or "openai"
             # Where the key comes from: stored on the connection, an env var, or none.
             key_mode = post.get("key_mode", "stored")
@@ -1723,9 +1727,11 @@ class ModelsView(ProjectMixin, TemplateView):
             ids = [m.strip() for m in post.getlist("model_id") if m.strip()][:200]
             if not ids:
                 return fail("Enter a model ID or pick models to add.")
-            label = post.get("model_display_name", "").strip() if len(ids) == 1 else ""
+            single = len(ids) == 1
+            label = post.get("model_display_name", "").strip() if single else ""
+            desc = post.get("model_description", "").strip()[:DESCRIPTION_MAX] if single else ""
             existing = set(conn.models.values_list("model_id", flat=True))
-            new = [RegisteredModel(connection=conn, project=p, model_id=m, display_name=label or m, enabled=True)
+            new = [RegisteredModel(connection=conn, project=p, model_id=m, display_name=label or m, description=desc, enabled=True)
                    for m in dict.fromkeys(ids) if m not in existing]
             RegisteredModel.objects.bulk_create(new)
             skipped = len(set(ids)) - len(new)
@@ -1742,7 +1748,9 @@ class ModelsView(ProjectMixin, TemplateView):
                     return fail(f"“{new_id}” is already registered on {rm.connection.name}.")
                 rm.model_id = new_id
                 rm.display_name = post.get("model_display_name", "").strip() or new_id
-                rm.save(update_fields=["model_id", "display_name"])
+                rm.description = post.get("model_description", "").strip()[:DESCRIPTION_MAX]
+                rm.save(update_fields=["model_id", "display_name", "description"])
+                messages.success(request, f"Saved {rm.display_name}.")
             else:
                 try:
                     rm.delete()
