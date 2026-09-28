@@ -527,6 +527,11 @@ def _scenario_execute_impl(workflow_input: ScenarioInput, ctx: Context) -> dict:
                 on_turn=_on_turn,
                 on_rep_started=_on_rep_started,
                 cancel_event=_cancel_event,
+                severity_ceiling=revision.severity_ceiling or "",
+                documents=revision.documents or None,
+                file_uri=revision.file_uri,
+                category=item.scenario.category or "",
+                metadata=revision.metadata or {},
             )
             # Use aggregated severity for the run-level counter
             severity = result_payload.get("aggregated_severity", "")
@@ -541,6 +546,11 @@ def _scenario_execute_impl(workflow_input: ScenarioInput, ctx: Context) -> dict:
                 judge=run.judge_config_snapshot,
                 generation=gen_params,
                 on_turn=_on_turn,
+                severity_ceiling=revision.severity_ceiling or "",
+                documents=revision.documents or None,
+                file_uri=revision.file_uri,
+                category=item.scenario.category or "",
+                metadata=revision.metadata or {},
             )
             severity = result_payload.get("severity", "")
         # Stop the live flusher: drains any remaining turn events and joins the
