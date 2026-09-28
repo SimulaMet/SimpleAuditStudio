@@ -126,7 +126,7 @@ class JudgeDetailView(ProjectMixin, TemplateView):
             shown=shown,
             latest=versions[0] if versions else None,
             form=form,
-            rubrics=rubric_choices(),
+            rubrics=rubric_choices(form.get("rubric")),
             monitors=list(judge.monitors.select_related("judge_version")) if judge else [],
         )
         return super().get_context_data(**kw)
