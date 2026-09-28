@@ -16,10 +16,10 @@
       A connection is one server and its API key; register the models it serves to use them as target, auditor or judge.
     </p>
   </div>
-  <div class="flex items-center gap-2">
+  <div class="flex flex-wrap items-center gap-2 w-full sm:w-auto">
     {% if connections %}
     <input type="search" id="model-search" placeholder="Filter connections and models…" aria-label="Filter connections and models"
-           class="w-60 px-2.5 py-1.5 rounded-lg bg-surface-overlay border border-gray-700 text-xs text-gray-200 focus:outline-none focus:ring-2 focus:ring-accent/50">
+           class="flex-1 min-w-0 sm:flex-none sm:w-60 px-2.5 py-1.5 rounded-lg bg-surface-overlay border border-gray-700 text-xs text-gray-200 focus:outline-none focus:ring-2 focus:ring-accent/50">
     <button type="button" id="check-all" title="Ping every connection and check which models it serves"
             class="px-3 py-1.5 rounded-lg bg-surface-overlay border border-gray-700 text-xs text-gray-300 hover:text-white whitespace-nowrap">Check all</button>
     {% endif %}
@@ -34,9 +34,9 @@
   <section id="conn-{{ conn.id }}" class="conn-card bg-surface-raised rounded-xl border border-gray-800 scroll-mt-6 {% if not conn.enabled %}opacity-70{% endif %}"
            data-conn="{{ conn.id }}" data-search="{{ conn.name|lower }} {{ conn.base_url|lower }} {{ conn.provider|lower }}">
     <!-- Connection header -->
-    <header class="flex flex-wrap items-center gap-3 px-4 py-3 border-b border-gray-800">
+    <header class="flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-3 border-b border-gray-800">
       <span class="w-9 h-9 shrink-0 rounded-lg bg-accent/15 text-accent font-semibold flex items-center justify-center uppercase" aria-hidden="true">{{ conn.name|slice:":1" }}</span>
-      <div class="min-w-0 flex-1">
+      <div class="min-w-0 flex-1 basis-48">
         <div class="flex flex-wrap items-center gap-2">
           <h2 class="text-sm font-semibold text-gray-100">{{ conn.name }}</h2>
           <span class="px-1.5 py-0.5 rounded bg-gray-800 text-[10px] text-gray-400 uppercase tracking-wide">{{ conn.provider }}</span>
@@ -48,7 +48,7 @@
         </div>
         <p class="text-xs text-gray-500 font-mono truncate mt-0.5" title="{{ conn.base_url }}">{{ conn.base_url }}</p>
       </div>
-      <div class="flex items-center gap-1.5">
+      <div class="flex items-center gap-1.5 w-full sm:w-auto justify-end">
         <button type="button" data-check="{{ conn.id }}" title="Ping the server and check which registered models it serves"
                 class="px-2.5 py-1 rounded-lg text-xs text-gray-300 bg-surface-overlay hover:text-white">Check</button>
         <button type="button" data-write data-discover="{{ conn.id }}" title="List the models this server offers and pick ones to add"
@@ -68,6 +68,7 @@
 
     <!-- Models -->
     {% if conn.model_list %}
+    <div class="overflow-x-auto">
     <table class="w-full text-sm">
       <thead>
         <tr class="text-[11px] uppercase tracking-wide text-gray-500">
@@ -120,6 +121,7 @@
         {% endfor %}
       </tbody>
     </table>
+    </div>
     {% else %}
     <p class="px-4 py-5 text-sm text-gray-500">No models yet. <button type="button" data-write data-discover="{{ conn.id }}" class="text-accent hover:underline">Add models</button> from this server.</p>
     {% endif %}

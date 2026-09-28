@@ -78,7 +78,7 @@ class SidebarNavTest(TestCase):
         content = self._dashboard()
         # The avatar/username row is now a link to /profile/.
         self.assertIn('href="/profile/"', content)
-        self.assertIn('title="Profile"', content)
+        self.assertIn('aria-label="Profile (', content)
 
     def test_logout_still_present(self):
         content = self._dashboard()

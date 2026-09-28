@@ -6,6 +6,10 @@
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
   <meta http-equiv="Pragma" content="no-cache">
   <meta http-equiv="Expires" content="0">
+  <script>
+    // Apply the remembered sidebar state before first paint (no layout jump).
+    try { if (localStorage.getItem('sa-sidebar-collapsed') === '1') document.documentElement.dataset.sidebar = 'collapsed'; } catch (e) {}
+  </script>
   <title>{% block title %}SimpleAudit Studio{% endblock %}</title>
   {% block head %}{% endblock %}
   {% load static %}
@@ -30,22 +34,25 @@
   <style>
     /* Viewers and archived workspaces: hide edit controls (the server blocks them too). */
     [data-readonly] [data-write] { display: none !important; }
-    /* Center icons in the collapsed (mini) sidebar so there's no empty strip on the right */
-    #sidebar.sidebar-collapsed nav a,
-    #sidebar.sidebar-collapsed #workspace-switcher-btn {
-      justify-content: center;
-      gap: 0;
-      padding-left: 0;
-      padding-right: 0;
+    /* Fieldsets default to min-width:min-content and overflow narrow screens. */
+    fieldset { min-width: 0; }
+    /* ── App shell sidebar ───────────────────────────────────────────── */
+    #sidebar { width: 13rem; transition: width .2s ease, transform .2s ease; }
+    @media (min-width: 768px) {
+      #sidebar { position: relative; flex-shrink: 0; }
+      html[data-sidebar="collapsed"] #sidebar { width: 4rem; }
+      html[data-sidebar="collapsed"] #sidebar .sidebar-label { display: none; }
+      html[data-sidebar="collapsed"] #sidebar .sb-item { justify-content: center; gap: 0; padding-left: 0; padding-right: 0; }
+      html[data-sidebar="collapsed"] #sidebar .sb-head { justify-content: center; padding: 0; }
+      html[data-sidebar="collapsed"] #sidebar .sb-user { flex-direction: column; }
+      html[data-sidebar="collapsed"] #sidebar .sb-collapse-icon { transform: rotate(180deg); }
+      /* The workspace menu opens beside the rail instead of under it. */
+      html[data-sidebar="collapsed"] #workspace-dropdown { left: 100%; top: 0; margin: 0 0 0 .5rem; }
     }
-    #sidebar.sidebar-collapsed nav a > span:first-child {
-      margin: 0 auto;
-    }
-    #sidebar.sidebar-collapsed .p-3.border-t > div {
-      justify-content: center;
-    }
-    #sidebar.sidebar-collapsed .p-3.border-t > div > a {
-      justify-content: center;
+    @media (max-width: 767.98px) {
+      #sidebar { position: fixed; inset: 0 auto 0 0; z-index: 50; width: min(16rem, 85vw); transform: translateX(-100%); box-shadow: none; }
+      html.sidebar-open #sidebar { transform: none; box-shadow: 0 0 40px rgb(0 0 0 / .5); }
+      html.sidebar-open body { overflow: hidden; }
     }
   </style>
 {% include "partials/ui_js.html" %}
@@ -53,92 +60,18 @@
 <body class="h-full bg-surface text-gray-200 antialiased"{% if user.is_authenticated and not can_write %} data-readonly{% endif %}>
 {% if user.is_authenticated %}
 <div class="flex h-screen overflow-hidden">
-  <!-- Sidebar -->
-  <aside id="sidebar" class="w-52 transition-all duration-200 flex flex-col bg-surface-raised border-r border-gray-800 shrink-0">
-    <div class="h-14 flex items-center px-4 border-b border-gray-800">
-      <a href="/" class="flex items-center group" title="Home">
-        <img src="{% static 'logo.svg' %}?v=3" alt="SimpleAudit" class="h-8 w-8 object-contain rounded-lg shrink-0"
-             onerror="this.onerror=null;this.src='https://raw.githubusercontent.com/SushantGautam/SimpleAuditStudio/main/static/logo.svg'">
-        <span class="sidebar-label ml-2 text-sm font-semibold text-gray-300 whitespace-nowrap group-hover:text-gray-100 transition-colors">SimpleAudit Studio</span>
-      </a>
-      <button id="sidebar-toggle" class="ml-auto p-1.5 -m-1.5 text-gray-400 hover:text-gray-200 text-base leading-none" title="Toggle sidebar" aria-label="Toggle sidebar">⟨</button>
-    </div>
-    <nav class="flex-1 py-3 space-y-0.5 px-2">
-      <!-- Workspace switcher -->
-      <div class="relative mb-2" id="workspace-switcher">
-        <button type="button" id="workspace-switcher-btn"
-                class="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm bg-surface-overlay border border-gray-700/60 text-gray-200 hover:border-accent/40 transition-colors"
-                title="{{ request.project.name|default:'No workspace' }}">
-          <span class="text-base w-5 text-center shrink-0">▣</span>
-          <span class="sidebar-label flex-1 text-left truncate font-medium">{{ request.project.name|default:"No workspace" }}</span>
-          <span class="sidebar-label text-sm text-gray-400 shrink-0 leading-none">▾</span>
-        </button>
-        <div id="workspace-dropdown" class="hidden absolute left-2 top-full mt-1 z-50 w-60 bg-surface-raised border border-gray-700 rounded-lg shadow-xl max-h-72 overflow-y-auto">
-          <p class="text-[10px] uppercase tracking-wide text-gray-500 px-3 pt-2 pb-1">Workspaces</p>
-          {% for ws in workspaces %}
-          <button type="button" data-workspace-id="{{ ws.id }}"
-                  class="workspace-row w-full flex items-center gap-2 px-3 py-2 text-sm text-left whitespace-nowrap {% if ws.is_current %}bg-accent/15 text-accent font-medium{% else %}text-gray-300 hover:bg-surface-overlay{% endif %}">
-            <span class="flex-1 truncate">{{ ws.name }}</span>
-            {% if ws.archived %}<span class="text-[10px] bg-gray-700/60 text-gray-300 rounded px-1 shrink-0" title="Archived — read-only">Archived</span>{% endif %}
-            {% if ws.is_admin %}<span class="text-[10px] bg-accent/20 text-accent rounded px-1 shrink-0">Admin</span>{% endif %}
-          </button>
-          {% empty %}
-          <p class="px-3 py-2 text-xs text-gray-500">No workspaces yet.</p>
-          {% endfor %}
-          <div class="border-t border-gray-800">
-            <a href="{% url 'workspaces' %}?new=1" class="block px-3 py-2 text-sm text-gray-400 hover:text-gray-200 hover:bg-surface-overlay">＋ New workspace</a>
-            <a href="{% url 'workspaces' %}" class="block px-3 py-2 text-sm text-gray-400 hover:text-gray-200 hover:bg-surface-overlay">Manage workspaces</a>
-          </div>
-        </div>
-      </div>
-      <a href="{% url 'dashboard' %}" class="flex items-center gap-3 px-3 py-2 rounded-lg text-sm whitespace-nowrap {% if request.path == '/' %}bg-accent/15 text-accent font-medium{% else %}text-gray-400 hover:text-gray-200 hover:bg-surface-overlay{% endif %}">
-        <span class="text-base w-5 text-center">◉</span><span class="sidebar-label">Dashboard</span>
-      </a>
-      <a href="{% url 'new_experiment' %}" class="flex items-center gap-3 px-3 py-2 rounded-lg text-sm whitespace-nowrap {% if request.path == '/experiments/new/' %}bg-accent/15 text-accent font-medium{% else %}text-gray-400 hover:text-gray-200 hover:bg-surface-overlay{% endif %}">
-        <span class="text-base w-5 text-center">＋</span><span class="sidebar-label">New Experiment</span>
-      </a>
-      <a href="{% url 'experiments' %}" class="flex items-center gap-3 px-3 py-2 rounded-lg text-sm whitespace-nowrap {% if request.path|slice:':13' == '/experiments/' and request.path != '/experiments/new/' %}bg-accent/15 text-accent font-medium{% else %}text-gray-400 hover:text-gray-200 hover:bg-surface-overlay{% endif %}">
-        <span class="text-base w-5 text-center">⊞</span><span class="sidebar-label">Experiments</span>
-      </a>
-      <a href="{% url 'monitors' %}" class="flex items-center gap-3 px-3 py-2 rounded-lg text-sm whitespace-nowrap {% if request.path|slice:':10' == '/monitors/' %}bg-accent/15 text-accent font-medium{% else %}text-gray-400 hover:text-gray-200 hover:bg-surface-overlay{% endif %}">
-        <span class="text-base w-5 text-center">↻</span><span class="sidebar-label">Monitors</span>
-      </a>
-      <a href="{% url 'scenarios' %}" class="flex items-center gap-3 px-3 py-2 rounded-lg text-sm whitespace-nowrap {% if request.path == '/scenarios/' %}bg-accent/15 text-accent font-medium{% else %}text-gray-400 hover:text-gray-200 hover:bg-surface-overlay{% endif %}">
-        <span class="text-base w-5 text-center">▤</span><span class="sidebar-label">Scenarios</span>
-      </a>
-      <a href="{% url 'models' %}" class="flex items-center gap-3 px-3 py-2 rounded-lg text-sm whitespace-nowrap {% if request.path == '/models/' %}bg-accent/15 text-accent font-medium{% else %}text-gray-400 hover:text-gray-200 hover:bg-surface-overlay{% endif %}">
-        <span class="text-base w-5 text-center">⬡</span><span class="sidebar-label">Models</span>
-      </a>
-      <a href="{% url 'compare' %}" class="flex items-center gap-3 px-3 py-2 rounded-lg text-sm whitespace-nowrap {% if request.path == '/compare/' %}bg-accent/15 text-accent font-medium{% else %}text-gray-400 hover:text-gray-200 hover:bg-surface-overlay{% endif %}">
-        <span class="text-base w-5 text-center">⇄</span><span class="sidebar-label">Compare</span>
-      </a>
-      {% if is_admin %}
-      <a href="{% url 'health' %}" class="flex items-center gap-3 px-3 py-2 rounded-lg text-sm whitespace-nowrap {% if request.path == '/health/' %}bg-accent/15 text-accent font-medium{% else %}text-gray-400 hover:text-gray-200 hover:bg-surface-overlay{% endif %}">
-        <span class="text-base w-5 text-center">⚕</span><span class="sidebar-label">Health</span>
-      </a>
-      {% endif %}
-    </nav>
-    <div class="p-3 border-t border-gray-800 space-y-1">
-      {% if is_superuser %}
-      <a href="{% url 'admin_settings' %}" class="flex items-center gap-3 px-3 py-2 rounded-lg text-sm whitespace-nowrap {% if request.path == '/admin-settings/' %}bg-accent/15 text-accent font-medium{% else %}text-gray-400 hover:text-gray-200 hover:bg-surface-overlay{% endif %}">
-        <span class="text-base w-5 text-center">⚙</span><span class="sidebar-label">Admin Settings</span>
-      </a>
-      {% endif %}
-      <div class="flex items-center gap-2">
-        <a href="{% url 'profile' %}" class="flex items-center gap-2 flex-1 min-w-0 rounded-lg px-1 py-1 -mx-1 hover:bg-surface-overlay transition-colors" title="Profile">
-          {% if gravatar_url %}
-          <img src="{{ gravatar_url }}" alt="{{ user.username }}" class="w-7 h-7 rounded-full shrink-0" referrerpolicy="no-referrer">
-          {% else %}
-          <div class="w-7 h-7 rounded-full bg-accent/20 flex items-center justify-center text-xs font-bold text-accent shrink-0">{{ user.username|first|upper }}</div>
-          {% endif %}
-          <span class="sidebar-label text-xs text-gray-400 truncate flex-1">{{ user.username }}</span>
-        </a>
-        <a href="{% url 'logout' %}" class="sidebar-label text-xs text-gray-600 hover:text-red-400 shrink-0" title="Sign out" aria-label="Sign out">⏻</a>
-      </div>
-    </div>
-  </aside>
+  {% include "partials/sidebar.html" %}
   <!-- Main column: scrollable content + footer pinned to bottom -->
   <div class="flex-1 flex flex-col min-w-0">
+    <!-- Mobile top bar -->
+    <header class="md:hidden h-12 shrink-0 flex items-center gap-2 px-3 border-b border-gray-800 bg-surface-raised">
+      <button type="button" id="sidebar-open" aria-label="Open menu" title="Open menu" aria-controls="sidebar" aria-expanded="false"
+              class="w-9 h-9 -ml-1 rounded-lg text-gray-300 hover:bg-surface-overlay text-lg leading-none">☰</button>
+      <a href="/" class="flex items-center gap-2 min-w-0">
+        <img src="{% static 'logo.svg' %}?v=3" alt="" class="h-6 w-6 rounded shrink-0">
+        <span class="text-sm font-semibold text-gray-200 truncate">{% for item in nav_items %}{% if item.active %}{{ item.label }}{% endif %}{% empty %}SimpleAudit{% endfor %}</span>
+      </a>
+    </header>
     <main class="flex-1 overflow-y-auto px-4 pt-4 pb-0 md:px-6 md:pt-6 md:pb-0 flex flex-col min-h-full">
       <div class="flex-1">
       {% if messages %}
@@ -177,10 +110,8 @@
 
   btn.addEventListener('click', (e) => {
     e.stopPropagation();
-    // Picker only available in the expanded sidebar; collapsed shows icon only.
-    const sidebar = document.getElementById('sidebar');
-    if (sidebar && sidebar.style.width === '4rem') return;
-    dd.classList.toggle('hidden');
+    const open = dd.classList.toggle('hidden') === false;
+    btn.setAttribute('aria-expanded', open);
   });
   document.addEventListener('click', (e) => {
     if (!wrap.contains(e.target)) dd.classList.add('hidden');
@@ -200,41 +131,29 @@
 })();
 </script>
 <script>
-(function() {
-  const btn = document.getElementById('sidebar-toggle');
-  const sidebar = document.getElementById('sidebar');
-  if (!btn || !sidebar) return;
-  const isMobile = window.innerWidth < 768;
-  let collapsed = isMobile ? true : (localStorage.getItem('sa-sidebar-collapsed') === '1');
-  function apply() {
-    sidebar.style.width = collapsed ? '4rem' : '13rem';
-    sidebar.classList.toggle('sidebar-collapsed', collapsed);
-    btn.textContent = collapsed ? '\u27E9' : '\u27E8';
-    document.querySelectorAll('.sidebar-label').forEach(el => el.classList.toggle('hidden', collapsed));
-    // Center the header content when collapsed
-    const header = sidebar.querySelector(':scope > div:first-child');
-    if (header) {
-      header.classList.toggle('justify-center', collapsed);
-      header.classList.toggle('px-2', collapsed);
-      header.classList.toggle('px-4', !collapsed);
-    }
+// Sidebar: collapse to an icon rail on desktop (remembered), drawer on mobile.
+(function () {
+  const root = document.documentElement;
+  const openBtn = document.getElementById('sidebar-open');
+  const backdrop = document.getElementById('sidebar-backdrop');
+  document.getElementById('sidebar-collapse')?.addEventListener('click', e => {
+    const collapsed = root.dataset.sidebar !== 'collapsed';
+    if (collapsed) root.dataset.sidebar = 'collapsed'; else delete root.dataset.sidebar;
+    e.currentTarget.setAttribute('aria-label', collapsed ? 'Expand sidebar' : 'Collapse sidebar');
+    try { localStorage.setItem('sa-sidebar-collapsed', collapsed ? '1' : '0'); } catch (err) { /* private mode */ }
+  });
+  function setDrawer(open) {
+    root.classList.toggle('sidebar-open', open);
+    if (backdrop) backdrop.hidden = !open;
+    openBtn?.setAttribute('aria-expanded', open);
+    if (open) document.querySelector('#sidebar a, #sidebar button')?.focus();
   }
-  apply();
-  btn.addEventListener('click', () => {
-    collapsed = !collapsed;
-    if (!isMobile) localStorage.setItem('sa-sidebar-collapsed', collapsed ? '1' : '0');
-    apply();
-  });
-  // Auto-collapse/expand on resize across breakpoint
-  let wasMobile = isMobile;
-  window.addEventListener('resize', () => {
-    const nowMobile = window.innerWidth < 768;
-    if (nowMobile !== wasMobile) {
-      wasMobile = nowMobile;
-      collapsed = nowMobile;
-      apply();
-    }
-  });
+  openBtn?.addEventListener('click', () => setDrawer(true));
+  document.addEventListener('click', e => { if (e.target.closest('[data-sidebar-close]')) setDrawer(false); });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape' && root.classList.contains('sidebar-open')) setDrawer(false); });
+  matchMedia('(min-width: 768px)').addEventListener('change', e => { if (e.matches) setDrawer(false); });
+  const collapseBtn = document.getElementById('sidebar-collapse');
+  if (collapseBtn && root.dataset.sidebar === 'collapsed') collapseBtn.setAttribute('aria-label', 'Expand sidebar');
 })();
 </script>
 </body>

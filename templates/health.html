@@ -1,9 +1,19 @@
 {% extends "base.html" %}
 {% block title %}Health — SimpleAudit Studio{% endblock %}
+{% block head %}
+<style>
+  /* Every health card is the same height; long content scrolls inside the card. */
+  .hcard { height: 11rem; display: flex; flex-direction: column; }
+  .hcard > * { flex-shrink: 0; }
+  .hcard > .hcard-scroll { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
+  /* The model-endpoints card holds a list: it scrolls, while its detail line stays one line. */
+  [data-component="model_endpoints"] > [data-detail] { flex: 0 0 auto; }
+</style>
+{% endblock %}
 {% block content %}
-<div class="flex items-center justify-between mb-6">
+<div class="flex flex-wrap items-center justify-between gap-3 mb-6">
   <h1 class="text-lg font-semibold text-gray-100">System Health</h1>
-  <div class="flex items-center gap-3">
+  <div class="flex flex-wrap items-center gap-3">
     <span id="overall-badge" class="px-2.5 py-1 rounded-full text-xs font-medium bg-gray-800 text-gray-400">…</span>
     <span id="last-updated" class="text-xs text-gray-600"></span>
     <div class="relative group/refresh">
@@ -37,18 +47,18 @@
 <div id="component-grid" class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3 mb-8">
   {% for name, comp in health.components.items %}
   {# min-w-0: a long detail or model name must not widen the grid column. #}
-  <div class="bg-surface-raised rounded-xl border border-gray-800 p-4 min-w-0 {% if name == "model_endpoints" %}col-span-2 md:col-span-1{% endif %}" data-component="{{ name }}">
+  <div class="hcard bg-surface-raised rounded-xl border border-gray-800 p-4 min-w-0 {% if name == "model_endpoints" %}col-span-2 md:col-span-1{% endif %}" data-component="{{ name }}">
     <div class="flex items-center justify-between gap-2 mb-2">
       <span class="text-sm font-medium text-gray-200 capitalize truncate">{% if name == "model_endpoints" %}Model endpoints{% else %}{{ name }}{% endif %}</span>
       <span class="status-dot w-2.5 h-2.5 rounded-full bg-gray-600 shrink-0" data-dot></span>
     </div>
-    <p class="text-xs text-gray-500 min-h-[1rem] max-h-20 overflow-y-auto break-words" data-detail title="{{ comp.detail|default:'' }}">{{ comp.detail|default:"" }}</p>
+    <p class="hcard-scroll text-xs text-gray-500 min-h-[1rem] break-words" data-detail title="{{ comp.detail|default:'' }}">{{ comp.detail|default:"" }}</p>
     <p class="text-xs text-gray-600 mt-1" data-latency>{% if comp.latency_ms is not None %}{{ comp.latency_ms }} ms{% endif %}</p>
     {% if name == "engine" %}
     <p class="text-xs text-gray-500 mt-1 truncate" data-engine title="{{ comp.version|default:'' }}{% if comp.commit %} · {{ comp.commit }}{% endif %}">{{ comp.version|default:"—" }}{% if comp.commit %} · {{ comp.commit|slice:":8" }}{% endif %}</p>
     {% endif %}
     {% if name == "model_endpoints" %}
-    <div class="mt-2 space-y-2 max-h-48 overflow-auto pr-1" data-endpoints>
+    <div class="hcard-scroll mt-2 space-y-2 pr-1" data-endpoints>
       {% for group in comp.groups %}
       <div data-group="{{ group.name }}">
         <p class="text-[10px] font-medium text-gray-500 uppercase tracking-wide mb-1 truncate" title="{{ group.name }} · {{ group.provider }}">{{ group.name }} <span class="text-gray-600 normal-case">· {{ group.provider }}</span></p>
@@ -73,36 +83,36 @@
 <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wide mb-3">Resources &amp; Throughput</h2>
 <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
   <!-- Memory -->
-  <div class="bg-surface-raised rounded-xl border border-gray-800 p-4 min-w-0" data-resource="memory">
+  <div class="hcard bg-surface-raised rounded-xl border border-gray-800 p-4 min-w-0" data-resource="memory">
     <div class="flex items-center justify-between mb-2">
       <span class="text-sm font-medium text-gray-200">Memory</span>
       <span class="status-dot w-2.5 h-2.5 rounded-full bg-gray-600" data-dot></span>
     </div>
     <div class="bar-track h-1.5 rounded-full bg-gray-800 mb-2"><div class="bar-fill h-1.5 rounded-full bg-accent" data-bar style="width:0%"></div></div>
     <p class="text-xs text-gray-500 break-words" data-summary>—</p>
-    <p class="text-xs text-gray-600 mt-1 max-h-20 overflow-y-auto break-words" data-sub></p>
+    <p class="text-xs text-gray-600 mt-1 hcard-scroll break-words" data-sub></p>
   </div>
   <!-- Disk -->
-  <div class="bg-surface-raised rounded-xl border border-gray-800 p-4 min-w-0" data-resource="disk">
+  <div class="hcard bg-surface-raised rounded-xl border border-gray-800 p-4 min-w-0" data-resource="disk">
     <div class="flex items-center justify-between mb-2">
       <span class="text-sm font-medium text-gray-200">Disk</span>
       <span class="status-dot w-2.5 h-2.5 rounded-full bg-gray-600" data-dot></span>
     </div>
     <div class="bar-track h-1.5 rounded-full bg-gray-800 mb-2"><div class="bar-fill h-1.5 rounded-full bg-accent" data-bar style="width:0%"></div></div>
     <p class="text-xs text-gray-500 break-words" data-summary>—</p>
-    <p class="text-xs text-gray-600 mt-1 max-h-20 overflow-y-auto break-words" data-sub></p>
+    <p class="text-xs text-gray-600 mt-1 hcard-scroll break-words" data-sub></p>
   </div>
   <!-- CPU -->
-  <div class="bg-surface-raised rounded-xl border border-gray-800 p-4 min-w-0" data-resource="cpu">
+  <div class="hcard bg-surface-raised rounded-xl border border-gray-800 p-4 min-w-0" data-resource="cpu">
     <div class="flex items-center justify-between mb-2">
       <span class="text-sm font-medium text-gray-200">CPU Load</span>
       <span class="status-dot w-2.5 h-2.5 rounded-full bg-gray-600" data-dot></span>
     </div>
     <p class="text-2xl font-bold text-gray-100" data-load>—</p>
-    <p class="text-xs text-gray-600 mt-1 max-h-20 overflow-y-auto break-words" data-sub></p>
+    <p class="text-xs text-gray-600 mt-1 hcard-scroll break-words" data-sub></p>
   </div>
   <!-- Queue / throughput -->
-  <div class="bg-surface-raised rounded-xl border border-gray-800 p-4 min-w-0" data-resource="queue">
+  <div class="hcard bg-surface-raised rounded-xl border border-gray-800 p-4 min-w-0" data-resource="queue">
     <div class="flex items-center justify-between mb-2">
       <span class="text-sm font-medium text-gray-200">Run Queue</span>
       <span class="status-dot w-2.5 h-2.5 rounded-full bg-gray-600" data-dot></span>
@@ -113,7 +123,7 @@
       <div><span class="text-lg font-bold text-emerald-400" data-q="completed">—</span><p class="text-[10px] text-gray-600 uppercase">Done</p></div>
       <div><span class="text-lg font-bold text-red-400" data-q="failed">—</span><p class="text-[10px] text-gray-600 uppercase">Failed</p></div>
     </div>
-    <p class="text-xs text-gray-600 mt-2 max-h-20 overflow-y-auto break-words" data-sub></p>
+    <p class="text-xs text-gray-600 mt-2 hcard-scroll break-words" data-sub></p>
   </div>
 </div>
 

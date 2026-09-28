@@ -150,6 +150,7 @@ TEMPLATES = [
                 "infra.context_processors.gravatar_url",
                 "infra.context_processors.workspaces",
                 "infra.context_processors.write_access",
+                "infra.context_processors.nav",
             ],
         },
     },

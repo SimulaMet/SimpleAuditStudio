@@ -83,3 +83,42 @@ def write_access(request):
     from infra.ui import write_block_reason
 
     return {"can_write": write_block_reason(request) is None}
+
+
+# (url name, label, icon, path prefixes that make it active, admin-only)
+_NAV = (
+    ("dashboard", "Dashboard", "◉", ("/", "/runs/"), False),
+    ("new_experiment", "New Experiment", "＋", ("/experiments/new/",), False),
+    ("experiments", "Experiments", "⊞", ("/experiments/",), False),
+    ("monitors", "Monitors", "↻", ("/monitors/",), False),
+    ("scenarios", "Scenarios", "▤", ("/scenarios/",), False),
+    ("models", "Models", "⬡", ("/models/",), False),
+    ("compare", "Compare", "⇄", ("/compare/",), False),
+    ("health", "Health", "⚕", ("/health/",), True),
+)
+
+
+def nav(request):
+    """Sidebar items with one active entry (the longest matching path prefix)."""
+    from django.urls import reverse
+
+    user = getattr(request, "user", None)
+    if user is None or not user.is_authenticated:
+        return {}
+    from accounts.services import is_any_project_admin
+
+    admin = is_any_project_admin(user)
+    path = request.path
+    items = [
+        {"url": reverse(name), "label": label, "icon": icon, "prefixes": prefixes}
+        for name, label, icon, prefixes, admin_only in _NAV
+        if admin or not admin_only
+    ]
+
+    def score(item):   # "/" only matches the home page itself
+        return max((len(p) for p in item["prefixes"] if (path == p if p == "/" else path.startswith(p))), default=0)
+
+    best = max(items, key=score, default=None)
+    for item in items:
+        item["active"] = best is not None and item is best and score(best) > 0
+    return {"nav_items": items}

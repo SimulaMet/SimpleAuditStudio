@@ -154,6 +154,7 @@
     </select>
     <button type="button" onclick="adminAddMember({{ manage_id }}, this)" class="px-3 py-1.5 rounded-lg text-xs bg-accent/15 border border-accent/30 text-accent hover:bg-accent/25">Add member</button>
   </div>
+  <div class="overflow-x-auto">
   <table class="w-full text-sm">
     <thead>
       <tr class="border-b border-gray-800">
@@ -187,6 +188,7 @@
       {% endfor %}
     </tbody>
   </table>
+  </div>
 </div>
 {% endif %}
 {% endif %}
