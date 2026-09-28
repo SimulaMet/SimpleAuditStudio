@@ -6,8 +6,15 @@
   <title>SimpleAudit Studio — Reproducible AI Model Auditing Platform</title>
   <meta name="description" content="SimpleAudit Studio is a self-hostable platform for running reproducible AI model audits. Freeze every audit input, compare runs, and judge LLM behavior with the SimpleAudit Target → Auditor → Judge engine.">
   <meta name="robots" content="index,follow">
+  <meta name="author" content="Sushant Gautam">
   <link rel="canonical" href="https://sushantgautam.github.io/SimpleAuditStudio/">
   <meta name="theme-color" content="#0f1117">
+
+  <!-- Performance: preconnect to external origins, preload the hero image, local CSS (no render-blocking CDN) -->
+  <link rel="preconnect" href="https://sushantgautam-simpleaudit-studio.hf.space">
+  <link rel="preconnect" href="https://github.com">
+  <link rel="preload" as="image" href="logo.png">
+  <link rel="stylesheet" href="styles.css">
 
   <!-- Open Graph -->
   <meta property="og:site_name" content="SimpleAudit Studio">
@@ -26,10 +33,6 @@
   <link rel="icon" type="image/x-icon" href="favicon.ico">
   <link rel="icon" type="image/svg+xml" sizes="32x32" href="favicon-32x32.svg">
   <link rel="icon" type="image/svg+xml" sizes="16x16" href="favicon-16x16.svg">
-  <script src="https://cdn.tailwindcss.com"></script>
-  <script>
-    tailwind.config = { theme: { extend: { colors: { surface: { DEFAULT: '#0f1117', raised: '#1a1d27', overlay: '#242836' }, accent: { DEFAULT: '#6c8cff', hover: '#8da4ff' } } } } };
-  </script>
   <script type="application/ld+json">
   {
     "@context": "https://schema.org",
@@ -105,6 +108,7 @@
     <p class="mt-6 text-xs text-gray-600">Open source · MIT licensed</p>
   </header>
 
+  <main>
   <!-- Quick start -->
   <section class="max-w-3xl mx-auto px-6 pb-16 w-full">
     <h2 class="text-2xl font-bold text-white text-center">Get started in one line</h2>
@@ -195,6 +199,7 @@
       See the <a href="https://github.com/SushantGautam/SimpleAuditStudio/blob/main/docs/deployment.md" target="_blank" rel="noopener" class="text-accent hover:underline">deployment guide</a> for production hardening, backups, and upgrades.
     </p>
   </section>
+  </main>
 
   <!-- Footer -->
   <footer class="border-t border-gray-800/60 mt-auto">
