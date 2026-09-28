@@ -13,7 +13,11 @@ from __future__ import annotations
 import atexit
 import logging
 import os
+import signal
+import subprocess
 import threading
+import time
+from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -41,12 +45,117 @@ def _data_dir() -> str:
     return d
 
 
+def _pid_alive(pid: int) -> bool:
+    """Return True if a process with this PID exists (signal 0 probe)."""
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def _cleanup_stale_embedded_pg(data_dir: str) -> None:
+    """Remove a stale ``postmaster.pid`` left by a hard-killed previous run.
+
+    If a prior dev server / CLI was killed (SIGKILL, crash, terminal close),
+    its bundled Postgres can leave ``data/postmaster.pid`` behind. The next
+    sidecar then fails to start with ``FATAL: lock file "postmaster.pid"
+    already exists``. We only remove the lock when the recorded postmaster PID
+    is no longer running — a live Postgres is never touched.
+
+    Best-effort: any error is logged and swallowed so startup proceeds.
+    """
+    pid_file = Path(data_dir) / "data" / "postmaster.pid"
+    try:
+        if not pid_file.exists():
+            return
+        raw = pid_file.read_text().splitlines()
+        if not raw or not raw[0].strip().isdigit():
+            return
+        pid = int(raw[0].strip())
+        if _pid_alive(pid):
+            # A real Postgres owns this data dir right now; leave it alone.
+            return
+        logger.warning(
+            "Removing stale embedded Postgres lock %s (recorded PID %d is not running)",
+            pid_file, pid,
+        )
+        pid_file.unlink(missing_ok=True)
+    except Exception:  # noqa: BLE001 - cleanup must never block startup
+        logger.warning("Could not clean up stale embedded Postgres lock", exc_info=True)
+
+
+def _kill_stale_sidecars() -> None:
+    """Terminate orphaned ``hatchet-embedded-sidecar`` processes from dead runs.
+
+    The SDK only reaps sidecars started *in the same process* (via atexit). A
+    hard-killed run leaves its sidecar + bundled Postgres alive, holding the
+    data dir. We find sidecar processes whose parent is gone (orphaned) and
+    terminate them, giving each a moment to shut down its Postgres cleanly.
+
+    Best-effort: any error is logged and swallowed so startup proceeds.
+    """
+    try:
+        out = subprocess.run(
+            ["ps", "-axo", "pid=,ppid=,command="],
+            capture_output=True, text=True, timeout=10,
+        ).stdout
+    except Exception:  # noqa: BLE001
+        logger.warning("Could not enumerate processes for stale sidecar cleanup", exc_info=True)
+        return
+
+    me = os.getpid()
+    orphans: list[int] = []
+    for line in out.splitlines():
+        parts = line.strip().split(None, 2)
+        if len(parts) < 3:
+            continue
+        pid_s, ppid_s, cmd = parts
+        if "hatchet-embedded-sidecar" not in cmd:
+            continue
+        try:
+            pid, ppid = int(pid_s), int(ppid_s)
+        except ValueError:
+            continue
+        if pid == me:
+            continue
+        # Orphaned = parent no longer exists (init/launchd reparents to 1).
+        if not _pid_alive(ppid):
+            orphans.append(pid)
+
+    if not orphans:
+        return
+
+    logger.warning("Terminating %d orphaned embedded sidecar(s): %s", len(orphans), orphans)
+    for pid in orphans:
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+    # Give them a moment to shut down their bundled Postgres before we proceed.
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline and any(_pid_alive(p) for p in orphans):
+        time.sleep(0.2)
+    for pid in orphans:
+        if _pid_alive(pid):
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+
+
 def start_embedded_hatchet() -> Any:
     """Start an embedded Hatchet engine and return the client.
 
     The sidecar binary downloads on first use (~53 MB) and caches at
     ~/.hatchet/embedded/. The Postgres cluster persists in
     ~/.simpleaudit-studio/embedded-pg/, so only the first start is slow.
+
+    Before starting, cleans up leftovers from a hard-killed previous run
+    (orphaned sidecar processes and a stale ``postmaster.pid``) so a restart
+    doesn't fail with ``lock file "postmaster.pid" already exists``.
 
     Returns the Hatchet client instance. Raises on failure.
     """
@@ -55,9 +164,12 @@ def start_embedded_hatchet() -> Any:
         if _embedded_client is not None:
             return _embedded_client
 
+        data_dir = _data_dir()
+        _kill_stale_sidecars()
+        _cleanup_stale_embedded_pg(data_dir)
+
         from hatchet_sdk import ClientConfig, EmbeddedHatchetConfig, Hatchet
 
-        data_dir = _data_dir()
         logger.info("Embedded Hatchet data dir: %s", data_dir)
 
         config = ClientConfig(
