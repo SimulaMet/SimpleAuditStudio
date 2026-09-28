@@ -1600,7 +1600,10 @@ class ScenarioExportView(ProjectMixin, View):
             {"key": it.scenario.key, "title": it.scenario.title,
              "description": it.revision.description, "category": it.scenario.category,
              "expected_behavior": it.revision.expected_behavior or [],
-             "test_prompt": it.revision.test_prompt or ""}
+             "test_prompt": it.revision.test_prompt or "",
+             "severity_ceiling": it.revision.severity_ceiling or "",
+             "documents": it.revision.documents or [],
+             "file_uri": it.revision.file_uri}
             for it in latest.items.select_related("scenario", "revision")
         ] if latest else []
         return JsonResponse({"set_name": sset.name, "scenarios": scenarios})
@@ -1627,6 +1630,9 @@ class ScenarioImportView(ProjectMixin, View):
                     scenario, item.get("description", ""), request.user,
                     expected_behavior=item.get("expected_behavior") or [],
                     test_prompt=item.get("test_prompt", ""),
+                    severity_ceiling=item.get("severity_ceiling", ""),
+                    documents=item.get("documents") or [],
+                    file_uri=item.get("file_uri"),
                 )
                 new_ids.append(scenario.id)
             # Auto-publish after import (include newly imported scenarios)
