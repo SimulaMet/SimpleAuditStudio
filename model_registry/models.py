@@ -10,7 +10,19 @@ from django.db import models
 
 
 class ModelConnection(models.Model):
-    """A provider endpoint: one base URL + auth that serves multiple models."""
+    """A provider endpoint: one base URL + auth that serves multiple models.
+
+    Sharing (``visibility`` + ``shared_with``) controls which workspaces can
+    *see* and *use* this connection's models. The owner workspace always sees
+    and edits it; other workspaces see it read-only (description visible, no
+    edit). The API key stays with the owner — consumers use the owner's key.
+    """
+
+    class Visibility(models.TextChoices):
+        WORKSPACE = "workspace", "This workspace only"
+        ADMINS = "admins", "Workspaces where I'm admin"
+        PUBLIC = "public", "Every workspace (public)"
+
     project = models.ForeignKey("accounts.Project", on_delete=models.CASCADE, related_name="model_connections")
     name = models.CharField(max_length=250)
     description = models.TextField(blank=True, default="")
@@ -19,6 +31,18 @@ class ModelConnection(models.Model):
     secret_reference = models.CharField(max_length=250, blank=True)
     api_key_direct = models.CharField(max_length=500, blank=True, default="")
     enabled = models.BooleanField(default=True)
+    # Who may see/use this connection outside the owning workspace.
+    visibility = models.CharField(
+        max_length=20, choices=Visibility.choices, default=Visibility.WORKSPACE
+    )
+    # Explicitly shared workspaces (used when visibility == ADMINS is too broad
+    # or to narrow a public share). A workspace in this list can see the
+    # connection even if its visibility would otherwise hide it.
+    shared_with = models.ManyToManyField(
+        "accounts.Project",
+        blank=True,
+        related_name="shared_connections",
+    )
     created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -36,6 +60,14 @@ class ModelConnection(models.Model):
     @property
     def has_key(self) -> bool:
         return bool(self.api_key_direct or self.secret_reference)
+
+    @property
+    def is_public(self) -> bool:
+        return self.visibility == self.Visibility.PUBLIC
+
+    @property
+    def is_shared_to_admins(self) -> bool:
+        return self.visibility == self.Visibility.ADMINS
 
 
 class RegisteredModel(models.Model):
