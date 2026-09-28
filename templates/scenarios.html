@@ -142,18 +142,30 @@
               <details class="group">
                 <summary class="text-xs text-gray-500 cursor-pointer select-none hover:text-gray-400">Advanced (severity ceiling, documents, file URI)</summary>
                 <div class="space-y-2 mt-2 pl-3 border-l border-gray-800">
-                  <select name="severity_ceiling" class="w-full px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-1 focus:ring-accent/50">
-                    <option value="" {% if not item.revision.severity_ceiling %}selected{% endif %}>— No ceiling —</option>
-                    <option value="pass" {% if item.revision.severity_ceiling == "pass" %}selected{% endif %}>pass</option>
-                    <option value="low" {% if item.revision.severity_ceiling == "low" %}selected{% endif %}>low</option>
-                    <option value="medium" {% if item.revision.severity_ceiling == "medium" %}selected{% endif %}>medium</option>
-                    <option value="high" {% if item.revision.severity_ceiling == "high" %}selected{% endif %}>high</option>
-                    <option value="critical" {% if item.revision.severity_ceiling == "critical" %}selected{% endif %}>critical</option>
-                  </select>
-                  <input type="text" name="documents" value="{{ item.revision.documents|jsonify }}" placeholder='Documents (JSON array, e.g. ["policy.pdf"])'
-                         class="w-full px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-1 focus:ring-accent/50">
-                  <input type="text" name="file_uri" value="{{ item.revision.file_uri|default:'' }}" placeholder="File URI (optional, for vision scenarios)"
-                         class="w-full px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-1 focus:ring-accent/50">
+                  <div>
+                    <label class="text-xs text-gray-500">Severity ceiling</label>
+                    <p class="text-[11px] text-gray-600 mb-1">The maximum severity the judge will assign if the target fails this scenario. E.g. set to "medium" so a failure is capped at medium rather than escalating to critical. Used by all judges (severity, score, yes/no). Leave empty to let the judge assign any severity.</p>
+                    <select name="severity_ceiling" class="w-full px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-1 focus:ring-accent/50">
+                      <option value="" {% if not item.revision.severity_ceiling %}selected{% endif %}>— No ceiling (judge decides) —</option>
+                      <option value="pass" {% if item.revision.severity_ceiling == "pass" %}selected{% endif %}>pass</option>
+                      <option value="low" {% if item.revision.severity_ceiling == "low" %}selected{% endif %}>low</option>
+                      <option value="medium" {% if item.revision.severity_ceiling == "medium" %}selected{% endif %}>medium</option>
+                      <option value="high" {% if item.revision.severity_ceiling == "high" %}selected{% endif %}>high</option>
+                      <option value="critical" {% if item.revision.severity_ceiling == "critical" %}selected{% endif %}>critical</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label class="text-xs text-gray-500">Documents</label>
+                    <p class="text-[11px] text-gray-600 mb-1">Context documents injected into the auditor's prompt (RAG). JSON array of file names or document objects, e.g. ["policy.pdf"]. Leave empty for none.</p>
+                    <input type="text" name="documents" value="{{ item.revision.documents|jsonify }}" placeholder='e.g. ["policy.pdf"]'
+                           class="w-full px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-1 focus:ring-accent/50">
+                  </div>
+                  <div>
+                    <label class="text-xs text-gray-500">File URI</label>
+                    <p class="text-[11px] text-gray-600 mb-1">Path or URL of an image/file attached to the scenario for vision-based audits (e.g. /data/screenshots/login.png). Leave empty unless the scenario needs a visual input.</p>
+                    <input type="text" name="file_uri" value="{{ item.revision.file_uri|default:'' }}" placeholder="e.g. /data/screenshots/login.png"
+                           class="w-full px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-1 focus:ring-accent/50">
+                  </div>
                 </div>
               </details>
               <div class="flex gap-2 items-center">
@@ -188,18 +200,30 @@
         <details class="group">
           <summary class="text-xs text-gray-500 cursor-pointer select-none hover:text-gray-400">Advanced (severity ceiling, documents, file URI)</summary>
           <div class="space-y-2 mt-2 pl-3 border-l border-gray-800">
-            <select name="severity_ceiling" class="w-full px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-1 focus:ring-accent/50">
-              <option value="">— No ceiling —</option>
-              <option value="pass">pass</option>
-              <option value="low">low</option>
-              <option value="medium">medium</option>
-              <option value="high">high</option>
-              <option value="critical">critical</option>
-            </select>
-            <input type="text" name="documents" placeholder='Documents (JSON array, e.g. ["policy.pdf"])'
-                   class="w-full px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-1 focus:ring-accent/50">
-            <input type="text" name="file_uri" placeholder="File URI (optional, for vision scenarios)"
-                   class="w-full px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-1 focus:ring-accent/50">
+            <div>
+              <label class="text-xs text-gray-500">Severity ceiling</label>
+              <p class="text-[11px] text-gray-600 mb-1">The maximum severity the judge will assign if the target fails this scenario. E.g. set to "medium" so a failure is capped at medium rather than escalating to critical. Used by all judges (severity, score, yes/no). Leave empty to let the judge assign any severity.</p>
+              <select name="severity_ceiling" class="w-full px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-1 focus:ring-accent/50">
+                <option value="">— No ceiling (judge decides) —</option>
+                <option value="pass">pass</option>
+                <option value="low">low</option>
+                <option value="medium">medium</option>
+                <option value="high">high</option>
+                <option value="critical">critical</option>
+              </select>
+            </div>
+            <div>
+              <label class="text-xs text-gray-500">Documents</label>
+              <p class="text-[11px] text-gray-600 mb-1">Context documents injected into the auditor's prompt (RAG). JSON array of file names or document objects, e.g. ["policy.pdf"]. Leave empty for none.</p>
+              <input type="text" name="documents" placeholder='e.g. ["policy.pdf"]'
+                     class="w-full px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-1 focus:ring-accent/50">
+            </div>
+            <div>
+              <label class="text-xs text-gray-500">File URI</label>
+              <p class="text-[11px] text-gray-600 mb-1">Path or URL of an image/file attached to the scenario for vision-based audits (e.g. /data/screenshots/login.png). Leave empty unless the scenario needs a visual input.</p>
+              <input type="text" name="file_uri" placeholder="e.g. /data/screenshots/login.png"
+                     class="w-full px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-1 focus:ring-accent/50">
+            </div>
           </div>
         </details>
         <button class="px-3 py-1.5 rounded-lg bg-accent text-white text-xs font-medium hover:bg-accent-hover">+ Add Scenario</button>
