@@ -40,7 +40,9 @@ uv run manage.py dev_server --embedded  # web + worker + embedded Hatchet → ht
 SIMPLEAUDIT_LOCAL_SQLITE=1 uv run manage.py test infra
 ```
 
-Only one `dev_server --embedded` can run at a time: they share the embedded
+`dev_server` applies migrations and bootstraps the admin (a superuser) and the
+default workspace from `BOOTSTRAP_*` in `.env` every time it starts, like the
+Compose `web` service and the uvx CLI. Only one `dev_server --embedded` can run at a time: they share the embedded
 PostgreSQL directory (`~/.simpleaudit-studio/embedded-pg`, or
 `SIMPLEAUDIT_EMBEDDED_PG_DIR`). The worker does not auto-reload; restart
 `dev_server` after changing worker code.
