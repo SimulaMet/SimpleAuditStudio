@@ -188,6 +188,26 @@
       <p>The <strong class="text-gray-300">auditor</strong> model plays the user, following the probe prompt. After the conversation, the <strong class="text-gray-300">judge model</strong> (picked per run) grades it.</p>
       <p>The judge prompt is your <strong class="text-gray-300">criteria</strong> followed by the <strong class="text-gray-300">output format</strong>. The format says what JSON to return, and SimpleAudit turns it into a severity. You only write the criteria.</p>
       <p>Start from a SimpleAudit judge to keep its format (for example Harm's category field), or pick a ready-made format: severity, score 1–10 with your own dimensions, or a yes/no question.</p>
+      {% if shown %}
+      <div class="pt-1">
+        <p class="mb-1 text-gray-500">Plugs into a run as one <code class="text-gray-400">judge=</code> argument:</p>
+        <pre class="overflow-auto rounded-lg bg-surface-overlay border border-gray-800 p-2 font-mono text-[11px] leading-relaxed text-gray-300">{% if shown.base and not shown.resolved.custom_criteria %}{% if shown.base != 'default' %}auditor = ModelAuditor(
+    target_model="…", auditor_model="…", judge_model="…",
+    judge="{{ shown.base }}"{% if shown.resolved.probe_prompt %}, probe_prompt="…"
+{% endif %}){% else %}auditor = ModelAuditor(
+    target_model="…", auditor_model="…", judge_model="…",
+    judge=None{% if shown.resolved.probe_prompt %}, probe_prompt="…"
+{% endif %})  # None = SimpleAudit's default judge{% endif %}{% elif shown.base %}from simpleaudit.judges import customize_judge
+
+auditor = ModelAuditor(
+    target_model="…", auditor_model="…", judge_model="…",
+    judge=customize_judge("{{ shown.base }}", criteria="…")){% else %}from simpleaudit.judges import build_judge
+
+auditor = ModelAuditor(
+    target_model="…", auditor_model="…", judge_model="…",
+    judge=build_judge("{{ shown.output }}", criteria="…", …)){% endif %}</pre>
+      </div>
+      {% endif %}
     </div>
   </aside>
 </div>
