@@ -12,7 +12,7 @@ from django.contrib.auth import login, logout
 from django.contrib.auth.forms import AuthenticationForm
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.db.models import Count, F, Max, ProtectedError, Q, RestrictedError
-from django.http import HttpResponse, HttpResponseForbidden, JsonResponse
+from django.http import Http404, HttpResponse, HttpResponseForbidden, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
 from django.views.generic import DetailView, TemplateView, View
@@ -1354,14 +1354,18 @@ class ScenariosView(ProjectMixin, TemplateView):
         return super().get_context_data(**kw)
 
 
-def _create_revision(scenario, description: str, user, expected_behavior: list | None = None, test_prompt: str = "") -> ScenarioRevision:
+def _create_revision(scenario, description: str, user, expected_behavior: list | None = None, test_prompt: str = "",
+                     severity: str = "", documents=None, file_uri=None) -> ScenarioRevision:
     """Create the next revision for a scenario."""
     rev = scenario.revisions.count() + 1
     eb = expected_behavior or []
+    docs = documents or []
     return ScenarioRevision.objects.create(
         scenario=scenario, revision=rev, description=description,
         expected_behavior=eb, test_prompt=test_prompt,
-        content_hash=scenario_revision_hash(description=description, expected_behavior=eb, test_prompt=test_prompt, metadata={}),
+        severity=severity or "", documents=docs, file_uri=file_uri,
+        content_hash=scenario_revision_hash(description=description, expected_behavior=eb, test_prompt=test_prompt,
+                                            severity=severity or "", documents=docs, file_uri=file_uri, metadata={}),
         created_by=user,
     )
 
@@ -1445,6 +1449,11 @@ class ScenarioCreateView(ProjectMixin, View):
         desc = request.POST.get("description", "")
         expected_behavior_raw = request.POST.get("expected_behavior", "").strip()
         expected_behavior = [line.strip() for line in expected_behavior_raw.splitlines() if line.strip()] if expected_behavior_raw else []
+        severity = request.POST.get("severity", "").strip().lower()
+        documents_raw = request.POST.get("documents", "").strip()
+        documents = json.loads(documents_raw) if documents_raw else []
+        file_uri_raw = request.POST.get("file_uri", "").strip()
+        file_uri = file_uri_raw or None
         set_id = request.POST.get("set_id", "").strip()
         if name:
             key = hashlib.sha256(name.encode()).hexdigest()[:12]
@@ -1452,7 +1461,8 @@ class ScenarioCreateView(ProjectMixin, View):
                 project=request.project, key=key,
                 defaults={"title": name, "category": category},
             )
-            _create_revision(scenario, desc, request.user, expected_behavior=expected_behavior)
+            _create_revision(scenario, desc, request.user, expected_behavior=expected_behavior,
+                             severity=severity, documents=documents, file_uri=file_uri)
             # Auto-publish new version including this scenario
             if set_id:
                 sset = ScenarioSet.objects.filter(pk=set_id, project=request.project).first()
@@ -1475,6 +1485,11 @@ class ScenarioEditView(ProjectMixin, View):
             desc = request.POST.get("description", "")
             expected_behavior_raw = request.POST.get("expected_behavior", "").strip()
             expected_behavior = [line.strip() for line in expected_behavior_raw.splitlines() if line.strip()] if expected_behavior_raw else []
+            severity = request.POST.get("severity", "").strip().lower()
+            documents_raw = request.POST.get("documents", "").strip()
+            documents = json.loads(documents_raw) if documents_raw else []
+            file_uri_raw = request.POST.get("file_uri", "").strip()
+            file_uri = file_uri_raw or None
             if title:
                 scenario.title = title
             scenario.category = category
@@ -1486,9 +1501,13 @@ class ScenarioEditView(ProjectMixin, View):
                 latest_rev is None
                 or latest_rev.description != desc
                 or (latest_rev.expected_behavior or []) != expected_behavior
+                or latest_rev.severity != severity
+                or (latest_rev.documents or []) != documents
+                or latest_rev.file_uri != file_uri
             )
             if content_changed:
-                _create_revision(scenario, desc, request.user, expected_behavior=expected_behavior)
+                _create_revision(scenario, desc, request.user, expected_behavior=expected_behavior,
+                                 severity=severity, documents=documents, file_uri=file_uri)
                 if set_id:
                     sset = ScenarioSet.objects.filter(pk=set_id, project=request.project).first()
                     if sset:
@@ -2274,4 +2293,29 @@ class RunScriptView(ProjectMixin, View):
         response = HttpResponse(script, content_type="text/x-python; charset=utf-8")
         safe_name = "".join(c if c.isalnum() or c in "-_." else "_" for c in run.name)[:60] or "run"
         response["Content-Disposition"] = f'attachment; filename="rerun_{safe_name}_{run.id}.py"'
+        return response
+
+
+class JudgeScriptView(ProjectMixin, View):
+    """A standalone snippet that builds this judge from its spec.
+
+    Served as a file download by default, or as JSON (``?format=json``) for the
+    judge page's copy/download modal. ``?v=N`` targets a specific version."""
+
+    def get(self, request, judge_id):
+        from infra.codegen import generate_judge_script
+        from judges.models import Judge
+
+        judge = get_object_or_404(Judge, pk=judge_id, project=request.project)
+        versions = list(judge.versions.order_by("-version"))
+        wanted = request.GET.get("v", "")
+        shown = next((v for v in versions if str(v.version) == wanted), versions[0] if versions else None)
+        if shown is None:
+            raise Http404("This judge has no versions yet.")
+        script = generate_judge_script(judge.name, shown.content())
+        if request.GET.get("format") == "json":
+            return JsonResponse({"script": script})
+        response = HttpResponse(script, content_type="text/x-python; charset=utf-8")
+        safe_name = "".join(c if c.isalnum() or c in "-_." else "_" for c in judge.name)[:60] or "judge"
+        response["Content-Disposition"] = f'attachment; filename="{safe_name}_judge.py"'
         return response
