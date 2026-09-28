@@ -1,4 +1,5 @@
 """Tests for the admin Health panel: probes, API auth gating, and page render."""
+import os
 from unittest import mock
 
 from django.test import Client, TestCase
@@ -167,3 +168,20 @@ class HealthPageRenderTest(TestCase):
         self.client.force_login(nonadmin_user)
         nonadmin_page = self.client.get("/").content.decode()
         self.assertNotIn('href="/health/"', nonadmin_page)
+
+
+class HatchetProbeMessageTest(TestCase):
+    def test_unreachable_hatchet_gives_actionable_message(self):
+        import requests
+        from django.test import override_settings
+
+        from infra import health
+
+        with override_settings(HATCHET_SERVER_URL="http://hatchet-server:8888"), \
+             mock.patch.dict(os.environ, {}, clear=False), \
+             mock.patch("requests.get", side_effect=requests.ConnectionError("Failed to resolve")):
+            os.environ.pop("HATCHET_EMBEDDED_HANDSHAKE", None)
+            result = health._probe(health._hatchet_probe)
+        self.assertEqual(result["status"], "down")
+        self.assertIn("isn't reachable at http://hatchet-server:8888", result["detail"])
+        self.assertNotIn("HTTPConnectionPool", result["detail"])

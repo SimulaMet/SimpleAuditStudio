@@ -111,7 +111,18 @@ def _hatchet_probe() -> dict[str, Any]:
     base = getattr(settings, "HATCHET_SERVER_URL", "").rstrip("/")
     if not base:
         return {"status": "unknown", "detail": "HATCHET_SERVER_URL not configured"}
-    resp = requests.get(f"{base}/healthz", timeout=3)
+    try:
+        resp = requests.get(f"{base}/healthz", timeout=3)
+    except requests.ConnectionError:
+        # Not reachable: say what to do instead of dumping the urllib3 traceback.
+        hint = (
+            "start it with `manage.py dev_server --embedded`"
+            if getattr(settings, "DATABASES", {}).get("default", {}).get("ENGINE", "").endswith("sqlite3")
+            else "check that the hatchet-server container is running"
+        )
+        return {"status": "down", "detail": f"Hatchet isn't reachable at {base} — {hint}."}
+    except requests.Timeout:
+        return {"status": "down", "detail": f"Hatchet at {base} didn't answer within 3 s."}
     resp.raise_for_status()
     return {"status": "up"}
 

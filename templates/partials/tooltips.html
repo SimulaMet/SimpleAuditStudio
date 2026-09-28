@@ -26,11 +26,11 @@ hover; scripts that later set `title` again (e.g. live refresh) still work.
       el.dataset.tip = el.getAttribute('title');
       el.removeAttribute('title');
       // Icon-only controls keep an accessible name once title is gone.
-      if (!el.hasAttribute('aria-label') && !/[\p{L}\p{N}]/u.test(el.textContent)) el.setAttribute('aria-label', el.dataset.tip);
+      if (!el.hasAttribute('aria-label') && !/[\p{L}\p{N}]/u.test(el.innerText)) el.setAttribute('aria-label', el.dataset.tip);
     }
     let text = el.dataset.tip || '';
     // Icon-only (no letters or digits, e.g. an SVG, "✎" or "×"): fall back to aria-label.
-    if (!text && !/[\p{L}\p{N}]/u.test(el.textContent)) text = el.getAttribute('aria-label') || '';
+    if (!text && !/[\p{L}\p{N}]/u.test(el.innerText)) text = el.getAttribute('aria-label') || '';
     return [text ? el : null, text];
   }
 
