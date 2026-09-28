@@ -20,6 +20,7 @@ from infra.tests.factories import (
     ScenarioSetFactory,
     ScenarioSetVersionFactory,
     UserFactory,
+    judge_for,
 )
 
 _PROVENANCE = mock.Mock(version="0.2.1", commit="", source="metadata")
@@ -55,7 +56,7 @@ class _ExperimentBase(TestCase):
             "scenario_set": [self.set_a.id],
             "target_model": [self.t1.id, self.t2.id],
             "auditor_model": [self.judge.id],
-            "judge_model": [self.judge.id],
+            "judge": [judge_for(self.judge).id],
             "max_turns": "3, 5",
             "language": "",
             "n_repetitions": "3",
@@ -80,6 +81,7 @@ class _ExperimentBase(TestCase):
             data[f"run-{i}-language"] = row["language"]
             data[f"run-{i}-n_repetitions"] = row["n_repetitions"]
             data[f"run-{i}-gen_config_json"] = row["gen_config_json"]
+            data[f"run-{i}-system_prompt"] = row["system_prompt"]
             if include is None or i in include:
                 data[f"run-{i}-include"] = "1"
         data.update(overrides)
@@ -147,8 +149,8 @@ class ExperimentFlowTests(_ExperimentBase):
         self.assertEqual(page.context["clone"]["max_turns"], "3, 5")
 
     def test_design_errors_are_explained(self):
-        resp = self.client.post("/experiments/new/", self._design(judge_model=[]))
-        self.assertContains(resp, "Pick at least one judge model.")
+        resp = self.client.post("/experiments/new/", self._design(judge=[]))
+        self.assertContains(resp, "Pick at least one judge.")
         resp = self.client.post("/experiments/new/", self._design(max_turns="3, lots"))
         self.assertContains(resp, "Max turns")
 
@@ -161,7 +163,7 @@ class ExperimentFlowTests(_ExperimentBase):
 
     def test_confound_and_self_grading_warnings(self):
         review = self.client.post(
-            "/experiments/new/", self._design(judge_model=[self.judge.id, self.t1.id], max_turns="")
+            "/experiments/new/", self._design(judge=[judge_for(self.judge).id, judge_for(self.t1).id], max_turns="")
         )
         self.assertContains(review, "Target and judge both vary")
         self.assertContains(review, "grades itself")
@@ -291,7 +293,7 @@ class ReviewWarningTests(_ExperimentBase):
 
     def test_row_specific_warning_stays_on_its_row(self):
         review = self.client.post(
-            "/experiments/new/", self._design(judge_model=[self.judge.id, self.t1.id], target_model=[self.t1.id], max_turns="")
+            "/experiments/new/", self._design(judge=[judge_for(self.judge).id, judge_for(self.t1).id], target_model=[self.t1.id], max_turns="")
         )
         rows = review.context["rows"]
         self.assertEqual(sum("grades itself" in " ".join(r["warnings"]) for r in rows), 1)
@@ -331,7 +333,7 @@ class ScenarioVersionPickTests(_ExperimentBase):
     def test_clone_ticks_exact_version(self):
         run = AuditRun.objects.create(
             project=self.project, name="old", scenario_set_version=self.v_a1,
-            target_model=self.t1, auditor_model=self.judge, judge_model=self.judge,
+            target_model=self.t1, auditor_model=self.judge, judge_model=self.judge, judge_version=judge_for(self.judge),
             target_config_snapshot={}, auditor_config_snapshot={}, judge_config_snapshot={},
             generation_parameters_snapshot={}, simpleaudit_version="0.2.1", git_commit="",
         )
@@ -392,3 +394,62 @@ class AlwaysLatestTests(_ExperimentBase):
         ScenarioSetVersionFactory(scenario_set=foreign)
         resp = self.client.post("/experiments/new/", self._payload([f"latest:{foreign.id}"]))
         self.assertContains(resp, "not in this workspace")
+
+
+class JudgeAndSystemPromptTests(_ExperimentBase):
+    """Judges as an experiment input, and the target system prompt as a run setting."""
+
+    def test_several_judges_become_a_factor(self):
+        from judges.services import create_judge
+
+        strict = create_judge(project=self.project, name="Strict", model=self.t2, rubric="harm").latest
+        review = self.client.post("/experiments/new/", self._design(
+            target_model=[self.t1.id], max_turns="", judge=[judge_for(self.judge).id, strict.id]))
+        self.assertEqual([k for k, _ in review.context["columns"]], ["judge"])
+        exp_payload = self._review_to_launch_payload(review)
+        self.client.post("/experiments/new/", exp_payload)
+        exp = Experiment.objects.get()
+        self.assertEqual(exp.factors, ["judge"])
+        runs = {r.judge_version_id: r for r in exp.runs.all()}
+        self.assertEqual(set(runs), {judge_for(self.judge).id, strict.id})
+        # The run freezes the judge version's model, rubric and prompts.
+        snap = runs[strict.id].judge_config_snapshot
+        self.assertEqual(runs[strict.id].judge_model_id, self.t2.id)
+        self.assertEqual((snap["judge"]["rubric"], snap["judge"]["name"], snap["judge"]["version"]), ("harm", "Strict", 1))
+        self.assertTrue(snap["judge"]["judge_prompt"])   # resolved from the rubric
+
+    def test_always_latest_judge_leaves_monitor_unpinned(self):
+        from audits.models import Monitor
+
+        jv = judge_for(self.judge)
+        self.client.post("/experiments/new/", self._design(
+            target_model=[self.t1.id], max_turns="3", judge=[f"latest:{jv.judge_id}"], repeat="168", timezone="UTC",
+            start="now"))
+        monitor = Monitor.objects.get()
+        self.assertEqual((monitor.judge_id, monitor.judge_version_id), (jv.judge_id, None))
+        self.assertEqual(AuditRun.objects.get().judge_version_id, jv.id)
+
+    def test_foreign_judge_rejected(self):
+        other = judge_for(RegisteredModelFactory())
+        resp = self.client.post("/experiments/new/", self._design(judge=[other.id]))
+        self.assertContains(resp, "A selected judge is not in this workspace.")
+        self.assertFalse(AuditRun.objects.exists())
+
+    def test_system_prompt_is_frozen_and_editable_per_run(self):
+        review = self.client.post("/experiments/new/", self._design(max_turns="", system_prompt="You are Acme's bot."))
+        self.assertEqual({r["system_prompt"] for r in review.context["rows"]}, {"You are Acme's bot."})
+        payload = self._review_to_launch_payload(review, **{"run-1-system_prompt": ""})
+        self.client.post("/experiments/new/", payload)
+        exp = Experiment.objects.get()
+        prompts = [r.generation_parameters_snapshot.get("system_prompt") for r in exp.runs.order_by("id")]
+        self.assertEqual(prompts, ["You are Acme's bot.", None])
+        self.assertEqual(exp.factors, ["target", "system_prompt"])
+
+    def test_clone_prefills_judge_and_system_prompt(self):
+        self.client.post("/experiments/new/", self._design(target_model=[self.t1.id], max_turns="3", system_prompt="Be terse."))
+        run = AuditRun.objects.get()
+        page = self.client.get(f"/experiments/new/?clone_from={run.id}")
+        self.assertEqual(page.context["clone"]["system_prompt"], "Be terse.")
+        self.assertNotIn("system_prompt", page.context["clone"]["generation_json"])
+        row = next(j for j in page.context["judges"] if j.id == run.judge_version.judge_id)
+        self.assertEqual(row.ticked, {str(run.judge_version_id)})

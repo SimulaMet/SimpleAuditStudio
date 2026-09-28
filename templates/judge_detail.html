@@ -1,0 +1,175 @@
+{% extends "base.html" %}
+{% block title %}{% if judge %}{{ judge.name }}{% else %}New judge{% endif %} — Judges — SimpleAudit{% endblock %}
+{% block content %}
+<a href="{% url 'judges' %}" class="text-xs text-gray-500 hover:text-accent">← Judges</a>
+<div class="flex flex-wrap items-center justify-between gap-3 mt-1 mb-4">
+  <div class="flex flex-wrap items-center gap-2 min-w-0">
+    <h1 class="text-lg font-semibold text-gray-100 truncate">{% if judge %}{{ judge.name }}{% else %}New judge{% endif %}</h1>
+    {% if shown %}<span class="px-1.5 py-0.5 rounded bg-gray-800 text-[11px] text-gray-400">v{{ shown.version }}{% if shown == latest %} · latest{% endif %}</span>{% endif %}
+  </div>
+  {% if shown %}
+  <form method="post" action="{% url 'judges' %}" data-write>
+    {% csrf_token %}<input type="hidden" name="action" value="clone"><input type="hidden" name="version_id" value="{{ shown.id }}">
+    <button title="Make a new judge starting from v{{ shown.version }}" class="px-3 py-1.5 rounded-lg bg-surface-overlay border border-gray-700 text-xs text-gray-300 hover:text-white">Clone v{{ shown.version }}</button>
+  </form>
+  {% endif %}
+</div>
+
+{% if shown and shown != latest %}
+<p class="mb-4 text-xs text-amber-300 bg-amber-900/20 rounded-lg px-3 py-2">
+  Viewing v{{ shown.version }} (latest is <a href="?v={{ latest.version }}" class="underline">v{{ latest.version }}</a>). Saving creates a new version from these values.
+</p>
+{% endif %}
+
+<div class="grid grid-cols-1 lg:grid-cols-3 gap-4 items-start">
+  <form method="post" class="lg:col-span-2 bg-surface-raised rounded-xl border border-gray-800 p-4 space-y-4 min-w-0" id="judge-form">
+    {% csrf_token %}
+    <fieldset class="space-y-4" {% if not can_write %}disabled{% endif %}>
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <label class="block text-xs text-gray-500">Name
+          <input type="text" name="name" value="{{ form.name }}" required maxlength="250" placeholder="e.g. Safety (GPT-4o)"
+                 class="mt-1 w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm text-gray-100 focus:outline-none focus:ring-2 focus:ring-accent/50"></label>
+        <label class="block text-xs text-gray-500">Model that grades
+          <select name="model_id" required class="mt-1 w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm text-gray-100">
+            {% regroup models by connection as groups %}
+            {% for g in groups %}<optgroup label="{{ g.grouper.name }}">
+              {% for m in g.list %}<option value="{{ m.id }}" {% if m.id == form.model_id or m.id|stringformat:"d" == form.model_id %}selected{% endif %}>{{ m.display_name }}{% if not m.has_key %} (no key set){% endif %}</option>{% endfor %}
+            </optgroup>{% endfor %}
+          </select></label>
+      </div>
+      <label class="block text-xs text-gray-500">Description <span class="text-gray-600">(optional)</span>
+        <textarea name="description" rows="2" maxlength="2000" placeholder="What this judge checks and when to use it"
+                  class="mt-1 w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm text-gray-100 focus:outline-none focus:ring-2 focus:ring-accent/50">{{ form.description }}</textarea></label>
+
+      <div class="border-t border-gray-800 pt-4 space-y-4">
+        <p class="text-[11px] text-gray-500">Model, rubric and prompts are versioned: changing them saves a new version. Name and description are not.</p>
+        <div>
+          <label class="block text-xs text-gray-500">Rubric
+            <select name="rubric" id="rubric-select" class="mt-1 w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm text-gray-100">
+              {% for r in rubrics %}<option value="{{ r.key }}" {% if r.key == form.rubric %}selected{% endif %}>{{ r.name }} — {{ r.output_label }}</option>{% endfor %}
+            </select></label>
+          <p class="mt-1.5 text-xs text-gray-400" id="rubric-info"></p>
+        </div>
+
+        <div data-prompt="probe_prompt">
+          <div class="flex items-baseline justify-between gap-2">
+            <label for="probe-prompt" class="text-xs text-gray-500">Probe prompt <span class="text-gray-600">(guides the auditor)</span></label>
+            <span class="text-[11px]"><span data-prompt-state></span>
+              <button type="button" data-prompt-reset class="ml-2 text-gray-400 hover:text-accent hidden" title="Use the rubric's own probe prompt">Reset</button></span>
+          </div>
+          <textarea name="probe_prompt" id="probe-prompt" rows="8" spellcheck="false"
+                    class="mt-1 w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-xs font-mono text-gray-200 focus:outline-none focus:ring-2 focus:ring-accent/50 resize-y">{{ form.probe_prompt }}</textarea>
+          <p class="text-[11px] text-gray-600"><code>{language}</code> is replaced with the run's language.</p>
+        </div>
+        <div data-prompt="judge_prompt">
+          <div class="flex items-baseline justify-between gap-2">
+            <label for="judge-prompt" class="text-xs text-gray-500">Judge prompt <span class="text-gray-600">(how to grade)</span></label>
+            <span class="text-[11px]"><span data-prompt-state></span>
+              <button type="button" data-prompt-reset class="ml-2 text-gray-400 hover:text-accent hidden" title="Use the rubric's own judge prompt">Reset</button></span>
+          </div>
+          <textarea name="judge_prompt" id="judge-prompt" rows="12" spellcheck="false"
+                    class="mt-1 w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-xs font-mono text-gray-200 focus:outline-none focus:ring-2 focus:ring-accent/50 resize-y">{{ form.judge_prompt }}</textarea>
+          <p class="text-[11px] text-gray-600">Keep the JSON output format the rubric asks for: results are read from it.</p>
+        </div>
+        {% if judge %}
+        <label class="block text-xs text-gray-500">What changed? <span class="text-gray-600">(optional, shown in the history)</span>
+          <input type="text" name="note" maxlength="250" value="{{ form.note|default:'' }}" placeholder="e.g. Stricter on medical advice"
+                 class="mt-1 w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm text-gray-100 focus:outline-none focus:ring-2 focus:ring-accent/50"></label>
+        {% endif %}
+      </div>
+    </fieldset>
+    {% if can_write %}
+    <div class="flex justify-end gap-2">
+      <a href="{% if judge %}{% url 'judge_detail' judge.id %}{% else %}{% url 'judges' %}{% endif %}" class="px-3 py-2 rounded-lg text-sm text-gray-400 hover:text-gray-200">Cancel</a>
+      <button type="submit" class="px-4 py-2 rounded-lg bg-accent text-white text-sm font-medium hover:bg-accent-hover" title="{% if judge %}Save; model, rubric or prompt changes create a new version{% else %}Create the judge{% endif %}">{% if judge %}Save{% else %}Create judge{% endif %}</button>
+    </div>
+    {% endif %}
+  </form>
+
+  <aside class="space-y-4 min-w-0">
+    {% if judge %}
+    <div class="bg-surface-raised rounded-xl border border-gray-800 p-4">
+      <h2 class="text-sm font-semibold text-gray-300 mb-2">Versions</h2>
+      <ol class="space-y-1">
+        {% for v in versions %}
+        <li>
+          <a href="?v={{ v.version }}" {% if v == shown %}aria-current="true"{% endif %}
+             class="block rounded-lg px-2.5 py-2 text-xs {% if v == shown %}bg-accent/15{% else %}hover:bg-surface-overlay{% endif %}">
+            <span class="flex items-baseline justify-between gap-2">
+              <span class="{% if v == shown %}text-accent font-medium{% else %}text-gray-200{% endif %}">v{{ v.version }}{% if forloop.first %} · latest{% endif %}</span>
+              <span class="text-gray-500 shrink-0" title="{{ v.created_at|date:'M j, Y, H:i' }} UTC">{{ v.created_at|date:"M j, Y" }}</span>
+            </span>
+            <span class="block text-gray-500 truncate">{{ v.model.display_name }} · {{ v.rubric_name }}{% if v.probe_prompt or v.judge_prompt %} · custom prompts{% endif %}</span>
+            {% if v.note %}<span class="block text-gray-400 truncate" title="{{ v.note }}">{{ v.note }}</span>{% endif %}
+            <span class="block text-gray-600">{% if v.run_count %}{{ v.run_count }} run{{ v.run_count|pluralize }}{% else %}no runs{% endif %}{% if v.created_by %} · {{ v.created_by.username }}{% endif %}</span>
+          </a>
+        </li>
+        {% endfor %}
+      </ol>
+    </div>
+    {% if monitors %}
+    <div class="bg-surface-raised rounded-xl border border-gray-800 p-4">
+      <h2 class="text-sm font-semibold text-gray-300 mb-2">Monitors</h2>
+      <ul class="space-y-1 text-xs">
+        {% for m in monitors %}<li><a href="{% url 'monitor_detail' m.id %}" class="text-gray-300 hover:text-accent">{{ m.name }}</a>
+          <span class="text-gray-500">· {% if m.judge_version_id %}pinned v{{ m.judge_version.version }}{% else %}always latest{% endif %}</span></li>{% endfor %}
+      </ul>
+    </div>
+    {% endif %}
+    {% endif %}
+    <div class="bg-surface-raised rounded-xl border border-gray-800 p-4 text-xs text-gray-400 space-y-2">
+      <h2 class="text-sm font-semibold text-gray-300">How judging works</h2>
+      <p>The <strong class="text-gray-300">auditor</strong> model plays the user, following the probe prompt. After the conversation, the <strong class="text-gray-300">judge</strong> model grades it with the judge prompt.</p>
+      <p>The rubric also sets the result format (severity, score or yes/no) and any post-processing, so keep its JSON format when editing prompts.</p>
+    </div>
+  </aside>
+</div>
+
+{{ rubrics|json_script:"rubric-data" }}
+<script>
+(function () {
+  const RUBRICS = Object.fromEntries(JSON.parse(document.getElementById('rubric-data').textContent).map(r => [r.key, r]));
+  const form = document.getElementById('judge-form');
+  const select = document.getElementById('rubric-select');
+  const info = document.getElementById('rubric-info');
+  let current = select.value;
+
+  function promptDefault(field) { return (RUBRICS[select.value] || {})[field] || ''; }
+  function syncPrompt(box) {
+    const field = box.dataset.prompt;
+    const ta = box.querySelector('textarea');
+    const def = promptDefault(field);
+    const edited = ta.value.trim() !== def.trim();
+    box.querySelector('[data-prompt-state]').innerHTML = edited
+      ? '<span class="text-amber-300">edited</span>' : '<span class="text-gray-500">rubric default</span>';
+    box.querySelector('[data-prompt-reset]').classList.toggle('hidden', !edited || form.querySelector('fieldset').disabled);
+    ta.placeholder = def ? '' : "Empty: SimpleAudit's built-in prompt";
+  }
+  function syncInfo() {
+    const r = RUBRICS[select.value] || {};
+    info.innerHTML = `${esc(r.description || '')} <span class="text-gray-500">Result: ${esc(r.output_label || '')}.</span>` +
+      (r.source_url ? ` <a href="${esc(r.source_url)}" target="_blank" rel="noopener" class="text-accent hover:underline">Source ↗</a>` : '');
+  }
+  select.addEventListener('change', () => {
+    // Prompts still at the old rubric's defaults follow the new rubric; edited ones stay.
+    form.querySelectorAll('[data-prompt]').forEach(box => {
+      const ta = box.querySelector('textarea');
+      const oldDef = (RUBRICS[current] || {})[box.dataset.prompt] || '';
+      if (!ta.value.trim() || ta.value.trim() === oldDef.trim()) ta.value = promptDefault(box.dataset.prompt);
+      syncPrompt(box);
+    });
+    current = select.value;
+    syncInfo();
+  });
+  form.querySelectorAll('[data-prompt]').forEach(box => {
+    box.querySelector('textarea').addEventListener('input', () => syncPrompt(box));
+    box.querySelector('[data-prompt-reset]').addEventListener('click', () => {
+      box.querySelector('textarea').value = promptDefault(box.dataset.prompt);
+      syncPrompt(box);
+    });
+    syncPrompt(box);
+  });
+  syncInfo();
+})();
+</script>
+{% endblock %}

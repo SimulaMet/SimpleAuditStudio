@@ -122,6 +122,21 @@ class Command(BaseCommand):
 
         self.stdout.write(self.style.SUCCESS(f"\nDone. Created {created} demo audit run(s)."))
 
+    @staticmethod
+    def _judge(project, user, model):
+        """The Safety judge on ``model`` (the fixture was graded with SimpleAudit's safety rubric)."""
+        from judges.models import JudgeVersion
+        from judges.services import create_judge, unique_name
+
+        version = (
+            JudgeVersion.objects.filter(judge__project=project, judge__name__startswith="Safety", model=model, rubric="safety")
+            .order_by("-version").first()
+        )
+        if version is None:
+            judge = create_judge(project=project, name=unique_name(project, "Safety"), model=model, rubric="safety", user=user)
+            version = judge.latest
+        return version
+
     def _create_run(self, project, user, pack: str, label: str, scenarios: list[dict],
                     target_ep, auditor_ep, judge_ep) -> bool:
         from audits.events import append_event, upsert_scenario_result
@@ -139,6 +154,9 @@ class Command(BaseCommand):
             return False
 
         from audits.services import _endpoint_snapshot as _snap
+        from judges.services import judge_snapshot
+
+        judge_version = self._judge(project, user, judge_ep)
 
         provenance = resolve_engine_provenance()
         now = timezone.now()
@@ -156,10 +174,11 @@ class Command(BaseCommand):
             scenario_set_version=version,
             target_model=target_ep,
             auditor_model=auditor_ep,
+            judge_version=judge_version,
             judge_model=judge_ep,
             target_config_snapshot=_snap(target_ep),
             auditor_config_snapshot=_snap(auditor_ep),
-            judge_config_snapshot=_snap(judge_ep),
+            judge_config_snapshot={**_snap(judge_ep), "judge": judge_snapshot(judge_version)},
             generation_parameters_snapshot=gen_params,
             simpleaudit_version=provenance.version or "unknown",
             git_commit=provenance.commit or "",

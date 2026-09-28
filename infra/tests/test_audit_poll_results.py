@@ -9,6 +9,7 @@ from django.test import TestCase
 from rest_framework.test import APIClient
 
 from audits.events import append_event, upsert_scenario_result
+from infra.tests.factories import judge_for
 
 
 class _Base(TestCase):
@@ -49,7 +50,7 @@ class _Base(TestCase):
             scenario_set_version=version,
             target_model=target,
             auditor_model=target,
-            judge_model=target,
+            judge_model=target, judge_version=judge_for(target),
             target_config_snapshot={},
             auditor_config_snapshot={},
             judge_config_snapshot={},

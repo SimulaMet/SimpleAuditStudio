@@ -321,6 +321,11 @@ class DashboardView(ProjectMixin, TemplateView):
             ScenarioSet.objects.filter(project=p, versions__audit_runs__isnull=False).distinct().order_by("name")
             .values("id", "name")
         )
+        from judges.models import Judge
+
+        ctx["filter_judges"] = (
+            Judge.objects.filter(project=p, versions__audit_runs__isnull=False).distinct().order_by("name").values("id", "name")
+        )
         ctx["filter_experiments"] = Experiment.objects.filter(project=p).order_by("-created_at").values("id", "name")[:200]
         ctx["column_layout"] = (self.request.user.preferences or {}).get("dashboard_columns")
         return ctx
@@ -545,22 +550,26 @@ def _run_from_query(request, param: str):
     )
 
 
+# Generation keys with their own fields on the run settings form.
+_SETTINGS_FORM_KEYS = {"max_turns", "n_repetitions", "language", "system_prompt"}
+
+
 def _clone_from_run(source: AuditRun) -> dict:
     """Prefill for the shared audit form blocks from an existing run."""
     params = source.generation_parameters_snapshot or {}
     # Strip form-managed keys from the JSON so they don't appear in the Advanced
     # textarea (they're pre-filled in their own fields).
-    _FORM_KEYS = {"max_turns", "n_repetitions", "language"}
-    gen_params = {k: v for k, v in params.items() if k not in _FORM_KEYS}
+    gen_params = {k: v for k, v in params.items() if k not in _SETTINGS_FORM_KEYS}
     return {
         "scenario_set_id": source.scenario_set_version.scenario_set_id,
         "scenario_set_version_id": source.scenario_set_version_id,
         "target_model_id": source.target_model_id,
         "auditor_model_id": source.auditor_model_id,
-        "judge_model_id": source.judge_model_id,
+        "judge_version_id": source.judge_version_id,
         "max_turns": params.get("max_turns", ""),
         "language": params.get("language", ""),
         "n_repetitions": params.get("n_repetitions", ""),
+        "system_prompt": params.get("system_prompt", ""),
         "generation_json": json.dumps(gen_params, indent=2, sort_keys=True) if gen_params else "",
     }
 
@@ -577,7 +586,7 @@ def _design_selection(post=None, clone=None) -> dict:
             "versions": post.getlist("scenario_version"),
             "target": post.getlist("target_model"),
             "auditor": post.getlist("auditor_model"),
-            "judge": post.getlist("judge_model"),
+            "judge": post.getlist("judge"),
         }
     if clone:
         # Clone pins the cloned run's exact version.
@@ -586,7 +595,7 @@ def _design_selection(post=None, clone=None) -> dict:
             "versions": [str(clone["scenario_set_version_id"])],
             "target": [str(clone["target_model_id"])],
             "auditor": [str(clone["auditor_model_id"])],
-            "judge": [str(clone["judge_model_id"])],
+            "judge": [str(clone["judge_version_id"])],
         }
     return {"sets": [], "versions": [], "target": [], "auditor": [], "judge": []}
 
@@ -621,6 +630,7 @@ def _settings_prefill(post) -> dict:
         "max_turns": post.get("max_turns", ""),
         "language": post.get("language", ""),
         "n_repetitions": post.get("n_repetitions", ""),
+        "system_prompt": post.get("system_prompt", ""),
         "generation_json": post.get("gen_config_json", ""),
     }
 
@@ -686,8 +696,8 @@ class NewExperimentView(ProjectMixin, TemplateView):
             model_roles=[
                 ("target", "Target", "The model under test.", sel["target"]),
                 ("auditor", "Auditor", "Plays the user and probes the target.", sel["auditor"]),
-                ("judge", "Judge", "Grades each conversation.", sel["judge"]),
             ],
+            judges=_judge_picker(p, sel["judge"]),
             max_runs=MAX_RUNS_PER_EXPERIMENT,
             repeat_choices=REPEAT_CHOICES,
             timezones=_timezone_choices(),
@@ -759,7 +769,7 @@ class NewExperimentView(ProjectMixin, TemplateView):
                         scenario_set_version=run_spec["version"],
                         target_model=run_spec["target"],
                         auditor_model=run_spec["auditor"],
-                        judge_model=run_spec["judge"],
+                        judge=run_spec["judge"],
                         max_turns_override=run_spec["max_turns"],
                         language_override=run_spec["language"],
                         n_repetitions_override=run_spec["n_repetitions"],
@@ -792,7 +802,8 @@ class NewExperimentView(ProjectMixin, TemplateView):
     # have gaps; the server walks 0..row_count and skips missing ones.
 
     @staticmethod
-    def _row_context(i, spec_objs, *, name, max_turns, language, n_reps, gen_json, include=True, duplicate=False):
+    def _row_context(i, spec_objs, *, name, max_turns, language, n_reps, system_prompt, gen_json, include=True,
+                     duplicate=False):
         from audits import experiments as ex
 
         spec = {"scenario_set": spec_objs["version"], **{r: spec_objs[r] for r in ("target", "auditor", "judge")}}
@@ -804,6 +815,7 @@ class NewExperimentView(ProjectMixin, TemplateView):
             "max_turns": max_turns or "",
             "language": language or "",
             "n_repetitions": n_reps or "",
+            "system_prompt": system_prompt or "",
             "gen_config_json": gen_json,
             "warnings": ex.spec_warnings(spec),
             "include": include,
@@ -851,7 +863,9 @@ class NewExperimentView(ProjectMixin, TemplateView):
         from audits import experiments as ex
 
         factors = ex.varied_factors(design)
-        gen_json = json.dumps(design["gen_config"], indent=2, sort_keys=True) if design["gen_config"] else ""
+        gen_config = dict(design["gen_config"] or {})
+        system_prompt = gen_config.pop("system_prompt", "")
+        gen_json = json.dumps(gen_config, indent=2, sort_keys=True) if gen_config else ""
         rows = [
             self._row_context(
                 i,
@@ -860,6 +874,7 @@ class NewExperimentView(ProjectMixin, TemplateView):
                 max_turns=spec["max_turns"],
                 language=spec["language"],
                 n_reps=spec["n_repetitions"],
+                system_prompt=system_prompt,
                 gen_json=gen_json,
             )
             for i, spec in enumerate(specs)
@@ -878,6 +893,7 @@ class NewExperimentView(ProjectMixin, TemplateView):
         """
         import copy
 
+        from judges.models import JudgeVersion
         from model_registry.models import RegisteredModel
 
         specs = {}
@@ -890,8 +906,11 @@ class NewExperimentView(ProjectMixin, TemplateView):
             {spec["v"] for spec in specs.values()}
         )
         models = RegisteredModel.objects.select_related("connection").filter(project=project).in_bulk(
-            {spec[k] for spec in specs.values() for k in ("t", "a", "j")}
+            {spec[k] for spec in specs.values() for k in ("t", "a")}
         )
+        judges = JudgeVersion.objects.select_related("judge", "model__connection").filter(
+            judge__project=project
+        ).in_bulk({spec["j"] for spec in specs.values()})
 
         def lookup(found, pk, model):
             if pk not in found:
@@ -904,21 +923,26 @@ class NewExperimentView(ProjectMixin, TemplateView):
             if spec.get("f"):
                 version = copy.copy(version)   # the flag is per row
                 version.follow_latest = True
+            judge = lookup(judges, spec["j"], JudgeVersion)
+            if spec.get("jf"):
+                judge = copy.copy(judge)   # the flag is per row
+                judge.follow_latest = True
             objs = {
                 "version": version,
-                **{
-                    role: lookup(models, spec[key], RegisteredModel)
-                    for role, key in (("target", "t"), ("auditor", "a"), ("judge", "j"))
-                },
+                "target": lookup(models, spec["t"], RegisteredModel),
+                "auditor": lookup(models, spec["a"], RegisteredModel),
+                "judge": judge,
             }
             name = (post.get(f"run-{i}-name") or "").strip() or f"Run {i + 1}"
             mt = (post.get(f"run-{i}-max_turns") or "").strip()
             lang = (post.get(f"run-{i}-language") or "").strip()
             reps = (post.get(f"run-{i}-n_repetitions") or "").strip()
+            system_prompt = (post.get(f"run-{i}-system_prompt") or "").strip()
             gen_raw = (post.get(f"run-{i}-gen_config_json") or "").strip()
             include = bool(post.get(f"run-{i}-include"))
             rows.append(self._row_context(
-                i, objs, name=name, max_turns=mt, language=lang, n_reps=reps, gen_json=gen_raw,
+                i, objs, name=name, max_turns=mt, language=lang, n_reps=reps, system_prompt=system_prompt,
+                gen_json=gen_raw,
                 include=include, duplicate=bool(post.get(f"run-{i}-duplicate")),
             ))
             if not include:
@@ -946,6 +970,10 @@ class NewExperimentView(ProjectMixin, TemplateView):
                 except (ValueError, TypeError) as exc:
                     errors.append(f"“{name}”: generation config is not valid JSON ({exc}).")
                     continue
+            if system_prompt:
+                gen_config = {**(gen_config or {}), "system_prompt": system_prompt}
+            elif gen_config:
+                gen_config.pop("system_prompt", None)   # cleared on review
             runs.append({
                 "name": name,
                 **objs,
@@ -1098,6 +1126,41 @@ class ExperimentDetailView(ProjectMixin, TemplateView):
 # Monitors are created from New Experiment ("Repeat"); this page lists them.
 
 
+def _judge_picker(project, selected: list[str]) -> list:
+    """Judges for the New Experiment picker, each with its versions (newest first).
+
+    ``selected``: ticked values (version ids, or "latest:<judge id>" for always
+    latest). With nothing ticked, the first judge's latest version is ticked so
+    a quick run needs no extra click.
+    """
+    from django.db.models import Prefetch
+
+    from judges.models import Judge, JudgeVersion
+    from judges.services import OUTPUT_LABELS, rubric
+
+    judges = list(
+        Judge.objects.filter(project=project).order_by("name").prefetch_related(
+            Prefetch("versions", queryset=JudgeVersion.objects.select_related("model__connection").order_by("-version"))
+        )
+    )
+    if not selected and judges and judges[0].versions.all():
+        default = next((j for j in judges if j.name == "Safety"), judges[0])
+        selected = [str(default.versions.all()[0].id)]
+    for judge in judges:
+        judge.version_list = list(judge.versions.all())
+        for v in judge.version_list:
+            info = rubric(v.rubric)
+            v.rubric_name = info["name"]
+            v.output_label = OUTPUT_LABELS[info["output"]]
+        judge.follow_value = f"latest:{judge.id}"
+        judge.ticked = {str(v.id) for v in judge.version_list if str(v.id) in selected}
+        if judge.follow_value in selected:
+            judge.ticked.add(judge.follow_value)
+        latest_id = str(judge.version_list[0].id) if judge.version_list else None
+        judge.show_versions = bool(judge.ticked - {latest_id})
+    return judges
+
+
 def _timezone_choices() -> list[str]:
     """IANA zone names for the Repeat timezone picker (UTC first, then alphabetical)."""
     from zoneinfo import available_timezones
@@ -1121,7 +1184,7 @@ class MonitorsView(ProjectMixin, TemplateView):
         p = self.request.project
         monitors = list(
             Monitor.objects.filter(project=p).select_related(
-                "project", "scenario_set", "scenario_set_version", "target_model", "auditor_model", "judge_model",
+                "project", "scenario_set", "scenario_set_version", "target_model", "auditor_model", "judge", "judge_version",
                 "last_run", "created_by", "experiment",
             )
         )
@@ -1174,7 +1237,7 @@ class MonitorDetailView(ProjectMixin, TemplateView):
 
         monitor = get_object_or_404(
             Monitor.objects.select_related(
-                "scenario_set", "scenario_set_version", "target_model", "auditor_model", "judge_model"
+                "scenario_set", "scenario_set_version", "target_model", "auditor_model", "judge", "judge_version"
             ),
             pk=kw["monitor_id"],
             project=self.request.project,
@@ -2001,9 +2064,11 @@ class RunDetailView(ProjectMixin, DetailView):
         from audits.monitors import has_write_role
 
         ctx["can_schedule"] = has_write_role(self.request.user, self.request.project)
-        from audits.services import ROLES, frozen_model
+        from audits.services import ROLES, frozen_judge, frozen_model
 
         ctx["frozen_models"] = [frozen_model(run, role) for role in ROLES]
+        ctx["judge"] = frozen_judge(run)
+        ctx["system_prompt"] = (run.generation_parameters_snapshot or {}).get("system_prompt", "")
         return ctx
 
 
@@ -2082,6 +2147,41 @@ def _as_text_list(value) -> list[str]:
     return out
 
 
+# Judgment keys already shown as their own sections.
+_JUDGMENT_SHOWN = {"severity", "summary", "issues_found", "positive_behaviors", "recommendations", "score", "abstained"}
+
+
+def _judge_grade(judgment: dict) -> dict:
+    """What a rubric's judgment adds beyond severity: score, abstained, and its other fields.
+
+    Score rubrics (helpfulness, factuality, abstention) give a 1-10 score with
+    sub-scores; binary_abstention gives yes/no; checklist gives per-item results.
+    """
+    judgment = judgment if isinstance(judgment, dict) else {}
+    fields, notes = [], []
+    for key, value in judgment.items():
+        if key in _JUDGMENT_SHOWN or key.startswith("_") or value in (None, "", [], {}):
+            continue
+        label = key.replace("_", " ").capitalize()
+        if isinstance(value, bool):
+            fields.append((label, "yes" if value else "no"))
+        elif isinstance(value, (int, float)):
+            fields.append((label, f"{value:g}"))
+        elif isinstance(value, str) and len(value) <= 80:
+            fields.append((label, value))
+        elif isinstance(value, str):
+            notes.append((label, value))
+        else:
+            notes.append((label, json.dumps(value, indent=2, ensure_ascii=False)))
+    score = judgment.get("score")
+    return {
+        "score": f"{score:g}" if isinstance(score, (int, float)) else None,
+        "abstained": judgment.get("abstained") if isinstance(judgment.get("abstained"), bool) else None,
+        "fields": fields,
+        "notes": notes,
+    }
+
+
 def _rep_view(rep: dict, index: int) -> dict:
     """One judged conversation (a repetition, or the whole single-rep result)."""
     conversation = []
@@ -2107,10 +2207,13 @@ def _rep_view(rep: dict, index: int) -> dict:
         if rep.get(f"{r}_input_tokens") is not None or rep.get(f"{r}_output_tokens") is not None
     ]
     total_tokens = sum((t["input"] or 0) + (t["output"] or 0) for t in tokens)
+    grade = _judge_grade(rep.get("judgment"))
     return {
         "index": index,
         "severity": rep.get("severity", ""),
         "summary": rep.get("summary", ""),
+        "grade": grade,
+        "has_grade": bool(grade["score"] or grade["abstained"] is not None or grade["fields"] or grade["notes"]),
         "conversation": conversation,
         "turns": turn,
         "issues": _as_text_list(rep.get("issues_found", rep.get("issues"))),

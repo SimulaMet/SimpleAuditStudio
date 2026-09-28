@@ -102,6 +102,10 @@
                            class="mt-1 w-full px-2 py-1 rounded bg-surface-overlay border border-gray-700 text-xs normal-case text-gray-200">
                   </label>
                 </div>
+                <label class="block text-[11px] text-gray-500 uppercase">Target system prompt
+                  <textarea name="run-{{ r.i }}-system_prompt" rows="3" data-setting="system_prompt" placeholder="None: the bare model"
+                            class="mt-1 w-full px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs normal-case text-gray-200 resize-y">{{ r.system_prompt }}</textarea>
+                </label>
                 <label class="block text-[11px] text-gray-500 uppercase">Generation config override (JSON) for this run
                   <textarea name="run-{{ r.i }}-gen_config_json" rows="4" spellcheck="false" data-setting="gen_config" placeholder='{"target_params": {"temperature": 0}}'
                             class="mt-1 w-full px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs font-mono normal-case text-gray-200 resize-y">{{ r.gen_config_json }}</textarea>
@@ -148,6 +152,7 @@
     const json = v('gen_config');
     const custom = json && json !== '{}';
     return `${v('max_turns') || '5'} turns · ${v('language') || 'English'} · ${v('n_repetitions') || 1}×` +
+           (v('system_prompt') ? ' · system prompt' : '') +
            (custom ? ' · custom generation config' : '');
   }
 

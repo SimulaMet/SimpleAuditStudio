@@ -19,6 +19,7 @@ class AuditRunSerializer(serializers.ModelSerializer):
             "scenario_set_version_hash",
             "target_config_snapshot",
             "auditor_config_snapshot",
+            "judge_version",
             "judge_config_snapshot",
             "generation_parameters_snapshot",
             "simpleaudit_version",
@@ -44,4 +45,11 @@ class AuditRunCreateSerializer(serializers.Serializer):
     scenario_set_version_id = serializers.IntegerField()
     target_model_id = serializers.IntegerField()
     auditor_model_id = serializers.IntegerField()
-    judge_model_id = serializers.IntegerField()
+    # The judge that grades: a specific version, or a judge (its latest version).
+    judge_version_id = serializers.IntegerField(required=False)
+    judge_id = serializers.IntegerField(required=False)
+
+    def validate(self, attrs):
+        if not attrs.get("judge_version_id") and not attrs.get("judge_id"):
+            raise serializers.ValidationError("Give judge_id (latest version) or judge_version_id.")
+        return attrs

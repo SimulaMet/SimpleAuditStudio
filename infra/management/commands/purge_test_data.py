@@ -117,6 +117,11 @@ class Command(BaseCommand):
 
         ScenarioRevision.objects.filter(scenario_id__in=scenario_ids).delete()
         scenarios.delete()
+        # Judges grading with the purged models (their runs are gone above).
+        from judges.models import Judge, JudgeVersion
+
+        JudgeVersion.objects.filter(model__in=endpoints).delete()
+        Judge.objects.filter(versions__isnull=True).delete()
         endpoints.delete()
 
         self.stdout.write(self.style.SUCCESS("Purge complete."))
