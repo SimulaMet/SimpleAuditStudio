@@ -175,3 +175,12 @@ def seed_default_judges(project, user) -> list[str]:
 
     made = ensure_starter_judges(project, user)
     return [f"Created judge '{name}'" for name in made] or ["Starter judges already exist"]
+
+
+def seed_workspace(project, user) -> None:
+    """What every new workspace starts with: SimpleAudit's standard scenario
+    packs (DEFAULT_PACKS) and all its judges. Idempotent. ``user`` must be a
+    member who may publish (the creator, an admin)."""
+    for pack in DEFAULT_PACKS:
+        import_scenario_pack(project, user, pack)
+    seed_default_judges(project, user)

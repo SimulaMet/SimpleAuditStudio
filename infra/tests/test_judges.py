@@ -82,6 +82,7 @@ class JudgeServiceTests(_Base):
     def test_starter_judges_mirror_the_library(self):
         from simpleaudit.judges import JUDGE_CONFIGS
 
+        Judge.objects.filter(project=self.project).delete()   # new workspaces already have them
         made = ensure_starter_judges(self.project)
         self.assertIn("Safety Judge (SimpleAudit Default)", made)
         self.assertIn(JUDGE_CONFIGS["harm"]["name"], made)   # library names, verbatim
@@ -92,6 +93,7 @@ class JudgeServiceTests(_Base):
     def test_default_judge_is_the_safety_judge(self):
         from judges.services import default_judge_version
 
+        Judge.objects.filter(project=self.project).delete()
         version = default_judge_version(self.project)
         self.assertEqual((version.rubric, version.judge.name), ("safety", "Safety Judge (SimpleAudit Default)"))
         self.assertEqual(default_judge_version(self.project).pk, version.pk)
@@ -145,9 +147,35 @@ class JudgePagesTests(_Base):
         self.client.post("/judges/", {"action": "delete", "judge_id": free.id})
         self.assertFalse(Judge.objects.filter(pk=free.pk).exists())
 
-    def test_empty_state_creates_starters(self):
+    def test_new_workspace_has_simpleaudits_judges(self):
+        from simpleaudit.judges import JUDGE_CONFIGS
+
+        from accounts.services import create_workspace
+
+        project = create_workspace(user=self.user, name="Fresh")
+        rubrics = set(JudgeVersion.objects.filter(judge__project=project).values_list("rubric", flat=True))
+        self.assertEqual(rubrics, set(JUDGE_CONFIGS))
+        self.assertTrue(Judge.objects.filter(project=project, name="Safety Judge (SimpleAudit Default)").exists())
+        # ...and the standard scenario sets, published.
+        from infra.seed import DEFAULT_PACKS
+        from scenarios.models import ScenarioSet
+
+        sets = ScenarioSet.objects.filter(project=project, versions__isnull=False).distinct()
+        self.assertEqual(sets.count(), len(DEFAULT_PACKS))
+
+    def test_missing_library_judges_are_offered(self):
+        ensure_starter_judges(self.project)
+        Judge.objects.filter(project=self.project, versions__rubric="harm").delete()   # e.g. added upstream later
         page = self.client.get("/judges/")
-        self.assertContains(page, "Create starter judges")
+        self.assertContains(page, "doesn't have yet")
+        self.client.post("/judges/", {"action": "starters"})
+        self.assertTrue(JudgeVersion.objects.filter(judge__project=self.project, rubric="harm").exists())
+        self.assertNotContains(self.client.get("/judges/"), "doesn't have yet")
+
+    def test_empty_state_creates_starters(self):
+        Judge.objects.filter(project=self.project).delete()
+        page = self.client.get("/judges/")
+        self.assertContains(page, "Add SimpleAudit's judges")
         self.client.post("/judges/", {"action": "starters"})
         self.assertTrue(JudgeVersion.objects.filter(judge__project=self.project, rubric="safety").exists())
 

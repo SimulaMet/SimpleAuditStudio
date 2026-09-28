@@ -68,6 +68,10 @@ def bootstrap_admin_and_default_project(
         user=user,
         defaults={"role": ProjectMembership.Role.ADMIN},
     )
+    if created:
+        from infra.seed import seed_workspace
+
+        seed_workspace(project, user)   # standard scenario sets and SimpleAudit's judges
     return user, project
 
 
@@ -140,11 +144,14 @@ def create_workspace(*, user, name: str, description: str = "") -> Project:
             with transaction.atomic():
                 project = Project.objects.create(name=clean_name, slug=candidate, description=(description or "").strip())
                 ProjectMembership.objects.create(project=project, user=user, role=ProjectMembership.Role.ADMIN)
-            return project
         except IntegrityError:
             if attempt == 4:
                 raise StableAPIError(detail="A workspace with this name already exists.", code="workspace_name_conflict", http_status=409)
             continue
+        from infra.seed import seed_workspace
+
+        seed_workspace(project, user)   # standard scenario sets and SimpleAudit's judges
+        return project
     raise StableAPIError(detail="A workspace with this name already exists.", code="workspace_name_conflict", http_status=409)
 
 
