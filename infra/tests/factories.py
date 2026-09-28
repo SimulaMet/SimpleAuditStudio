@@ -10,6 +10,7 @@ from factory.django import DjangoModelFactory
 from accounts.models import Project, ProjectMembership, User
 from audits.events import ScenarioResult
 from audits.models import AuditRun
+from judges.models import Judge, JudgeVersion
 from model_registry.models import ModelConnection, RegisteredModel
 from scenarios.models import (
     Scenario,
@@ -113,6 +114,27 @@ class RegisteredModelFactory(DjangoModelFactory):
     enabled = True
 
 
+class JudgeFactory(DjangoModelFactory):
+    class Meta:
+        model = Judge
+    project = factory.SubFactory(ProjectFactory)
+    name = factory.Sequence(lambda n: f"Judge {n}")
+
+
+class JudgeVersionFactory(DjangoModelFactory):
+    """A judge version; pass ``model`` to grade with a specific model (its project is used)."""
+    class Meta:
+        model = JudgeVersion
+    model = factory.SubFactory(RegisteredModelFactory)
+    judge = factory.SubFactory(JudgeFactory, project=factory.SelfAttribute("..model.project"))
+    version = factory.Sequence(lambda n: n + 1)
+    rubric = "safety"
+
+
+def judge_for(model) -> JudgeVersion:
+    """The (one) test judge grading with ``model``: same model, same judge version."""
+    judge, _ = Judge.objects.get_or_create(project=model.project, name=f"Judge {model.pk}")
+    return judge.latest or JudgeVersion.objects.create(judge=judge, version=1, model=model, rubric="safety")
 
 
 class AuditRunFactory(DjangoModelFactory):
@@ -125,6 +147,8 @@ class AuditRunFactory(DjangoModelFactory):
     target_model = factory.SubFactory(RegisteredModelFactory)
     auditor_model = factory.SubFactory(RegisteredModelFactory)
     judge_model = factory.SubFactory(RegisteredModelFactory)
+    # A judge version grading with judge_model (tests may pass either).
+    judge_version = factory.LazyAttribute(lambda o: judge_for(o.judge_model))
     target_config_snapshot = {"model": "test", "params": {}}
     auditor_config_snapshot = {"model": "test", "params": {}}
     judge_config_snapshot = {"model": "test", "params": {}}

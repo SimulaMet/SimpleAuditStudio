@@ -117,6 +117,7 @@ INSTALLED_APPS = [
     "accounts",
     "scenarios",
     "model_registry",
+    "judges",
     "audits",
     "infra",
 ]

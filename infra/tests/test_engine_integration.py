@@ -15,6 +15,7 @@ from django.utils import timezone
 from accounts.models import Project, ProjectMembership, User
 from audits.events import get_result
 from audits.models import AuditRun
+from infra.tests.factories import judge_for
 from model_registry.models import ModelConnection, RegisteredModel
 from scenarios.models import (
     Scenario,
@@ -56,7 +57,7 @@ def _build_run(user, project):
     judge = RegisteredModel.objects.create(connection=judge_conn, project=project, display_name="Judge", model_id="j-model")
     run = AuditRun.objects.create(
         project=project, name="run", status=AuditRun.Status.QUEUED,
-        scenario_set_version=version, target_model=target, auditor_model=auditor, judge_model=judge,
+        scenario_set_version=version, target_model=target, auditor_model=auditor, judge_model=judge, judge_version=judge_for(judge),
         target_config_snapshot={"model_id": "t-model", "provider": "simulachat", "base_url": "https://t.invalid/v1",
                                 "secret_reference": "TARGET_KEY", "default_parameters": {}},
         auditor_config_snapshot={"model_id": "a-model", "provider": "simulachat", "base_url": "https://a.invalid/v1",
@@ -131,7 +132,8 @@ class AuditorKwargsTest(TestCase):
         kwargs, language = auditor_kwargs(
             target=_snap("tgt", default_parameters={"temperature": 0.1}),
             auditor=_snap("aud", default_parameters={"timeout": 5}),
-            judge=_snap("jdg", default_parameters={"timeout": 9, "temperature": 0}),
+            judge=_snap("jdg", default_parameters={"timeout": 9, "temperature": 0},
+                        judge={"rubric": "helpfulness", "probe_prompt": "Ask.", "judge_prompt": "Grade."}),
             generation={"language": "Norwegian", "system_prompt": "Be brief.", "judge_params": {"top_p": 1}},
         )
         self.assertEqual(language, "Norwegian")
@@ -142,6 +144,14 @@ class AuditorKwargsTest(TestCase):
         self.assertEqual(kwargs["judge_params"], {"temperature": 0, "top_p": 1})
         self.assertEqual(kwargs["target_params"], {"temperature": 0.1})
         self.assertEqual(kwargs["system_prompt"], "Be brief.")
+        self.assertEqual((kwargs["judge"], kwargs["probe_prompt"], kwargs["judge_prompt"]), ("helpfulness", "Ask.", "Grade."))
+
+    def test_default_judge_passes_no_rubric(self):
+        from infra.engine import auditor_kwargs
+
+        kwargs, _ = auditor_kwargs(target=_snap("t"), auditor=_snap("a"), judge=_snap("j", judge={"rubric": ""}),
+                                   generation={"judge_prompt": "ignored: prompts come from the judge"})
+        self.assertEqual((kwargs["judge"], kwargs["probe_prompt"], kwargs["judge_prompt"]), (None, None, None))
 
     def test_repeated_runs_use_the_judge_model(self):
         """Regression: multi-repetition runs graded with the auditor model."""

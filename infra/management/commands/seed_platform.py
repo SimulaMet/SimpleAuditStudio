@@ -19,6 +19,7 @@ from django.core.management.base import BaseCommand, CommandError
 from infra.seed import (
     DEFAULT_PACKS,
     import_scenario_pack,
+    seed_default_judges,
     seed_default_model_connections,
 )
 
@@ -76,6 +77,8 @@ class Command(BaseCommand):
 
         if not options["skip_models"]:
             for message in seed_default_model_connections(project, user):
+                self.stdout.write(f"  {message}")
+            for message in seed_default_judges(project, user):
                 self.stdout.write(f"  {message}")
 
         if not options["skip_demo_audits"]:

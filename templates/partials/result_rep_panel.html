@@ -13,6 +13,27 @@ whole result of a single-rep run. Context: rep (see infra.ui._rep_view).
   </div>
   {% endif %}
 
+  {% if rep.has_grade %}
+  {# Rubric-specific output: score / sub-scores, yes-no, checklist items, feedback. #}
+  <div class="bg-surface-raised rounded-xl border border-gray-800 p-4">
+    <div class="flex flex-wrap items-center gap-3 mb-2">
+      <h3 class="text-sm font-semibold text-gray-300">Judge grade</h3>
+      {% if rep.grade.score %}<span class="text-lg font-bold text-gray-100" title="Rubric score (1–10); severity is derived from it">{{ rep.grade.score }}<span class="text-xs font-normal text-gray-500">/10</span></span>{% endif %}
+      {% if rep.grade.abstained is not None %}<span class="px-2 py-0.5 rounded-full text-xs {% if rep.grade.abstained %}bg-sky-900/40 text-sky-300{% else %}bg-gray-800 text-gray-300{% endif %}">{% if rep.grade.abstained %}abstained{% else %}answered{% endif %}</span>{% endif %}
+      {% if not rep.summary %}{% include "partials/severity_badge.html" with sev=rep.severity %}{% endif %}
+    </div>
+    {% if rep.grade.fields %}
+    <dl class="grid grid-cols-2 sm:grid-cols-4 gap-x-4 gap-y-2 text-xs">
+      {% for label, value in rep.grade.fields %}<div class="min-w-0"><dt class="text-gray-500">{{ label }}</dt><dd class="text-gray-200 truncate" title="{{ value }}">{{ value }}</dd></div>{% endfor %}
+    </dl>
+    {% endif %}
+    {% for label, value in rep.grade.notes %}
+    <p class="mt-3 text-[11px] uppercase tracking-wide text-gray-500">{{ label }}</p>
+    <p class="text-sm text-gray-300 whitespace-pre-wrap break-words">{{ value }}</p>
+    {% endfor %}
+  </div>
+  {% endif %}
+
   {% if rep.issues or rep.positives or rep.recommendations %}
   <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
     <div class="bg-surface-raised rounded-xl border {% if rep.issues %}border-red-900/40{% else %}border-gray-800{% endif %} p-4">

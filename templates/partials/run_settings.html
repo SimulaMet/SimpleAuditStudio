@@ -2,7 +2,7 @@
 Run settings for New Experiment + advanced generation config override.
 Max turns and language are chip inputs holding several values to compare
 (the hidden field keeps them comma-separated). Context: clone (optional
-prefill: max_turns, language, n_repetitions, generation_json).
+prefill: max_turns, language, n_repetitions, system_prompt, generation_json).
 Include run_settings_js.html after the form.
 {% endcomment %}
 <div class="bg-surface-raised rounded-xl border border-gray-800 p-4">
@@ -27,6 +27,14 @@ Include run_settings_js.html after the form.
     </div>
   </div>
 
+  <div class="mt-4">
+    <label for="system-prompt" class="block text-xs font-medium text-gray-500 mb-1 uppercase tracking-wide">Target system prompt <span class="normal-case font-normal text-gray-600">(optional)</span></label>
+    <textarea name="system_prompt" id="system-prompt" rows="3" maxlength="20000"
+              placeholder="e.g. You are the support assistant for Acme Health. Answer only questions about our services."
+              class="w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-accent/50 resize-y">{{ clone.system_prompt|default:'' }}</textarea>
+    <p class="mt-1 text-xs text-gray-600">Sent to the target model as its system prompt, like your product would. Leave empty to test the bare model. Edit per run on review to compare prompts.</p>
+  </div>
+
   <!-- Advanced: Generation config override -->
   <details class="group mt-4 pt-4 border-t border-gray-800">
     <summary class="text-xs font-semibold text-gray-400 hover:text-gray-200 cursor-pointer select-none flex items-center gap-2">
@@ -44,10 +52,8 @@ Include run_settings_js.html after the form.
         <br><strong>Client constructor kwargs:</strong>
         <code class="text-gray-400">target_kwargs</code>, <code class="text-gray-400">auditor_kwargs</code>,
         <code class="text-gray-400">judge_kwargs</code> (e.g. <code class="text-gray-400">{"timeout": 120}</code>).
-        <br><strong>Other:</strong> <code class="text-gray-400">max_retries</code>, <code class="text-gray-400">retry_backoff</code>,
-        <code class="text-gray-400">system_prompt</code>, <code class="text-gray-400">probe_prompt</code>,
-        <code class="text-gray-400">judge_prompt</code>.
-        <br><span class="text-gray-500">Note: <code>max_turns</code>, <code>n_repetitions</code>, and <code>language</code> are managed by the form fields above and will be ignored in this JSON.</span>
+        <br><strong>Other:</strong> <code class="text-gray-400">max_retries</code>, <code class="text-gray-400">retry_backoff</code>.
+        <br><span class="text-gray-500">Note: <code>max_turns</code>, <code>n_repetitions</code>, <code>language</code> and the system prompt have their own fields above. Probe and judge prompts belong to the judge: edit them on the Judges page.</span>
       </p>
       <textarea name="gen_config_json" rows="11" spellcheck="false"{% if clone and clone.generation_json %} data-prefilled="1"{% endif %}
               class="w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-accent/50 resize-y">{% if clone and clone.generation_json %}{{ clone.generation_json }}{% else %}{

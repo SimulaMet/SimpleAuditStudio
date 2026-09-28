@@ -20,8 +20,8 @@
   {% csrf_token %}
   <input type="hidden" name="action" value="design">
 
-  {# Row 1 (wide screens): scenario sets | models, equal height, lists scroll inside. #}
-  <div id="picker-sections" class="grid grid-cols-1 xl:grid-cols-3 gap-4">
+  {# Row 1 (wide screens): scenario sets | models | judges, equal height, lists scroll inside. #}
+  <div id="picker-sections" class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
   <div class="bg-surface-raised rounded-xl border border-gray-800 p-4 min-w-0">
     <div class="flex items-center justify-between mb-1">
       <h3 class="text-sm font-semibold text-gray-300">Scenario sets</h3>
@@ -38,7 +38,7 @@
     <div data-filter-list class="space-y-1.5 h-60 overflow-y-auto pr-1">
       {% for s in sets %}
       {# Only the version checkboxes are submitted (name="scenario_version"); the set checkbox is a shortcut for "latest". #}
-      <div data-filter-item data-set-row class="rounded-lg border border-gray-800 bg-surface-overlay/40 text-sm">
+      <div data-filter-item data-set-row="scenario_version" class="rounded-lg border border-gray-800 bg-surface-overlay/40 text-sm">
         <div class="flex items-start gap-2 px-2.5 py-2">
           <input type="checkbox" data-set-toggle id="set-{{ s.id }}" class="mt-0.5" {% if s.ticked %}checked{% endif %} {% if not s.version_list %}disabled{% endif %}>
           <label for="set-{{ s.id }}" class="min-w-0 flex-1 cursor-pointer">
@@ -83,7 +83,8 @@
     {% endif %}
   </div>
 
-  <div class="xl:col-span-2 min-w-0">{% include "partials/model_pickers.html" %}</div>
+  <div class="md:col-span-2 xl:col-span-2 min-w-0 md:order-last xl:order-none">{% include "partials/model_pickers.html" %}</div>
+  <div class="min-w-0">{% include "partials/judge_picker.html" %}</div>
   </div>
 
 
@@ -159,7 +160,7 @@
   const summary = document.getElementById('design-summary');
   const canLaunch = {{ can_launch|yesno:"true,false" }};
   const MAX_RUNS = {{ max_runs }};
-  const AXES = [['scenario_version', 'scenario set'], ['target_model', 'target'], ['auditor_model', 'auditor'], ['judge_model', 'judge']];
+  const AXES = [['scenario_version', 'scenario set'], ['target_model', 'target'], ['auditor_model', 'auditor'], ['judge', 'judge']];
 
   function listCount(name) {
     const el = form.querySelector(`[name="${name}"]`);
@@ -179,7 +180,7 @@
       if (n > 1) {
         // Two versions of one set are compared as versions, not as different sets.
         const sameSet = name === 'scenario_version' &&
-          [...form.querySelectorAll('[data-set-row]')].some(r => r.querySelectorAll('input[name="scenario_version"]:checked').length > 1);
+          [...form.querySelectorAll('[data-set-row="scenario_version"]')].some(r => r.querySelectorAll('input[name="scenario_version"]:checked').length > 1);
         compared.push(n + ' ' + (sameSet ? 'scenario versions' : label + 's'));
       }
       runs *= Math.max(n, 1);
@@ -329,9 +330,10 @@
   }
   form.querySelectorAll('[data-chips]').forEach(initChips);
 
-  // --- Scenario set rows: the set checkbox means "latest"; versions can be picked. ---
+  // --- Scenario set and judge rows: the row checkbox means "latest"; versions can be picked. ---
+  const rowVersions = row => [...row.querySelectorAll(`input[name="${row.dataset.setRow}"]`)];
   function syncSetRow(row) {
-    const versions = [...row.querySelectorAll('input[name="scenario_version"]')];
+    const versions = rowVersions(row);
     const ticked = versions.filter(v => v.checked);
     const toggle = row.querySelector('[data-set-toggle]');
     const summary = row.querySelector('[data-set-summary]');
@@ -353,7 +355,7 @@
     root.querySelectorAll('[data-set-row]').forEach(row => {
       syncSetRow(row);
       row.querySelector('[data-set-toggle]').addEventListener('change', e => {
-        const versions = [...row.querySelectorAll('input[name="scenario_version"]')];
+        const versions = rowVersions(row);
         if (e.target.checked) {
           if (!versions.some(v => v.checked)) versions.find(v => 'latest' in v.dataset).checked = true;
         } else {
@@ -361,7 +363,7 @@
         }
         syncSetRow(row);
       });
-      row.querySelectorAll('input[name="scenario_version"]').forEach(v => v.addEventListener('change', () => syncSetRow(row)));
+      rowVersions(row).forEach(v => v.addEventListener('change', () => syncSetRow(row)));
       const btn = row.querySelector('[data-version-toggle]');
       if (btn) btn.addEventListener('click', () => {
         const list = row.querySelector('[data-version-list]');

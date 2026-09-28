@@ -9,6 +9,7 @@ from django.test import TestCase
 from accounts.models import Project, ProjectMembership, User
 from audits.models import AuditRun
 from audits.services import create_audit_run, submit_audit_run
+from infra.tests.factories import judge_for
 from model_registry.models import ModelConnection, RegisteredModel
 from scenarios.models import (
     Scenario,
@@ -71,7 +72,7 @@ class AuditSubmissionTest(TestCase):
                 scenario_set_version=self.version,
                 target_model=self.target,
                 auditor_model=self.auditor,
-                judge_model=self.judge,
+                judge=judge_for(self.judge),
             )
 
     def test_submit_without_live_server_keeps_run_queued_and_records_reason(self):

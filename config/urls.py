@@ -54,6 +54,7 @@ from infra.ui import (
     auto_login_view,
     logout_view,
 )
+from judges.views import JudgeDetailView, JudgesView
 
 # --- Static file serving ---------------------------------------------------
 # For the canonical Docker Compose self-hosted deployment Django serves its
@@ -176,6 +177,9 @@ urlpatterns = [
     path("models/", ModelsView.as_view(), name="models"),
     path("models/discover/", DiscoverModelsView.as_view(), name="models_discover"),
     path("models/connection-delete/<int:conn_id>/", ConnectionDeleteView.as_view(), name="connection_delete"),
+    path("judges/", JudgesView.as_view(), name="judges"),
+    path("judges/new/", JudgeDetailView.as_view(), name="judge_new"),
+    path("judges/<int:judge_id>/", JudgeDetailView.as_view(), name="judge_detail"),
     path("compare/", CompareView.as_view(), name="compare"),
     path("runs/<int:run_id>/", RunDetailView.as_view(), name="run_detail"),
     path("runs/<int:run_id>/cancel/", RunCancelView.as_view(), name="run_cancel"),

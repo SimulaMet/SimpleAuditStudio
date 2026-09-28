@@ -7,7 +7,7 @@ Date: 2026-09-28
 
 **Every `AuditRun` must reference immutable inputs.**
 
-Once an audit is submitted, its effective scenario content, model configuration, generation parameters, engine version, and runtime metadata are frozen. Later edits to scenarios, models or connections must not alter historical runs.
+Once an audit is submitted, its effective scenario content, model configuration, judge, generation parameters, engine version, and runtime metadata are frozen. Later edits to scenarios, judges, models or connections must not alter historical runs.
 
 This invariant must be enforced by schema design and service behavior, not only by convention.
 
@@ -25,7 +25,11 @@ erDiagram
     SCENARIO_SET_VERSION ||--o{ SCENARIO_SET_VERSION_ITEM : contains
     SCENARIO_REVISION ||--o{ SCENARIO_SET_VERSION_ITEM : pinned_by
     MODEL_CONNECTION ||--o{ REGISTERED_MODEL : serves
-    REGISTERED_MODEL ||--o{ AUDIT_RUN : "target / auditor / judge"
+    PROJECT ||--o{ JUDGE : owns
+    JUDGE ||--o{ JUDGE_VERSION : versions
+    REGISTERED_MODEL ||--o{ JUDGE_VERSION : grades_with
+    REGISTERED_MODEL ||--o{ AUDIT_RUN : "target / auditor"
+    JUDGE_VERSION ||--o{ AUDIT_RUN : grades
     SCENARIO_SET_VERSION ||--o{ AUDIT_RUN : pinned_by
     EXPERIMENT ||--o{ AUDIT_RUN : groups
     EXPERIMENT ||--o{ MONITOR : groups
@@ -195,6 +199,7 @@ Fields:
 - `project_id`
 - `display_name`
 - `model_id`
+- `description`
 - `model_revision`
 - `capabilities` — JSON
 - `default_parameters` — JSON
@@ -215,6 +220,30 @@ execution time (e.g. `OPENAI_API_KEY`). The direct key wins when both are set.
 Keys are never rendered into pages: the models page and model discovery look the
 connection up server-side (`model_registry.services`).
 
+### 4.4 `Judge` and `JudgeVersion` (`judges/`)
+
+A judge is how a run is graded. `Judge` holds the identity (`project_id`,
+`name`, `description`; unique per workspace). Each `JudgeVersion` is immutable
+and bundles the grading setup:
+
+- `model_id` — the registered model that grades
+- `rubric` — a built-in SimpleAudit judge config (`simpleaudit.judges`: safety,
+  harm, helpfulness, factuality, abstention, binary_abstention, checklist, …), or
+  `""` for SimpleAudit's default judge. The rubric also brings its output schema
+  (severity, score 1–10, yes/no, checklist) and post-processing.
+- `probe_prompt`, `judge_prompt` — blank means the rubric's own prompt
+- `note`, `created_by`, `created_at`
+
+Rules:
+
+- saving a judge creates a new version only when model, rubric or prompts
+  change; name and description are not versioned
+- cloning starts a new judge whose history begins at v1
+- runs and monitors reference versions with RESTRICT, so a used judge can't be
+  deleted
+- new workspaces get starter judges from `seed_platform` (one per
+  general-purpose rubric), or from the Judges page's empty state
+
 ## 5. Audit run
 
 ### 5.1 `AuditRun`
@@ -230,10 +259,12 @@ Fields:
 - `scenario_set_version_id`
 - `target_model_id`
 - `auditor_model_id`
-- `judge_model_id`
+- `judge_version_id` — the judge (version) that grades
+- `judge_model_id` — that version's model, kept on the run for model-level queries
 - `target_config_snapshot` — JSON without secrets
 - `auditor_config_snapshot` — JSON without secrets
-- `judge_config_snapshot` — JSON without secrets
+- `judge_config_snapshot` — JSON without secrets; its `judge` key freezes the
+  judge name, version, rubric and the probe / judge prompts resolved to full text
 - `generation_parameters_snapshot` — JSON
 - `simpleaudit_version`
 - `git_commit`
@@ -276,6 +307,7 @@ Rules:
 - terminal states are immutable; retry always creates a new `AuditRun` referencing the same immutable inputs
 - config snapshots never contain raw API keys; they keep `connection_id` and `secret_reference`, and the worker resolves the key at execution time (`infra.engine.snapshot_api_key`), so a rotated key applies to queued runs too
 - workers execute only from config snapshots and pinned scenario version
+- the target system prompt is a run setting: `generation_parameters_snapshot.system_prompt`
 - `simpleaudit_version` and `git_commit` must be non-null for production runs
 - worker must verify loaded SimpleAudit version/commit against the run manifest and fail with stable error `SIMPLEAUDIT_VERSION_MISMATCH` on mismatch
 - `workflow_run_id` links to execution system but is not authoritative domain state
@@ -284,9 +316,9 @@ Rules:
 
 A group of runs launched together from one design on New Experiment
 (`/experiments/new/`). Every design input (scenario sets, target, auditor,
-judge, max turns, language) takes one or more values; the cartesian product is
+judges, max turns, language) takes one or more values; the cartesian product is
 the list of runs, each an ordinary `AuditRun` with `experiment_id` set. The
-review step can drop, rename, edit (settings and generation config) or
+review step can drop, rename, edit (settings, system prompt and generation config) or
 duplicate runs before launch. A design that yields a single run launches it
 directly, without an `Experiment`.
 
@@ -307,8 +339,10 @@ Experiment when Repeat is not "Once" (one monitor per run setup, linked to the
 experiment if there is one). Each tick creates an ordinary `AuditRun` with
 `monitor_id` (and the monitor's `experiment_id`).
 
-Fields: `project_id`, `name`, `enabled`, pinned `scenario_set_version_id`, the
-three model ids, `generation_parameters` (same shape as the run snapshot),
+Fields: `project_id`, `name`, `enabled`, `scenario_set_id` with an optional
+pinned `scenario_set_version_id`, target and auditor model ids, `judge_id` with
+an optional pinned `judge_version_id` (empty = the judge's latest version at
+each tick), `generation_parameters` (same shape as the run snapshot),
 timing (`interval_hours`, or `cron_expression` read in `timezone`),
 `next_run_at`, `last_run_id`, `last_tick_at`, `last_error`, `experiment_id`,
 `created_by`.
@@ -323,6 +357,7 @@ Rules:
   creator's role and pauses the monitor if it was lost
 - at most 50 monitors per workspace; fixed intervals are 6 hours to 90 days,
   cron expressions have no minimum
+- the drift baseline resets when the scenario set version or the judge version changes
 
 ### 5.4 Reproducibility manifest
 
@@ -378,7 +413,7 @@ Fields: `run_id`, `version_item_id` (`"_run"` for run-level events), `kind`
 `/compare/?runs=a,b,…` compares completed runs on the scenarios they share
 (`audits/comparison.py`). Nothing is stored. The page shows every input that
 differs between runs (models, scenario set version, engine version, generation
-parameters) and warns when the judge or auditor differs, since judge effects can
+parameters, judge, system prompt) and warns when the judge or auditor differs, since judge effects can
 dominate target-model effects.
 
 ## 8. User preferences

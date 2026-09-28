@@ -4,7 +4,7 @@ Status: current (matches the code)
 Date: 2026-09-28
 
 SimpleAudit Studio is a web platform around the [SimpleAudit](https://pypi.org/project/simpleaudit/)
-engine: it stores versioned scenarios and model connections, runs audits as
+engine: it stores versioned scenarios, versioned judges and model connections, runs audits as
 durable background jobs, and records every run as a frozen, reproducible
 experiment. See [domain-model.md](domain-model.md) for the data model and
 [deployment.md](deployment.md) for how to run it.
@@ -27,7 +27,8 @@ flowchart LR
 | Web UI | `infra/ui.py`, `infra/runs_table.py`, `templates/` | Server-rendered Django views. Tailwind (CDN), htmx, Tabulator on the dashboard. Shared JS helpers in `templates/partials/ui_js.html`. |
 | REST API | `*/views.py`, `*/urls.py` under `/api/` | DRF, session or token auth. OpenAPI at `/api/schema/`, docs at `/api/docs/`. |
 | Worker | `infra/worker.py`, `manage.py run_worker` | Hatchet tasks `audit.scenario_execute` (one per scenario) and `audit.run_finalize`. Labelled with `WORKER_POOL` (`cpu` by default). |
-| Engine adapter | `infra/engine.py` | Builds SimpleAudit clients from the run's frozen config snapshots and executes one scenario (with repetitions). |
+| Engine adapter | `infra/engine.py` | Builds SimpleAudit clients from the run's frozen config snapshots (`auditor_kwargs`: models, the judge's rubric and prompts, the target system prompt) and executes one scenario (with repetitions). |
+| Judges | `judges/` | Versioned grading setups (model + SimpleAudit rubric + probe / judge prompts); rubric catalogue read from `simpleaudit.judges`. |
 | Sweeper | `infra/worker.py` (`_stuck_run_sweeper`) | Runs every 60 s inside the worker: finalizes finished runs, resumes stuck ones, and ticks due monitors (`audits.monitors.run_due_monitors`). |
 | Health | `infra/health.py`, `/health/`, `/api/health/` | Probes web, database, Hatchet, worker, engine and model servers, plus host resources. Admins only. |
 
@@ -73,6 +74,7 @@ data directory (`~/.simpleaudit-studio/embedded-pg`, override with
 | `/runs/<id>/`, `/runs/<id>/results/<rid>/` | Run detail (live) and per-scenario result |
 | `/compare/?runs=a,b` | Side-by-side comparison of completed runs |
 | `/scenarios/`, `/models/` | Scenario library and model registry |
+| `/judges/`, `/judges/<id>/` | Judges: create from a rubric, edit (new version), clone, version history |
 | `/workspaces/`, `/admin-settings/`, `/profile/`, `/health/` | Workspaces, super-admin settings, profile, system health |
 | `/healthz`, `/readyz` | Liveness and readiness probes |
 

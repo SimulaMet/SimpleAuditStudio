@@ -3,6 +3,7 @@ from rest_framework.test import APIClient
 
 from accounts.models import Project, ProjectMembership, User
 from audits.models import AuditRun
+from infra.tests.factories import judge_for
 from model_registry.models import ModelConnection, RegisteredModel
 from scenarios.models import Scenario, ScenarioRevision, ScenarioSet, ScenarioSetVersion
 
@@ -72,7 +73,7 @@ class AuditRunFreezeTests(TestCase):
                     "scenario_set_version_id": self.version.id,
                     "target_model_id": self.target.id,
                     "auditor_model_id": self.auditor.id,
-                    "judge_model_id": self.judge.id,
+                    "judge_version_id": judge_for(self.judge).id,
                 },
                 format="json",
             )
@@ -109,7 +110,7 @@ class AuditRunFreezeTests(TestCase):
                     "scenario_set_version_id": self.version.id,
                     "target_model_id": self.target.id,
                     "auditor_model_id": self.auditor.id,
-                    "judge_model_id": self.judge.id,
+                    "judge_version_id": judge_for(self.judge).id,
                 },
                 format="json",
             )
@@ -133,7 +134,7 @@ class AuditRunFreezeTests(TestCase):
                     "scenario_set_version_id": self.version.id,
                     "target_model_id": self.target.id,
                     "auditor_model_id": self.auditor.id,
-                    "judge_model_id": self.judge.id,
+                    "judge_version_id": judge_for(self.judge).id,
                 },
                 format="json",
             )
@@ -152,7 +153,7 @@ class AuditRunFreezeTests(TestCase):
                 "scenario_set_version_id": other_version.id,
                 "target_model_id": self.target.id,
                 "auditor_model_id": self.auditor.id,
-                "judge_model_id": self.judge.id,
+                "judge_version_id": judge_for(self.judge).id,
                 "simpleaudit_version": "0.1.0",
                 "git_commit": "deadbeef",
             },

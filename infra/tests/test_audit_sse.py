@@ -7,6 +7,7 @@ Hatchet server required).
 from django.test import Client, TestCase
 
 from audits.events import append_event
+from infra.tests.factories import judge_for
 
 
 class AuditSSEStreamTest(TestCase):
@@ -57,7 +58,7 @@ class AuditSSEStreamTest(TestCase):
             scenario_set_version=version,
             target_model=target,
             auditor_model=target,
-            judge_model=target,
+            judge_model=target, judge_version=judge_for(target),
             target_config_snapshot={},
             auditor_config_snapshot={},
             judge_config_snapshot={},

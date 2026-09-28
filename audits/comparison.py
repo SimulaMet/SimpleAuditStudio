@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from audits.events import ScenarioResult
 from audits.models import AuditRun
-from audits.services import frozen_name
+from audits.services import frozen_judge, frozen_name
 
 
 class ComparisonIncompatible(Exception):
@@ -47,10 +47,10 @@ def compare_runs(project, run_ids: list[int]) -> dict:
         warnings.append(f"Scenario set versions differ: {', '.join('v'+str(v) for v in vnums)}. Results may not be directly comparable.")
 
     # Check: same judge?
-    judge_ids = {r.judge_model_id for r in runs}
+    judge_ids = {r.judge_version_id for r in runs}
     if len(judge_ids) > 1:
-        judge_names = sorted({frozen_name(r, "judge", with_id=True) for r in runs})
-        warnings.append(f"Different judge models used: {', '.join(judge_names)}. Judge effects can dominate model effects — interpret with caution.")
+        judge_names = sorted({f"{frozen_judge(r)['label']} ({frozen_name(r, 'judge')})" for r in runs})
+        warnings.append(f"Different judges used: {', '.join(judge_names)}. Judge effects can dominate model effects — interpret with caution.")
 
     # Check: same auditor?
     auditor_ids = {r.auditor_model_id for r in runs}
@@ -130,7 +130,10 @@ def compare_runs(project, run_ids: list[int]) -> dict:
     param_defs = [
         ("Target model", lambda r: frozen_name(r, "target", with_id=True)),
         ("Auditor model", lambda r: frozen_name(r, "auditor", with_id=True)),
+        ("Judge", lambda r: frozen_judge(r)["label"]),
+        ("Judge rubric", lambda r: frozen_judge(r)["rubric_name"]),
         ("Judge model", lambda r: frozen_name(r, "judge", with_id=True)),
+        ("System prompt", lambda r: (r.generation_parameters_snapshot or {}).get("system_prompt") or "none"),
         ("Scenario set version", lambda r: f"{r.scenario_set_version.scenario_set.name} (v{r.scenario_set_version.version})" if r.scenario_set_version else "—"),
         ("SimpleAudit version", lambda r: f"{r.simpleaudit_version} ({r.git_commit[:8]}…)" if r.simpleaudit_version and r.git_commit else (r.simpleaudit_version or "—")),
         ("Temperature (target)", lambda r: (r.generation_parameters_snapshot or {}).get("temperature_target", "—")),
@@ -156,6 +159,8 @@ def compare_runs(project, run_ids: list[int]) -> dict:
                 url = f"/models/#conn-{r.target_model.connection_id}"
             elif label == "Auditor model" and r.auditor_model_id:
                 url = f"/models/#conn-{r.auditor_model.connection_id}"
+            elif label == "Judge" and frozen_judge(r)["judge_id"]:
+                url = f"/judges/{frozen_judge(r)['judge_id']}/?v={frozen_judge(r)['version']}"
             elif label == "Judge model" and r.judge_model_id:
                 url = f"/models/#conn-{r.judge_model.connection_id}"
             elif label == "Scenario set version" and r.scenario_set_version:
@@ -173,7 +178,7 @@ def compare_runs(project, run_ids: list[int]) -> dict:
                 "name": r.name,
                 "status": r.status,
                 "target": frozen_name(r, "target"),
-                "judge": frozen_name(r, "judge"),
+                "judge": frozen_judge(r)["label"],
                 "scenario_set_version": f"v{r.scenario_set_version.version}" if r.scenario_set_version else None,
                 "total_scenarios": r.total_scenarios,
                 "successful_scenarios": r.successful_scenarios,
