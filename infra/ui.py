@@ -926,8 +926,10 @@ class NewExperimentView(ProjectMixin, TemplateView):
             {spec["v"] for spec in specs.values()}
         )
         _model_ids = {spec[k] for spec in specs.values() for k in ("t", "a", "jm")}
+        # Keyed by int pk to match the int ids in each row's spec (and what the
+        # previous in_bulk() returned); a str key would never match on lookup.
         models = {
-            str(m.pk): m
+            m.pk: m
             for m in RegisteredModel.objects.select_related("connection").filter(pk__in=_model_ids)
             if m.project_id == project.id or m.connection_id in allowed_conn_ids
         }
