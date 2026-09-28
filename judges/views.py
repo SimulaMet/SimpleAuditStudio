@@ -45,7 +45,9 @@ class JudgesView(ProjectMixin, TemplateView):
             versions = list(judge.versions.all())
             judge.current = _decorate(versions[0]) if versions else None
             judge.usage = usage.get(judge.id, 0)
-        kw.update(judges=judges, rubrics=rubric_choices())
+        used = set(JudgeVersion.objects.filter(judge__project=p).values_list("rubric", flat=True))
+        kw.update(judges=judges, rubrics=rubric_choices(),
+                  missing_rubrics=[r for r in rubric_choices() if r["key"] not in used])
         return super().get_context_data(**kw)
 
     def post(self, request):
@@ -56,7 +58,7 @@ class JudgesView(ProjectMixin, TemplateView):
         action = request.POST.get("action")
         if action == "starters":
             made = ensure_starter_judges(p, request.user)
-            messages.success(request, f"Created {len(made)} judge{'s' if len(made) != 1 else ''}.")
+            messages.success(request, f"Added {len(made)} SimpleAudit judge{'s' if len(made) != 1 else ''}.")
         elif action == "clone":
             version = JudgeVersion.objects.select_related("judge").filter(
                 pk=request.POST.get("version_id") or 0, judge__project=p

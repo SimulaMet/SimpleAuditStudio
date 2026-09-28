@@ -19,6 +19,14 @@
   </div>
 </div>
 
+{% if judges and missing_rubrics %}
+<form method="post" data-write class="mb-4 flex flex-wrap items-center gap-3 rounded-lg border border-accent/30 bg-accent/10 px-4 py-2.5 text-sm">
+  {% csrf_token %}<input type="hidden" name="action" value="starters">
+  <span class="text-gray-200 flex-1 min-w-0">SimpleAudit has {{ missing_rubrics|length }} judge{{ missing_rubrics|pluralize }} this workspace doesn't have yet:
+    <span class="text-gray-400">{% for r in missing_rubrics %}{{ r.name }}{% if not forloop.last %}, {% endif %}{% endfor %}</span></span>
+  <button class="px-3 py-1.5 rounded-lg bg-accent text-white text-xs font-medium hover:bg-accent-hover whitespace-nowrap" title="Create the missing SimpleAudit judges">Add {{ missing_rubrics|length }}</button>
+</form>
+{% endif %}
 {% if judges %}
 <div class="grid grid-cols-1 lg:grid-cols-2 gap-4" id="judge-list">
   {% for j in judges %}
@@ -75,7 +83,7 @@
   <p class="text-sm text-gray-500 mt-1 mb-5 max-w-lg mx-auto">Start with SimpleAudit's judges: its default judge plus one per built-in rubric (safety, harm, helpfulness, factuality, abstention, checklist, …). You can edit or clone each one later.</p>
   <form method="post" data-write class="flex justify-center">
     {% csrf_token %}<input type="hidden" name="action" value="starters">
-    <button class="px-4 py-2 rounded-lg bg-accent text-white text-sm font-medium hover:bg-accent-hover" title="Create the starter judges">Create starter judges</button>
+    <button class="px-4 py-2 rounded-lg bg-accent text-white text-sm font-medium hover:bg-accent-hover" title="Create SimpleAudit's judges in this workspace">Add SimpleAudit's judges</button>
   </form>
   <p class="text-xs text-gray-600 mt-4">Or <a href="{% url 'judge_new' %}" class="text-accent hover:underline">create one judge</a> from any rubric.</p>
 </div>
