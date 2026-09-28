@@ -58,10 +58,14 @@ Context: judges (from _judge_picker).
       </div>
       {% endwith %}
       {% endfor %}
-      <p data-filter-empty class="hidden px-2.5 py-2 text-xs text-gray-500">No matches.</p>
+      <div data-filter-empty class="hidden px-2.5 py-2 text-xs text-gray-500">
+        No matches.
+        {% include "partials/need_help.html" %}
+      </div>
     </div>
   </fieldset>
   {% else %}
   <p class="text-xs text-gray-500">No judges yet. <a href="{% url 'judges' %}" target="_blank" class="text-accent hover:underline">Create a judge →</a></p>
+  {% include "partials/need_help.html" %}
   {% endif %}
 </div>
