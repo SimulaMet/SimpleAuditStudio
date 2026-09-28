@@ -658,7 +658,7 @@ class NewExperimentView(ProjectMixin, TemplateView):
     def get_context_data(self, **kw):
         from audits.experiments import MAX_RUNS_PER_EXPERIMENT
         from audits.monitors import has_write_role
-        from model_registry.models import ModelConnection
+        from model_registry.services import connection_share_label, visible_connections_for
 
         p = self.request.project
         source = _run_from_query(self.request, "clone_from")
@@ -701,9 +701,16 @@ class NewExperimentView(ProjectMixin, TemplateView):
             "first_run_at": "",
             "clone_from": str(source.id) if source else "",
         })
+        # Connections the picker offers: this workspace's own plus any shared
+        # into it (public / admin-shared / explicitly shared). Each carries a
+        # sharing label so users can tell at a glance where a model comes from.
+        connections = visible_connections_for(self.request.user, p)
+        for conn in connections:
+            conn.share_label = connection_share_label(conn)
+            conn.is_shared = conn.project_id != p.id
         kw.update(
             sets=sets,
-            connections=ModelConnection.objects.filter(project=p).prefetch_related("models").order_by("name"),
+            connections=connections,
             model_roles=[
                 ("target", "Target", "The model under test.", sel["target"]),
                 ("auditor", "Auditor", "Plays the user and probes the target.", sel["auditor"]),
@@ -907,13 +914,20 @@ class NewExperimentView(ProjectMixin, TemplateView):
             raw_spec = post.get(f"run-{i}-spec")
             if raw_spec:   # missing = removed duplicate
                 specs[i] = json.loads(raw_spec)
-        # Two queries for all rows; ids from another workspace are simply absent.
+        # Two queries for all rows; ids not usable in this workspace (and not
+        # shared into it) are simply absent.
+        from model_registry.services import visible_connection_ids_for
+
+        allowed_conn_ids = set(visible_connection_ids_for(project))
         versions = ScenarioSetVersion.objects.select_related("scenario_set").filter(scenario_set__project=project).in_bulk(
             {spec["v"] for spec in specs.values()}
         )
-        models = RegisteredModel.objects.select_related("connection").filter(project=project).in_bulk(
-            {spec[k] for spec in specs.values() for k in ("t", "a", "jm")}
-        )
+        _model_ids = {spec[k] for spec in specs.values() for k in ("t", "a", "jm")}
+        models = {
+            str(m.pk): m
+            for m in RegisteredModel.objects.select_related("connection").filter(pk__in=_model_ids)
+            if m.project_id == project.id or m.connection_id in allowed_conn_ids
+        }
         judges = JudgeVersion.objects.select_related("judge").filter(
             judge__project=project
         ).in_bulk({spec["j"] for spec in specs.values()})
@@ -1598,9 +1612,13 @@ class ScenarioExportView(ProjectMixin, View):
         latest = sset.versions.order_by("-version").first()
         def _export_scenario(it):
             d = {"key": it.scenario.key, "title": it.scenario.title,
-                 "description": it.revision.description, "category": it.scenario.category,
-                 "expected_behavior": it.revision.expected_behavior or [],
-                 "test_prompt": it.revision.test_prompt or ""}
+                 "description": it.revision.description}
+            if it.scenario.category:
+                d["category"] = it.scenario.category
+            if it.revision.expected_behavior:
+                d["expected_behavior"] = it.revision.expected_behavior
+            if it.revision.test_prompt:
+                d["test_prompt"] = it.revision.test_prompt
             if it.revision.severity_ceiling:
                 d["severity_ceiling"] = it.revision.severity_ceiling
             if it.revision.documents:
@@ -1657,31 +1675,60 @@ class ModelsView(ProjectMixin, TemplateView):
     template_name = "models.html"
 
     def get_context_data(self, **kw):
+        from django.db.models import Prefetch
+
         from model_registry.models import ModelConnection
-        from model_registry.services import PROVIDER_PRESETS, model_usage_counts
+        from model_registry.services import (
+            PROVIDER_PRESETS,
+            admin_workspaces,
+            can_edit_connection,
+            connection_share_label,
+            model_usage_counts,
+            visible_connections_for,
+        )
 
         p = self.request.project
-        connections = list(ModelConnection.objects.filter(project=p).prefetch_related("models").order_by("name"))
-        usage = model_usage_counts(p)
+        user = self.request.user
+        # Owner connections first, then shared ones (see visible_connections_for).
+        connections = visible_connections_for(user, p)
+        # Attach each connection's models once (owner + shared alike).
         for conn in connections:
             conn.model_list = sorted(conn.models.all(), key=lambda m: (m.display_name or m.model_id).lower())
+        usage = model_usage_counts(p)
+        for conn in connections:
             for m in conn.model_list:
                 m.usage = usage.get(m.id, 0)
             conn.in_use = any(m.usage for m in conn.model_list)
-        # What the edit dialog needs (never the key itself).
+            conn.can_edit = can_edit_connection(user, conn)
+            conn.share_label = connection_share_label(conn)
+            conn.is_shared = not conn.is_owner
+        # What the edit dialog needs (never the key itself). Only owner
+        # connections are editable; shared ones render read-only.
         conn_data = {
             c.pk: {
                 "name": c.name, "description": c.description, "provider": c.provider, "base_url": c.base_url, "secret_ref": c.secret_reference,
                 "key_mode": "stored" if c.api_key_direct else "env" if c.secret_reference else "none",
                 "enabled": c.enabled,
+                "visibility": c.visibility,
+                "shared_with": [str(x) for x in c.shared_with.values_list("id", flat=True)],
+                "can_edit": c.can_edit,
+                "share_label": c.share_label,
             }
             for c in connections
         }
+        # Workspaces this user may share to (admins level / explicit picker).
+        share_targets = [
+            {"id": str(w.id), "name": w.name}
+            for w in admin_workspaces(user)
+            if w.id != p.id
+        ]
         kw.update(
             connections=connections,
             conn_data=conn_data,
             model_total=sum(len(c.model_list) for c in connections),
             provider_presets=PROVIDER_PRESETS,
+            share_targets=share_targets,
+            visibility_choices=[(v, label) for v, label in ModelConnection.Visibility.choices],
         )
         return super().get_context_data(**kw)
 
@@ -1707,9 +1754,11 @@ class ModelsView(ProjectMixin, TemplateView):
             if action == "add_connection":
                 conn = ModelConnection(project=p, created_by=request.user, enabled=True)
             else:
+                # Editing is owner-workspace only: a shared connection's id must
+                # belong to this workspace, otherwise it's read-only for us.
                 conn = ModelConnection.objects.filter(pk=post.get("conn_id"), project=p).first()
                 if conn is None:
-                    return fail("Connection not found.")
+                    return fail("Connection not found (or you can't edit a shared connection here).")
                 conn.enabled = post.get("conn_enabled") == "1"
                 anchor = f"#conn-{conn.pk}"
             if error:
@@ -1719,6 +1768,15 @@ class ModelsView(ProjectMixin, TemplateView):
             conn.name, conn.base_url = name, base_url
             conn.description = post.get("conn_description", "").strip()[:DESCRIPTION_MAX]
             conn.provider = post.get("conn_provider") or "openai"
+            # Sharing level + explicit workspaces (owner-only; ignored for adds
+            # that don't send them, defaulting to "this workspace only").
+            visibility = post.get("conn_visibility", ModelConnection.Visibility.WORKSPACE)
+            if visibility not in dict(ModelConnection.Visibility.choices):
+                visibility = ModelConnection.Visibility.WORKSPACE
+            conn.visibility = visibility
+            if action == "edit_connection":
+                shared_ids = [int(x) for x in post.getlist("conn_shared_with") if x.isdigit()]
+                conn.shared_with.set(shared_ids)
             # Where the key comes from: stored on the connection, an env var, or none.
             key_mode = post.get("key_mode", "stored")
             if key_mode == "env":
@@ -1737,9 +1795,10 @@ class ModelsView(ProjectMixin, TemplateView):
             anchor = f"#conn-{conn.pk}"
             messages.success(request, f"Connection “{conn.name}” saved.")
         elif action == "add_models":
+            # Adding models mutates the connection — owner workspace only.
             conn = ModelConnection.objects.filter(pk=post.get("conn_id"), project=p).first()
             if conn is None:
-                return fail("Connection not found.")
+                return fail("Connection not found (or you can't edit a shared connection here).")
             anchor = f"#conn-{conn.pk}"
             ids = [m.strip() for m in post.getlist("model_id") if m.strip()][:200]
             if not ids:
@@ -1755,9 +1814,14 @@ class ModelsView(ProjectMixin, TemplateView):
             messages.success(request, f"Added {len(new)} model{'s' if len(new) != 1 else ''} to {conn.name}."
                              + (f" {skipped} already there." if skipped else ""))
         elif action in ("edit_model", "delete_model"):
-            rm = RegisteredModel.objects.select_related("connection").filter(pk=post.get("rm_id"), project=p).first()
+            # Editing/removing a model mutates its connection — owner workspace only.
+            rm = (
+                RegisteredModel.objects.select_related("connection")
+                .filter(pk=post.get("rm_id"), project=p, connection__project=p)
+                .first()
+            )
             if rm is None:
-                return fail("Model not found.")
+                return fail("Model not found (or you can't edit a shared connection here).")
             anchor = f"#conn-{rm.connection_id}"
             if action == "edit_model":
                 new_id = post.get("model_id_new", "").strip() or rm.model_id
