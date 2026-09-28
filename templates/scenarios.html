@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% load json_filters %}
 {% block title %}Scenarios — SimpleAudit{% endblock %}
 {% block content %}
 <h1 class="text-lg font-semibold text-gray-100 mb-6">Scenario Library</h1>
@@ -138,6 +139,23 @@
               <textarea name="expected_behavior" rows="2" id="eb-{{ item.scenario.id }}" placeholder="Should refuse…&#10;Should not reveal…"
                         class="w-full px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-1 focus:ring-accent/50">{% for b in item.revision.expected_behavior %}{{ b }}
 {% endfor %}</textarea>
+              <details class="group">
+                <summary class="text-xs text-gray-500 cursor-pointer select-none hover:text-gray-400">Advanced (severity ceiling, documents, file URI)</summary>
+                <div class="space-y-2 mt-2 pl-3 border-l border-gray-800">
+                  <select name="severity_ceiling" class="w-full px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-1 focus:ring-accent/50">
+                    <option value="" {% if not item.revision.severity_ceiling %}selected{% endif %}>— No ceiling —</option>
+                    <option value="pass" {% if item.revision.severity_ceiling == "pass" %}selected{% endif %}>pass</option>
+                    <option value="low" {% if item.revision.severity_ceiling == "low" %}selected{% endif %}>low</option>
+                    <option value="medium" {% if item.revision.severity_ceiling == "medium" %}selected{% endif %}>medium</option>
+                    <option value="high" {% if item.revision.severity_ceiling == "high" %}selected{% endif %}>high</option>
+                    <option value="critical" {% if item.revision.severity_ceiling == "critical" %}selected{% endif %}>critical</option>
+                  </select>
+                  <input type="text" name="documents" value="{{ item.revision.documents|jsonify }}" placeholder='Documents (JSON array, e.g. ["policy.pdf"])'
+                         class="w-full px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-1 focus:ring-accent/50">
+                  <input type="text" name="file_uri" value="{{ item.revision.file_uri|default:'' }}" placeholder="File URI (optional, for vision scenarios)"
+                         class="w-full px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-1 focus:ring-accent/50">
+                </div>
+              </details>
               <div class="flex gap-2 items-center">
                 <button class="px-3 py-1 rounded bg-accent text-white text-xs">Save</button>
                 <button type="button" onclick="document.getElementById('edit-scenario-{{ item.scenario.id }}').style.display='none'" class="px-3 py-1 rounded bg-surface-overlay text-gray-400 text-xs">Cancel</button>
@@ -167,6 +185,23 @@
         <label class="text-xs text-gray-500">Expected behavior (one per line — judge criteria)</label>
         <textarea name="expected_behavior" rows="2" placeholder="Should refuse harmful requests…&#10;Should maintain boundaries…"
                   class="w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-accent/50"></textarea>
+        <details class="group">
+          <summary class="text-xs text-gray-500 cursor-pointer select-none hover:text-gray-400">Advanced (severity ceiling, documents, file URI)</summary>
+          <div class="space-y-2 mt-2 pl-3 border-l border-gray-800">
+            <select name="severity_ceiling" class="w-full px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-1 focus:ring-accent/50">
+              <option value="">— No ceiling —</option>
+              <option value="pass">pass</option>
+              <option value="low">low</option>
+              <option value="medium">medium</option>
+              <option value="high">high</option>
+              <option value="critical">critical</option>
+            </select>
+            <input type="text" name="documents" placeholder='Documents (JSON array, e.g. ["policy.pdf"])'
+                   class="w-full px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-1 focus:ring-accent/50">
+            <input type="text" name="file_uri" placeholder="File URI (optional, for vision scenarios)"
+                   class="w-full px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-1 focus:ring-accent/50">
+          </div>
+        </details>
         <button class="px-3 py-1.5 rounded-lg bg-accent text-white text-xs font-medium hover:bg-accent-hover">+ Add Scenario</button>
       </form>
     </div>
