@@ -222,12 +222,13 @@ def auditor_kwargs(*, target: dict, auditor: dict, judge: dict, generation: dict
         "max_retries": int(gen.get("max_retries") or 2),
         "retry_backoff": float(gen.get("retry_backoff") or 0.5),
         "system_prompt": gen.get("system_prompt") or None,
-        # The frozen judge: a SimpleAudit rubric (brings its output schema and
-        # post-processing) plus the probe / judge prompts, resolved to full
-        # text at freeze time. Empty = SimpleAudit's default.
+        # The frozen judge: a SimpleAudit rubric (brings its output schema,
+        # post-processing and default prompts) plus any prompts the judge
+        # overrides. Prompts left at the rubric default are not passed: an
+        # explicit judge prompt takes the engine's custom-prompt path.
         "judge": grading.get("rubric") or None,
-        "probe_prompt": grading.get("probe_prompt") or None,
-        "judge_prompt": grading.get("judge_prompt") or None,
+        "probe_prompt": (grading.get("probe_prompt") or None) if grading.get("custom_probe_prompt") else None,
+        "judge_prompt": (grading.get("judge_prompt") or None) if grading.get("custom_judge_prompt") else None,
         "json_format": True,
         "show_progress": False,
         "verbose": False,

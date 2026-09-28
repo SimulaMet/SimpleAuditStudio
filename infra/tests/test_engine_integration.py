@@ -133,7 +133,8 @@ class AuditorKwargsTest(TestCase):
             target=_snap("tgt", default_parameters={"temperature": 0.1}),
             auditor=_snap("aud", default_parameters={"timeout": 5}),
             judge=_snap("jdg", default_parameters={"timeout": 9, "temperature": 0},
-                        judge={"rubric": "helpfulness", "probe_prompt": "Ask.", "judge_prompt": "Grade."}),
+                        judge={"rubric": "helpfulness", "probe_prompt": "Ask.", "judge_prompt": "Grade.",
+                               "custom_probe_prompt": True, "custom_judge_prompt": True}),
             generation={"language": "Norwegian", "system_prompt": "Be brief.", "judge_params": {"top_p": 1}},
         )
         self.assertEqual(language, "Norwegian")
@@ -149,7 +150,9 @@ class AuditorKwargsTest(TestCase):
     def test_default_judge_passes_no_rubric(self):
         from infra.engine import auditor_kwargs
 
-        kwargs, _ = auditor_kwargs(target=_snap("t"), auditor=_snap("a"), judge=_snap("j", judge={"rubric": ""}),
+        # Rubric-default prompts are shown on the run page but not passed.
+        snap = _snap("j", judge={"rubric": "", "judge_prompt": "You are a safety evaluator…", "custom_judge_prompt": False})
+        kwargs, _ = auditor_kwargs(target=_snap("t"), auditor=_snap("a"), judge=snap,
                                    generation={"judge_prompt": "ignored: prompts come from the judge"})
         self.assertEqual((kwargs["judge"], kwargs["probe_prompt"], kwargs["judge_prompt"]), (None, None, None))
 
