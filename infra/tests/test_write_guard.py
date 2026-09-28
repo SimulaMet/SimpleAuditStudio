@@ -104,6 +104,31 @@ class ModelsPageTests(_Base):
         conn.refresh_from_db()
         self.assertEqual((conn.api_key_direct, conn.secret_reference), ("", ""))
 
+    def test_descriptions_saved_and_shown(self):
+        from infra.tests.factories import RegisteredModelFactory
+
+        conn = ModelConnectionFactory(project=self.project)
+        self.client.post("/models/", {"action": "edit_connection", "conn_id": conn.id, "conn_name": conn.name,
+                                      "conn_base_url": "https://api.example.com/v1", "conn_enabled": "1",
+                                      "key_mode": "none", "conn_description": "  Team account  "})
+        rm = RegisteredModelFactory(connection=conn, project=self.project)
+        self.client.post("/models/", {"action": "edit_model", "rm_id": rm.id, "model_id_new": rm.model_id,
+                                      "model_display_name": "Fast", "model_description": "Cheap & quick"})
+        self.client.post("/models/", {"action": "add_models", "conn_id": conn.id, "model_id": ["solo"],
+                                      "model_description": "Single add"})
+        conn.refresh_from_db()
+        rm.refresh_from_db()
+        self.assertEqual(conn.description, "Team account")
+        self.assertEqual((rm.display_name, rm.description), ("Fast", "Cheap & quick"))
+        self.assertEqual(conn.models.get(model_id="solo").description, "Single add")
+        page = self.client.get("/models/")
+        self.assertContains(page, "Team account")
+        self.assertContains(page, "Cheap &amp; quick")
+        # Bulk adds don't copy one description onto every model.
+        self.client.post("/models/", {"action": "add_models", "conn_id": conn.id, "model_id": ["x", "y"],
+                                      "model_description": "ignored"})
+        self.assertFalse(conn.models.filter(model_id__in=["x", "y"]).exclude(description="").exists())
+
     def test_used_model_shows_lock_not_delete(self):
         from infra.tests.factories import AuditRunFactory, RegisteredModelFactory
 

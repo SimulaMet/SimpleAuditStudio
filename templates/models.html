@@ -32,7 +32,7 @@
 <div class="space-y-4" id="conn-list">
   {% for conn in connections %}
   <section id="conn-{{ conn.id }}" class="conn-card bg-surface-raised rounded-xl border border-gray-800 scroll-mt-6 {% if not conn.enabled %}opacity-70{% endif %}"
-           data-conn="{{ conn.id }}" data-search="{{ conn.name|lower }} {{ conn.base_url|lower }} {{ conn.provider|lower }}">
+           data-conn="{{ conn.id }}" data-search="{{ conn.name|lower }} {{ conn.base_url|lower }} {{ conn.provider|lower }} {{ conn.description|lower }}">
     <!-- Connection header -->
     <header class="flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-3 border-b border-gray-800">
       <span class="w-9 h-9 shrink-0 rounded-lg bg-accent/15 text-accent font-semibold flex items-center justify-center uppercase" aria-hidden="true">{{ conn.name|slice:":1" }}</span>
@@ -46,6 +46,7 @@
           {% else %}<span class="text-[11px] text-gray-500" title="Requests are sent without an API key (fine for local servers)">○ no key</span>{% endif %}
           <span class="conn-status hidden text-[11px] px-1.5 py-0.5 rounded" aria-live="polite"></span>
         </div>
+        {% if conn.description %}<p class="text-xs text-gray-400 mt-0.5 line-clamp-2 whitespace-pre-line" title="{{ conn.description }}">{{ conn.description }}</p>{% endif %}
         <p class="text-xs text-gray-500 font-mono truncate mt-0.5" title="{{ conn.base_url }}">{{ conn.base_url }}</p>
       </div>
       <div class="flex items-center gap-1.5 w-full sm:w-auto justify-end">
@@ -82,11 +83,14 @@
       <tbody>
         {% for m in conn.model_list %}
         <tr class="model-row border-t border-gray-800/60 hover:bg-surface-overlay/40 group" data-model="{{ m.id }}" data-model-id="{{ m.model_id }}"
-            data-search="{{ m.display_name|lower }} {{ m.model_id|lower }}">
-          <td class="px-4 py-2"><span class="model-dot inline-block w-2 h-2 rounded-full bg-gray-700" title="Not checked yet — press Check"></span></td>
-          <td class="px-2 py-2 text-gray-200">
-            <span class="model-view">{{ m.display_name|default:m.model_id }}</span>
-            <form method="post" class="model-edit hidden flex gap-2 items-center">
+            data-search="{{ m.display_name|lower }} {{ m.model_id|lower }} {{ m.description|lower }}">
+          <td class="px-4 py-2 align-top"><span class="model-dot inline-block w-2 h-2 rounded-full bg-gray-700" title="Not checked yet — press Check"></span></td>
+          <td class="px-2 py-2 text-gray-200 align-top">
+            <div class="model-view min-w-0 max-w-md">
+              <span>{{ m.display_name|default:m.model_id }}</span>
+              {% if m.description %}<p class="text-[11px] text-gray-500 mt-0.5 line-clamp-2 whitespace-pre-line" title="{{ m.description }}">{{ m.description }}</p>{% endif %}
+            </div>
+            <form method="post" class="model-edit hidden flex flex-wrap gap-2 items-start max-w-2xl">
               {% csrf_token %}
               <input type="hidden" name="action" value="edit_model">
               <input type="hidden" name="rm_id" value="{{ m.id }}">
@@ -94,16 +98,18 @@
                      class="w-40 px-2 py-1 rounded bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-1 focus:ring-accent/50">
               <input type="text" name="model_id_new" value="{{ m.model_id }}" placeholder="Model ID" aria-label="Model ID" required
                      class="w-48 px-2 py-1 rounded bg-surface-overlay border border-gray-700 text-xs font-mono focus:outline-none focus:ring-1 focus:ring-accent/50">
-              <button class="px-2 py-1 rounded bg-accent/20 text-accent text-xs hover:bg-accent/30">Save</button>
-              <button type="button" data-edit-cancel class="px-2 py-1 rounded text-gray-500 text-xs hover:text-gray-300">Cancel</button>
+              <textarea name="model_description" rows="2" maxlength="1000" placeholder="Description (optional): what it is, when to use it" aria-label="Description"
+                        class="basis-full px-2 py-1 rounded bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-1 focus:ring-accent/50">{{ m.description }}</textarea>
+              <button class="px-2 py-1 rounded bg-accent/20 text-accent text-xs hover:bg-accent/30" title="Save changes">Save</button>
+              <button type="button" data-edit-cancel class="px-2 py-1 rounded text-gray-500 text-xs hover:text-gray-300" title="Discard changes">Cancel</button>
             </form>
           </td>
-          <td class="px-2 py-2 text-xs text-gray-400 font-mono model-view">{{ m.model_id }}</td>
-          <td class="px-2 py-2 text-xs text-right model-view {% if m.usage %}text-gray-300{% else %}text-gray-600{% endif %}"
+          <td class="px-2 py-2 text-xs text-gray-400 font-mono model-view align-top">{{ m.model_id }}</td>
+          <td class="px-2 py-2 text-xs text-right model-view align-top {% if m.usage %}text-gray-300{% else %}text-gray-600{% endif %}"
               title="Runs and monitors that use this model as target, auditor or judge">{% if m.usage %}{{ m.usage }} run{{ m.usage|pluralize }}{% else %}unused{% endif %}</td>
-          <td class="px-4 py-2 text-right whitespace-nowrap model-view">
+          <td class="px-4 py-1 text-right whitespace-nowrap model-view align-top">
             <span data-write class="opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
-              <button type="button" data-edit title="Rename or change the model ID" aria-label="Edit {{ m.display_name|default:m.model_id }}"
+              <button type="button" data-edit title="Edit name, model ID or description" aria-label="Edit {{ m.display_name|default:m.model_id }}"
                       class="w-7 h-7 rounded text-gray-500 hover:text-accent">✎</button>
               {% if m.usage %}
               <span class="inline-flex w-7 h-7 items-center justify-center text-gray-600 cursor-help" title="Used by {{ m.usage }} run{{ m.usage|pluralize }} — kept for reproducibility"><svg class="w-3.5 h-3.5" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 1a3.5 3.5 0 0 0-3.5 3.5V6H4a1.5 1.5 0 0 0-1.5 1.5v6A1.5 1.5 0 0 0 4 15h8a1.5 1.5 0 0 0 1.5-1.5v-6A1.5 1.5 0 0 0 12 6h-.5V4.5A3.5 3.5 0 0 0 8 1Zm2 5H6V4.5a2 2 0 1 1 4 0V6Z"/></svg></span>
@@ -170,6 +176,9 @@
           {% for key, label, provider, url, env in provider_presets %}{% ifchanged provider %}<option value="{{ provider }}">{{ provider }}</option>{% endifchanged %}{% endfor %}
         </select></label>
     </div>
+    <label class="block text-xs text-gray-500">Description <span class="text-gray-600">(optional)</span>
+      <textarea name="conn_description" rows="2" maxlength="1000" placeholder="e.g. Team OpenAI account, billed to project X"
+                class="mt-1 w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm text-gray-100 focus:outline-none focus:ring-2 focus:ring-accent/50"></textarea></label>
     <label class="block text-xs text-gray-500">Base URL
       <input type="url" name="conn_base_url" required placeholder="https://api.example.com/v1"
              class="mt-1 w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm font-mono text-gray-100 focus:outline-none focus:ring-2 focus:ring-accent/50">
@@ -229,6 +238,9 @@
                class="px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm font-mono text-gray-100 focus:outline-none focus:ring-2 focus:ring-accent/50">
         <input type="text" name="model_display_name" id="manual-name" placeholder="Display name (optional)" aria-label="Display name"
                class="px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm text-gray-100 focus:outline-none focus:ring-2 focus:ring-accent/50">
+        <textarea name="model_description" rows="2" maxlength="1000" placeholder="Description (optional)" aria-label="Description"
+                  class="sm:col-span-2 px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm text-gray-100 focus:outline-none focus:ring-2 focus:ring-accent/50"></textarea>
+        <p class="sm:col-span-2 text-[11px] text-gray-600">Name and description apply when you add a single model. Edit any model later with ✎.</p>
       </div>
     </details>
     <div class="flex items-center justify-end gap-2 pt-1">
@@ -303,7 +315,7 @@
     $$('[data-preset-chip]', connForm).forEach(ch => ch.setAttribute('aria-pressed', 'false'));
     if (editing) {
       if (![...f.conn_provider.options].some(o => o.value === c.provider)) f.conn_provider.add(new Option(c.provider, c.provider));
-      f.conn_name.value = c.name; f.conn_provider.value = c.provider; f.conn_base_url.value = c.base_url;
+      f.conn_name.value = c.name; f.conn_description.value = c.description; f.conn_provider.value = c.provider; f.conn_base_url.value = c.base_url;
       f.conn_secret_ref.value = c.secret_ref; f.conn_enabled.checked = c.enabled;
       setKeyMode(c.key_mode);
       f.conn_api_key.placeholder = c.key_mode === 'stored' ? '•••••••• (leave blank to keep the stored key)' : 'sk-…';
