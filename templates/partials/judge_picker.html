@@ -1,0 +1,67 @@
+{% comment %}
+Judge picker for New Experiment: ticking a judge uses its latest version; open
+Versions for an older one or "Always latest". Tick several to compare judges.
+Same row behaviour as the scenario set picker (data-set-row="judge").
+Context: judges (from _judge_picker).
+{% endcomment %}
+<div class="bg-surface-raised rounded-xl border border-gray-800 p-4 h-full min-w-0">
+  <div class="flex items-center justify-between mb-1">
+    <h3 class="text-sm font-semibold text-gray-300">Judges</h3>
+    <a href="{% url 'judges' %}" target="_blank" class="text-xs text-accent hover:text-accent-hover hover:underline" title="Create or edit judges in a new tab">＋ New</a>
+  </div>
+  <p class="text-xs text-gray-500 mb-3">A judge is a model plus a rubric and prompts. It grades each conversation.</p>
+  {% if judges %}
+  <fieldset data-axis="judge">
+    <div class="flex items-center gap-2 mb-2">
+      <input type="search" data-filter placeholder="Search judges…" aria-label="Search judges"
+             class="flex-1 min-w-0 px-2.5 py-1.5 rounded-lg bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-2 focus:ring-accent/50">
+      <span class="text-[10px] text-gray-500 shrink-0" data-axis-count></span>
+    </div>
+    <div data-filter-list class="space-y-1.5 h-60 overflow-y-auto pr-1">
+      {% for j in judges %}
+      {% with latest=j.version_list.0 %}
+      <div data-filter-item data-set-row="judge" class="rounded-lg border border-gray-800 bg-surface-overlay/40 text-sm"{% if j.description %} title="{{ j.description }}"{% endif %}>
+        <div class="flex items-start gap-2 px-2.5 py-2">
+          <input type="checkbox" data-set-toggle id="judge-{{ j.id }}" class="mt-0.5" {% if j.ticked %}checked{% endif %} {% if not latest %}disabled{% endif %}>
+          <label for="judge-{{ j.id }}" class="min-w-0 flex-1 cursor-pointer">
+            <span class="text-gray-200 block truncate" title="{{ j.name }}">{{ j.name }}</span>
+            <span class="text-[11px] text-gray-500 block truncate" data-set-summary>{% if latest %}v{{ latest.version }} · latest{% endif %}</span>
+            {% if latest %}<span class="text-[11px] text-gray-500 block truncate">{{ latest.model.display_name }} · {{ latest.rubric_name }}{% if not latest.model.has_key %} · <span class="text-yellow-500">no key set</span>{% endif %}</span>{% endif %}
+          </label>
+          {% if latest %}
+          <button type="button" data-version-toggle aria-expanded="{% if j.show_versions %}true{% else %}false{% endif %}" title="Pick another version, or always use the latest"
+                  class="shrink-0 text-[11px] text-gray-400 hover:text-accent px-1.5 py-0.5 rounded hover:bg-surface-overlay">Versions {% if j.show_versions %}▴{% else %}▾{% endif %}</button>
+          {% endif %}
+        </div>
+        <div data-version-list class="{% if not j.show_versions %}hidden{% endif %} border-t border-gray-800 px-2.5 py-1.5 space-y-0.5 max-h-44 overflow-y-auto">
+          {% if latest %}
+          <label class="flex items-baseline gap-2 text-xs cursor-pointer py-0.5 border-b border-gray-800/60 pb-1.5 mb-1" title="Not pinned: each run uses the newest version saved at that time">
+            <input type="checkbox" name="judge" value="{{ j.follow_value }}" data-follow data-version="{{ latest.version }}"
+                   {% if j.follow_value in j.ticked %}checked{% endif %}>
+            <span class="text-gray-200">Always latest</span>
+            <span class="text-gray-500 truncate">follows new versions · now v{{ latest.version }}</span>
+          </label>
+          {% endif %}
+          {% for v in j.version_list %}
+          <div class="flex items-baseline gap-2 text-xs py-0.5">
+            <label class="flex items-baseline gap-2 min-w-0 flex-1 cursor-pointer">
+              <input type="checkbox" name="judge" value="{{ v.id }}" data-version="{{ v.version }}" {% if forloop.first %}data-latest{% endif %}
+                     {% if v.id|stringformat:"d" in j.ticked %}checked{% endif %}>
+              <span class="text-gray-200 shrink-0">v{{ v.version }}{% if forloop.first %} <span class="text-accent">latest</span>{% endif %}</span>
+              <span class="text-gray-500 truncate" title="Saved {{ v.created_at|date:'M j, Y, H:i' }} UTC{% if v.note %} · {{ v.note }}{% endif %}">{{ v.model.display_name }} · {{ v.rubric_name }}</span>
+            </label>
+            <a href="{% url 'judge_detail' j.id %}?v={{ v.version }}" target="_blank" rel="noopener"
+               title="Open v{{ v.version }} of {{ j.name }} in a new tab" class="shrink-0 text-gray-500 hover:text-accent">View ↗</a>
+          </div>
+          {% endfor %}
+        </div>
+      </div>
+      {% endwith %}
+      {% endfor %}
+      <p data-filter-empty class="hidden px-2.5 py-2 text-xs text-gray-500">No matches.</p>
+    </div>
+  </fieldset>
+  {% else %}
+  <p class="text-xs text-gray-500">No judges yet. <a href="{% url 'judges' %}" target="_blank" class="text-accent hover:underline">Create a judge →</a></p>
+  {% endif %}
+</div>

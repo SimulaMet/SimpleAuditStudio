@@ -1,6 +1,7 @@
 """First-run seed logic — single source of truth.
 
-Imports SimpleAudit scenario packs and creates default model connections.
+Imports SimpleAudit scenario packs, creates default model connections and
+starter judges.
 Used by the ``seed_platform`` management command, which runs automatically on
 web container boot (docker-compose) and in the HF Space ``start.sh``, and can
 be run manually with ``--packs`` to import additional packs.
@@ -166,3 +167,20 @@ def seed_default_model_connections(project, user) -> list[str]:
             if m_created:
                 messages.append(f"  + {display_name} ({model_id})")
     return messages
+
+
+# Model the starter judges use (falls back to the workspace's first model).
+DEFAULT_JUDGE_MODEL = "GPT-4o Mini"
+
+
+def seed_default_judges(project, user) -> list[str]:
+    """Create the starter judges (one per general-purpose rubric) if missing."""
+    from judges.services import ensure_starter_judges
+    from model_registry.models import RegisteredModel
+
+    models = RegisteredModel.objects.filter(project=project, enabled=True).order_by("id")
+    model = models.filter(display_name=DEFAULT_JUDGE_MODEL).first() or models.first()
+    if model is None:
+        return ["No model for starter judges; add a model, then create judges on the Judges page."]
+    made = ensure_starter_judges(project, model, user)
+    return [f"Created judge '{name}' ({model.display_name})" for name in made] or ["Starter judges already exist"]

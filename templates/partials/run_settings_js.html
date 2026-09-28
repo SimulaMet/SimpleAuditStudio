@@ -24,7 +24,7 @@ function cleanGenConfig(obj) {
   try {
     let obj = JSON.parse(ta.value);
     if (typeof obj !== 'object' || obj === null || Array.isArray(obj)) return;
-    delete obj.max_turns; delete obj.n_repetitions; delete obj.language;
+    delete obj.max_turns; delete obj.n_repetitions; delete obj.language; delete obj.system_prompt;
     cleanGenConfig(obj);
     ta.value = Object.keys(obj).length ? JSON.stringify(obj, null, 2) : '{}';
   } catch (_) { /* leave as-is if not valid JSON yet */ }

@@ -56,6 +56,7 @@
            class="w-52 px-2.5 py-1.5 rounded-lg bg-surface-overlay border border-gray-700 text-xs text-gray-200 focus:outline-none focus:ring-2 focus:ring-accent/50">
     {% include "partials/multi_filter.html" with key="target" label="Target" items=filter_targets %}
     {% include "partials/multi_filter.html" with key="set" label="Scenario set" items=filter_sets %}
+    {% if filter_judges|length > 1 %}{% include "partials/multi_filter.html" with key="judge" label="Judge" items=filter_judges %}{% endif %}
     {% if filter_experiments %}{% include "partials/multi_filter.html" with key="experiment" label="Experiment" items=filter_experiments %}{% endif %}
     <div class="relative" data-pop>
       <button type="button" data-pop-btn id="date-btn" aria-haspopup="true" aria-expanded="false" title="Filter by creation date" class="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-surface-overlay border border-gray-700 text-xs text-gray-300 hover:text-white whitespace-nowrap"><span id="date-label">Any time</span> <span class="text-gray-500">▾</span></button>
@@ -229,7 +230,8 @@
     { title: 'Created', field: 'created_at', formatter: fmt.time, minWidth: 200 },
     { title: 'Scenarios', field: 'completed', formatter: fmt.scenarios, visible: false, headerSort: false },
     { title: 'Auditor', field: 'auditor', visible: false },
-    { title: 'Judge', field: 'judge', visible: false },
+    { title: 'Judge', field: 'judge', visible: false, headerTooltip: 'Judge and version that graded the run' },
+    { title: 'Judge model', field: 'judge_model', visible: false, headerSort: false },
     { title: 'Duration', field: 'duration', formatter: fmt.muted, visible: false, headerSort: false },
     { title: 'Max turns', field: 'max_turns', visible: false, headerSort: false },
     { title: 'Language', field: 'language', visible: false, headerSort: false },

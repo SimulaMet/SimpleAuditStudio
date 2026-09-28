@@ -5,6 +5,7 @@ from accounts.models import Project, ProjectMembership, User
 from audits.comparison import ComparisonIncompatible, compare_runs
 from audits.events import ScenarioResult
 from audits.models import AuditRun
+from infra.tests.factories import judge_for
 from model_registry.models import ModelConnection, RegisteredModel
 from scenarios.models import (
     Scenario,
@@ -46,7 +47,7 @@ def _make_run(project, version, target, judge, name="Run", status_val=AuditRun.S
     return AuditRun.objects.create(
         project=project, name=name, status=status_val,
         scenario_set_version=version, target_model=target, auditor_model=judge,
-        judge_model=judge, total_scenarios=version.scenario_count, created_by=None,
+        judge_model=judge, judge_version=judge_for(judge), total_scenarios=version.scenario_count, created_by=None,
         target_config_snapshot={}, auditor_config_snapshot={}, judge_config_snapshot={},
         generation_parameters_snapshot={}, simpleaudit_version="0.1.9", git_commit="abc",
     )

@@ -12,6 +12,7 @@ from django.test import TestCase
 from accounts.models import Project, ProjectMembership, User
 from audits.events import AuditEvent, ScenarioResult
 from audits.models import AuditRun
+from infra.tests.factories import judge_for
 from model_registry.models import ModelConnection, RegisteredModel
 from scenarios.models import (
     Scenario,
@@ -71,14 +72,14 @@ def _make_e2e_artifacts(project):
     e2e_run = AuditRun.objects.create(
         project=project, name="E2E Smoke Run 1", status=AuditRun.Status.COMPLETED,
         scenario_set_version=e2e_version, target_model=e2e_ep, auditor_model=e2e_ep,
-        judge_model=e2e_ep, total_scenarios=1, created_by=None,
+        judge_model=e2e_ep, judge_version=judge_for(e2e_ep), total_scenarios=1, created_by=None,
         target_config_snapshot={}, auditor_config_snapshot={}, judge_config_snapshot={},
         generation_parameters_snapshot={}, simpleaudit_version="0.1.9", git_commit="abc",
     )
     keep_run = AuditRun.objects.create(
         project=project, name="Important Real Run", status=AuditRun.Status.COMPLETED,
         scenario_set_version=keep_version, target_model=keep_ep, auditor_model=keep_ep,
-        judge_model=keep_ep, total_scenarios=1, created_by=None,
+        judge_model=keep_ep, judge_version=judge_for(keep_ep), total_scenarios=1, created_by=None,
         target_config_snapshot={}, auditor_config_snapshot={}, judge_config_snapshot={},
         generation_parameters_snapshot={}, simpleaudit_version="0.1.9", git_commit="abc",
     )

@@ -19,6 +19,7 @@ from django.utils import timezone
 from django.views import View
 
 from audits.models import AuditRun
+from audits.services import frozen_judge
 from infra.ui import ProjectMixin, write_block_reason
 
 PAGE_SIZES = (10, 25, 50, 100)
@@ -31,7 +32,7 @@ SORT_FIELDS = {
     "created_at": "created_at",
     "target": "target_model__display_name",
     "auditor": "auditor_model__display_name",
-    "judge": "judge_model__display_name",
+    "judge": "judge_version__judge__name",
     "scenario_set": "scenario_set_version__scenario_set__name",
     "created_by": "created_by__username",
 }
@@ -56,7 +57,7 @@ def filtered_runs(project, params):
     """Runs of ``project`` matching the dashboard filters in ``params`` (a QueryDict)."""
     qs = AuditRun.objects.filter(project=project).select_related(
         "scenario_set_version__scenario_set", "target_model", "auditor_model", "judge_model",
-        "experiment", "monitor", "created_by",
+        "judge_version__judge", "experiment", "monitor", "created_by",
     )
     status = params.get("status", "")
     if status == "archived":
@@ -79,6 +80,7 @@ def filtered_runs(project, params):
             filt |= Q(pk=int(q.lstrip("#")))
         qs = qs.filter(filt)
     for param, field in (("target", "target_model_id"), ("set", "scenario_set_version__scenario_set_id"),
+                         ("judge", "judge_version__judge_id"),
                          ("experiment", "experiment_id"), ("monitor", "monitor_id")):
         ids = [v for v in params.getlist(param) if v.isdigit()]
         if ids:
@@ -122,7 +124,8 @@ def run_row(run, counts: dict) -> dict:
         "target": _frozen_name(run, "target"),
         "target_id": (run.target_config_snapshot or {}).get("model_id") or run.target_model.model_id,
         "auditor": _frozen_name(run, "auditor"),
-        "judge": _frozen_name(run, "judge"),
+        "judge": frozen_judge(run)["label"],
+        "judge_model": _frozen_name(run, "judge"),
         "scenario_set": f"{run.scenario_set_version.scenario_set.name} v{run.scenario_set_version.version}",
         "max_turns": params.get("max_turns") or 5,
         "language": params.get("language") or "English",
@@ -220,7 +223,7 @@ class RunsExportView(ProjectMixin, View):
 
         runs = list(filtered_runs(request.project, request.GET).order_by(*_ordering(request.GET))[:10000])
         counts = pass_counts([r.id for r in runs])
-        cols = ["id", "name", "status", "scenario_set", "target", "auditor", "judge", "completed", "total",
+        cols = ["id", "name", "status", "scenario_set", "target", "auditor", "judge", "judge_model", "completed", "total",
                 "reps", "pass_rate", "max_turns", "language", "duration", "created_by", "created_at"]
         buf = io.StringIO()
         writer = csv.writer(buf)

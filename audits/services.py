@@ -83,8 +83,28 @@ def frozen_name(run: AuditRun, role: str, *, with_id: bool = False) -> str:
     return snap.get("display_name") or snap.get("model_id") or (live.display_name if live else "—")
 
 
-# Keys managed by dedicated form fields — stripped from JSON override to avoid confusion.
-_FORM_MANAGED_KEYS = {"max_turns", "n_repetitions", "language"}
+def frozen_judge(run: AuditRun) -> dict:
+    """The judge a run was graded with (name, version, rubric, prompts), from its snapshot."""
+    grading = (run.judge_config_snapshot or {}).get("judge") or {}
+    return {
+        "judge_id": grading.get("judge_id"),
+        "name": grading.get("name") or "Judge",
+        "version": grading.get("version"),
+        "label": f"{grading.get('name') or 'Judge'} v{grading.get('version') or '?'}",
+        "rubric": grading.get("rubric", ""),
+        "rubric_name": grading.get("rubric_name") or "SimpleAudit default",
+        "output": grading.get("output") or "severity",
+        "probe_prompt": grading.get("probe_prompt", ""),
+        "judge_prompt": grading.get("judge_prompt", ""),
+        "custom_probe_prompt": grading.get("custom_probe_prompt", False),
+        "custom_judge_prompt": grading.get("custom_judge_prompt", False),
+        "model": frozen_name(run, "judge"),
+    }
+
+
+# Keys managed by dedicated form fields — stripped from JSON override to avoid
+# confusion. Probe / judge prompts belong to the judge, not the run.
+_FORM_MANAGED_KEYS = {"max_turns", "n_repetitions", "language", "probe_prompt", "judge_prompt"}
 
 
 def _generation_parameters(
@@ -121,7 +141,7 @@ def create_audit_run(
     scenario_set_version: ScenarioSetVersion,
     target_model: RegisteredModel,
     auditor_model: RegisteredModel,
-    judge_model: RegisteredModel,
+    judge,
     max_turns_override: int | None = None,
     language_override: str | None = None,
     n_repetitions_override: int | None = None,
@@ -133,11 +153,18 @@ def create_audit_run(
 
     This does not enqueue work yet. The durable job system integration will add
     workflow submission after the Phase 4 spike validates the selected system.
+
+    ``judge`` is a ``JudgeVersion``: its model grades, with its rubric and prompts.
     """
+    from judges.services import judge_snapshot
+
+    judge_model = judge.model
     # Launching spends the workspace's API keys: viewers may not.
     require_project_role(user, project, ProjectMembership.Role.ADMIN, ProjectMembership.Role.AUDITOR)
     if scenario_set_version.scenario_set.project_id != project.id:
         raise StableAPIError(detail="Scenario set version belongs to another project.", code="cross_project_input")
+    if judge.judge.project_id != project.id:
+        raise StableAPIError(detail="Judge belongs to another project.", code="cross_project_input")
     for model in (target_model, auditor_model, judge_model):
         if model.project_id != project.id or not model.enabled or not model.connection.enabled:
             raise StableAPIError(detail="Model is unavailable in this project.", code="model_unavailable")
@@ -163,10 +190,11 @@ def create_audit_run(
         scenario_set_version=scenario_set_version,
         target_model=target_model,
         auditor_model=auditor_model,
+        judge_version=judge,
         judge_model=judge_model,
         target_config_snapshot=_endpoint_snapshot(target_model),
         auditor_config_snapshot=_endpoint_snapshot(auditor_model),
-        judge_config_snapshot=_endpoint_snapshot(judge_model),
+        judge_config_snapshot={**_endpoint_snapshot(judge_model), "judge": judge_snapshot(judge)},
         generation_parameters_snapshot=_generation_parameters(
             max_turns_override=max_turns_override,
             language_override=language_override,

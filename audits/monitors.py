@@ -158,6 +158,11 @@ def resolve_version(monitor: Monitor):
     return monitor.scenario_set.versions.order_by("-version").first()
 
 
+def resolve_judge(monitor: Monitor):
+    """The judge version the next tick uses: pinned, or the judge's newest."""
+    return monitor.judge_version if monitor.judge_version_id else monitor.judge.latest
+
+
 def launch_monitor(monitor: Monitor, *, now=None) -> AuditRun:
     """Create (not submit) one frozen AuditRun for ``monitor``."""
     from audits.services import create_audit_run
@@ -177,7 +182,7 @@ def launch_monitor(monitor: Monitor, *, now=None) -> AuditRun:
         scenario_set_version=version,
         target_model=monitor.target_model,
         auditor_model=monitor.auditor_model,
-        judge_model=monitor.judge_model,
+        judge=resolve_judge(monitor),
         max_turns_override=overrides["max_turns"],
         language_override=overrides["language"],
         n_repetitions_override=overrides["n_repetitions"],
@@ -269,7 +274,7 @@ def run_matches_monitor(run: AuditRun, monitor: Monitor) -> bool:
         and run.scenario_set_version_id == version.id
         and run.target_model_id == monitor.target_model_id
         and run.auditor_model_id == monitor.auditor_model_id
-        and run.judge_model_id == monitor.judge_model_id
+        and run.judge_version_id == getattr(resolve_judge(monitor), "pk", None)
         and (run.generation_parameters_snapshot or {}) == (monitor.generation_parameters or {})
     )
 
@@ -299,7 +304,9 @@ def create_monitor(*, project, user, name: str, run: dict, repeat: dict, experim
         scenario_set_version=None if getattr(run["version"], "follow_latest", False) else run["version"],
         target_model=run["target"],
         auditor_model=run["auditor"],
-        judge_model=run["judge"],
+        judge=run["judge"].judge,
+        # Pinned unless the judge was picked as "Always latest".
+        judge_version=None if getattr(run["judge"], "follow_latest", False) else run["judge"],
         generation_parameters=_generation_parameters(
             max_turns_override=run["max_turns"],
             language_override=run["language"],
@@ -440,7 +447,7 @@ def drift_series(monitor: Monitor) -> list[dict]:
     """Chronological points for the monitor's runs with CI and change flags.
 
     Each completed run is tested against the pooled previous ``BASELINE_WINDOW``
-    completed runs on the same scenario set version; ``change`` is
+    completed runs on the same scenario set and judge versions; ``change`` is
     "drop"/"rise" when |z| >= 1.96, else "".
     """
     runs = list(
@@ -464,12 +471,17 @@ def drift_series(monitor: Monitor) -> list[dict]:
             "z": None,
             "change": "",
             "version": run.scenario_set_version.version,
-            "version_changed": bool(points) and points[-1]["version"] != run.scenario_set_version.version,
+            "judge_version": run.judge_version_id,
+            # Other scenarios or another judge version: not comparable with before.
+            "version_changed": bool(points) and (
+                points[-1]["version"] != run.scenario_set_version.version
+                or points[-1]["judge_version"] != run.judge_version_id
+            ),
         }
         if c["n"]:
             point["lo"], point["hi"] = wilson(c["k"], c["n"])
         if point["version_changed"]:
-            # Different scenarios: the old baseline is not comparable.
+            # Different scenarios or judge: the old baseline is not comparable.
             history = []
         if run.status == AuditRun.Status.COMPLETED and c["n"]:
             window = history[-BASELINE_WINDOW:]

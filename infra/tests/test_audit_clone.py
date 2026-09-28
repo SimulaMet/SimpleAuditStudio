@@ -4,6 +4,7 @@ from django.test import TestCase
 
 from accounts.models import Project, ProjectMembership, User
 from audits.models import AuditRun
+from infra.tests.factories import judge_for
 from model_registry.models import ModelConnection, RegisteredModel
 from scenarios.models import (
     Scenario,
@@ -55,7 +56,7 @@ class AuditCloneTests(TestCase):
             scenario_set_version=self.version,
             target_model=self.target,
             auditor_model=self.auditor,
-            judge_model=self.judge,
+            judge_model=self.judge, judge_version=judge_for(self.judge),
             target_config_snapshot={"model_id": "target"},
             auditor_config_snapshot={"model_id": "auditor"},
             judge_config_snapshot={"model_id": "judge"},

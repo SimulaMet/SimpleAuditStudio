@@ -1,0 +1,112 @@
+{% extends "base.html" %}
+{% block title %}Judges — SimpleAudit{% endblock %}
+{% block content %}
+<div class="flex flex-wrap items-start justify-between gap-3 mb-5">
+  <div>
+    <h1 class="text-lg font-semibold text-gray-100">Judges</h1>
+    <p class="text-sm text-gray-500 mt-0.5 max-w-2xl">
+      A judge grades each conversation: a model plus a rubric, a judge prompt and the probe prompt the auditor follows.
+      Editing a judge saves a new version; runs keep the version they used.
+    </p>
+  </div>
+  <div class="flex flex-wrap items-center gap-2 w-full sm:w-auto">
+    {% if judges %}
+    <input type="search" id="judge-search" placeholder="Filter judges…" aria-label="Filter judges"
+           class="flex-1 min-w-0 sm:flex-none sm:w-56 px-2.5 py-1.5 rounded-lg bg-surface-overlay border border-gray-700 text-xs text-gray-200 focus:outline-none focus:ring-2 focus:ring-accent/50">
+    {% endif %}
+    <a href="{% url 'judge_new' %}" data-write title="Create a judge from a rubric"
+       class="px-3 py-1.5 rounded-lg bg-accent text-white text-xs font-medium hover:bg-accent-hover whitespace-nowrap">+ New judge</a>
+  </div>
+</div>
+
+{% if judges %}
+<div class="grid grid-cols-1 lg:grid-cols-2 gap-4" id="judge-list">
+  {% for j in judges %}
+  <section class="bg-surface-raised rounded-xl border border-gray-800 flex flex-col min-w-0"
+           data-judge data-search="{{ j.name|lower }} {{ j.description|lower }} {{ j.current.rubric_name|lower }} {{ j.current.model.display_name|lower }}">
+    <header class="flex items-start gap-3 px-4 pt-4">
+      <span class="w-9 h-9 shrink-0 rounded-lg bg-accent/15 text-accent flex items-center justify-center" aria-hidden="true">⚖</span>
+      <div class="min-w-0 flex-1">
+        <div class="flex flex-wrap items-center gap-2">
+          <a href="{% url 'judge_detail' j.id %}" class="text-sm font-semibold text-gray-100 hover:text-accent">{{ j.name }}</a>
+          {% if j.current %}<span class="px-1.5 py-0.5 rounded bg-gray-800 text-[10px] text-gray-400" title="{{ j.version_count }} version{{ j.version_count|pluralize }}">v{{ j.current.version }}</span>{% endif %}
+        </div>
+        {% if j.description %}<p class="text-xs text-gray-400 mt-0.5 line-clamp-2" title="{{ j.description }}">{{ j.description }}</p>{% endif %}
+      </div>
+    </header>
+    {% if j.current %}
+    <dl class="grid grid-cols-[auto,1fr] gap-x-3 gap-y-1 px-4 py-3 text-xs">
+      <dt class="text-gray-500">Model</dt>
+      <dd class="min-w-0 truncate text-gray-300" title="{{ j.current.model.connection.name }} · {{ j.current.model.model_id }}">
+        {{ j.current.model.display_name }}{% if not j.current.model.has_key %} <span class="text-yellow-500">· no key set</span>{% endif %}
+        {% if not j.current.model.enabled or not j.current.model.connection.enabled %} <span class="text-yellow-500">· disabled</span>{% endif %}
+      </dd>
+      <dt class="text-gray-500">Rubric</dt>
+      <dd class="min-w-0 truncate text-gray-300">{{ j.current.rubric_name }} <span class="text-gray-500">· {{ j.current.output_label }}</span></dd>
+      <dt class="text-gray-500">Prompts</dt>
+      <dd class="text-gray-300">{% if j.current.probe_prompt or j.current.judge_prompt %}<span class="text-amber-300/90">customised</span>{% if j.current.probe_prompt %} probe{% endif %}{% if j.current.probe_prompt and j.current.judge_prompt %} +{% endif %}{% if j.current.judge_prompt %} judge{% endif %}{% else %}rubric defaults{% endif %}</dd>
+      <dt class="text-gray-500">Used by</dt>
+      <dd class="{% if j.usage or j.monitor_count %}text-gray-300{% else %}text-gray-600{% endif %}">
+        {% if j.usage %}{{ j.usage }} run{{ j.usage|pluralize }}{% else %}no runs{% endif %}{% if j.monitor_count %} · {{ j.monitor_count }} monitor{{ j.monitor_count|pluralize }}{% endif %}
+      </dd>
+    </dl>
+    {% endif %}
+    <footer class="mt-auto flex items-center gap-1.5 px-4 py-2.5 border-t border-gray-800">
+      <a href="{% url 'judge_detail' j.id %}" title="View prompts and version history, or edit"
+         class="px-2.5 py-1 rounded-lg text-xs text-gray-300 bg-surface-overlay hover:text-white">Open</a>
+      {% if j.current %}
+      <form method="post" data-write>
+        {% csrf_token %}<input type="hidden" name="action" value="clone"><input type="hidden" name="version_id" value="{{ j.current.id }}">
+        <button title="Make a new judge starting from v{{ j.current.version }}" class="px-2.5 py-1 rounded-lg text-xs text-gray-300 bg-surface-overlay hover:text-white">Clone</button>
+      </form>
+      {% endif %}
+      <span class="flex-1"></span>
+      {% if j.usage or j.monitor_count %}
+      <span class="w-7 h-7 inline-flex items-center justify-center text-gray-600 cursor-help" title="Can't delete: runs or monitors use it"><svg class="w-3.5 h-3.5" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 1a3.5 3.5 0 0 0-3.5 3.5V6H4a1.5 1.5 0 0 0-1.5 1.5v6A1.5 1.5 0 0 0 4 15h8a1.5 1.5 0 0 0 1.5-1.5v-6A1.5 1.5 0 0 0 12 6h-.5V4.5A3.5 3.5 0 0 0 8 1Zm2 5H6V4.5a2 2 0 1 1 4 0V6Z"/></svg></span>
+      {% else %}
+      <form method="post" data-write data-confirm="Delete judge “{{ j.name }}” and its {{ j.version_count }} version{{ j.version_count|pluralize }}?">
+        {% csrf_token %}<input type="hidden" name="action" value="delete"><input type="hidden" name="judge_id" value="{{ j.id }}">
+        <button title="Delete judge" aria-label="Delete judge {{ j.name }}" class="w-7 h-7 rounded-lg text-gray-500 hover:text-red-400 hover:bg-surface-overlay">✕</button>
+      </form>
+      {% endif %}
+    </footer>
+  </section>
+  {% endfor %}
+</div>
+<p id="filter-empty" class="hidden text-sm text-gray-500 text-center py-6">Nothing matches this filter.</p>
+{% else %}
+<div class="bg-surface-raised rounded-xl border border-gray-800 p-8 text-center">
+  <p class="text-base text-gray-200 font-medium">Set up your judges</p>
+  <p class="text-sm text-gray-500 mt-1 mb-5 max-w-lg mx-auto">Start with one judge per SimpleAudit rubric (safety, harm, helpfulness, factuality, abstention, checklist), all graded by one model. You can change each one later.</p>
+  {% if models %}
+  <form method="post" data-write class="flex flex-wrap justify-center items-center gap-2">
+    {% csrf_token %}<input type="hidden" name="action" value="starters">
+    <label class="text-xs text-gray-500">Judge model
+      <select name="model_id" class="ml-1 px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm text-gray-100">
+        {% for m in models %}<option value="{{ m.id }}">{{ m.connection.name }} · {{ m.display_name }}</option>{% endfor %}
+      </select>
+    </label>
+    <button class="px-4 py-2 rounded-lg bg-accent text-white text-sm font-medium hover:bg-accent-hover" title="Create the starter judges">Create starter judges</button>
+  </form>
+  <p class="text-xs text-gray-600 mt-4">Or <a href="{% url 'judge_new' %}" class="text-accent hover:underline">create one judge</a> from any rubric.</p>
+  {% else %}
+  <p class="text-sm text-gray-400">Judges need a model. <a href="{% url 'models' %}" class="text-accent hover:underline">Add a model first →</a></p>
+  {% endif %}
+</div>
+{% endif %}
+
+<script>
+(function () {
+  const search = document.getElementById('judge-search');
+  search?.addEventListener('input', () => {
+    const q = search.value.trim().toLowerCase();
+    let shown = 0;
+    document.querySelectorAll('[data-judge]').forEach(card => {
+      card.hidden = !card.dataset.search.includes(q);
+      shown += !card.hidden;
+    });
+    document.getElementById('filter-empty').classList.toggle('hidden', shown > 0);
+  });
+})();
+</script>
+{% endblock %}
