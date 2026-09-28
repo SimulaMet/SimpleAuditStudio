@@ -1596,16 +1596,20 @@ class ScenarioExportView(ProjectMixin, View):
         if not sset:
             return JsonResponse({"error": "Not found"}, status=404)
         latest = sset.versions.order_by("-version").first()
-        scenarios = [
-            {"key": it.scenario.key, "title": it.scenario.title,
-             "description": it.revision.description, "category": it.scenario.category,
-             "expected_behavior": it.revision.expected_behavior or [],
-             "test_prompt": it.revision.test_prompt or "",
-             "severity_ceiling": it.revision.severity_ceiling or "",
-             "documents": it.revision.documents or [],
-             "file_uri": it.revision.file_uri}
-            for it in latest.items.select_related("scenario", "revision")
-        ] if latest else []
+        def _export_scenario(it):
+            d = {"key": it.scenario.key, "title": it.scenario.title,
+                 "description": it.revision.description, "category": it.scenario.category,
+                 "expected_behavior": it.revision.expected_behavior or [],
+                 "test_prompt": it.revision.test_prompt or ""}
+            if it.revision.severity_ceiling:
+                d["severity_ceiling"] = it.revision.severity_ceiling
+            if it.revision.documents:
+                d["documents"] = it.revision.documents
+            if it.revision.file_uri:
+                d["file_uri"] = it.revision.file_uri
+            return d
+
+        scenarios = [_export_scenario(it) for it in latest.items.select_related("scenario", "revision")] if latest else []
         return JsonResponse({"set_name": sset.name, "scenarios": scenarios})
 
 
