@@ -1,0 +1,83 @@
+{% load static %}
+{% comment %}
+App sidebar. Desktop: full width or a collapsed icon rail (html[data-sidebar="collapsed"],
+set before paint in base.html). Mobile: an off-canvas drawer opened from the top bar
+(html.sidebar-open). All sizing lives in the CSS in base.html; nav items come from the
+`nav` context processor.
+{% endcomment %}
+<aside id="sidebar" aria-label="Main navigation" class="flex flex-col bg-surface-raised border-r border-gray-800">
+  <div class="sb-head h-14 shrink-0 flex items-center gap-2 px-4 border-b border-gray-800">
+    <a href="/" class="flex items-center min-w-0 group" title="Home">
+      <img src="{% static 'logo.svg' %}?v=3" alt="SimpleAudit" class="h-8 w-8 object-contain rounded-lg shrink-0">
+      <span class="sidebar-label ml-2 text-sm font-semibold text-gray-300 whitespace-nowrap group-hover:text-gray-100 transition-colors">SimpleAudit Studio</span>
+    </a>
+    <button type="button" data-sidebar-close class="md:hidden ml-auto w-8 h-8 rounded-lg text-gray-400 hover:text-gray-100 hover:bg-surface-overlay" aria-label="Close menu" title="Close menu">✕</button>
+  </div>
+
+  <!-- Outside the scrolling nav so its menu isn't clipped. -->
+  <div class="shrink-0 px-2 pt-3">
+    <!-- Workspace switcher -->
+    <div class="relative" id="workspace-switcher">
+      <button type="button" id="workspace-switcher-btn" aria-haspopup="true" aria-expanded="false"
+              aria-label="Workspace: {{ request.project.name|default:'none' }}"
+              class="sb-item w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm bg-surface-overlay border border-gray-700/60 text-gray-200 hover:border-accent/40 transition-colors">
+        <span class="sb-icon text-base w-5 text-center shrink-0" aria-hidden="true">▣</span>
+        <span class="sidebar-label flex-1 text-left truncate font-medium">{{ request.project.name|default:"No workspace" }}</span>
+        <span class="sidebar-label text-sm text-gray-400 shrink-0 leading-none" aria-hidden="true">▾</span>
+      </button>
+      <div id="workspace-dropdown" class="hidden absolute left-0 top-full mt-1 z-50 w-60 bg-surface-raised border border-gray-700 rounded-lg shadow-xl max-h-72 overflow-y-auto">
+        <p class="text-[10px] uppercase tracking-wide text-gray-500 px-3 pt-2 pb-1">Workspaces</p>
+        {% for ws in workspaces %}
+        <button type="button" data-workspace-id="{{ ws.id }}"
+                class="workspace-row w-full flex items-center gap-2 px-3 py-2 text-sm text-left whitespace-nowrap {% if ws.is_current %}bg-accent/15 text-accent font-medium{% else %}text-gray-300 hover:bg-surface-overlay{% endif %}">
+          <span class="flex-1 truncate">{{ ws.name }}</span>
+          {% if ws.archived %}<span class="text-[10px] bg-gray-700/60 text-gray-300 rounded px-1 shrink-0" title="Archived — read-only">Archived</span>{% endif %}
+          {% if ws.is_admin %}<span class="text-[10px] bg-accent/20 text-accent rounded px-1 shrink-0">Admin</span>{% endif %}
+        </button>
+        {% empty %}
+        <p class="px-3 py-2 text-xs text-gray-500">No workspaces yet.</p>
+        {% endfor %}
+        <div class="border-t border-gray-800">
+          <a href="{% url 'workspaces' %}?new=1" class="block px-3 py-2 text-sm text-gray-400 hover:text-gray-200 hover:bg-surface-overlay">＋ New workspace</a>
+          <a href="{% url 'workspaces' %}" class="block px-3 py-2 text-sm text-gray-400 hover:text-gray-200 hover:bg-surface-overlay">Manage workspaces</a>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <nav class="flex-1 min-h-0 overflow-y-auto overflow-x-hidden py-2 px-2 space-y-0.5">
+    {% for item in nav_items %}
+    <a href="{{ item.url }}" aria-label="{{ item.label }}"{% if item.active %} aria-current="page"{% endif %}
+       class="sb-item flex items-center gap-3 px-3 py-2 rounded-lg text-sm whitespace-nowrap {% if item.active %}bg-accent/15 text-accent font-medium{% else %}text-gray-400 hover:text-gray-200 hover:bg-surface-overlay{% endif %}">
+      <span class="sb-icon text-base w-5 text-center shrink-0" aria-hidden="true">{{ item.icon }}</span><span class="sidebar-label">{{ item.label }}</span>
+    </a>
+    {% endfor %}
+  </nav>
+
+  <div class="shrink-0 p-2 border-t border-gray-800 space-y-0.5">
+    {% if is_superuser %}
+    <a href="{% url 'admin_settings' %}" aria-label="Admin settings"{% if request.path == '/admin-settings/' %} aria-current="page"{% endif %}
+       class="sb-item flex items-center gap-3 px-3 py-2 rounded-lg text-sm whitespace-nowrap {% if request.path == '/admin-settings/' %}bg-accent/15 text-accent font-medium{% else %}text-gray-400 hover:text-gray-200 hover:bg-surface-overlay{% endif %}">
+      <span class="sb-icon text-base w-5 text-center shrink-0" aria-hidden="true">⚙</span><span class="sidebar-label">Admin Settings</span>
+    </a>
+    {% endif %}
+    <div class="sb-user flex items-center gap-1">
+      <a href="{% url 'profile' %}" aria-label="Profile ({{ user.username }})"
+         class="sb-item flex items-center gap-2 flex-1 min-w-0 rounded-lg px-2 py-1.5 hover:bg-surface-overlay transition-colors">
+        {% if gravatar_url %}
+        <img src="{{ gravatar_url }}" alt="" class="w-7 h-7 rounded-full shrink-0" referrerpolicy="no-referrer">
+        {% else %}
+        <span class="w-7 h-7 rounded-full bg-accent/20 flex items-center justify-center text-xs font-bold text-accent shrink-0" aria-hidden="true">{{ user.username|first|upper }}</span>
+        {% endif %}
+        <span class="sidebar-label text-xs text-gray-400 truncate flex-1">{{ user.username }}</span>
+      </a>
+      <a href="{% url 'logout' %}" aria-label="Sign out" title="Sign out"
+         class="w-8 h-8 shrink-0 inline-flex items-center justify-center rounded-lg text-gray-500 hover:text-red-400 hover:bg-surface-overlay">⏻</a>
+    </div>
+    <button type="button" id="sidebar-collapse" aria-label="Collapse sidebar"
+            class="sb-item hidden md:flex w-full items-center gap-3 px-3 py-2 rounded-lg text-xs text-gray-500 hover:text-gray-200 hover:bg-surface-overlay">
+      <span class="sb-icon text-base w-5 text-center shrink-0" aria-hidden="true"><span class="sb-collapse-icon inline-block transition-transform">⟨</span></span><span class="sidebar-label">Collapse</span>
+    </button>
+  </div>
+</aside>
+<div id="sidebar-backdrop" class="md:hidden fixed inset-0 z-40 bg-black/60" data-sidebar-close hidden></div>
