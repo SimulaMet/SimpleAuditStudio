@@ -140,7 +140,7 @@ def _split_endpoint_params(params: dict[str, Any]) -> tuple[dict | None, dict | 
     return (gen_params or None), (client_kwargs or None)
 
 
-def _auditor_kwargs_from_snapshot(snapshot: dict[str, Any]) -> dict[str, Any]:
+def _auditor_kwargs_from_snapshot(snapshot: dict[str, Any], resolve_key=snapshot_api_key) -> dict[str, Any]:
     """Map a frozen endpoint snapshot onto ModelAuditor constructor kwargs.
 
     Only the fields relevant to a given role are used; the caller picks which
@@ -152,7 +152,7 @@ def _auditor_kwargs_from_snapshot(snapshot: dict[str, Any]) -> dict[str, Any]:
     raw_params = dict(snapshot.get("default_parameters") or {})
     gen_params, client_kwargs = _split_endpoint_params(raw_params)
     base_url = snapshot.get("base_url") or None
-    api_key = snapshot_api_key(snapshot)
+    api_key = resolve_key(snapshot)
     # any_llm's OpenAI-compatible client requires *some* API key even when the
     # endpoint needs no auth (self-hosted / local servers). A snapshot without a
     # secret_reference means "no auth", so supply a non-secret placeholder — the
@@ -177,7 +177,8 @@ def _merge(*dicts: dict | None) -> dict | None:
     return merged or None
 
 
-def auditor_kwargs(*, target: dict, auditor: dict, judge: dict, generation: dict | None = None) -> tuple[dict, str]:
+def auditor_kwargs(*, target: dict, auditor: dict, judge: dict, generation: dict | None = None,
+                   resolve_key=None) -> tuple[dict, str]:
     """``ModelAuditor`` constructor kwargs from the three frozen snapshots, plus the language.
 
     The single place that maps a run onto the engine, used by both the
@@ -188,17 +189,23 @@ def auditor_kwargs(*, target: dict, auditor: dict, judge: dict, generation: dict
     (temperature, top_p, max_tokens, ...), merged over each endpoint's own
     defaults. ``target_kwargs`` / ``auditor_kwargs`` / ``judge_kwargs`` are
     client constructor kwargs (timeout, headers, ...).
+
+    ``resolve_key(snapshot)`` supplies each endpoint's API key. By default the
+    real key is resolved (and a missing one is an error); script generation
+    (infra.codegen) passes its own, which yields environment lookups instead.
     """
     from judges.services import library_judge
 
     gen = dict(generation or {})
     spec = (judge.get("judge") or {}).get("spec") or {}
-    target_cfg = _auditor_kwargs_from_snapshot(target)
-    auditor_cfg = _auditor_kwargs_from_snapshot(auditor)
-    judge_cfg = _auditor_kwargs_from_snapshot(judge)
-    # Fail fast with a clear, actionable error if a required secret is unset,
-    # rather than letting any_llm raise an opaque MissingApiKeyError later.
-    _validate_secrets(("target", target), ("auditor", auditor), ("judge", judge))
+    if resolve_key is None:
+        # Fail fast with a clear, actionable error if a required secret is unset,
+        # rather than letting any_llm raise an opaque MissingApiKeyError later.
+        _validate_secrets(("target", target), ("auditor", auditor), ("judge", judge))
+        resolve_key = snapshot_api_key
+    target_cfg = _auditor_kwargs_from_snapshot(target, resolve_key)
+    auditor_cfg = _auditor_kwargs_from_snapshot(auditor, resolve_key)
+    judge_cfg = _auditor_kwargs_from_snapshot(judge, resolve_key)
 
     kwargs = {
         "model": target_cfg["model"],

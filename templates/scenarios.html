@@ -49,7 +49,7 @@
           {% if viewing_version %}{% include "partials/version_badge.html" with number=viewing_version.version latest=viewing_is_latest count=versions|length %}{% endif %}
         </div>
         <div class="flex flex-wrap gap-2 items-center">
-          <a href="{% url 'scenario_export' selected.id %}" class="px-2 py-1 rounded text-xs bg-surface-overlay text-gray-400 hover:text-gray-200">Export</a>
+          <button onclick="openScenarioExport()" class="px-2 py-1 rounded text-xs bg-surface-overlay text-gray-400 hover:text-gray-200">Export</button>
           <button data-write onclick="openModal('import-set-modal')" class="px-2 py-1 rounded text-xs bg-surface-overlay text-gray-400 hover:text-gray-200">Import</button>
           <button data-write onclick="openModal('edit-set-modal')" class="px-2 py-1 rounded text-xs bg-surface-overlay text-gray-400 hover:text-gray-200">Edit</button>
           <form method="post" data-write action="{% url 'scenario_set_delete' selected.id %}" data-confirm="Delete this set and all its versions?">
@@ -399,6 +399,20 @@ async function submitImport(setId) {
     feedback.className = 'text-xs px-3 py-2 rounded-lg bg-red-900/30 border border-red-800 text-red-300';
     feedback.classList.remove('hidden');
   }
+}
+</script>
+{% endif %}
+
+{% if selected %}
+{% include "partials/text_file_modal.html" %}
+<script>
+function openScenarioExport() {
+  TextFileModal.open({
+    url: '{% url "scenario_export" selected.id %}',
+    filename: '{{ selected.name|slugify }}_scenarios.json',
+    title: 'Export scenario set',
+    description: 'The scenarios in this set as JSON — re-import it on another workspace with the Import button.',
+  });
 }
 </script>
 {% endif %}

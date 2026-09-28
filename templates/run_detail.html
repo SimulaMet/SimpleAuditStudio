@@ -55,8 +55,23 @@
       <button class="px-3 py-1.5 rounded-lg bg-red-900/50 text-red-300 text-xs font-medium hover:bg-red-800/60">Cancel</button>
     </form>
     {% endif %}
+    <button type="button" onclick="openScriptModal()" title="Copy or download a standalone Python script that runs this audit with the simpleaudit library" aria-label="Run script" class="inline-flex items-center justify-center w-8 h-8 rounded-lg bg-surface-overlay text-gray-400 hover:text-accent transition-colors">
+      <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
+    </button>
   </div>
 </div>
+
+{% include "partials/text_file_modal.html" %}
+<script>
+function openScriptModal() {
+  TextFileModal.open({
+    url: '{% url "run_script" run.id %}?format=json',
+    filename: 'rerun_{{ run.name|slugify }}_{{ run.id }}.py',
+    title: 'Run script',
+    description: 'A standalone Python script that runs this audit with the <code class="text-gray-400">simpleaudit</code> library — same scenarios, models, judge and settings as this run. Fill in any <code class="text-gray-400">**API_KEY**</code> placeholders before running.',
+  });
+}
+</script>
 
 <script>
 function toggleRename() {

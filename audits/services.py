@@ -133,6 +133,35 @@ def _generation_parameters(
     return params
 
 
+def frozen_inputs(
+    *,
+    target_model: RegisteredModel,
+    auditor_model: RegisteredModel,
+    judge_model: RegisteredModel,
+    judge,
+    max_turns_override: int | None = None,
+    language_override: str | None = None,
+    n_repetitions_override: int | None = None,
+    gen_config_override: dict | None = None,
+) -> dict:
+    """The snapshots a run freezes: the three endpoints, the judge and the
+    generation settings. Shared by ``create_audit_run`` and script generation
+    for runs not created yet (infra.codegen)."""
+    from judges.services import judge_snapshot
+
+    return {
+        "target_config_snapshot": _endpoint_snapshot(target_model),
+        "auditor_config_snapshot": _endpoint_snapshot(auditor_model),
+        "judge_config_snapshot": {**_endpoint_snapshot(judge_model), "judge": judge_snapshot(judge)},
+        "generation_parameters_snapshot": _generation_parameters(
+            max_turns_override=max_turns_override,
+            language_override=language_override,
+            n_repetitions_override=n_repetitions_override,
+            gen_config_override=gen_config_override,
+        ),
+    }
+
+
 @transaction.atomic
 def create_audit_run(
     *,
@@ -158,8 +187,6 @@ def create_audit_run(
 
     ``judge`` is a ``JudgeVersion`` (criteria, output format, probe prompt); ``judge_model`` grades with it.
     """
-    from judges.services import judge_snapshot
-
     # Launching spends the workspace's API keys: viewers may not.
     require_project_role(user, project, ProjectMembership.Role.ADMIN, ProjectMembership.Role.AUDITOR)
     if scenario_set_version.scenario_set.project_id != project.id:
@@ -193,14 +220,10 @@ def create_audit_run(
         auditor_model=auditor_model,
         judge_version=judge,
         judge_model=judge_model,
-        target_config_snapshot=_endpoint_snapshot(target_model),
-        auditor_config_snapshot=_endpoint_snapshot(auditor_model),
-        judge_config_snapshot={**_endpoint_snapshot(judge_model), "judge": judge_snapshot(judge)},
-        generation_parameters_snapshot=_generation_parameters(
-            max_turns_override=max_turns_override,
-            language_override=language_override,
-            n_repetitions_override=n_repetitions_override,
-            gen_config_override=gen_config_override,
+        **frozen_inputs(
+            target_model=target_model, auditor_model=auditor_model, judge_model=judge_model, judge=judge,
+            max_turns_override=max_turns_override, language_override=language_override,
+            n_repetitions_override=n_repetitions_override, gen_config_override=gen_config_override,
         ),
         simpleaudit_version=resolved_version,
         git_commit=resolved_commit,

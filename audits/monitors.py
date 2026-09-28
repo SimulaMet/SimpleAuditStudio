@@ -163,31 +163,49 @@ def resolve_judge(monitor: Monitor):
     return monitor.judge_version if monitor.judge_version_id else monitor.judge.latest
 
 
+def monitor_plan(monitor: Monitor) -> dict:
+    """What the monitor's next run is made of, as a planned run (the
+    ``launch_experiment`` run item shape). Raises ``ValueError`` when it can't run."""
+    version = resolve_version(monitor)
+    if version is None:
+        raise ValueError("Scenario set has no published version.")
+    params = dict(monitor.generation_parameters or {})
+    overrides = {k: params.pop(k, None) for k in _FORM_KEYS}
+    return {
+        "name": monitor.name,
+        "version": version,
+        "target": monitor.target_model,
+        "auditor": monitor.auditor_model,
+        "judge_model": monitor.judge_model,
+        "judge": resolve_judge(monitor),
+        "max_turns": overrides["max_turns"],
+        "language": overrides["language"],
+        "n_repetitions": overrides["n_repetitions"],
+        "gen_config": params or None,
+    }
+
+
 def launch_monitor(monitor: Monitor, *, now=None) -> AuditRun:
     """Create (not submit) one frozen AuditRun for ``monitor``."""
     from audits.services import create_audit_run
 
     now = now or timezone.now()
-    version = resolve_version(monitor)
-    if version is None:
-        raise ValueError("Scenario set has no published version.")
+    plan = monitor_plan(monitor)
     if monitor.created_by is None:
         raise ValueError("Monitor owner no longer exists; recreate the monitor.")
-    params = dict(monitor.generation_parameters or {})
-    overrides = {k: params.pop(k, None) for k in _FORM_KEYS}
     return create_audit_run(
         project=monitor.project,
         user=monitor.created_by,
         name=f"{monitor.name} · {now:%Y-%m-%d %H:%M}",
-        scenario_set_version=version,
-        target_model=monitor.target_model,
-        auditor_model=monitor.auditor_model,
-        judge_model=monitor.judge_model,
-        judge=resolve_judge(monitor),
-        max_turns_override=overrides["max_turns"],
-        language_override=overrides["language"],
-        n_repetitions_override=overrides["n_repetitions"],
-        gen_config_override=params or None,
+        scenario_set_version=plan["version"],
+        target_model=plan["target"],
+        auditor_model=plan["auditor"],
+        judge_model=plan["judge_model"],
+        judge=plan["judge"],
+        max_turns_override=plan["max_turns"],
+        language_override=plan["language"],
+        n_repetitions_override=plan["n_repetitions"],
+        gen_config_override=plan["gen_config"],
         monitor=monitor,
         experiment=monitor.experiment,
     )
