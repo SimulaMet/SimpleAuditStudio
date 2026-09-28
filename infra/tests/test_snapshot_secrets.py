@@ -77,3 +77,41 @@ class StripKeysMigrationTests(TestCase):
         for snap in (run.target_config_snapshot, run.auditor_config_snapshot, run.judge_config_snapshot):
             self.assertNotIn("api_key_direct", snap)
         self.assertEqual(run.target_config_snapshot["connection_id"], conn.id)
+
+
+class FrozenModelDisplayTests(TestCase):
+    """Pages show the model a run actually used, even after the model is edited."""
+
+    def test_run_page_and_grid_show_snapshot_after_edit(self):
+        project = ProjectFactory()
+        user = UserFactory()
+        MembershipFactory(user=user, project=project, role="admin")
+        conn = ModelConnectionFactory(project=project, base_url="https://old.example/v1")
+        model = RegisteredModelFactory(connection=conn, display_name="Old Name", model_id="old-id")
+        run = AuditRunFactory(project=project, target_model=model, target_config_snapshot=_endpoint_snapshot(model))
+        model.display_name, model.model_id = "New Name", "new-id"
+        model.save()
+        client = Client()
+        client.force_login(user)
+        page = client.get(f"/runs/{run.id}/").content.decode()
+        self.assertIn("Old Name", page)
+        self.assertIn("(old-id)", page)
+        self.assertIn("edited since this run", page)
+        row = client.get("/runs/data/").json()["data"][0]
+        self.assertEqual((row["target"], row["target_id"]), ("Old Name", "old-id"))
+
+    def test_compare_flags_model_edited_between_runs(self):
+        from audits.comparison import compare_runs
+
+        project = ProjectFactory()
+        conn = ModelConnectionFactory(project=project)
+        model = RegisteredModelFactory(connection=conn, display_name="GPT", model_id="gpt-4o")
+        first = AuditRunFactory(project=project, target_model=model, target_config_snapshot=_endpoint_snapshot(model))
+        model.model_id = "gpt-4.1"   # same model record, re-pointed
+        model.save()
+        second = AuditRunFactory(project=project, target_model=model, target_config_snapshot=_endpoint_snapshot(model),
+                                 scenario_set_version=first.scenario_set_version)
+        rows = {row["label"]: row for row in compare_runs(project, [first.id, second.id])["inputs"]}
+        target = rows["Target model"]
+        self.assertTrue(target["differs"])
+        self.assertEqual(sorted(c["text"] for c in target["cells"]), ["GPT (gpt-4.1)", "GPT (gpt-4o)"])
