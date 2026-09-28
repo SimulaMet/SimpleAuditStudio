@@ -18,6 +18,11 @@ except ImportError:  # pragma: no cover - python-dotenv is in pyproject.toml
 
 def main() -> None:
     os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings")
+    # Zero-Docker mode (`dev_server --embedded`) implies SQLite for the domain
+    # DB. Decide before Django loads settings: a Postgres `.env` would otherwise
+    # make settings import the Postgres driver first.
+    if sys.argv[1:2] == ["dev_server"] and "--embedded" in sys.argv:
+        os.environ.setdefault("SIMPLEAUDIT_LOCAL_SQLITE", "1")
     try:
         from django.core.management import execute_from_command_line
     except ImportError as exc:

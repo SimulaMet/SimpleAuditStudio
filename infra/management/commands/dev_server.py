@@ -62,10 +62,9 @@ class Command(BaseCommand):
         )
 
     def handle(self, *args, **options):
-        # Zero-Docker mode implies SQLite for the domain DB too. SIMPLEAUDIT_LOCAL_SQLITE
-        # must be set before Django loads settings, so if --embedded is on but the env
-        # var isn't, re-exec this command once with it set. The child sees the flag
-        # already satisfied and proceeds without re-execing.
+        # Zero-Docker mode implies SQLite for the domain DB too. manage.py sets
+        # SIMPLEAUDIT_LOCAL_SQLITE before settings load; if the command was
+        # started another way without it, re-exec once with it set.
         if options["embedded"] and not os.environ.get("SIMPLEAUDIT_LOCAL_SQLITE"):
             os.environ["SIMPLEAUDIT_LOCAL_SQLITE"] = "1"
             os.execv(sys.executable, [sys.executable] + sys.argv)
