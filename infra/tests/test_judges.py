@@ -182,3 +182,26 @@ class RunPagesShowJudgeTests(_Base):
         self.assertContains(page, "Judge grade")
         self.assertContains(page, "7.5")
         self.assertContains(page, "Mostly right but vague")
+
+
+class RubricCatalogueTests(TestCase):
+    def test_binary_rubric_and_default_prompts(self):
+        from judges.services import rubrics
+
+        self.assertEqual(rubric("binary_abstention")["output"], "binary")
+        self.assertEqual(rubric("helpfulness")["output"], "score")
+        try:
+            from simpleaudit.judges import DEFAULT_JUDGE
+        except ImportError:
+            self.skipTest("SimpleAudit < 0.2.2 does not export the default judge")
+        self.assertEqual(rubrics()[""]["judge_prompt"], DEFAULT_JUDGE["judge_prompt"])
+
+
+class UngradedTrialsTests(TestCase):
+    def test_ungraded_is_neither_pass_nor_fail(self):
+        from audits.monitors import pass_counts
+
+        run = AuditRunFactory()
+        for i, sev in enumerate(("pass", "high", "ungraded", "ungraded")):
+            ScenarioResultFactory(run_id=run.id, version_item_id=str(i), status="completed", result={"severity": sev})
+        self.assertEqual(pass_counts([run.id])[run.id], {"k": 1, "n": 2, "errors": 0, "ungraded": 2})
