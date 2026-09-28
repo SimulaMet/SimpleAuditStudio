@@ -1,0 +1,21 @@
+# SimpleAudit Studio
+
+> Reproducible AI Model Auditing Platform. A self-hostable platform for running reproducible audits of AI models, wrapping the open-source SimpleAudit Target → Auditor → Judge engine.
+
+## What it does
+- Design and version test scenarios that probe model behavior
+- Register any OpenAI-compatible model endpoint (Ollama, vLLM, OpenAI, Together, Groq)
+- Run durable, observable audits that survive restarts
+- Compare completed runs across common scenarios
+- Freeze every run's inputs (scenarios, config, judge, engine version) for reproducibility
+
+## Key links
+- Home: https://simpleauditstudio.sushant.no/
+- Live demo (Hugging Face Space): https://sushantgautam-simpleaudit-studio.hf.space
+- GitHub: https://github.com/SushantGautam/SimpleAuditStudio
+- PyPI: https://pypi.org/project/simpleaudit-studio/
+- SimpleAudit engine: https://github.com/kelkalot/simpleaudit
+- Deployment guide: https://github.com/SushantGautam/SimpleAuditStudio/blob/main/docs/deployment.md
+
+## License
+MIT — see https://github.com/SushantGautam/SimpleAuditStudio
