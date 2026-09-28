@@ -141,6 +141,7 @@ def create_audit_run(
     scenario_set_version: ScenarioSetVersion,
     target_model: RegisteredModel,
     auditor_model: RegisteredModel,
+    judge_model: RegisteredModel,
     judge,
     max_turns_override: int | None = None,
     language_override: str | None = None,
@@ -154,11 +155,10 @@ def create_audit_run(
     This does not enqueue work yet. The durable job system integration will add
     workflow submission after the Phase 4 spike validates the selected system.
 
-    ``judge`` is a ``JudgeVersion``: its model grades, with its rubric and prompts.
+    ``judge`` is a ``JudgeVersion`` (rubric + prompts); ``judge_model`` grades with it.
     """
     from judges.services import judge_snapshot
 
-    judge_model = judge.model
     # Launching spends the workspace's API keys: viewers may not.
     require_project_role(user, project, ProjectMembership.Role.ADMIN, ProjectMembership.Role.AUDITOR)
     if scenario_set_version.scenario_set.project_id != project.id:

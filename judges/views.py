@@ -19,16 +19,6 @@ from judges.services import (
 )
 
 
-def _models(project):
-    """Models a judge can use, for the picker (grouped by connection in the template)."""
-    from model_registry.models import RegisteredModel
-
-    return list(
-        RegisteredModel.objects.filter(project=project, enabled=True, connection__enabled=True)
-        .select_related("connection").order_by("connection__name", "display_name")
-    )
-
-
 def _decorate(version: JudgeVersion) -> JudgeVersion:
     info = rubric(version.rubric)
     version.rubric_name = info["name"]
@@ -47,7 +37,7 @@ class JudgesView(ProjectMixin, TemplateView):
             Judge.objects.filter(project=p).order_by("name").annotate(
                 version_count=Count("versions", distinct=True), monitor_count=Count("monitors", distinct=True)
             ).prefetch_related(
-                Prefetch("versions", queryset=JudgeVersion.objects.select_related("model__connection").order_by("-version"))
+                Prefetch("versions", queryset=JudgeVersion.objects.order_by("-version"))
             )
         )
         usage = judge_usage_counts(p)
@@ -55,7 +45,7 @@ class JudgesView(ProjectMixin, TemplateView):
             versions = list(judge.versions.all())
             judge.current = _decorate(versions[0]) if versions else None
             judge.usage = usage.get(judge.id, 0)
-        kw.update(judges=judges, models=_models(p), rubrics=rubric_choices())
+        kw.update(judges=judges, rubrics=rubric_choices())
         return super().get_context_data(**kw)
 
     def post(self, request):
@@ -65,14 +55,8 @@ class JudgesView(ProjectMixin, TemplateView):
         p = request.project
         action = request.POST.get("action")
         if action == "starters":
-            from model_registry.models import RegisteredModel
-
-            model = RegisteredModel.objects.filter(pk=request.POST.get("model_id") or 0, project=p).first()
-            if model is None:
-                messages.error(request, "Pick a model for the judges.")
-                return redirect("judges")
-            made = ensure_starter_judges(p, model, request.user)
-            messages.success(request, f"Created {len(made)} judge{'s' if len(made) != 1 else ''} using {model.display_name}.")
+            made = ensure_starter_judges(p, request.user)
+            messages.success(request, f"Created {len(made)} judge{'s' if len(made) != 1 else ''}.")
         elif action == "clone":
             version = JudgeVersion.objects.select_related("judge").filter(
                 pk=request.POST.get("version_id") or 0, judge__project=p
@@ -97,7 +81,7 @@ class JudgesView(ProjectMixin, TemplateView):
 class JudgeDetailView(ProjectMixin, TemplateView):
     """Create (no judge_id) or view / edit a judge. ``?v=N`` shows version N.
 
-    Saving name / description updates the judge; saving model, rubric or
+    Saving name / description updates the judge; saving rubric or
     prompts creates a new version (runs keep the version they used).
     """
 
@@ -113,12 +97,11 @@ class JudgeDetailView(ProjectMixin, TemplateView):
         return judge
 
     def get_context_data(self, **kw):
-        p = self.request.project
         judge = self._judge()
         versions, shown = [], None
         if judge is not None:
             versions = [
-                _decorate(v) for v in judge.versions.select_related("model__connection", "created_by")
+                _decorate(v) for v in judge.versions.select_related("created_by")
                 .annotate(run_count=Count("audit_runs")).order_by("-version")
             ]
             wanted = self.request.GET.get("v", "")
@@ -128,14 +111,13 @@ class JudgeDetailView(ProjectMixin, TemplateView):
         if form is None:
             if shown is not None:
                 form = {
-                    "name": judge.name, "description": judge.description, "model_id": shown.model_id,
+                    "name": judge.name, "description": judge.description,
                     "rubric": shown.rubric, "probe_prompt": shown.effective_probe, "judge_prompt": shown.effective_judge,
                 }
             else:
                 start = rubric(self.request.GET.get("rubric", "safety"))
-                models = _models(p)
                 form = {
-                    "name": "", "description": start["description"], "model_id": models[0].pk if models else None,
+                    "name": "", "description": start["description"],
                     "rubric": start["key"], "probe_prompt": start["probe_prompt"], "judge_prompt": start["judge_prompt"],
                 }
         kw.update(
@@ -144,7 +126,6 @@ class JudgeDetailView(ProjectMixin, TemplateView):
             shown=shown,
             latest=versions[0] if versions else None,
             form=form,
-            models=_models(p),
             rubrics=rubric_choices(),
             monitors=list(judge.monitors.select_related("judge_version")) if judge else [],
         )
@@ -154,26 +135,21 @@ class JudgeDetailView(ProjectMixin, TemplateView):
         blocked = _require_write_access(request)
         if blocked:
             return blocked
-        from model_registry.models import RegisteredModel
-
         p = request.project
         judge = self._judge()
         post = request.POST
-        form = {k: post.get(k, "") for k in ("name", "description", "model_id", "rubric", "probe_prompt", "judge_prompt", "note")}
+        form = {k: post.get(k, "") for k in ("name", "description", "rubric", "probe_prompt", "judge_prompt", "note")}
         name = form["name"].strip()
-        model = RegisteredModel.objects.filter(pk=form["model_id"] or 0, project=p).first()
         error = None
         if not name:
             error = "Give the judge a name."
         elif Judge.objects.filter(project=p, name=name).exclude(pk=getattr(judge, "pk", None)).exists():
             error = f"A judge named “{name}” already exists."
-        elif model is None:
-            error = "Pick the model that grades."
         if error is None:
             try:
                 if judge is None:
                     judge = create_judge(
-                        project=p, name=name, description=form["description"], model=model, rubric=form["rubric"],
+                        project=p, name=name, description=form["description"], rubric=form["rubric"],
                         probe_prompt=form["probe_prompt"], judge_prompt=form["judge_prompt"],
                         note=form["note"] or "Created", user=request.user,
                     )
@@ -182,7 +158,7 @@ class JudgeDetailView(ProjectMixin, TemplateView):
                 judge.name, judge.description = name, form["description"].strip()
                 judge.save(update_fields=["name", "description", "updated_at"])
                 version, created = save_version(
-                    judge, model=model, rubric=form["rubric"], probe_prompt=form["probe_prompt"],
+                    judge, rubric=form["rubric"], probe_prompt=form["probe_prompt"],
                     judge_prompt=form["judge_prompt"], note=form["note"], user=request.user,
                 )
             except ValueError as e:

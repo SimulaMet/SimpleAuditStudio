@@ -1,5 +1,5 @@
 {% comment %}
-Target / auditor pickers where each role takes one or more models
+Target / auditor / judge model pickers where each role takes one or more models
 (New Experiment). Context: connections, sel.target/auditor/judge (id strings).
 Field names match the single-select partial so one-run posts look the same.
 {% endcomment %}
@@ -10,7 +10,7 @@ Field names match the single-select partial so one-run posts look the same.
   </div>
   <p class="text-xs text-gray-500 mb-3">Pick one model per role, or several to compare them.</p>
   {% if connections %}
-  <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+  <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
     {% for role, label, hint, chosen in model_roles %}
     <fieldset data-axis="{{ role }}_model">
       <legend class="w-full flex items-baseline justify-between mb-1">
@@ -18,7 +18,7 @@ Field names match the single-select partial so one-run posts look the same.
         <span class="text-[10px] text-gray-500" data-axis-count></span>
       </legend>
       <p class="text-[11px] text-gray-600 mb-1.5">{{ hint }}</p>
-      <input type="search" data-filter placeholder="Search {{ label|lower }} models…" aria-label="Search {{ label|lower }} models"
+      <input type="search" data-filter placeholder="Search models…" aria-label="Search {{ label|lower }} choices"
              class="w-full mb-1.5 px-2.5 py-1.5 rounded-lg bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-2 focus:ring-accent/50">
       <div data-filter-list class="h-60 overflow-y-auto rounded-lg border border-gray-800 bg-surface-overlay/40 divide-y divide-gray-800/60">
         {% for conn in connections %}

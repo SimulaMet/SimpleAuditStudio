@@ -25,24 +25,15 @@
   <form method="post" class="lg:col-span-2 bg-surface-raised rounded-xl border border-gray-800 p-4 space-y-4 min-w-0" id="judge-form">
     {% csrf_token %}
     <fieldset class="space-y-4" {% if not can_write %}disabled{% endif %}>
-      <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
-        <label class="block text-xs text-gray-500">Name
-          <input type="text" name="name" value="{{ form.name }}" required maxlength="250" placeholder="e.g. Safety (GPT-4o)"
-                 class="mt-1 w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm text-gray-100 focus:outline-none focus:ring-2 focus:ring-accent/50"></label>
-        <label class="block text-xs text-gray-500">Model that grades
-          <select name="model_id" required class="mt-1 w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm text-gray-100">
-            {% regroup models by connection as groups %}
-            {% for g in groups %}<optgroup label="{{ g.grouper.name }}">
-              {% for m in g.list %}<option value="{{ m.id }}" {% if m.id == form.model_id or m.id|stringformat:"d" == form.model_id %}selected{% endif %}>{{ m.display_name }}{% if not m.has_key %} (no key set){% endif %}</option>{% endfor %}
-            </optgroup>{% endfor %}
-          </select></label>
-      </div>
+      <label class="block text-xs text-gray-500">Name
+        <input type="text" name="name" value="{{ form.name }}" required maxlength="250" placeholder="e.g. Strict medical safety"
+               class="mt-1 w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm text-gray-100 focus:outline-none focus:ring-2 focus:ring-accent/50"></label>
       <label class="block text-xs text-gray-500">Description <span class="text-gray-600">(optional)</span>
         <textarea name="description" rows="2" maxlength="2000" placeholder="What this judge checks and when to use it"
                   class="mt-1 w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm text-gray-100 focus:outline-none focus:ring-2 focus:ring-accent/50">{{ form.description }}</textarea></label>
 
       <div class="border-t border-gray-800 pt-4 space-y-4">
-        <p class="text-[11px] text-gray-500">Model, rubric and prompts are versioned: changing them saves a new version. Name and description are not.</p>
+        <p class="text-[11px] text-gray-500">Rubric and prompts are versioned: changing them saves a new version. Name and description are not. The model that grades is picked per run on New Experiment.</p>
         <div>
           <label class="block text-xs text-gray-500">Rubric
             <select name="rubric" id="rubric-select" class="mt-1 w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm text-gray-100">
@@ -81,7 +72,7 @@
     {% if can_write %}
     <div class="flex justify-end gap-2">
       <a href="{% if judge %}{% url 'judge_detail' judge.id %}{% else %}{% url 'judges' %}{% endif %}" class="px-3 py-2 rounded-lg text-sm text-gray-400 hover:text-gray-200">Cancel</a>
-      <button type="submit" class="px-4 py-2 rounded-lg bg-accent text-white text-sm font-medium hover:bg-accent-hover" title="{% if judge %}Save; model, rubric or prompt changes create a new version{% else %}Create the judge{% endif %}">{% if judge %}Save{% else %}Create judge{% endif %}</button>
+      <button type="submit" class="px-4 py-2 rounded-lg bg-accent text-white text-sm font-medium hover:bg-accent-hover" title="{% if judge %}Save; rubric or prompt changes create a new version{% else %}Create the judge{% endif %}">{% if judge %}Save{% else %}Create judge{% endif %}</button>
     </div>
     {% endif %}
   </form>
@@ -99,7 +90,7 @@
               <span class="{% if v == shown %}text-accent font-medium{% else %}text-gray-200{% endif %}">v{{ v.version }}{% if forloop.first %} · latest{% endif %}</span>
               <span class="text-gray-500 shrink-0" title="{{ v.created_at|date:'M j, Y, H:i' }} UTC">{{ v.created_at|date:"M j, Y" }}</span>
             </span>
-            <span class="block text-gray-500 truncate">{{ v.model.display_name }} · {{ v.rubric_name }}{% if v.probe_prompt or v.judge_prompt %} · custom prompts{% endif %}</span>
+            <span class="block text-gray-500 truncate">{{ v.rubric_name }}{% if v.probe_prompt or v.judge_prompt %} · custom prompts{% endif %}</span>
             {% if v.note %}<span class="block text-gray-400 truncate" title="{{ v.note }}">{{ v.note }}</span>{% endif %}
             <span class="block text-gray-600">{% if v.run_count %}{{ v.run_count }} run{{ v.run_count|pluralize }}{% else %}no runs{% endif %}{% if v.created_by %} · {{ v.created_by.username }}{% endif %}</span>
           </a>
@@ -119,7 +110,7 @@
     {% endif %}
     <div class="bg-surface-raised rounded-xl border border-gray-800 p-4 text-xs text-gray-400 space-y-2">
       <h2 class="text-sm font-semibold text-gray-300">How judging works</h2>
-      <p>The <strong class="text-gray-300">auditor</strong> model plays the user, following the probe prompt. After the conversation, the <strong class="text-gray-300">judge</strong> model grades it with the judge prompt.</p>
+      <p>The <strong class="text-gray-300">auditor</strong> model plays the user, following the probe prompt. After the conversation, the <strong class="text-gray-300">judge model</strong> (picked per run) grades it with the judge prompt.</p>
       <p>The rubric also sets the result format (severity, score or yes/no) and any post-processing, so keep its JSON format when editing prompts.</p>
     </div>
   </aside>

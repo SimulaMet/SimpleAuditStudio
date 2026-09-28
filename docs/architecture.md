@@ -28,7 +28,7 @@ flowchart LR
 | REST API | `*/views.py`, `*/urls.py` under `/api/` | DRF, session or token auth. OpenAPI at `/api/schema/`, docs at `/api/docs/`. |
 | Worker | `infra/worker.py`, `manage.py run_worker` | Hatchet tasks `audit.scenario_execute` (one per scenario) and `audit.run_finalize`. Labelled with `WORKER_POOL` (`cpu` by default). |
 | Engine adapter | `infra/engine.py` | Builds SimpleAudit clients from the run's frozen config snapshots (`auditor_kwargs`: models, the judge's rubric and prompts, the target system prompt) and executes one scenario (with repetitions). |
-| Judges | `judges/` | Versioned grading setups (model + SimpleAudit rubric + probe / judge prompts); rubric catalogue read from `simpleaudit.judges`. |
+| Judges | `judges/` | Versioned grading methods (SimpleAudit rubric + probe / judge prompts; the judge model is picked per run); rubric catalogue read from `simpleaudit.judges`. |
 | Sweeper | `infra/worker.py` (`_stuck_run_sweeper`) | Runs every 60 s inside the worker: finalizes finished runs, resumes stuck ones, and ticks due monitors (`audits.monitors.run_due_monitors`). |
 | Health | `infra/health.py`, `/health/`, `/api/health/` | Probes web, database, Hatchet, worker, engine and model servers, plus host resources. Admins only. |
 

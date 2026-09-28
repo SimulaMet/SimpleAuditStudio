@@ -27,8 +27,7 @@ erDiagram
     MODEL_CONNECTION ||--o{ REGISTERED_MODEL : serves
     PROJECT ||--o{ JUDGE : owns
     JUDGE ||--o{ JUDGE_VERSION : versions
-    REGISTERED_MODEL ||--o{ JUDGE_VERSION : grades_with
-    REGISTERED_MODEL ||--o{ AUDIT_RUN : "target / auditor"
+    REGISTERED_MODEL ||--o{ AUDIT_RUN : "target / auditor / judge model"
     JUDGE_VERSION ||--o{ AUDIT_RUN : grades
     SCENARIO_SET_VERSION ||--o{ AUDIT_RUN : pinned_by
     EXPERIMENT ||--o{ AUDIT_RUN : groups
@@ -224,9 +223,10 @@ connection up server-side (`model_registry.services`).
 
 A judge is how a run is graded. `Judge` holds the identity (`project_id`,
 `name`, `description`; unique per workspace). Each `JudgeVersion` is immutable
-and bundles the grading setup:
+and bundles the grading method. The model that grades is not part of it: runs
+and monitors pick a judge model separately, like target and auditor, so one
+judge can be compared across graders.
 
-- `model_id` — the registered model that grades
 - `rubric` — a built-in SimpleAudit judge config (`simpleaudit.judges`: safety,
   harm, helpfulness, factuality, abstention, binary_abstention, checklist, …), or
   `""` for SimpleAudit's default judge. The rubric also brings its output schema
@@ -236,8 +236,8 @@ and bundles the grading setup:
 
 Rules:
 
-- saving a judge creates a new version only when model, rubric or prompts
-  change; name and description are not versioned
+- saving a judge creates a new version only when rubric or prompts change;
+  name and description are not versioned
 - cloning starts a new judge whose history begins at v1
 - runs and monitors reference versions with RESTRICT, so a used judge can't be
   deleted
@@ -259,8 +259,8 @@ Fields:
 - `scenario_set_version_id`
 - `target_model_id`
 - `auditor_model_id`
-- `judge_version_id` — the judge (version) that grades
-- `judge_model_id` — that version's model, kept on the run for model-level queries
+- `judge_version_id` — how the run is graded (rubric + prompts)
+- `judge_model_id` — the model that grades
 - `target_config_snapshot` — JSON without secrets
 - `auditor_config_snapshot` — JSON without secrets
 - `judge_config_snapshot` — JSON without secrets; its `judge` key freezes the
@@ -316,7 +316,7 @@ Rules:
 
 A group of runs launched together from one design on New Experiment
 (`/experiments/new/`). Every design input (scenario sets, target, auditor,
-judges, max turns, language) takes one or more values; the cartesian product is
+judge model, judges, max turns, language) takes one or more values; the cartesian product is
 the list of runs, each an ordinary `AuditRun` with `experiment_id` set. The
 review step can drop, rename, edit (settings, system prompt and generation config) or
 duplicate runs before launch. A design that yields a single run launches it
@@ -340,7 +340,7 @@ experiment if there is one). Each tick creates an ordinary `AuditRun` with
 `monitor_id` (and the monitor's `experiment_id`).
 
 Fields: `project_id`, `name`, `enabled`, `scenario_set_id` with an optional
-pinned `scenario_set_version_id`, target and auditor model ids, `judge_id` with
+pinned `scenario_set_version_id`, target, auditor and judge model ids, `judge_id` with
 an optional pinned `judge_version_id` (empty = the judge's latest version at
 each tick), `generation_parameters` (same shape as the run snapshot),
 timing (`interval_hours`, or `cron_expression` read in `timezone`),
@@ -357,7 +357,7 @@ Rules:
   creator's role and pauses the monitor if it was lost
 - at most 50 monitors per workspace; fixed intervals are 6 hours to 90 days,
   cron expressions have no minimum
-- the drift baseline resets when the scenario set version or the judge version changes
+- the drift baseline resets when the scenario set version, judge version or judge model changes
 
 ### 5.4 Reproducibility manifest
 

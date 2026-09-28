@@ -20,8 +20,8 @@
   {% csrf_token %}
   <input type="hidden" name="action" value="design">
 
-  {# Row 1 (wide screens): scenario sets | models | judges, equal height, lists scroll inside. #}
-  <div id="picker-sections" class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
+  {# Scenario sets | judges, then models (target, auditor, judge model) full width. #}
+  <div id="picker-sections" class="grid grid-cols-1 md:grid-cols-2 gap-4">
   <div class="bg-surface-raised rounded-xl border border-gray-800 p-4 min-w-0">
     <div class="flex items-center justify-between mb-1">
       <h3 class="text-sm font-semibold text-gray-300">Scenario sets</h3>
@@ -83,8 +83,8 @@
     {% endif %}
   </div>
 
-  <div class="md:col-span-2 xl:col-span-2 min-w-0 md:order-last xl:order-none">{% include "partials/model_pickers.html" %}</div>
   <div class="min-w-0">{% include "partials/judge_picker.html" %}</div>
+  <div class="md:col-span-2 min-w-0">{% include "partials/model_pickers.html" %}</div>
   </div>
 
 
@@ -160,7 +160,7 @@
   const summary = document.getElementById('design-summary');
   const canLaunch = {{ can_launch|yesno:"true,false" }};
   const MAX_RUNS = {{ max_runs }};
-  const AXES = [['scenario_version', 'scenario set'], ['target_model', 'target'], ['auditor_model', 'auditor'], ['judge', 'judge']];
+  const AXES = [['scenario_version', 'scenario set'], ['target_model', 'target'], ['auditor_model', 'auditor'], ['judge_model', 'judge model'], ['judge', 'judge']];
 
   function listCount(name) {
     const el = form.querySelector(`[name="${name}"]`);
@@ -375,6 +375,32 @@
   }
   initSetRows(form);
 
+  // --- Selected choices first: on load (and refresh) ticked items move to the
+  // top of each picker list, so a cloned or pre-ticked setup is visible at a
+  // glance. Not while clicking: items never jump under the pointer.
+  function floatSelected(root) {
+    root.querySelectorAll('[data-filter-list]').forEach(list => {
+      const empty = list.querySelector('[data-filter-empty]');
+      const ticked = el => !!el.querySelector('input[type="checkbox"]:checked');
+      const rows = [...list.querySelectorAll(':scope > [data-set-row]')];
+      if (rows.length) {   // scenario sets / judges
+        rows.filter(ticked).reverse().forEach(r => list.prepend(r));
+        return;
+      }
+      // Models: groups (connection heading + its items) with a tick first,
+      // ticked items first inside each group.
+      const groups = [...list.querySelectorAll(':scope > [data-filter-group]')].map(head => {
+        const items = [...list.querySelectorAll(`:scope > [data-filter-item][data-group="${head.dataset.filterGroup}"]`)];
+        return { head, items: [...items.filter(ticked), ...items.filter(i => !ticked(i))], any: items.some(ticked) };
+      });
+      [...groups.filter(g => g.any), ...groups.filter(g => !g.any)].forEach(g => {
+        list.insertBefore(g.head, empty);
+        g.items.forEach(i => list.insertBefore(i, empty));
+      });
+    });
+  }
+  floatSelected(form);
+
   // Returning from another tab (e.g. after adding a model): refresh the pickers, keeping ticks.
   let focusTimer = null;
   window.addEventListener('focus', () => {
@@ -390,6 +416,7 @@
         if (!fresh) return;
         fresh.querySelectorAll('input[type="checkbox"]').forEach(i => { i.checked = ticked.has(i.name + '=' + i.value); });
         target.replaceWith(fresh);
+        floatSelected(fresh);
         initFilters(fresh);
         initSetRows(fresh);
         update();

@@ -11,7 +11,6 @@ from rest_framework.test import APITestCase
 from accounts.models import Project, ProjectMembership, User
 from audits.events import ScenarioResult
 from audits.models import AuditRun
-from infra.tests.factories import judge_for
 from scenarios.models import (
     ScenarioSetVersionItem,
 )
@@ -79,7 +78,7 @@ class APIE2ETest(APITestCase):
             "scenario_set_version_id": version_id,
             "target_model_id": target_id,
             "auditor_model_id": target_id,
-            "judge_version_id": judge_for(RegisteredModel.objects.get(pk=judge_id)).id,
+            "judge_model_id": judge_id,   # no judge: the Safety judge
         }, format="json")
         assert resp.status_code == 201, f"Run create failed: {resp.status_code} {resp.content}"
         run_data = resp.json()
@@ -137,7 +136,7 @@ class APIE2ETest(APITestCase):
             "scenario_set_version_id": version_id,
             "target_model_id": target_id,
             "auditor_model_id": target_id,
-            "judge_version_id": judge_for(RegisteredModel.objects.get(pk=judge_id)).id,
+            "judge_model_id": judge_id,   # no judge: the Safety judge
         }, format="json")
         assert resp.status_code == 201
         run2_id = resp.json()["id"]
@@ -194,7 +193,7 @@ class APIE2ETest(APITestCase):
         # Run
         resp = self.client.post(f"/api/projects/{self.pid}/audit-runs/create/", {
             "name": name, "scenario_set_version_id": ver_id,
-            "target_model_id": r1["id"], "auditor_model_id": r1["id"], "judge_version_id": judge_for(RegisteredModel.objects.get(pk=r2["id"])).id,
+            "target_model_id": r1["id"], "auditor_model_id": r1["id"], "judge_model_id": r2["id"],
         }, format="json")
         assert resp.status_code == 201
         return resp.json()["id"]

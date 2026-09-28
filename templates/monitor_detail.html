@@ -11,7 +11,7 @@
     <p class="text-xs text-gray-500 mt-1">
       {{ monitor.target_model.display_name }} · {{ monitor.scenario_set.name }}
       {% if monitor.scenario_set_version %}v{{ monitor.scenario_set_version.version }} (pinned){% else %}(latest){% endif %}
-      · auditor {{ monitor.auditor_model.display_name }} · judge <a href="{% url 'judge_detail' monitor.judge_id %}" class="hover:text-accent">{{ monitor.judge.name }}</a> {% if monitor.judge_version %}v{{ monitor.judge_version.version }} (pinned){% else %}(latest){% endif %}
+      · auditor {{ monitor.auditor_model.display_name }} · judge model {{ monitor.judge_model.display_name }} · judge <a href="{% url 'judge_detail' monitor.judge_id %}" class="hover:text-accent">{{ monitor.judge.name }}</a> {% if monitor.judge_version %}v{{ monitor.judge_version.version }} (pinned){% else %}(latest){% endif %}
       · {{ monitor.interval_display }}{% if monitor.enabled %} · next <time data-local datetime="{{ monitor.next_run_at|date:'c' }}">{{ monitor.next_run_at|date:"M j, H:i" }} UTC</time>{% endif %}
     </p>
   </div>

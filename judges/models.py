@@ -1,8 +1,10 @@
 """Judges: how a run is graded.
 
-A Judge is a named, versioned grading setup. Each JudgeVersion is immutable and
-bundles the judge model, the SimpleAudit rubric and the probe / judge prompts.
-Runs pin the exact version they used; editing a judge saves a new version.
+A Judge is a named, versioned grading method. Each JudgeVersion is immutable and
+bundles the SimpleAudit rubric and the probe / judge prompts. The model that
+grades is picked per run (like target and auditor), so one judge can be run
+with several models. Runs pin the exact version they used; editing a judge
+saves a new version.
 """
 from django.conf import settings
 from django.db import models
@@ -33,11 +35,10 @@ class Judge(models.Model):
 
 
 class JudgeVersion(models.Model):
-    """One immutable grading setup: model + rubric + prompts."""
+    """One immutable grading method: rubric + prompts."""
 
     judge = models.ForeignKey(Judge, on_delete=models.CASCADE, related_name="versions")
     version = models.PositiveIntegerField()
-    model = models.ForeignKey("model_registry.RegisteredModel", on_delete=models.RESTRICT, related_name="judge_versions")
     # Key of a built-in SimpleAudit judge config (simpleaudit.judges), or ""
     # for SimpleAudit's default judge. It also brings the rubric's output
     # schema and post-processing, which prompts alone can't express.
@@ -66,7 +67,6 @@ class JudgeVersion(models.Model):
     def content(self) -> dict:
         """The versioned fields (a new version is saved only when these change)."""
         return {
-            "model_id": self.model_id,
             "rubric": self.rubric,
             "probe_prompt": self.probe_prompt,
             "judge_prompt": self.judge_prompt,
