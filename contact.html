@@ -74,7 +74,7 @@
     <p class="mt-6 text-lg text-gray-400 leading-relaxed">
       SimpleAudit Studio works with any OpenAI-compatible endpoint — but wiring up a
       production chatbot, a fine-tuned model, or a bespoke evaluation scenario takes more
-      than copy-paste. The team behind the project is happy to help you get there.
+      than copy-paste. Contact us and we will find the best options for you.
     </p>
 
     <!-- What we can help with -->
@@ -121,15 +121,16 @@
           <p class="mt-2 text-sm text-gray-400 leading-relaxed">
             Prefer email? Reach out directly — especially for longer conversations
             about integrating SimpleAudit Studio into your research or product workflow.
+            We will find the best options for you.
           </p>
           <div class="mt-4 flex flex-col sm:flex-row gap-3">
-            <a href="mailto:sushant@simula.no"
-               class="px-6 py-3 rounded-xl bg-accent hover:bg-accent-hover text-white text-sm font-semibold text-center transition-colors">
-              sushant@simula.no
-            </a>
-            <a href="mailto:michael@simula.no"
+            <button type="button" onclick="copyEmail(this)" data-email="support@simpleauditstudio.sushant.no"
+                    class="px-6 py-3 rounded-xl bg-accent hover:bg-accent-hover text-white text-sm font-semibold transition-colors cursor-pointer">
+              Copy email
+            </button>
+            <a href="mailto:support@simpleauditstudio.sushant.no"
                class="px-6 py-3 rounded-xl border border-gray-700 hover:border-accent/50 text-gray-200 text-sm font-medium text-center transition-colors">
-              michael@simula.no
+              support@simpleauditstudio.sushant.no
             </a>
           </div>
         </div>
@@ -140,26 +141,12 @@
     <section class="mt-10">
       <h2 class="text-xl font-bold text-white">Who we are</h2>
       <p class="mt-4 text-sm text-gray-400 leading-relaxed">
-        SimpleAudit Studio is developed by researchers at the
+        SimpleAudit Studio is built by the team at the
         <a href="https://www.simulamet.no/research/research-departments/ai-safety" target="_blank" rel="noopener"
            class="text-accent hover:underline">AI Safety department at Simula Met</a>.
         We build it to make LLM auditing reproducible and verifiable — and we use it
         ourselves in our research.
       </p>
-      <div class="mt-6 grid md:grid-cols-2 gap-4">
-        <a href="https://www.simulamet.no/people/sushant" target="_blank" rel="noopener"
-           class="rounded-2xl border border-gray-800 bg-surface-raised p-6 hover:border-accent/50 transition-colors group">
-          <h3 class="text-base font-semibold text-gray-100 transition-colors">Sushant Gautam</h3>
-          <p class="text-sm text-gray-500">Researcher · Simula Met</p>
-          <p class="mt-3 text-xs text-gray-500"><a href="mailto:sushant@simula.no" class="text-accent hover:underline">sushant@simula.no</a></p>
-        </a>
-        <a href="https://www.simulamet.no/people/michael" target="_blank" rel="noopener"
-           class="rounded-2xl border border-gray-800 bg-surface-raised p-6 hover:border-accent/50 transition-colors group">
-          <h3 class="text-base font-semibold text-gray-100 transition-colors">Michael</h3>
-          <p class="text-sm text-gray-500">Simula Met</p>
-          <p class="mt-3 text-xs text-gray-500"><a href="mailto:michael@simula.no" class="text-accent hover:underline">michael@simula.no</a></p>
-        </a>
-      </div>
     </section>
 
     <!-- Back link -->
@@ -181,5 +168,26 @@
     </div>
   </footer>
 </div>
+  <script>
+    function copyEmail(btn) {
+      const email = btn.dataset.email;
+      navigator.clipboard.writeText(email).then(() => {
+        const original = btn.textContent;
+        btn.textContent = 'Copied!';
+        setTimeout(() => { btn.textContent = original; }, 2000);
+      }).catch(() => {
+        // Fallback for older browsers
+        const ta = document.createElement('textarea');
+        ta.value = email;
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+        const original = btn.textContent;
+        btn.textContent = 'Copied!';
+        setTimeout(() => { btn.textContent = original; }, 2000);
+      });
+    }
+  </script>
 </body>
 </html>
