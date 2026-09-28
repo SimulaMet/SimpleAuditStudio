@@ -15,6 +15,7 @@ from django.db import transaction
 
 from audits.models import AuditRun, Experiment
 from audits.monitors import pass_counts, wilson
+from audits.services import frozen_name
 
 MAX_RUNS_PER_EXPERIMENT = 50
 
@@ -335,9 +336,9 @@ def run_factor_values(run: AuditRun) -> dict:
     params = run.generation_parameters_snapshot or {}
     return {
         "scenario_set": f"{run.scenario_set_version.scenario_set.name} v{run.scenario_set_version.version}",
-        "target": run.target_model.display_name,
-        "auditor": run.auditor_model.display_name,
-        "judge": run.judge_model.display_name,
+        "target": frozen_name(run, "target"),
+        "auditor": frozen_name(run, "auditor"),
+        "judge": frozen_name(run, "judge"),
         "max_turns": str(params.get("max_turns") or "default"),
         "language": params.get("language") or "default",
         "n_repetitions": f"{params.get('n_repetitions') or 1}×",

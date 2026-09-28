@@ -97,6 +97,11 @@ def _ordering(params) -> list[str]:
     return [f"-{field}" if desc else field, "-id"]
 
 
+def _frozen_name(run, role: str) -> str:
+    snap = getattr(run, f"{role}_config_snapshot") or {}
+    return snap.get("display_name") or snap.get("model_id") or getattr(run, f"{role}_model").display_name
+
+
 def run_row(run, counts: dict) -> dict:
     params = run.generation_parameters_snapshot or {}
     c = counts.get(run.id) or {"k": 0, "n": 0}
@@ -113,10 +118,11 @@ def run_row(run, counts: dict) -> dict:
         "reps": int(params.get("n_repetitions") or 1),
         "pass_rate": round(c["k"] * 100 / c["n"], 1) if c["n"] else None,
         "trials": c["n"],
-        "target": run.target_model.display_name,
-        "target_id": run.target_model.model_id,
-        "auditor": run.auditor_model.display_name,
-        "judge": run.judge_model.display_name,
+        # Names as frozen when the run was created (models can be renamed later).
+        "target": _frozen_name(run, "target"),
+        "target_id": (run.target_config_snapshot or {}).get("model_id") or run.target_model.model_id,
+        "auditor": _frozen_name(run, "auditor"),
+        "judge": _frozen_name(run, "judge"),
         "scenario_set": f"{run.scenario_set_version.scenario_set.name} v{run.scenario_set_version.version}",
         "max_turns": params.get("max_turns") or 5,
         "language": params.get("language") or "English",

@@ -22,7 +22,7 @@ from accounts.models import User
 from audits.comparison import compare_runs
 from audits.events import ScenarioResult
 from audits.models import AuditRun
-from audits.services import create_audit_run, submit_audit_run
+from audits.services import create_audit_run, frozen_name, submit_audit_run
 from infra.hashing import scenario_revision_hash
 from scenarios.models import (
     Scenario,
@@ -1840,7 +1840,7 @@ class CompareView(ProjectMixin, TemplateView):
             run_meta.append({
                 "id": r["id"],
                 "name": run_obj.name if run_obj else f"Run #{r['id']}",
-                "target": run_obj.target_model.display_name if run_obj else (r["target"] or "?"),
+                "target": frozen_name(run_obj, "target") if run_obj else (r["target"] or "?"),
             })
         return {
             "warnings": raw["warnings"],
@@ -1993,6 +1993,9 @@ class RunDetailView(ProjectMixin, DetailView):
         from audits.monitors import has_write_role
 
         ctx["can_schedule"] = has_write_role(self.request.user, self.request.project)
+        from audits.services import ROLES, frozen_model
+
+        ctx["frozen_models"] = [frozen_model(run, role) for role in ROLES]
         return ctx
 
 
