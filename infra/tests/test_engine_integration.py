@@ -7,7 +7,6 @@ The real engine is not installed in the test environment, so these tests cover:
 - With the engine mocked, a successful scenario persists its structured result
   into the idempotent ScenarioResult row.
 """
-import inspect
 from unittest import mock
 
 from django.test import TestCase
@@ -117,17 +116,56 @@ class RoleKwargsFilteringTest(TestCase):
         filtered = {k: v for k, v in raw.items() if k in allowlist}
         self.assertEqual(filtered, {"timeout": 60})
 
-    def test_engine_uses_simpleaudit_params_api(self):
-        # Guard against regression: the engine must use SimpleAudit 0.1.13+
-        # params/target_params/judge_params/auditor_params for per-request
-        # generation params, not the old denylist approach.
+
+
+def _snap(model_id, **extra):
+    return {"model_id": model_id, "provider": "openai", "base_url": f"http://{model_id}.local/v1", **extra}
+
+
+class AuditorKwargsTest(TestCase):
+    """Each role gets its own model, endpoint, client kwargs and params."""
+
+    def test_roles_map_to_their_own_snapshot(self):
+        from infra.engine import auditor_kwargs
+
+        kwargs, language = auditor_kwargs(
+            target=_snap("tgt", default_parameters={"temperature": 0.1}),
+            auditor=_snap("aud", default_parameters={"timeout": 5}),
+            judge=_snap("jdg", default_parameters={"timeout": 9, "temperature": 0}),
+            generation={"language": "Norwegian", "system_prompt": "Be brief.", "judge_params": {"top_p": 1}},
+        )
+        self.assertEqual(language, "Norwegian")
+        self.assertEqual((kwargs["model"], kwargs["auditor_model"], kwargs["judge_model"]), ("tgt", "aud", "jdg"))
+        self.assertEqual(kwargs["judge_base_url"], "http://jdg.local/v1")
+        self.assertEqual(kwargs["auditor_kwargs"], {"timeout": 5})
+        self.assertEqual(kwargs["judge_kwargs"], {"timeout": 9})
+        self.assertEqual(kwargs["judge_params"], {"temperature": 0, "top_p": 1})
+        self.assertEqual(kwargs["target_params"], {"temperature": 0.1})
+        self.assertEqual(kwargs["system_prompt"], "Be brief.")
+
+    def test_repeated_runs_use_the_judge_model(self):
+        """Regression: multi-repetition runs graded with the auditor model."""
         from infra import engine
 
-        src = inspect.getsource(engine.build_model_auditor)
-        self.assertIn("target_params", src)
-        self.assertIn("judge_params", src)
-        self.assertIn("auditor_params", src)
-        self.assertNotIn("_CONSTRUCTOR_DENYLIST", src)
+        captured = {}
+
+        class FakeExperiment:
+            def __init__(self, models, **kw):
+                captured["entry"] = models[0]
+
+            async def run_scenario_reps(self, **kw):
+                return []
+
+        with mock.patch("simpleaudit.experiment.AuditExperiment", FakeExperiment):
+            engine.run_scenario_repeated(
+                name="s", description="d", expected_behavior=None, test_prompt=None,
+                target=_snap("tgt"), auditor=_snap("aud"), judge=_snap("jdg", default_parameters={"timeout": 9}),
+                n_repetitions=2,
+            )
+        entry = captured["entry"]
+        self.assertEqual((entry["model"], entry["auditor_model"], entry["judge_model"]), ("tgt", "aud", "jdg"))
+        self.assertEqual(entry["judge_base_url"], "http://jdg.local/v1")
+        self.assertEqual(entry["judge_kwargs"], {"timeout": 9})
 
 
 class ProviderNormalizationTest(TestCase):
