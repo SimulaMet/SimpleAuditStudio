@@ -110,7 +110,7 @@ See [docs/deployment.md](docs/deployment.md) for production hardening, backups, 
 ## ✨ What You Can Do
 
 - Build versioned scenario sets and register OpenAI-compatible models
-- Define versioned judges: a SimpleAudit rubric (safety, harm, helpfulness, factuality, abstention, checklist, …) with editable prompts, run with any judge model
+- Define versioned judges: start from a SimpleAudit judge (safety, harm, helpfulness, factuality, abstention, checklist, …) and edit its criteria, or write your own criteria as a severity, 1–10 score (with your own dimensions) or yes/no judge; run with any judge model
 - Test your deployment's target system prompt, and compare prompts or judges side by side
 - Run experiments across models, scenario versions and settings, with a review step before launch
 - Watch runs live, including per-repetition results

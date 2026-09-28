@@ -817,7 +817,7 @@ function toggleRename() {
   <div class="bg-surface-raised rounded-xl border border-gray-800 p-4">
     <h2 class="text-sm font-semibold text-gray-300 mb-3">Frozen Manifest</h2>
     <div class="space-y-1.5 text-xs">
-      <div class="flex justify-between gap-2"><span class="text-gray-500 shrink-0">Scenario Set</span><a href="/scenarios/?set={{ run.scenario_set_version.scenario_set_id }}" class="min-w-0 text-gray-300 text-right break-all hover:text-accent transition-colors">{{ run.scenario_set_version.scenario_set.name }} v{{ run.scenario_set_version.version }}</a></div>
+      <div class="flex justify-between gap-2"><span class="text-gray-500 shrink-0">Scenario Set</span><a href="/scenarios/?set={{ run.scenario_set_version.scenario_set_id }}&version={{ run.scenario_set_version.version }}" title="Open the scenario set version this run used" class="min-w-0 text-gray-300 text-right break-all hover:text-accent transition-colors">{{ run.scenario_set_version.label }}</a></div>
       <div class="flex justify-between gap-2"><span class="text-gray-500 shrink-0">Content Hash</span><span class="min-w-0 text-gray-400 font-mono truncate max-w-[140px]">{{ run.scenario_set_version.content_hash|truncatechars:16 }}</span></div>
       {% for m in frozen_models %}
       <div class="flex justify-between gap-2"><span class="text-gray-500 shrink-0">{% if m.role == "judge" %}Judge model{% else %}{{ m.role|capfirst }}{% endif %}</span>
@@ -830,16 +830,16 @@ function toggleRename() {
       <div class="flex justify-between gap-2"><span class="text-gray-500 shrink-0">Judge</span>
         <span class="min-w-0 text-right">
           {% if judge.judge_id %}<a href="{% url 'judge_detail' judge.judge_id %}?v={{ judge.version }}" class="text-gray-300 hover:text-accent transition-colors" title="Open this judge version">{{ judge.label }}</a>{% else %}<span class="text-gray-300">{{ judge.label }}</span>{% endif %}
-          <span class="block text-[10px] text-gray-500">{{ judge.rubric_name }}{% if judge.custom_probe_prompt or judge.custom_judge_prompt %} · custom prompts{% endif %}</span>
+          <span class="block text-[10px] text-gray-500">{% if judge.base_name %}{{ judge.base_name }}{% else %}Own criteria{% endif %} · {{ judge.output_label }}{% if judge.custom_criteria %} · edited criteria{% endif %}{% if judge.custom_probe_prompt %} · own probe{% endif %}</span>
         </span>
       </div>
-      {% if judge.probe_prompt or judge.judge_prompt %}
+      {% if judge.judge_prompt or judge.probe_prompt %}
       <details class="group">
-        <summary class="cursor-pointer select-none text-gray-500 hover:text-gray-300">Judge prompts used <span class="text-gray-600 group-open:hidden">▸</span></summary>
-        {% if judge.probe_prompt %}<p class="mt-2 text-[10px] uppercase tracking-wide text-gray-500">Probe prompt</p>
-        <pre class="mt-1 max-h-48 overflow-auto whitespace-pre-wrap break-words rounded bg-surface-overlay p-2 text-[11px] text-gray-300">{{ judge.probe_prompt }}</pre>{% endif %}
-        {% if judge.judge_prompt %}<p class="mt-2 text-[10px] uppercase tracking-wide text-gray-500">Judge prompt</p>
+        <summary class="cursor-pointer select-none text-gray-500 hover:text-gray-300">Prompts used <span class="text-gray-600 group-open:hidden">▸</span></summary>
+        {% if judge.judge_prompt %}<p class="mt-2 text-[10px] uppercase tracking-wide text-gray-500">Judge prompt <span class="normal-case tracking-normal text-gray-600">(criteria + output format)</span></p>
         <pre class="mt-1 max-h-48 overflow-auto whitespace-pre-wrap break-words rounded bg-surface-overlay p-2 text-[11px] text-gray-300">{{ judge.judge_prompt }}</pre>{% endif %}
+        {% if judge.probe_prompt %}<p class="mt-2 text-[10px] uppercase tracking-wide text-gray-500">Probe prompt <span class="normal-case tracking-normal text-gray-600">(guides the auditor)</span></p>
+        <pre class="mt-1 max-h-48 overflow-auto whitespace-pre-wrap break-words rounded bg-surface-overlay p-2 text-[11px] text-gray-300">{{ judge.probe_prompt }}</pre>{% endif %}
       </details>
       {% endif %}
       <div class="flex justify-between gap-2"><span class="text-gray-500 shrink-0">System Prompt</span>

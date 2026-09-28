@@ -227,22 +227,41 @@ and bundles the grading method. The model that grades is not part of it: runs
 and monitors pick a judge model separately, like target and auditor, so one
 judge can be compared across graders.
 
-- `rubric` — a built-in SimpleAudit judge config (`simpleaudit.judges`: safety,
-  harm, helpfulness, factuality, abstention, binary_abstention, checklist, …), or
-  `""` for SimpleAudit's default judge. The rubric also brings its output schema
-  (severity, score 1–10, yes/no, checklist) and post-processing.
-- `probe_prompt`, `judge_prompt` — blank means the rubric's own prompt
+A judge prompt has two parts: the **criteria** (what to evaluate, plain words)
+and the **output format** (the JSON the judge returns, its schema, and the code
+that turns it into a severity). Users write criteria; formats come from
+SimpleAudit (`simpleaudit.judges.compose`).
+
+- `base` — the SimpleAudit judge the version starts from (`simpleaudit.judges`
+  key: safety, harm, helpfulness, factuality, abstention, binary_abstention,
+  checklist, …; `default` = SimpleAudit's unnamed default judge). The base's
+  output format comes along, fields and post-processing included. `""` = a
+  generic format with the version's own criteria.
+- `output` — `severity`, `score`, `binary` or `checklist`; with a base, the base's
+- `criteria` — blank means the base's criteria; required without a base
+- `probe_prompt` — how the auditor plays the user; blank means the base's
+  (SimpleAudit's default without a base)
+- `options` — generic formats only: `{"dimensions": [...]}` for a score (each
+  scored 1–10, the score is their average, computed in code), `{"question":
+  ..., "pass_when": bool}` for a yes/no question (a wrong answer gets the
+  scenario's designed severity, `high` when it has none)
 - `note`, `created_by`, `created_at`
+
+`judges.services.library_judge` turns a version into what `ModelAuditor(judge=)`
+takes: an unedited base by name (exactly as the library runs it), edited
+criteria via `customize_judge`, a generic format via `build_judge`.
 
 Rules:
 
-- saving a judge creates a new version only when rubric or prompts change;
-  name and description are not versioned
+- saving a judge creates a new version only when base, output, criteria, probe
+  prompt or options change; name and description are not versioned. Text equal
+  to the base's is stored blank, so it keeps following the base
 - cloning starts a new judge whose history begins at v1
 - runs and monitors reference versions with RESTRICT, so a used judge can't be
   deleted
-- new workspaces get starter judges from `seed_platform` (one per
-  general-purpose rubric), or from the Judges page's empty state
+- new workspaces start with one judge per SimpleAudit judge (the safety judge
+  named "Safety Judge (SimpleAudit Default)"); the Judges page offers any that
+  are missing
 
 ## 5. Audit run
 
@@ -259,12 +278,14 @@ Fields:
 - `scenario_set_version_id`
 - `target_model_id`
 - `auditor_model_id`
-- `judge_version_id` — how the run is graded (rubric + prompts)
+- `judge_version_id` — how the run is graded (criteria, output format, probe prompt)
 - `judge_model_id` — the model that grades
 - `target_config_snapshot` — JSON without secrets
 - `auditor_config_snapshot` — JSON without secrets
 - `judge_config_snapshot` — JSON without secrets; its `judge` key freezes the
-  judge name, version, rubric and the probe / judge prompts resolved to full text
+  judge name, version, its spec (`JudgeVersion.content()`, what the engine
+  builds the SimpleAudit judge from) and the criteria, judge and probe prompts
+  resolved to full text
 - `generation_parameters_snapshot` — JSON
 - `simpleaudit_version`
 - `git_commit`

@@ -147,3 +147,58 @@ class ConflictHandlingTests(TestCase):
         assert second.status_code == 409, second.content
         assert second.json()["error"]["code"] == "conflict"
 
+
+
+class ScenarioSetDiffTests(TestCase):
+    """What changed between scenario set versions (one service, two endpoints)."""
+
+    def setUp(self):
+        from scenarios.services import (
+            create_scenario,
+            create_scenario_set,
+            publish_scenario_set_version,
+        )
+
+        self.user = User.objects.create_user(username="bob", password="pass12345")
+        self.project = Project.objects.create(name="Diff", slug="diff")
+        ProjectMembership.objects.create(project=self.project, user=self.user, role=ProjectMembership.Role.ADMIN)
+        self.client.force_login(self.user)
+        make = lambda key, desc: create_scenario(
+            project=self.project, user=self.user, key=key, title=key.title(), description=desc,
+            expected_behavior=["Refuse"])
+        self.kept, self.edited, self.dropped = make("kept", "Same."), make("edited", "Old text."), make("dropped", "Gone.")
+        self.sset = create_scenario_set(project=self.project, user=self.user, name="Set")
+        self.v1 = publish_scenario_set_version(scenario_set=self.sset, user=self.user,
+                                               scenario_ids=[self.kept.id, self.edited.id, self.dropped.id])
+        from scenarios.services import update_scenario_content
+
+        update_scenario_content(scenario=self.edited, user=self.user, description="New text.", expected_behavior=["Refuse", "Explain"])
+        added = make("added", "Fresh.")
+        self.v2 = publish_scenario_set_version(scenario_set=self.sset, user=self.user,
+                                               scenario_ids=[self.kept.id, self.edited.id, added.id])
+
+    def test_version_diff(self):
+        from scenarios.services import version_diff
+
+        d = version_diff(self.v1, self.v2)
+        self.assertEqual((d["from_version"], d["to_version"], d["unchanged_count"]), (1, 2, 1))
+        self.assertEqual([s["key"] for s in d["added"]], ["added"])
+        self.assertEqual([s["key"] for s in d["removed"]], ["dropped"])
+        (changed,) = d["changed"]
+        self.assertEqual((changed["from"]["revision"], changed["to"]["revision"]), (1, 2))
+        self.assertEqual((changed["from"]["description"], changed["to"]["expected_behavior"]), ("Old text.", ["Refuse", "Explain"]))
+
+    def test_endpoints(self):
+        d = self.client.get(f"/scenarios/diff/{self.sset.id}/?from=1&to=2").json()
+        self.assertEqual(len(d["changed"]), 1)
+        revert = self.client.get(f"/scenarios/revert/{self.sset.id}/?target_version=1").json()
+        self.assertEqual((revert["from_version"], revert["to_version"]), (2, 1))   # latest -> target
+        self.assertEqual([s["key"] for s in revert["added"]], ["dropped"])
+        self.assertEqual(self.client.get(f"/scenarios/diff/{self.sset.id}/?from=x&to=9").status_code, 404)
+
+    def test_page_labels(self):
+        page = self.client.get(f"/scenarios/?set={self.sset.id}")
+        self.assertContains(page, "v2 · latest")
+        self.assertContains(page, "rev 2")
+        self.assertContains(page, "Changes from v1")
+        self.assertNotContains(page, "2v<")

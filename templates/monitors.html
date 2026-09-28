@@ -35,7 +35,7 @@
             {% if s.experiment %}<a href="{% url 'experiment_detail' s.experiment.id %}" onclick="event.stopPropagation()" class="block text-[11px] text-gray-500 hover:text-accent truncate max-w-[18rem]">⊞ {{ s.experiment.name }}</a>{% endif %}
           </td>
           <td class="px-3 py-2.5 text-gray-400 text-xs">{{ s.target_model.display_name }}</td>
-          <td class="px-3 py-2.5 text-gray-400 text-xs">{{ s.scenario_set.name }} {% if s.scenario_set_version %}<span class="text-gray-500">(v{{ s.scenario_set_version.version }} pinned)</span>{% else %}<span class="text-gray-500">(latest)</span>{% endif %}</td>
+          <td class="px-3 py-2.5 text-gray-400 text-xs">{{ s.scenario_set.name }} {% include "partials/pinned_version.html" with version=s.scenario_set_version %}</td>
           <td class="px-3 py-2.5 text-gray-400 text-xs">{{ s.interval_display }}</td>
           <td class="px-3 py-2.5 text-gray-400 text-xs whitespace-nowrap">{% if s.enabled %}<time data-local datetime="{{ s.next_run_at|date:'c' }}">{{ s.next_run_at|date:"M j, H:i" }} UTC</time>{% else %}—{% endif %}</td>
           <td class="px-3 py-2.5 text-xs whitespace-nowrap">{% if s.last_run %}<a href="/runs/{{ s.last_run.id }}/" onclick="event.stopPropagation()" class="text-accent hover:underline">#{{ s.last_run.id }}</a> <span class="text-gray-500">{{ s.last_run.status }}</span>{% else %}<span class="text-gray-600">—</span>{% endif %}</td>

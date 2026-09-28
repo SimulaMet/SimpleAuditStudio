@@ -126,13 +126,13 @@ class JudgeVersionFactory(DjangoModelFactory):
         model = JudgeVersion
     judge = factory.SubFactory(JudgeFactory)
     version = factory.Sequence(lambda n: n + 1)
-    rubric = "safety"
+    base = "safety"
 
 
 def judge_for(model) -> JudgeVersion:
     """The test judge of ``model``'s workspace (one per workspace, same version every call)."""
     judge, _ = Judge.objects.get_or_create(project=model.project, name="Test judge")
-    return judge.latest or JudgeVersion.objects.create(judge=judge, version=1, rubric="safety")
+    return judge.latest or JudgeVersion.objects.create(judge=judge, version=1, base="safety")
 
 
 class AuditRunFactory(DjangoModelFactory):

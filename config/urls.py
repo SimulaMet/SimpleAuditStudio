@@ -37,6 +37,7 @@ from infra.ui import (
     RunRenameView,
     RunResultsFragmentView,
     RunResultView,
+    RunScriptView,
     ScenarioCreateView,
     ScenarioDeleteView,
     ScenarioDiffView,
@@ -54,7 +55,7 @@ from infra.ui import (
     auto_login_view,
     logout_view,
 )
-from judges.views import JudgeDetailView, JudgesView
+from judges.views import JudgeDetailView, JudgePreviewView, JudgesView
 
 # --- Static file serving ---------------------------------------------------
 # For the canonical Docker Compose self-hosted deployment Django serves its
@@ -179,6 +180,7 @@ urlpatterns = [
     path("models/connection-delete/<int:conn_id>/", ConnectionDeleteView.as_view(), name="connection_delete"),
     path("judges/", JudgesView.as_view(), name="judges"),
     path("judges/new/", JudgeDetailView.as_view(), name="judge_new"),
+    path("judges/preview/", JudgePreviewView.as_view(), name="judge_preview"),
     path("judges/<int:judge_id>/", JudgeDetailView.as_view(), name="judge_detail"),
     path("compare/", CompareView.as_view(), name="compare"),
     path("runs/<int:run_id>/", RunDetailView.as_view(), name="run_detail"),
@@ -187,6 +189,7 @@ urlpatterns = [
     path("runs/<int:run_id>/rename/", RunRenameView.as_view(), name="run_rename"),
     path("runs/<int:run_id>/results/<int:result_id>/", RunResultView.as_view(), name="run_result"),
     path("runs/<int:run_id>/export/", RunExportView.as_view(), name="run_export"),
+    path("runs/<int:run_id>/script/", RunScriptView.as_view(), name="run_script"),
     path("runs/<int:run_id>/results-fragment/", RunResultsFragmentView.as_view(), name="run_results_fragment"),
     path("runs/data/", RunsDataView.as_view(), name="runs_data"),
     path("runs/bulk/", RunsBulkView.as_view(), name="runs_bulk"),

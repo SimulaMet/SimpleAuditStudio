@@ -126,7 +126,7 @@ def run_row(run, counts: dict) -> dict:
         "auditor": _frozen_name(run, "auditor"),
         "judge": frozen_judge(run)["label"],
         "judge_model": _frozen_name(run, "judge"),
-        "scenario_set": f"{run.scenario_set_version.scenario_set.name} v{run.scenario_set_version.version}",
+        "scenario_set": run.scenario_set_version.label,
         "max_turns": params.get("max_turns") or 5,
         "language": params.get("language") or "English",
         "duration": run.duration_display,

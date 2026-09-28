@@ -5,8 +5,8 @@
   <div>
     <h1 class="text-lg font-semibold text-gray-100">Judges</h1>
     <p class="text-sm text-gray-500 mt-0.5 max-w-2xl">
-      A judge is how conversations are graded: a rubric, the judge prompt and the probe prompt the auditor follows.
-      You pick the model that grades on New Experiment, so one judge works with any model. Editing a judge saves a new version; runs keep the version they used.
+      A judge is how conversations are graded: the criteria (what to evaluate), the output format (severity, score, yes/no or checklist) and the probe prompt the auditor follows.
+      Start from one of SimpleAudit's judges, or write your own criteria. You pick the model that grades on New Experiment. Editing a judge saves a new version; runs keep the version they used.
     </p>
   </div>
   <div class="flex flex-wrap items-center gap-2 w-full sm:w-auto">
@@ -14,40 +14,40 @@
     <input type="search" id="judge-search" placeholder="Filter judges…" aria-label="Filter judges"
            class="flex-1 min-w-0 sm:flex-none sm:w-56 px-2.5 py-1.5 rounded-lg bg-surface-overlay border border-gray-700 text-xs text-gray-200 focus:outline-none focus:ring-2 focus:ring-accent/50">
     {% endif %}
-    <a href="{% url 'judge_new' %}" data-write title="Create a judge from a rubric"
+    <a href="{% url 'judge_new' %}" data-write title="Create a judge: start from a SimpleAudit judge or write your own criteria"
        class="px-3 py-1.5 rounded-lg bg-accent text-white text-xs font-medium hover:bg-accent-hover whitespace-nowrap">+ New judge</a>
   </div>
 </div>
 
-{% if judges and missing_rubrics %}
+{% if judges and missing_bases %}
 <form method="post" data-write class="mb-4 flex flex-wrap items-center gap-3 rounded-lg border border-accent/30 bg-accent/10 px-4 py-2.5 text-sm">
   {% csrf_token %}<input type="hidden" name="action" value="starters">
-  <span class="text-gray-200 flex-1 min-w-0">SimpleAudit has {{ missing_rubrics|length }} judge{{ missing_rubrics|pluralize }} this workspace doesn't have yet:
-    <span class="text-gray-400">{% for r in missing_rubrics %}{{ r.name }}{% if not forloop.last %}, {% endif %}{% endfor %}</span></span>
-  <button class="px-3 py-1.5 rounded-lg bg-accent text-white text-xs font-medium hover:bg-accent-hover whitespace-nowrap" title="Create the missing SimpleAudit judges">Add {{ missing_rubrics|length }}</button>
+  <span class="text-gray-200 flex-1 min-w-0">SimpleAudit has {{ missing_bases|length }} judge{{ missing_bases|pluralize }} this workspace doesn't have yet:
+    <span class="text-gray-400">{% for r in missing_bases %}{{ r.name }}{% if not forloop.last %}, {% endif %}{% endfor %}</span></span>
+  <button class="px-3 py-1.5 rounded-lg bg-accent text-white text-xs font-medium hover:bg-accent-hover whitespace-nowrap" title="Create the missing SimpleAudit judges">Add {{ missing_bases|length }}</button>
 </form>
 {% endif %}
 {% if judges %}
 <div class="grid grid-cols-1 lg:grid-cols-2 gap-4" id="judge-list">
   {% for j in judges %}
   <section class="bg-surface-raised rounded-xl border border-gray-800 flex flex-col min-w-0"
-           data-judge data-search="{{ j.name|lower }} {{ j.description|lower }} {{ j.current.rubric_name|lower }}">
+           data-judge data-search="{{ j.name|lower }} {{ j.description|lower }} {{ j.current.base_name|lower }} {{ j.current.output_label|lower }}">
     <header class="flex items-start gap-3 px-4 pt-4">
       <span class="w-9 h-9 shrink-0 rounded-lg bg-accent/15 text-accent flex items-center justify-center" aria-hidden="true">⚖</span>
       <div class="min-w-0 flex-1">
         <div class="flex flex-wrap items-center gap-2">
           <a href="{% url 'judge_detail' j.id %}" class="text-sm font-semibold text-gray-100 hover:text-accent">{{ j.name }}</a>
-          {% if j.current %}<span class="px-1.5 py-0.5 rounded bg-gray-800 text-[10px] text-gray-400" title="{{ j.version_count }} version{{ j.version_count|pluralize }}">v{{ j.current.version }}</span>{% endif %}
+          {% if j.current %}{% include "partials/version_badge.html" with number=j.current.version count=j.version_count %}{% endif %}
         </div>
         {% if j.description %}<p class="text-xs text-gray-400 mt-0.5 line-clamp-2" title="{{ j.description }}">{{ j.description }}</p>{% endif %}
       </div>
     </header>
     {% if j.current %}
     <dl class="grid grid-cols-[auto,1fr] gap-x-3 gap-y-1 px-4 py-3 text-xs">
-      <dt class="text-gray-500">Rubric</dt>
-      <dd class="min-w-0 truncate text-gray-300">{{ j.current.rubric_name }} <span class="text-gray-500">· {{ j.current.output_label }}</span></dd>
-      <dt class="text-gray-500">Prompts</dt>
-      <dd class="text-gray-300">{% if j.current.probe_prompt or j.current.judge_prompt %}<span class="text-amber-300/90">customised</span>{% if j.current.probe_prompt %} probe{% endif %}{% if j.current.probe_prompt and j.current.judge_prompt %} +{% endif %}{% if j.current.judge_prompt %} judge{% endif %}{% else %}rubric defaults{% endif %}</dd>
+      <dt class="text-gray-500">Grades as</dt>
+      <dd class="min-w-0 truncate text-gray-300">{{ j.current.output_label }}{% if j.current.output == "score" and j.current.options.dimensions %} <span class="text-gray-500">· {{ j.current.options.dimensions|join:", " }}</span>{% endif %}</dd>
+      <dt class="text-gray-500">Criteria</dt>
+      <dd class="min-w-0 truncate text-gray-300">{% if not j.current.base %}<span class="text-accent/90">own</span>{% else %}{% if j.current.resolved.custom_criteria %}<span class="text-amber-300/90">edited</span>{% else %}SimpleAudit's{% endif %}{% if j.current.base_name != j.name %} <span class="text-gray-500">· from {{ j.current.base_name }}</span>{% endif %}{% endif %}{% if j.current.resolved.custom_probe_prompt %} <span class="text-gray-500">· own probe</span>{% endif %}</dd>
       <dt class="text-gray-500">Used by</dt>
       <dd class="{% if j.usage or j.monitor_count %}text-gray-300{% else %}text-gray-600{% endif %}">
         {% if j.usage %}{{ j.usage }} run{{ j.usage|pluralize }}{% else %}no runs{% endif %}{% if j.monitor_count %} · {{ j.monitor_count }} monitor{{ j.monitor_count|pluralize }}{% endif %}
@@ -58,10 +58,8 @@
       <a href="{% url 'judge_detail' j.id %}" title="View prompts and version history, or edit"
          class="px-2.5 py-1 rounded-lg text-xs text-gray-300 bg-surface-overlay hover:text-white">Open</a>
       {% if j.current %}
-      <form method="post" data-write>
-        {% csrf_token %}<input type="hidden" name="action" value="clone"><input type="hidden" name="version_id" value="{{ j.current.id }}">
-        <button title="Make a new judge starting from v{{ j.current.version }}" class="px-2.5 py-1 rounded-lg text-xs text-gray-300 bg-surface-overlay hover:text-white">Clone</button>
-      </form>
+      <a href="{% url 'judge_new' %}?clone={{ j.current.id }}" data-write title="Start a new judge prefilled from v{{ j.current.version }}; nothing is saved until you create it"
+         class="px-2.5 py-1 rounded-lg text-xs text-gray-300 bg-surface-overlay hover:text-white">Clone</a>
       {% endif %}
       <span class="flex-1"></span>
       {% if j.usage or j.monitor_count %}
@@ -80,12 +78,12 @@
 {% else %}
 <div class="bg-surface-raised rounded-xl border border-gray-800 p-8 text-center">
   <p class="text-base text-gray-200 font-medium">Set up your judges</p>
-  <p class="text-sm text-gray-500 mt-1 mb-5 max-w-lg mx-auto">Start with SimpleAudit's judges: its default judge plus one per built-in rubric (safety, harm, helpfulness, factuality, abstention, checklist, …). You can edit or clone each one later.</p>
+  <p class="text-sm text-gray-500 mt-1 mb-5 max-w-lg mx-auto">Start with SimpleAudit's judges: safety (its default), harm, helpfulness, factuality, abstention, checklist and more. You can edit their criteria or clone them later.</p>
   <form method="post" data-write class="flex justify-center">
     {% csrf_token %}<input type="hidden" name="action" value="starters">
     <button class="px-4 py-2 rounded-lg bg-accent text-white text-sm font-medium hover:bg-accent-hover" title="Create SimpleAudit's judges in this workspace">Add SimpleAudit's judges</button>
   </form>
-  <p class="text-xs text-gray-600 mt-4">Or <a href="{% url 'judge_new' %}" class="text-accent hover:underline">create one judge</a> from any rubric.</p>
+  <p class="text-xs text-gray-600 mt-4">Or <a href="{% url 'judge_new' %}" class="text-accent hover:underline">write your own judge</a>.</p>
 </div>
 {% endif %}
 
