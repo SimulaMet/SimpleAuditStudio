@@ -78,8 +78,9 @@ class Command(BaseCommand):
         if not options["skip_models"]:
             for message in seed_default_model_connections(project, user):
                 self.stdout.write(f"  {message}")
-            for message in seed_default_judges(project, user):
-                self.stdout.write(f"  {message}")
+        # Judges SimpleAudit added since the workspace was created (e.g. after an upgrade).
+        for message in seed_default_judges(project, user):
+            self.stdout.write(f"  {message}")
 
         if not options["skip_demo_audits"]:
             self._seed_demo_audits(project, user)
