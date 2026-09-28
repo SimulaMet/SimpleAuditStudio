@@ -66,7 +66,7 @@
   </div>
   {% if distribution %}
   <div class="flex h-2 rounded-full overflow-hidden bg-surface-overlay" role="img" aria-label="Severity split across repetitions">
-    {% for d in distribution %}<div style="width: {{ d.pct }}%" class="{% if d.severity == 'pass' or d.severity == 'low' %}bg-emerald-500{% elif d.severity == 'medium' %}bg-amber-500{% else %}bg-red-500{% endif %}" title="{{ d.severity }}: {{ d.count }}/{{ n_reps }}"></div>{% endfor %}
+    {% for d in distribution %}<div style="width: {{ d.pct }}%" class="{% if d.severity == 'pass' or d.severity == 'low' %}bg-emerald-500{% elif d.severity == 'medium' %}bg-amber-500{% elif d.severity == 'ungraded' %}bg-gray-500{% else %}bg-red-500{% endif %}" title="{{ d.severity }}: {{ d.count }}/{{ n_reps }}"></div>{% endfor %}
   </div>
   <div class="flex flex-wrap gap-3 text-[11px] text-gray-400 mt-2">
     {% for d in distribution %}<span>{{ d.severity }} {{ d.count }}/{{ n_reps }}</span>{% endfor %}
@@ -84,7 +84,7 @@
           class="rep-tab inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors {% if rep.dissent %}border-amber-600/50{% else %}border-gray-800{% endif %}"
           title="{% if rep.dissent %}Disagrees with the verdict · {% endif %}{{ rep.total_tokens }} tokens">
     Rep {{ rep.index }}
-    <span class="{% if rep.severity == 'pass' or rep.severity == 'low' %}text-emerald-400{% elif rep.severity == 'medium' %}text-amber-400{% else %}text-red-400{% endif %}">{{ rep.severity }}</span>
+    <span class="{% if rep.severity == 'pass' or rep.severity == 'low' %}text-emerald-400{% elif rep.severity == 'medium' %}text-amber-400{% elif rep.severity == 'ungraded' %}text-gray-400{% else %}text-red-400{% endif %}">{{ rep.severity }}</span>
     {% if rep.dissent %}<span class="text-amber-500">≠</span>{% endif %}
   </button>
   {% endfor %}

@@ -401,8 +401,11 @@ def pass_counts(run_ids: list[int]) -> dict[int, dict]:
     Repetitions count as separate trials, so the confidence interval narrows as
     ``n_repetitions`` grows. ERROR severities and non-completed scenarios are
     excluded from ``n`` (an outage is not a behaviour change) and counted apart.
+    "ungraded" trials (a judge classification without a verdict, e.g. binary
+    abstention on a scenario with no expected outcome) are neither pass nor
+    fail: excluded from ``n`` and counted in ``ungraded``.
     """
-    out = {rid: {"k": 0, "n": 0, "errors": 0} for rid in run_ids}
+    out = {rid: {"k": 0, "n": 0, "errors": 0, "ungraded": 0} for rid in run_ids}
     rows = ScenarioResult.objects.filter(run_id__in=run_ids).only("run_id", "status", "result")
     for row in rows:
         c = out.get(row.run_id)
@@ -414,6 +417,9 @@ def pass_counts(run_ids: list[int]) -> dict[int, dict]:
         for sev in _trial_severities(row.result or {}):
             if not sev or sev == "ERROR":
                 c["errors"] += 1
+                continue
+            if sev == "ungraded":
+                c["ungraded"] += 1
                 continue
             c["n"] += 1
             if sev == "pass":

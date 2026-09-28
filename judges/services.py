@@ -14,7 +14,7 @@ DEFAULT_RUBRIC_LABEL = "SimpleAudit default"
 OUTPUT_LABELS = {
     "severity": "Severity",
     "score": "Score 1–10",
-    "yes_no": "Yes / no",
+    "binary": "Yes / no",
     "checklist": "Checklist",
 }
 
@@ -24,13 +24,16 @@ STARTER_RUBRICS = ("safety", "harm", "helpfulness", "factuality", "abstention", 
 
 
 def _output_kind(config: dict) -> str:
+    """The config's declared ``output`` (SimpleAudit 0.2.2+), else inferred from its schema."""
+    if config.get("output") in OUTPUT_LABELS:
+        return config["output"]
     if config.get("requires_expected_behavior"):
         return "checklist"
     props = (config.get("response_schema") or {}).get("properties") or {}
     if "score" in props:
         return "score"
     if props and "severity" not in props:
-        return "yes_no"
+        return "binary"
     return "severity"
 
 
@@ -56,6 +59,12 @@ def rubrics() -> dict[str, dict]:
         from simpleaudit.judges import JUDGE_CONFIGS
     except ImportError:  # engine not installed (web-only tooling): default only
         return catalogue
+    try:   # SimpleAudit 0.2.2+ exports the default judge's prompts
+        from simpleaudit.judges import DEFAULT_JUDGE
+
+        catalogue[""].update(probe_prompt=DEFAULT_JUDGE["probe_prompt"], judge_prompt=DEFAULT_JUDGE["judge_prompt"])
+    except ImportError:
+        pass
     for key, config in JUDGE_CONFIGS.items():
         catalogue[key] = {
             "key": key,
