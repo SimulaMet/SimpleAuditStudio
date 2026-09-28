@@ -124,7 +124,7 @@ class Command(BaseCommand):
 
     @staticmethod
     def _judge(project, user):
-        """The Safety judge (the fixture was graded with SimpleAudit's safety rubric)."""
+        """SimpleAudit's default judge (what graded the fixture)."""
         from judges.services import default_judge_version
 
         return default_judge_version(project, user)
