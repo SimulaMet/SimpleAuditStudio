@@ -83,17 +83,24 @@ class JudgeServiceTests(_Base):
         from simpleaudit.judges import JUDGE_CONFIGS
 
         made = ensure_starter_judges(self.project)
-        self.assertIn("SimpleAudit Default", made)
-        self.assertIn(JUDGE_CONFIGS["safety"]["name"], made)   # library names, verbatim
-        self.assertEqual(len(made), len(JUDGE_CONFIGS) + 1)
+        self.assertIn("Safety Judge (SimpleAudit Default)", made)
+        self.assertIn(JUDGE_CONFIGS["harm"]["name"], made)   # library names, verbatim
+        self.assertNotIn("SimpleAudit Default", made)
+        self.assertEqual(len(made), len(JUDGE_CONFIGS))
         self.assertEqual(ensure_starter_judges(self.project), [])
 
-    def test_default_judge_is_simpleaudits_default(self):
+    def test_default_judge_is_the_safety_judge(self):
         from judges.services import default_judge_version
 
         version = default_judge_version(self.project)
-        self.assertEqual((version.rubric, version.judge.name), ("", "SimpleAudit Default"))
+        self.assertEqual((version.rubric, version.judge.name), ("safety", "Safety Judge (SimpleAudit Default)"))
         self.assertEqual(default_judge_version(self.project).pk, version.pk)
+
+    def test_unnamed_default_rubric_only_offered_to_versions_using_it(self):
+        from judges.services import rubric_choices
+
+        self.assertNotIn("", [r["key"] for r in rubric_choices()])
+        self.assertIn("", [r["key"] for r in rubric_choices("")])
 
 
 class JudgePagesTests(_Base):

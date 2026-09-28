@@ -2,8 +2,8 @@
 
 Monitors get their judge model from the judge version they used. The
 "Default judge · <model>" judges made by 0003 (one per model) become one
-"SimpleAudit Default" judge per workspace, since without the model they are
-the same judge.
+"Safety Judge (SimpleAudit Default)" judge per workspace, since without the
+model they are the same judge (its v1 keeps SimpleAudit's unnamed default).
 """
 import django.db.models.deletion
 from django.db import migrations, models
@@ -24,10 +24,10 @@ def forwards(apps, schema_editor):
     for judge in backfilled:
         keep = keep_by_project.get(judge.project_id)
         if keep is None:
-            name = "SimpleAudit Default"
+            name = "Safety Judge (SimpleAudit Default)"
             if Judge.objects.filter(project_id=judge.project_id, name=name).exclude(pk=judge.pk).exists():
                 name = f"{name} ({judge.pk})"
-            Judge.objects.filter(pk=judge.pk).update(name=name, description="SimpleAudit's built-in judge (no rubric named).")
+            Judge.objects.filter(pk=judge.pk).update(name=name, description="SimpleAudit's default judge. v1: the unnamed default that graded earlier runs.")
             keep_by_project[judge.project_id] = (judge.pk, JudgeVersion.objects.get(judge_id=judge.pk, version=1).pk, name)
             continue
         keep_id, keep_version_id, _ = keep
