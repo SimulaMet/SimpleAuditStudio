@@ -38,6 +38,15 @@ class ScenarioRevision(models.Model):
     description = models.TextField()
     expected_behavior = models.JSONField(default=list)
     test_prompt = models.TextField(blank=True)
+    # Severity ceiling (pass/low/medium/high/critical): the highest severity the
+    # checklist judge's postprocess can derive for this scenario. Blank = no cap.
+    severity_ceiling = models.CharField(max_length=16, blank=True, default="")
+    # RAG source corpus: list of {id, title, content, source, ...} dicts.
+    # Rendered into the first user message for RAG-framed judges.
+    documents = models.JSONField(default=list, blank=True)
+    # File attachment(s) for multimodal scenarios (str or list[str]).
+    # Resolved via fsspec by the engine; attached to the first user message.
+    file_uri = models.JSONField(null=True, blank=True)
     metadata = models.JSONField(default=dict, blank=True)
     content_hash = models.CharField(max_length=71)
     created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True)

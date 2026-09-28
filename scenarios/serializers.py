@@ -2,11 +2,21 @@ from rest_framework import serializers
 
 from scenarios.models import Scenario, ScenarioRevision, ScenarioSet, ScenarioSetVersion
 
+SEVERITY_CHOICES = ["pass", "low", "medium", "high", "critical"]
+
+
+def _validate_severity_ceiling(value: str) -> str:
+    value = (value or "").strip().lower()
+    if value and value not in SEVERITY_CHOICES:
+        raise serializers.ValidationError(f"Severity ceiling must be one of {SEVERITY_CHOICES}.")
+    return value
+
 
 class ScenarioRevisionSerializer(serializers.ModelSerializer):
     class Meta:
         model = ScenarioRevision
-        fields = ("id", "revision", "description", "expected_behavior", "test_prompt", "metadata", "content_hash", "created_at")
+        fields = ("id", "revision", "description", "expected_behavior", "test_prompt",
+                  "severity_ceiling", "documents", "file_uri", "metadata", "content_hash", "created_at")
         read_only_fields = fields
 
 
@@ -31,6 +41,9 @@ class ScenarioCreateSerializer(serializers.Serializer):
     description = serializers.CharField(allow_blank=False)
     expected_behavior = serializers.ListField(child=serializers.CharField(), allow_empty=False)
     test_prompt = serializers.CharField(required=False, allow_blank=True, default="")
+    severity_ceiling = serializers.CharField(required=False, allow_blank=True, default="", validators=[_validate_severity_ceiling])
+    documents = serializers.ListField(child=serializers.DictField(), required=False, default=list)
+    file_uri = serializers.JSONField(required=False, allow_null=True, default=None)
     metadata = serializers.DictField(required=False, default=dict)
     category = serializers.CharField(required=False, allow_blank=True, default="")
     tags = serializers.ListField(child=serializers.CharField(), required=False, default=list)
@@ -40,6 +53,9 @@ class ScenarioUpdateSerializer(serializers.Serializer):
     description = serializers.CharField(allow_blank=False)
     expected_behavior = serializers.ListField(child=serializers.CharField(), allow_empty=False)
     test_prompt = serializers.CharField(required=False, allow_blank=True, default="")
+    severity_ceiling = serializers.CharField(required=False, allow_blank=True, default="", validators=[_validate_severity_ceiling])
+    documents = serializers.ListField(child=serializers.DictField(), required=False, default=list)
+    file_uri = serializers.JSONField(required=False, allow_null=True, default=None)
     metadata = serializers.DictField(required=False, default=dict)
 
 
