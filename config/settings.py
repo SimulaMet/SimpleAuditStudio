@@ -94,6 +94,14 @@ def _csrf_trusted_origins() -> list[str]:
 
 CSRF_TRUSTED_ORIGINS = _csrf_trusted_origins()
 
+# The app runs behind a TLS-terminating reverse proxy (HF Spaces, nginx, etc.).
+# Without this, Django sees the proxied request as plain HTTP and
+# build_absolute_uri() emits http:// URLs — which makes og:url/og:image/canonical
+# point at the http:// origin (Facebook's debugger then follows the 301 to
+# https://host:443/ and warns about the mismatch). Trusting the proxy header
+# makes absolute URLs use https:// like the browser actually sees.
+SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+
 
 INSTALLED_APPS = [
     "django.contrib.admin",

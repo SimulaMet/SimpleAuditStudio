@@ -31,7 +31,13 @@ def _absolute_url(request, path: str) -> str:
 def _base_context(request) -> dict:
     return {
         "current_year": datetime.now(UTC).year,
-        "og_image_url": _absolute_url(request, "/static/logo.png"),
+        # 1200x630 social card (Facebook/Twitter recommended size). The
+        # dimensions are declared in the template so crawlers precache the
+        # image synchronously instead of inferring it asynchronously.
+        "og_image_url": _absolute_url(request, "/static/og-image.png"),
+        "og_image_width": 1200,
+        "og_image_height": 630,
+        "og_image_alt": f"{SITE_NAME} — {SITE_TAGLINE}",
     }
 
 
