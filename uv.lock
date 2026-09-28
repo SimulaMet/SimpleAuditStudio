@@ -2149,16 +2149,16 @@ wheels = [
 
 [[package]]
 name = "simpleaudit"
-version = "0.2.1"
+version = "0.2.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "any-llm-sdk" },
     { name = "fsspec" },
     { name = "tqdm" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/15/3f/dc60dd5485c78a477c4acf625c125519dceec45c8743d10e7336363e138c/simpleaudit-0.2.1.tar.gz", hash = "sha256:3ff6d95fe255149f6116e6012e981a6a8692ea189c000a91a921c0a47a50be59", size = 1426694, upload-time = "2026-09-25T19:24:23.022Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/70/bd/549c74e4bf9a6dddb76263ae58c8a6009f51dd12bce3fcb988b1c1468c64/simpleaudit-0.2.2.tar.gz", hash = "sha256:54d1009adeb3e6c705f606d02aa829e6a9ba7c97fc55e0a14e6413e1582f05b4", size = 1430618, upload-time = "2026-09-28T13:04:52.186Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/ec/1e/ee9404ede455c34b306d58748bb650fc047819c273e6c3fd2926295d60b4/simpleaudit-0.2.1-py3-none-any.whl", hash = "sha256:18ee7f1e59aaf1324c36ddd2958a45b4dfcd9bb121fcbf1044f04dd03cca2988", size = 1316318, upload-time = "2026-09-25T19:24:21.229Z" },
+    { url = "https://files.pythonhosted.org/packages/f6/0b/2e8f3529f73c032a55e1a63b399cc551e553b99362e43ab63a04a41c9dd6/simpleaudit-0.2.2-py3-none-any.whl", hash = "sha256:b048375779b3684a30f291d7de81ccb5f4fe6eae5cac81a5a9a379bdbd2339f6", size = 1319098, upload-time = "2026-09-28T13:04:49.83Z" },
 ]
 
 [[package]]
@@ -2212,7 +2212,7 @@ requires-dist = [
     { name = "requests", specifier = "==2.32.5" },
     { name = "ruff", marker = "extra == 'dev'" },
     { name = "sentry-sdk", extras = ["django"], specifier = ">=2.0" },
-    { name = "simpleaudit", specifier = "==0.2.1" },
+    { name = "simpleaudit", specifier = "==0.2.2" },
     { name = "workos", specifier = "==10.4.0" },
 ]
 provides-extras = ["postgres", "server", "dev", "e2e"]
