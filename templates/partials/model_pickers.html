@@ -37,7 +37,10 @@ Field names match the single-select partial so one-run posts look the same.
           {% endfor %}
           {% endif %}
         {% endfor %}
-        <p data-filter-empty class="hidden px-2.5 py-2 text-xs text-gray-500">No matches.</p>
+        <div data-filter-empty class="hidden px-2.5 py-2 text-xs text-gray-500">
+          No matches.
+          {% include "partials/need_help.html" %}
+        </div>
       </div>
     </fieldset>
     {% endfor %}
@@ -46,5 +49,6 @@ Field names match the single-select partial so one-run posts look the same.
   <p class="text-xs text-gray-500">
     No models yet? <a href="{% url 'models' %}" target="_blank" class="text-accent hover:underline">Register a model connection →</a>
   </p>
+  {% include "partials/need_help.html" %}
   {% endif %}
 </div>
