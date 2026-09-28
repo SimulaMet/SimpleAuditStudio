@@ -31,7 +31,7 @@ class AuditRun(models.Model):
     scenario_set_version = models.ForeignKey("scenarios.ScenarioSetVersion", on_delete=models.RESTRICT, related_name="audit_runs")
     target_model = models.ForeignKey("model_registry.RegisteredModel", on_delete=models.RESTRICT, related_name="target_audit_runs")
     auditor_model = models.ForeignKey("model_registry.RegisteredModel", on_delete=models.RESTRICT, related_name="auditor_audit_runs")
-    # How the run is graded (rubric + prompts) and the model that grades.
+    # How the run is graded (criteria, output format, probe prompt) and the model that grades.
     judge_version = models.ForeignKey("judges.JudgeVersion", on_delete=models.RESTRICT, related_name="audit_runs")
     judge_model = models.ForeignKey("model_registry.RegisteredModel", on_delete=models.RESTRICT, related_name="judge_audit_runs")
     target_config_snapshot = models.JSONField()

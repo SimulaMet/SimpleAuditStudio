@@ -1,5 +1,4 @@
 {% extends "base.html" %}
-{% load static %}
 {% block title %}Scenarios — SimpleAudit{% endblock %}
 {% block content %}
 <h1 class="text-lg font-semibold text-gray-100 mb-6">Scenario Library</h1>
@@ -15,7 +14,7 @@
     <a href="?set={{ s.id }}"
        class="block px-4 py-3 rounded-xl border text-sm transition-colors {% if selected and selected.id == s.id %}bg-accent/15 border-accent/30 text-accent{% else %}bg-surface-raised border-gray-800 text-gray-300 hover:border-gray-600{% endif %}">
       <span class="font-medium">{{ s.name }}</span>
-      <span class="text-xs text-gray-500 ml-2">{{ s.version_count }}v</span>
+      {% if s.latest_version %}<span class="ml-2">{% include "partials/version_badge.html" with number=s.latest_version count=s.version_count %}</span>{% else %}<span class="ml-2 text-[11px] text-gray-500" title="No version published yet: add a scenario to publish v1">draft</span>{% endif %}
     </a>
     {% empty %}
     <p class="text-sm text-gray-500">No scenario sets yet.</p>
@@ -47,7 +46,7 @@
       <div class="flex flex-wrap items-center justify-between gap-2 mb-3">
         <div class="flex items-center gap-2 min-w-0">
           <h2 class="text-sm font-semibold text-gray-200 truncate">{{ selected.name }}</h2>
-          {% if viewing_version %}<span class="text-xs text-gray-500">(v{{ viewing_version.version }})</span>{% endif %}
+          {% if viewing_version %}{% include "partials/version_badge.html" with number=viewing_version.version latest=viewing_is_latest count=versions|length %}{% endif %}
         </div>
         <div class="flex flex-wrap gap-2 items-center">
           <a href="{% url 'scenario_export' selected.id %}" class="px-2 py-1 rounded text-xs bg-surface-overlay text-gray-400 hover:text-gray-200">Export</a>
@@ -76,11 +75,11 @@
         <form id="revert-form" method="post" action="{% url 'scenario_revert' selected.id %}">
           {% csrf_token %}
           <input type="hidden" name="target_version" value="{{ viewing_version.version }}">
-          <button type="button" onclick="showRevertDiff({{ selected.id }}, {{ viewing_version.version }})" class="px-2 py-1 rounded text-xs bg-amber-900/30 text-amber-400 hover:bg-amber-900/50">↩ Compare & Revert to v{{ viewing_version.version }}</button>
+          <button type="button" id="revert-open" title="See what reverting changes before confirming" class="px-2 py-1 rounded text-xs bg-amber-900/30 text-amber-400 hover:bg-amber-900/50">↩ Compare & Revert to v{{ viewing_version.version }}</button>
         </form>
         {% endif %}
         {% if viewing_version and viewing_version.version > 1 %}
-        <button onclick="showVersionDiff({{ selected.id }}, {{ prev_version }}, {{ viewing_version.version }})" class="px-2 py-1 rounded text-xs bg-blue-900/30 text-blue-400 hover:bg-blue-900/50">📋 Changes from v{{ prev_version }}</button>
+        <button type="button" data-diff-open="{{ prev_version }}:{{ viewing_version.version }}" title="See what changed from v{{ prev_version }} to v{{ viewing_version.version }}" class="px-2 py-1 rounded text-xs bg-blue-900/30 text-blue-400 hover:bg-blue-900/50">Changes from v{{ prev_version }}</button>
         {% endif %}
       </div>
       {% endif %}
@@ -106,7 +105,7 @@
             <div class="min-w-0 flex-1">
               <span class="text-sm text-gray-200 truncate">{{ item.scenario.title }}</span>
               {% if item.scenario.category %}<span class="ml-2 text-xs text-gray-500">{{ item.scenario.category }}</span>{% endif %}
-              <span class="ml-2 text-xs text-gray-600">rev {{ item.revision.revision }}</span>
+              <span class="ml-2 text-xs text-gray-600" title="Revision {{ item.revision.revision }} of this scenario: each edit to its description or expected behaviour adds a revision">rev {{ item.revision.revision }}</span>
             </div>
             <div class="flex gap-1 shrink-0">
               <button data-write onclick="document.getElementById('edit-scenario-{{ item.scenario.id }}').style.display='block'" title="Edit scenario" aria-label="Edit scenario" class="text-xs text-gray-500 hover:text-accent">✎</button>
@@ -221,10 +220,16 @@ document.addEventListener('click', e => {
 </div>
 {% endif %}
 
-<script src="{% static 'js/diff.min.js' %}"></script>
+{% if selected and versions|length > 1 %}
+{% include "partials/version_diff_modal.html" with id="set-diff" title="What changed" versions=versions %}
+{% include "partials/version_diff_modal.html" with id="revert-diff" title="Compare & revert" confirm="Confirm revert" %}
+{% endif %}
+
+{% include "partials/version_diff_js.html" %}
 <script>
 // Live version hint: shows "Will publish as vN" when description OR expected_behavior changes
-const CURRENT_VERSION = {{ viewing_version.version|default:0 }};
+// Saving publishes after the latest version, whichever one is being viewed.
+const CURRENT_VERSION = {{ versions.0.version|default:0 }};
 
 // Scenario content changed (a new version will be published)? defaultValue is the saved text.
 function _contentChanged(id) {
@@ -255,172 +260,54 @@ function confirmScenarioSave(scenarioId, form) {
   return true;
 }
 
-// ─── Diff Rendering Helpers (jsdiff-based) ──────────────────────────────────
-/** Render an inline word-level diff using jsdiff. Returns HTML string. */
-function renderInlineDiff(oldText, newText) {
-  if (!oldText && !newText) return '<span class="text-gray-600 italic">empty</span>';
-  if (!oldText) return `<span class="bg-green-900/40 text-green-300 rounded px-0.5">${esc(newText)}</span>`;
-  if (!newText) return `<span class="bg-red-900/40 text-red-300 rounded px-0.5 line-through">${esc(oldText)}</span>`;
-  const parts = Diff.diffWords(oldText, newText);
-  let html = '';
-  parts.forEach(part => {
-    if (part.added) {
-      html += `<span class="bg-green-900/50 text-green-300 rounded-sm px-0.5">${esc(part.value)}</span>`;
-    } else if (part.removed) {
-      html += `<span class="bg-red-900/50 text-red-300 rounded-sm px-0.5 line-through">${esc(part.value)}</span>`;
-    } else {
-      html += esc(part.value);
-    }
-  });
+// ─── What changed / Compare & revert (shared VersionDiff) ───────────────────
+{% if selected and versions|length > 1 %}
+/** A scenario set diff (scenarios/services.version_diff) as HTML. */
+function setDiffHtml(d) {
+  if (d.from_version === d.to_version) return '<p class="text-gray-400">Pick two different versions.</p>';
+  let html = VersionDiff.counts({ added: d.added.length, removed: d.removed.length, changed: d.changed.length, unchanged: d.unchanged_count });
+  if (!d.added.length && !d.removed.length && !d.changed.length) {
+    return html + `<p class="text-green-400">✓ No differences between v${d.from_version} and v${d.to_version}.</p>`;
+  }
+  const section = (title, cls, items, body) => items.length
+    ? `<h4 class="font-semibold uppercase tracking-wide mb-2 ${cls}">${title}</h4>` + items.map(body).join('') : '';
+  const scenario = (s, sign, border, extra = '') =>
+    `<div class="ml-2 pl-3 border-l-2 ${border} pb-2 mb-3"><p class="text-sm font-medium">${sign} ${esc(s.title)} <span class="text-xs font-normal text-gray-500">${extra}</span></p>`;
+  html += section('Added', 'text-green-400', d.added, s => scenario(s, '+', 'border-green-800', `rev ${s.revision}`) +
+    VersionDiff.fields([{ label: 'Description', from: '', to: s.description }, { label: 'Expected behaviour', from: [], to: s.expected_behavior }], { unchanged: false }) + '</div>');
+  html += section('Removed', 'text-red-400', d.removed, s => scenario(s, '−', 'border-red-800', `rev ${s.revision}`) +
+    `<p class="text-gray-500 line-through whitespace-pre-wrap">${esc(s.description)}</p></div>`);
+  html += section('Changed', 'text-yellow-400', d.changed, s => scenario(s, '~', 'border-yellow-800', `rev ${s.from.revision} → rev ${s.to.revision}`) +
+    VersionDiff.fields([
+      { label: 'Description', from: s.from.description, to: s.to.description },
+      { label: 'Expected behaviour', from: s.from.expected_behavior, to: s.to.expected_behavior },
+    ], { unchanged: false }) + '</div>');
   return html;
 }
 
-/** Render a list of EB criteria as a diff (line-by-line). */
-function renderEbdiff(oldList, newList) {
-  const oldStr = (oldList || []).join('\n');
-  const newStr = (newList || []).join('\n');
-  if (oldStr === newStr) return null;
-  return renderInlineDiff(oldStr, newStr);
-}
-
-/** Build the full diff modal body from a diff API response. */
-function buildDiffBody(d, opts) {
-  // opts: { labelFrom, labelTo, footer }
-  let html = '';
-  const totalChanges = d.added.length + d.removed.length + d.changed.length;
-
-  if (totalChanges === 0) {
-    html += `<p class="text-green-400 text-sm mb-3">✓ No differences between ${opts.labelFrom} and ${opts.labelTo}.</p>`;
-  } else {
-    html += `<div class="flex gap-2 text-xs mb-4 flex-wrap">`;
-    html += `<span class="px-2 py-0.5 rounded bg-green-900/40 text-green-400 font-medium">+${d.added.length} added</span>`;
-    html += `<span class="px-2 py-0.5 rounded bg-red-900/40 text-red-400 font-medium">−${d.removed.length} removed</span>`;
-    html += `<span class="px-2 py-0.5 rounded bg-yellow-900/40 text-yellow-400 font-medium">~${d.changed.length} changed</span>`;
-    html += `<span class="px-2 py-0.5 rounded bg-gray-800 text-gray-500">${d.unchanged_count} unchanged</span>`;
-    html += `</div>`;
-  }
-
-  // Added
-  if (d.added.length) {
-    html += `<div class="mb-4"><h4 class="text-xs font-semibold text-green-400 uppercase tracking-wide mb-2">Added</h4>`;
-    d.added.forEach(s => {
-      html += `<div class="ml-2 pl-3 border-l-2 border-green-800 pb-2 mb-2">`;
-      html += `<p class="text-sm text-green-300 font-medium">+ ${esc(s.title)}</p>`;
-      html += `<p class="text-xs text-gray-400 mt-1 whitespace-pre-wrap">${esc(s.description)}</p>`;
-      if (s.expected_behavior && s.expected_behavior.length) {
-        html += `<p class="text-xs text-gray-500 mt-1"><span class="text-gray-600">Criteria:</span> ${s.expected_behavior.map(esc).join('; ')}</p>`;
-      }
-      html += `</div>`;
-    });
-    html += `</div>`;
-  }
-
-  // Removed
-  if (d.removed.length) {
-    html += `<div class="mb-4"><h4 class="text-xs font-semibold text-red-400 uppercase tracking-wide mb-2">Removed</h4>`;
-    d.removed.forEach(s => {
-      html += `<div class="ml-2 pl-3 border-l-2 border-red-800 pb-2 mb-2">`;
-      html += `<p class="text-sm text-red-300 font-medium">− ${esc(s.title)}</p>`;
-      html += `<p class="text-xs text-gray-400 mt-1 whitespace-pre-wrap line-through decoration-red-900">${esc(s.description)}</p>`;
-      html += `</div>`;
-    });
-    html += `</div>`;
-  }
-
-  // Changed
-  if (d.changed.length) {
-    html += `<div class="mb-4"><h4 class="text-xs font-semibold text-yellow-400 uppercase tracking-wide mb-2">Modified</h4>`;
-    d.changed.forEach(s => {
-      html += `<div class="ml-2 pl-3 border-l-2 border-yellow-800 pb-3 mb-3">`;
-      html += `<p class="text-sm text-yellow-300 font-medium mb-1">~ ${esc(s.title)}</p>`;
-      // Description inline diff
-      const descKeyFrom = opts.descKeyFrom || 'from_desc';
-      const descKeyTo = opts.descKeyTo || 'to_desc';
-      if (s[descKeyFrom] !== s[descKeyTo]) {
-        html += `<div class="text-xs text-gray-300 bg-gray-900/50 rounded p-2 mt-1 whitespace-pre-wrap leading-relaxed">`;
-        html += renderInlineDiff(s[descKeyFrom], s[descKeyTo]);
-        html += `</div>`;
-      }
-      // EB inline diff
-      const ebKeyFrom = opts.ebKeyFrom || 'from_eb';
-      const ebKeyTo = opts.ebKeyTo || 'to_eb';
-      const ebDiff = renderEbdiff(s[ebKeyFrom], s[ebKeyTo]);
-      if (ebDiff) {
-        html += `<div class="text-xs text-gray-300 bg-gray-900/50 rounded p-2 mt-1 whitespace-pre-wrap leading-relaxed">`;
-        html += `<span class="text-gray-500 font-medium block mb-0.5">Judge criteria:</span>`;
-        html += ebDiff;
-        html += `</div>`;
-      }
-      html += `</div>`;
-    });
-    html += `</div>`;
-  }
-
-  if (opts.footer) html += `<p class="text-xs text-gray-500 mt-4 border-t border-gray-800 pt-3">${opts.footer}</p>`;
-  return html;
-}
-
-// ─── Compare & Revert (latest vs target) ────────────────────────────────────
-async function showRevertDiff(setId, targetVer) {
-  const overlay = document.getElementById('revert-diff-overlay');
-  const body = document.getElementById('revert-diff-body');
-  overlay.classList.remove('hidden');
-  body.innerHTML = '<div class="text-gray-400 text-sm py-8 text-center">Loading diff…</div>';
-
+async function loadSetDiff(api, url, footer) {
+  api.loading();
   try {
-    const resp = await fetch(`/scenarios/revert/${setId}/?target_version=${targetVer}`);
+    const resp = await fetch(url);
     const d = await resp.json();
-    if (d.error) { body.innerHTML = `<p class="text-red-400">${esc(d.error)}</p>`; return; }
-
-    body.innerHTML = buildDiffBody(d, {
-      labelFrom: `v${d.latest_version} (current)`,
-      labelTo: `v${d.target_version} (target)`,
-      descKeyFrom: 'latest_desc', descKeyTo: 'target_desc',
-      ebKeyFrom: 'latest_eb', ebKeyTo: 'target_eb',
-      footer: `Confirming will publish v${d.target_version}'s content as a new version (v${d.latest_version + 1}). Historical versions are not modified.`
-    });
-  } catch (e) {
-    body.innerHTML = `<p class="text-red-400 text-sm">Failed to load diff: ${esc(e.message)}</p>`;
-  }
+    if (d.error) return api.error(d.error);
+    api.body.innerHTML = setDiffHtml(d) + (footer ? `<p class="mt-4 pt-3 border-t border-gray-800 text-gray-500">${footer(d)}</p>` : '');
+  } catch (e) { api.error(`Failed to load the diff: ${e.message}`); }
 }
 
-function closeRevertDiff() {
-  document.getElementById('revert-diff-overlay').classList.add('hidden');
-}
+const setDiff = VersionDiff.modal('set-diff', api =>
+  loadSetDiff(api, `{% url 'scenario_diff' selected.id %}?from=${api.from.value}&to=${api.to.value}`));
+document.querySelectorAll('[data-diff-open]').forEach(btn =>
+  btn.addEventListener('click', () => setDiff.open(...btn.dataset.diffOpen.split(':'))));
 
-function confirmRevert() {
-  closeRevertDiff();
-  document.getElementById('revert-form').submit();
-}
-
-// ─── Version-to-Version Diff (read-only) ────────────────────────────────────
-async function showVersionDiff(setId, fromVer, toVer) {
-  const overlay = document.getElementById('version-diff-overlay');
-  const body = document.getElementById('version-diff-body');
-  const title = document.getElementById('version-diff-title');
-  overlay.classList.remove('hidden');
-  title.textContent = `v${fromVer} → v${toVer}`;
-  body.innerHTML = '<div class="text-gray-400 text-sm py-8 text-center">Loading diff…</div>';
-
-  try {
-    const resp = await fetch(`/scenarios/diff/${setId}/?from=${fromVer}&to=${toVer}`);
-    const d = await resp.json();
-    if (d.error) { body.innerHTML = `<p class="text-red-400">${esc(d.error)}</p>`; return; }
-
-    body.innerHTML = buildDiffBody(d, {
-      labelFrom: `v${d.from_version}`,
-      labelTo: `v${d.to_version}`,
-      descKeyFrom: 'from_desc', descKeyTo: 'to_desc',
-      ebKeyFrom: 'from_eb', ebKeyTo: 'to_eb',
-    });
-  } catch (e) {
-    body.innerHTML = `<p class="text-red-400 text-sm">Failed to load diff: ${esc(e.message)}</p>`;
-  }
-}
-
-function closeVersionDiff() {
-  document.getElementById('version-diff-overlay').classList.add('hidden');
-}
+{% if viewing_version and viewing_version != versions.0 %}
+const revertDiff = VersionDiff.modal('revert-diff', api =>
+  loadSetDiff(api, `{% url 'scenario_revert' selected.id %}?target_version={{ viewing_version.version }}`,
+    d => `Confirming publishes v${d.to_version}'s scenarios as a new version, v${d.from_version + 1}. Older versions are not changed.`));
+document.getElementById('revert-open').addEventListener('click', () => revertDiff.open());
+revertDiff.root.querySelector('[data-diff-confirm]').addEventListener('click', () => document.getElementById('revert-form').submit());
+{% endif %}
+{% endif %}
 
 // ─── Set list search filter ─────────────────────────────────────────────────
 function filterSets(query) {
@@ -445,35 +332,6 @@ function filterScenarios(query) {
   });
 }
 </script>
-
-<!-- Compare & Revert Modal -->
-<div id="revert-diff-overlay" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm" onclick="if(event.target===this)closeRevertDiff()">
-  <div class="bg-surface border border-gray-700 rounded-xl shadow-2xl w-full max-w-3xl max-h-[85vh] flex flex-col mx-4">
-    <div class="flex items-center justify-between px-5 py-3 border-b border-gray-800">
-      <h3 class="text-sm font-semibold text-gray-200">Compare & Revert</h3>
-      <button onclick="closeRevertDiff()" class="text-gray-500 hover:text-gray-300 text-lg leading-none" aria-label="Close">&times;</button>
-    </div>
-    <div id="revert-diff-body" class="flex-1 overflow-y-auto px-5 py-4"></div>
-    <div class="flex justify-end gap-2 px-5 py-3 border-t border-gray-800">
-      <button onclick="closeRevertDiff()" class="px-4 py-1.5 rounded text-xs bg-gray-800 text-gray-300 hover:bg-gray-700">Cancel</button>
-      <button onclick="confirmRevert()" class="px-4 py-1.5 rounded text-xs bg-amber-700 text-white hover:bg-amber-600 font-medium">Confirm Revert</button>
-    </div>
-  </div>
-</div>
-
-<!-- Version Changes Modal (read-only) -->
-<div id="version-diff-overlay" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm" onclick="if(event.target===this)closeVersionDiff()">
-  <div class="bg-surface border border-gray-700 rounded-xl shadow-2xl w-full max-w-3xl max-h-[85vh] flex flex-col mx-4">
-    <div class="flex items-center justify-between px-5 py-3 border-b border-gray-800">
-      <h3 class="text-sm font-semibold text-gray-200">Version Changes — <span id="version-diff-title"></span></h3>
-      <button onclick="closeVersionDiff()" class="text-gray-500 hover:text-gray-300 text-lg leading-none" aria-label="Close">&times;</button>
-    </div>
-    <div id="version-diff-body" class="flex-1 overflow-y-auto px-5 py-4"></div>
-    <div class="flex justify-end px-5 py-3 border-t border-gray-800">
-      <button onclick="closeVersionDiff()" class="px-4 py-1.5 rounded text-xs bg-gray-800 text-gray-300 hover:bg-gray-700">Close</button>
-    </div>
-  </div>
-</div>
 
 <!-- Import Set Modal -->
 {% if selected %}

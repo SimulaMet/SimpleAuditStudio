@@ -10,8 +10,8 @@
     </h1>
     <p class="text-xs text-gray-500 mt-1">
       {{ monitor.target_model.display_name }} · {{ monitor.scenario_set.name }}
-      {% if monitor.scenario_set_version %}v{{ monitor.scenario_set_version.version }} (pinned){% else %}(latest){% endif %}
-      · auditor {{ monitor.auditor_model.display_name }} · judge model {{ monitor.judge_model.display_name }} · judge <a href="{% url 'judge_detail' monitor.judge_id %}" class="hover:text-accent">{{ monitor.judge.name }}</a> {% if monitor.judge_version %}v{{ monitor.judge_version.version }} (pinned){% else %}(latest){% endif %}
+      {% include "partials/pinned_version.html" with version=monitor.scenario_set_version %}
+      · auditor {{ monitor.auditor_model.display_name }} · judge model {{ monitor.judge_model.display_name }} · judge <a href="{% url 'judge_detail' monitor.judge_id %}" class="hover:text-accent">{{ monitor.judge.name }}</a> {% include "partials/pinned_version.html" with version=monitor.judge_version %}
       · {{ monitor.interval_display }}{% if monitor.enabled %} · next <time data-local datetime="{{ monitor.next_run_at|date:'c' }}">{{ monitor.next_run_at|date:"M j, H:i" }} UTC</time>{% endif %}
     </p>
   </div>
@@ -90,7 +90,7 @@
       <tbody>
         {% for p in points %}
         <tr class="border-b border-gray-800/50 hover:bg-surface-overlay/50 cursor-pointer" onclick="location='/runs/{{ p.run.id }}/'">
-          <td class="px-3 py-2.5 text-gray-200 font-medium">#{{ p.run.id }} <span class="text-xs text-gray-500">v{{ p.version }}</span></td>
+          <td class="px-3 py-2.5 text-gray-200 font-medium">#{{ p.run.id }} <span class="text-xs text-gray-500" title="Scenario set version this run used">v{{ p.version }}</span></td>
           <td class="px-3 py-2.5 text-gray-400 text-xs whitespace-nowrap"><time data-local datetime="{{ p.run.created_at|date:'c' }}">{{ p.run.created_at|date:"M j, H:i" }} UTC</time></td>
           <td class="px-3 py-2.5 text-gray-400 text-xs">{{ p.run.status }}</td>
           <td class="px-3 py-2.5 text-gray-200 text-xs">{% if p.rate is not None %}{% widthratio p.k p.n 100 %}%{% else %}—{% endif %}</td>

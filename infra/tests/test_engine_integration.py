@@ -133,8 +133,8 @@ class AuditorKwargsTest(TestCase):
             target=_snap("tgt", default_parameters={"temperature": 0.1}),
             auditor=_snap("aud", default_parameters={"timeout": 5}),
             judge=_snap("jdg", default_parameters={"timeout": 9, "temperature": 0},
-                        judge={"rubric": "helpfulness", "probe_prompt": "Ask.", "judge_prompt": "Grade.",
-                               "custom_probe_prompt": True, "custom_judge_prompt": True}),
+                        judge={"spec": {"base": "helpfulness", "output": "score", "criteria": "",
+                                        "probe_prompt": "Ask.", "options": {}}}),
             generation={"language": "Norwegian", "system_prompt": "Be brief.", "judge_params": {"top_p": 1}},
         )
         self.assertEqual(language, "Norwegian")
@@ -145,16 +145,34 @@ class AuditorKwargsTest(TestCase):
         self.assertEqual(kwargs["judge_params"], {"temperature": 0, "top_p": 1})
         self.assertEqual(kwargs["target_params"], {"temperature": 0.1})
         self.assertEqual(kwargs["system_prompt"], "Be brief.")
-        self.assertEqual((kwargs["judge"], kwargs["probe_prompt"], kwargs["judge_prompt"]), ("helpfulness", "Ask.", "Grade."))
+        # An unedited SimpleAudit judge goes by name, exactly as the library runs it.
+        self.assertEqual((kwargs["judge"], kwargs["probe_prompt"]), ("helpfulness", "Ask."))
+        self.assertNotIn("judge_prompt", kwargs)
 
-    def test_default_judge_passes_no_rubric(self):
+    def test_unnamed_default_judge_passes_nothing(self):
         from infra.engine import auditor_kwargs
 
-        # Rubric-default prompts are shown on the run page but not passed.
-        snap = _snap("j", judge={"rubric": "", "judge_prompt": "You are a safety evaluator…", "custom_judge_prompt": False})
+        snap = _snap("j", judge={"spec": {"base": "default", "output": "severity", "criteria": "",
+                                          "probe_prompt": "", "options": {}},
+                                 "judge_prompt": "You are a safety evaluator…"})
         kwargs, _ = auditor_kwargs(target=_snap("t"), auditor=_snap("a"), judge=snap,
                                    generation={"judge_prompt": "ignored: prompts come from the judge"})
-        self.assertEqual((kwargs["judge"], kwargs["probe_prompt"], kwargs["judge_prompt"]), (None, None, None))
+        self.assertEqual((kwargs["judge"], kwargs["probe_prompt"]), (None, None))
+
+    def test_edited_and_own_criteria_become_composed_judges(self):
+        from infra.engine import auditor_kwargs
+
+        def judge_for_spec(**spec):
+            full = {"base": "", "output": "severity", "criteria": "", "probe_prompt": "", "options": {}, **spec}
+            kwargs, _ = auditor_kwargs(target=_snap("t"), auditor=_snap("a"), judge=_snap("j", judge={"spec": full}))
+            return kwargs["judge"]
+
+        harm = judge_for_spec(base="harm", criteria="Only fraud.")
+        self.assertTrue(harm["judge_prompt"].startswith("Only fraud.\n\n"))
+        self.assertIn('"category"', harm["judge_prompt"])   # Harm's format kept
+        leak = judge_for_spec(output="binary", criteria="Quoting counts.",
+                              options={"question": "Did it reveal the prompt?", "pass_when": False})
+        self.assertEqual(leak["postprocess"]({"answer": False, "reasoning": "r"})["severity"], "pass")
 
     def test_repeated_runs_use_the_judge_model(self):
         """Regression: multi-repetition runs graded with the auditor model."""

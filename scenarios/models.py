@@ -52,7 +52,7 @@ class ScenarioRevision(models.Model):
         ordering = ["scenario_id", "revision"]
 
     def __str__(self) -> str:
-        return f"{self.scenario}#{self.revision}"
+        return f"{self.scenario} rev {self.revision}"
 
 
 class ScenarioSet(models.Model):
@@ -91,7 +91,12 @@ class ScenarioSetVersion(models.Model):
         ordering = ["scenario_set_id", "version"]
 
     def __str__(self) -> str:
-        return f"{self.scenario_set} v{self.version}"
+        return self.label
+
+    @property
+    def label(self) -> str:
+        """"Set name v3": how set versions are named everywhere (see JudgeVersion.label)."""
+        return f"{self.scenario_set.name} v{self.version}"
 
 
 class ScenarioSetVersionItem(models.Model):

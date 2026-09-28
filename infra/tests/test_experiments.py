@@ -403,7 +403,7 @@ class JudgeAndSystemPromptTests(_ExperimentBase):
     def test_several_judges_become_a_factor(self):
         from judges.services import create_judge
 
-        strict = create_judge(project=self.project, name="Strict", rubric="harm").latest
+        strict = create_judge(project=self.project, name="Strict", base="harm").latest
         review = self.client.post("/experiments/new/", self._design(
             target_model=[self.t1.id], max_turns="", judge=[judge_for(self.judge).id, strict.id]))
         self.assertEqual([k for k, _ in review.context["columns"]], ["judge"])
@@ -413,11 +413,12 @@ class JudgeAndSystemPromptTests(_ExperimentBase):
         self.assertEqual(exp.factors, ["judge"])
         runs = {r.judge_version_id: r for r in exp.runs.all()}
         self.assertEqual(set(runs), {judge_for(self.judge).id, strict.id})
-        # The run freezes the judge version's rubric and prompts.
+        # The run freezes the judge version's spec and the prompts it resolves to.
         snap = runs[strict.id].judge_config_snapshot
         self.assertEqual(runs[strict.id].judge_model_id, self.judge.id)
-        self.assertEqual((snap["judge"]["rubric"], snap["judge"]["name"], snap["judge"]["version"]), ("harm", "Strict", 1))
-        self.assertTrue(snap["judge"]["judge_prompt"])   # resolved from the rubric
+        self.assertEqual((snap["judge"]["base"], snap["judge"]["name"], snap["judge"]["version"]), ("harm", "Strict", 1))
+        self.assertEqual(snap["judge"]["spec"]["criteria"], "")   # follows SimpleAudit's
+        self.assertIn("HELM", snap["judge"]["judge_prompt"])   # resolved to full text
 
     def test_always_latest_judge_leaves_monitor_unpinned(self):
         from audits.models import Monitor
@@ -456,7 +457,7 @@ class JudgeAndSystemPromptTests(_ExperimentBase):
         self.assertEqual(row.ticked, {str(run.judge_version_id)})
 
     def test_one_judge_with_several_judge_models(self):
-        """Same rubric, different graders: no cloning needed."""
+        """Same judge, different graders: no cloning needed."""
         review = self.client.post("/experiments/new/", self._design(
             target_model=[self.t1.id], max_turns="", judge_model=[self.judge.id, self.t2.id]))
         self.assertEqual([k for k, _ in review.context["columns"]], ["judge_model"])

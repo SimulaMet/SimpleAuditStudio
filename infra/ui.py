@@ -11,7 +11,7 @@ from django.contrib import messages
 from django.contrib.auth import login, logout
 from django.contrib.auth.forms import AuthenticationForm
 from django.contrib.auth.mixins import LoginRequiredMixin
-from django.db.models import Count, F, ProtectedError, Q, RestrictedError
+from django.db.models import Count, F, Max, ProtectedError, Q, RestrictedError
 from django.http import HttpResponse, HttpResponseForbidden, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
@@ -85,6 +85,14 @@ def write_block_reason(request) -> str | None:
     if not has_write_role(request.user, project):
         return "Admin or auditor role required to make changes in this workspace."
     return None
+
+
+def _int(value, default: int = 0) -> int:
+    """``value`` as an int (query and form values), ``default`` when it isn't one."""
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
 
 
 def _require_write_access(request):
@@ -1144,7 +1152,7 @@ def _judge_picker(project, selected: list[str]) -> list:
     from django.db.models import Prefetch
 
     from judges.models import Judge, JudgeVersion
-    from judges.services import OUTPUT_LABELS, default_judge, rubric
+    from judges.services import decorate, default_judge
 
     judges = list(
         Judge.objects.filter(project=project).order_by("name").prefetch_related(
@@ -1156,11 +1164,7 @@ def _judge_picker(project, selected: list[str]) -> list:
         default = next((j for j in judges if preferred and j.pk == preferred.pk), judges[0])
         selected = [str(default.versions.all()[0].id)]
     for judge in judges:
-        judge.version_list = list(judge.versions.all())
-        for v in judge.version_list:
-            info = rubric(v.rubric)
-            v.rubric_name = info["name"]
-            v.output_label = OUTPUT_LABELS[info["output"]]
+        judge.version_list = [decorate(v) for v in judge.versions.all()]
         judge.follow_value = f"latest:{judge.id}"
         judge.ticked = {str(v.id) for v in judge.version_list if str(v.id) in selected}
         if judge.follow_value in selected:
@@ -1329,7 +1333,8 @@ class ScenariosView(ProjectMixin, TemplateView):
 
     def get_context_data(self, **kw):
         p = self.request.project
-        sets = ScenarioSet.objects.filter(project=p).annotate(version_count=Count("versions")).order_by("name")
+        sets = ScenarioSet.objects.filter(project=p).annotate(
+            version_count=Count("versions"), latest_version=Max("versions__version")).order_by("name")
         selected = None
         items = []
         versions = []
@@ -1352,7 +1357,9 @@ class ScenariosView(ProjectMixin, TemplateView):
         prev_version = (viewing_version.version - 1) if viewing_version and viewing_version.version > 1 else None
         # Collect unique categories for filter dropdown
         categories = sorted({i.scenario.category for i in items if i.scenario.category}) if items else []
-        kw.update(sets=sets, selected=selected, items=items, versions=versions, viewing_version=viewing_version, prev_version=prev_version, categories=categories)
+        kw.update(sets=sets, selected=selected, items=items, versions=versions, viewing_version=viewing_version,
+                  viewing_is_latest=bool(versions) and viewing_version == versions[0],
+                  prev_version=prev_version, categories=categories)
         return super().get_context_data(**kw)
 
 
@@ -1524,58 +1531,17 @@ class ScenarioRevertView(ProjectMixin, View):
     """Revert a scenario set to an old version by publishing it as a new version."""
 
     def get(self, request, set_id):
-        """Return diff between current latest and target version."""
+        """What reverting would change: the latest version -> ``target_version``."""
+        from scenarios.services import version_diff
+
         sset = ScenarioSet.objects.filter(pk=set_id, project=request.project).first()
         if not sset:
             return JsonResponse({"error": "Not found"}, status=404)
-        target_ver = int(request.GET.get("target_version", 0))
-        target_version = sset.versions.filter(version=target_ver).first()
-        latest_version = sset.versions.order_by("-version").first()
-        if not target_version or not latest_version:
+        target = sset.versions.filter(version=_int(request.GET.get("target_version"))).first()
+        latest = sset.versions.order_by("-version").first()
+        if not target or not latest:
             return JsonResponse({"error": "Version not found"}, status=404)
-
-        # Build maps: scenario_key -> {title, description, expected_behavior}
-        def _snap(ver):
-            m = {}
-            for it in ver.items.select_related("scenario", "revision"):
-                m[it.scenario.key] = {
-                    "title": it.scenario.title,
-                    "description": it.revision.description,
-                    "expected_behavior": it.revision.expected_behavior or [],
-                }
-            return m
-
-        latest_map = _snap(latest_version)
-        target_map = _snap(target_version)
-
-        added = []      # in target but not in latest
-        removed = []    # in latest but not in target
-        changed = []    # in both but content differs
-        unchanged = []  # in both, same content
-
-        all_keys = set(latest_map.keys()) | set(target_map.keys())
-        for key in sorted(all_keys):
-            in_latest = key in latest_map
-            in_target = key in target_map
-            if in_target and not in_latest:
-                added.append({"key": key, **target_map[key]})
-            elif in_latest and not in_target:
-                removed.append({"key": key, **latest_map[key]})
-            else:
-                latest, target = latest_map[key], target_map[key]
-                if latest["description"] != target["description"] or latest["expected_behavior"] != target["expected_behavior"]:
-                    changed.append({"key": key, "title": target["title"],
-                                    "latest_desc": latest["description"], "target_desc": target["description"],
-                                    "latest_eb": latest["expected_behavior"], "target_eb": target["expected_behavior"]})
-                else:
-                    unchanged.append({"key": key, "title": target["title"]})
-
-        return JsonResponse({
-            "target_version": target_ver,
-            "latest_version": latest_version.version,
-            "added": added, "removed": removed, "changed": changed,
-            "unchanged_count": len(unchanged),
-        })
+        return JsonResponse(version_diff(latest, target))
 
     def post(self, request, set_id):
         blocked = _require_write_access(request)
@@ -1584,7 +1550,7 @@ class ScenarioRevertView(ProjectMixin, View):
         sset = ScenarioSet.objects.filter(pk=set_id, project=request.project).first()
         if not sset:
             return redirect("/scenarios/")
-        target_ver = int(request.POST.get("target_version", 0))
+        target_ver = _int(request.POST.get("target_version"))
         old_version = sset.versions.filter(version=target_ver).first()
         if old_version:
             scenario_ids = list(old_version.items.values_list("scenario_id", flat=True))
@@ -1599,60 +1565,19 @@ class ScenarioRevertView(ProjectMixin, View):
 
 
 class ScenarioDiffView(ProjectMixin, View):
-    """Return diff between any two versions of a scenario set."""
+    """What changed between two versions of a scenario set (``?from=&to=``)."""
 
     def get(self, request, set_id):
+        from scenarios.services import version_diff
+
         sset = ScenarioSet.objects.filter(pk=set_id, project=request.project).first()
         if not sset:
             return JsonResponse({"error": "Not found"}, status=404)
-        from_ver = int(request.GET.get("from", 0))
-        to_ver = int(request.GET.get("to", 0))
-        ver_from = sset.versions.filter(version=from_ver).first()
-        ver_to = sset.versions.filter(version=to_ver).first()
-        if not ver_from or not ver_to:
+        old = sset.versions.filter(version=_int(request.GET.get("from"))).first()
+        new = sset.versions.filter(version=_int(request.GET.get("to"))).first()
+        if not old or not new:
             return JsonResponse({"error": "Version not found"}, status=404)
-
-        def _snap(ver):
-            m = {}
-            for it in ver.items.select_related("scenario", "revision"):
-                m[it.scenario.key] = {
-                    "title": it.scenario.title,
-                    "description": it.revision.description,
-                    "expected_behavior": it.revision.expected_behavior or [],
-                }
-            return m
-
-        from_map = _snap(ver_from)
-        to_map = _snap(ver_to)
-
-        added = []    # in 'to' but not in 'from'
-        removed = []  # in 'from' but not in 'to'
-        changed = []  # in both but content differs
-        unchanged_count = 0
-
-        all_keys = set(from_map.keys()) | set(to_map.keys())
-        for key in sorted(all_keys):
-            in_from = key in from_map
-            in_to = key in to_map
-            if in_to and not in_from:
-                added.append({"key": key, **to_map[key]})
-            elif in_from and not in_to:
-                removed.append({"key": key, **from_map[key]})
-            else:
-                f, t = from_map[key], to_map[key]
-                if f["description"] != t["description"] or f["expected_behavior"] != t["expected_behavior"]:
-                    changed.append({"key": key, "title": t["title"],
-                                    "from_desc": f["description"], "to_desc": t["description"],
-                                    "from_eb": f["expected_behavior"], "to_eb": t["expected_behavior"]})
-                else:
-                    unchanged_count += 1
-
-        return JsonResponse({
-            "from_version": from_ver,
-            "to_version": to_ver,
-            "added": added, "removed": removed, "changed": changed,
-            "unchanged_count": unchanged_count,
-        })
+        return JsonResponse(version_diff(old, new))
 
 
 class ScenarioExportView(ProjectMixin, View):
@@ -2161,10 +2086,11 @@ _JUDGMENT_SHOWN = {"severity", "summary", "issues_found", "positive_behaviors", 
 
 
 def _judge_grade(judgment: dict) -> dict:
-    """What a rubric's judgment adds beyond severity: score, abstained, and its other fields.
+    """What a judgment adds beyond severity: score, abstained, and its other fields.
 
-    Score rubrics (helpfulness, factuality, abstention) give a 1-10 score with
-    sub-scores; binary_abstention gives yes/no; checklist gives per-item results.
+    Score judges (helpfulness, factuality, abstention, own score formats) give
+    a 1-10 score with dimension scores; yes/no judges give the answer; the
+    checklist gives per-item results.
     """
     judgment = judgment if isinstance(judgment, dict) else {}
     fields, notes = [], []
@@ -2337,4 +2263,19 @@ class RunExportView(ProjectMixin, View):
             response = HttpResponse(payload, content_type="application/json; charset=utf-8")
 
         response["Content-Disposition"] = f'attachment; filename="{filename}"'
+        return response
+
+
+class RunScriptView(ProjectMixin, View):
+    """Download a standalone Python script that re-runs this run with the
+    plain ``simpleaudit`` library (frozen scenarios, models, judge, settings)."""
+
+    def get(self, request, run_id):
+        run = get_object_or_404(AuditRun, pk=run_id, project=request.project)
+        from infra.codegen import generate_run_script
+
+        script = generate_run_script(run)
+        response = HttpResponse(script, content_type="text/x-python; charset=utf-8")
+        safe_name = "".join(c if c.isalnum() or c in "-_." else "_" for c in run.name)[:60] or "run"
+        response["Content-Disposition"] = f'attachment; filename="rerun_{safe_name}_{run.id}.py"'
         return response

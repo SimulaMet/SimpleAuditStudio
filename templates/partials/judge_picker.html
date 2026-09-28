@@ -9,7 +9,7 @@ Context: judges (from _judge_picker).
     <h3 class="text-sm font-semibold text-gray-300">Judges</h3>
     <a href="{% url 'judges' %}" target="_blank" class="text-xs text-accent hover:text-accent-hover hover:underline" title="Create or edit judges in a new tab">＋ New</a>
   </div>
-  <p class="text-xs text-gray-500 mb-3">How conversations are graded: a rubric and its prompts. The judge model grades with it. Tick several to compare.</p>
+  <p class="text-xs text-gray-500 mb-3">How conversations are graded: what to evaluate and how the grade is reported. The judge model grades with it. Tick several to compare.</p>
   {% if judges %}
   <fieldset data-axis="judge">
     <div class="flex items-center gap-2 mb-2">
@@ -26,7 +26,7 @@ Context: judges (from _judge_picker).
           <label for="judge-{{ j.id }}" class="min-w-0 flex-1 cursor-pointer">
             <span class="text-gray-200 block truncate" title="{{ j.name }}">{{ j.name }}</span>
             <span class="text-[11px] text-gray-500 block truncate" data-set-summary>{% if latest %}v{{ latest.version }} · latest{% endif %}</span>
-            {% if latest %}<span class="text-[11px] text-gray-500 block truncate">{{ latest.rubric_name }} · {{ latest.output_label }}</span>{% endif %}
+            {% if latest %}<span class="text-[11px] text-gray-500 block truncate" title="{{ latest.summary }}">{{ latest.summary }}</span>{% endif %}
           </label>
           {% if latest %}
           <button type="button" data-version-toggle aria-expanded="{% if j.show_versions %}true{% else %}false{% endif %}" title="Pick another version, or always use the latest"
@@ -48,7 +48,7 @@ Context: judges (from _judge_picker).
               <input type="checkbox" name="judge" value="{{ v.id }}" data-version="{{ v.version }}" {% if forloop.first %}data-latest{% endif %}
                      {% if v.id|stringformat:"d" in j.ticked %}checked{% endif %}>
               <span class="text-gray-200 shrink-0">v{{ v.version }}{% if forloop.first %} <span class="text-accent">latest</span>{% endif %}</span>
-              <span class="text-gray-500 truncate" title="Saved {{ v.created_at|date:'M j, Y, H:i' }} UTC{% if v.note %} · {{ v.note }}{% endif %}">{{ v.rubric_name }}{% if v.probe_prompt or v.judge_prompt %} · custom prompts{% endif %}{% if v.note %} · {{ v.note }}{% endif %}</span>
+              <span class="text-gray-500 truncate" title="Saved {{ v.created_at|date:'M j, Y, H:i' }} UTC{% if v.note %} · {{ v.note }}{% endif %}">{{ v.summary }}{% if v.note %} · {{ v.note }}{% endif %}</span>
             </label>
             <a href="{% url 'judge_detail' j.id %}?v={{ v.version }}" target="_blank" rel="noopener"
                title="Open v{{ v.version }} of {{ j.name }} in a new tab" class="shrink-0 text-gray-500 hover:text-accent">View ↗</a>

@@ -1,0 +1,6 @@
+{% comment %}
+A version number badge: "v4", "v4 · latest". Versions are what runs pin
+(scenario sets, judges); a scenario's own edits are revisions ("rev 3").
+Context: number; latest (optional bool); count (optional: how many versions
+exist, shown as the tooltip).
+{% endcomment %}<span class="px-1.5 py-0.5 rounded bg-gray-800 text-[11px] text-gray-400 whitespace-nowrap"{% if count %} title="{{ count }} version{{ count|pluralize }}"{% endif %}>v{{ number }}{% if latest %} · latest{% endif %}</span>
