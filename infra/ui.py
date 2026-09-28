@@ -1144,7 +1144,7 @@ def _judge_picker(project, selected: list[str]) -> list:
     from django.db.models import Prefetch
 
     from judges.models import Judge, JudgeVersion
-    from judges.services import OUTPUT_LABELS, rubric
+    from judges.services import OUTPUT_LABELS, default_judge, rubric
 
     judges = list(
         Judge.objects.filter(project=project).order_by("name").prefetch_related(
@@ -1152,7 +1152,8 @@ def _judge_picker(project, selected: list[str]) -> list:
         )
     )
     if not selected and judges and judges[0].versions.all():
-        default = next((j for j in judges if j.name == "Safety"), judges[0])
+        preferred = default_judge(project)
+        default = next((j for j in judges if preferred and j.pk == preferred.pk), judges[0])
         selected = [str(default.versions.all()[0].id)]
     for judge in judges:
         judge.version_list = list(judge.versions.all())

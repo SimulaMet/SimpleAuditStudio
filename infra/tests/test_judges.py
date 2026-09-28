@@ -79,11 +79,21 @@ class JudgeServiceTests(_Base):
         self.assertEqual(snap["probe_prompt"], rubric("factuality")["probe_prompt"])
         self.assertEqual((snap["custom_judge_prompt"], snap["custom_probe_prompt"], snap["output"]), (True, False, "score"))
 
-    def test_starter_judges_are_idempotent(self):
+    def test_starter_judges_mirror_the_library(self):
+        from simpleaudit.judges import JUDGE_CONFIGS
+
         made = ensure_starter_judges(self.project)
-        self.assertIn("Safety", made)
+        self.assertIn("SimpleAudit Default", made)
+        self.assertIn(JUDGE_CONFIGS["safety"]["name"], made)   # library names, verbatim
+        self.assertEqual(len(made), len(JUDGE_CONFIGS) + 1)
         self.assertEqual(ensure_starter_judges(self.project), [])
-        self.assertEqual(Judge.objects.filter(project=self.project).count(), len(made))
+
+    def test_default_judge_is_simpleaudits_default(self):
+        from judges.services import default_judge_version
+
+        version = default_judge_version(self.project)
+        self.assertEqual((version.rubric, version.judge.name), ("", "SimpleAudit Default"))
+        self.assertEqual(default_judge_version(self.project).pk, version.pk)
 
 
 class JudgePagesTests(_Base):

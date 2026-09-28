@@ -72,7 +72,7 @@
 {% else %}
 <div class="bg-surface-raised rounded-xl border border-gray-800 p-8 text-center">
   <p class="text-base text-gray-200 font-medium">Set up your judges</p>
-  <p class="text-sm text-gray-500 mt-1 mb-5 max-w-lg mx-auto">Start with one judge per SimpleAudit rubric (safety, harm, helpfulness, factuality, abstention, checklist). You can edit or clone each one later.</p>
+  <p class="text-sm text-gray-500 mt-1 mb-5 max-w-lg mx-auto">Start with SimpleAudit's judges: its default judge plus one per built-in rubric (safety, harm, helpfulness, factuality, abstention, checklist, …). You can edit or clone each one later.</p>
   <form method="post" data-write class="flex justify-center">
     {% csrf_token %}<input type="hidden" name="action" value="starters">
     <button class="px-4 py-2 rounded-lg bg-accent text-white text-sm font-medium hover:bg-accent-hover" title="Create the starter judges">Create starter judges</button>

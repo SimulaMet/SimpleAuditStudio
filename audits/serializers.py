@@ -47,6 +47,6 @@ class AuditRunCreateSerializer(serializers.Serializer):
     auditor_model_id = serializers.IntegerField()
     judge_model_id = serializers.IntegerField()
     # How it grades: a judge version, or a judge (its latest version). Neither
-    # = the workspace's Safety judge.
+    # = SimpleAudit's default judge, as in the library.
     judge_version_id = serializers.IntegerField(required=False)
     judge_id = serializers.IntegerField(required=False)
