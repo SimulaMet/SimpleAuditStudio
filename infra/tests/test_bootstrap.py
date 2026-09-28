@@ -1,3 +1,5 @@
+import os
+
 from django.contrib.auth import get_user_model
 from django.core.management import call_command
 from django.test import TestCase
@@ -40,3 +42,41 @@ class BootstrapTests(TestCase):
         user = User.objects.get(username="studio")
         self.assertTrue(user.is_superuser)
         self.assertTrue(user.is_staff)
+
+
+class DevServerBootstrapTests(TestCase):
+    """`dev_server` bootstraps on start, so a stale local admin becomes a superuser again."""
+
+    def test_prepare_database_promotes_existing_admin(self):
+        import io
+        from unittest import mock
+
+        from infra.management.commands.dev_server import Command
+
+        User.objects.create_user(username="studio", password="old", is_staff=True, is_superuser=False)
+        env = {"BOOTSTRAP_USERNAME": "studio", "BOOTSTRAP_PASSWORD": "localdevpass123"}
+        with safe_env(), mock.patch.dict(os.environ, env), mock.patch("infra.management.commands.dev_server.call_command",
+                                                                    side_effect=_skip_migrate):
+            Command(stdout=io.StringIO()).prepare_database()
+        admin = User.objects.get(username="studio")
+        self.assertTrue(admin.is_superuser)
+        self.assertTrue(Project.objects.filter(memberships__user=admin).exists())
+
+    def test_prepare_database_without_password_only_migrates(self):
+        import io
+        from unittest import mock
+
+        from infra.management.commands.dev_server import Command
+
+        out = io.StringIO()
+        with mock.patch.dict(os.environ, {"BOOTSTRAP_PASSWORD": ""}), \
+             mock.patch("infra.management.commands.dev_server.call_command") as cmd:
+            Command(stdout=out).prepare_database()
+        self.assertEqual([c.args[0] for c in cmd.call_args_list], ["migrate"])
+        self.assertIn("skipping admin bootstrap", out.getvalue())
+
+
+def _skip_migrate(name, *args, **kwargs):
+    """The test database is already migrated; run every other command for real."""
+    if name != "migrate":
+        call_command(name, *args, **kwargs)

@@ -14,10 +14,12 @@ The web server runs in a child process (with auto-reload on by default, like
 signal handlers receive Ctrl+C). Press Ctrl+C once to stop both cleanly.
 Pass --no-reload to disable auto-reload (web server then runs in a thread).
 
-Unlike the `uvx simpleaudit-studio` CLI (which embeds its own Hatchet + SQLite
-+ mock model for the end-user demo), this command uses your real `.env` config —
-typically the "partial Docker" setup where Postgres + Hatchet run via
-`docker compose up -d postgres hatchet-server`. If Hatchet isn't reachable the
+On start it applies migrations and bootstraps the admin user (a superuser) and
+default workspace from BOOTSTRAP_* in `.env`, like the Compose web service and
+the uvx CLI do, so a local database never lags behind the code.
+
+With --embedded it starts its own Hatchet engine (zero-Docker). Without it, it
+uses the Postgres + Hatchet configured in `.env`; if Hatchet isn't reachable the
 worker retries on startup (see infra.worker.start_worker).
 """
 from __future__ import annotations
@@ -69,6 +71,8 @@ class Command(BaseCommand):
             os.execv(sys.executable, [sys.executable] + sys.argv)
 
         from django.conf import settings
+
+        self.prepare_database()
 
         if options["pool"]:
             settings.WORKER_POOL = options["pool"]
@@ -142,3 +146,22 @@ class Command(BaseCommand):
             if web_proc is not None:
                 web_proc.terminate()
                 web_proc.wait(timeout=5)
+
+    def prepare_database(self):
+        """Apply migrations and make sure the bootstrap admin (a superuser) exists."""
+        self.stdout.write("→ Applying migrations...")
+        call_command("migrate", verbosity=0, interactive=False)
+        password = os.environ.get("BOOTSTRAP_PASSWORD", "")
+        if not password:
+            self.stdout.write(self.style.WARNING(
+                "BOOTSTRAP_PASSWORD is not set: skipping admin bootstrap (set it in .env)."
+            ))
+            return
+        call_command(
+            "bootstrap_platform",
+            username=os.environ.get("BOOTSTRAP_USERNAME", "studio"),
+            email=os.environ.get("BOOTSTRAP_EMAIL", "admin@example.local"),
+            password=password,
+            project_name=os.environ.get("BOOTSTRAP_PROJECT_NAME", "Default"),
+            verbosity=0,
+        )
