@@ -8,7 +8,7 @@ from django.db.models import Max
 
 from judges.models import Judge, JudgeVersion
 
-DEFAULT_RUBRIC_LABEL = "SimpleAudit default"
+DEFAULT_RUBRIC_LABEL = "SimpleAudit Default"   # simpleaudit.judges.DEFAULT_JUDGE["name"]
 
 # What a rubric's grade looks like, for pickers and result pages.
 OUTPUT_LABELS = {
@@ -18,9 +18,6 @@ OUTPUT_LABELS = {
     "checklist": "Checklist",
 }
 
-# Starter judges for a new workspace: general-purpose rubrics (the domain
-# rubrics stay available when creating a judge).
-STARTER_RUBRICS = ("safety", "harm", "helpfulness", "factuality", "abstention", "checklist")
 
 
 def _output_kind(config: dict) -> str:
@@ -59,10 +56,15 @@ def rubrics() -> dict[str, dict]:
         from simpleaudit.judges import JUDGE_CONFIGS
     except ImportError:  # engine not installed (web-only tooling): default only
         return catalogue
-    try:   # SimpleAudit 0.2.2+ exports the default judge's prompts
+    try:   # SimpleAudit 0.2.2+ exports the default judge
         from simpleaudit.judges import DEFAULT_JUDGE
 
-        catalogue[""].update(probe_prompt=DEFAULT_JUDGE["probe_prompt"], judge_prompt=DEFAULT_JUDGE["judge_prompt"])
+        catalogue[""].update(
+            name=DEFAULT_JUDGE.get("name") or DEFAULT_RUBRIC_LABEL,
+            description=" ".join((DEFAULT_JUDGE.get("description") or catalogue[""]["description"]).split()),
+            probe_prompt=DEFAULT_JUDGE["probe_prompt"],
+            judge_prompt=DEFAULT_JUDGE["judge_prompt"],
+        )
     except ImportError:
         pass
     for key, config in JUDGE_CONFIGS.items():
@@ -169,31 +171,35 @@ def clone_judge(version: JudgeVersion, *, name: str = "", user=None) -> Judge:
 
 
 def ensure_starter_judges(project, user=None) -> list[str]:
-    """Create one judge per starter rubric (idempotent by name)."""
+    """Mirror SimpleAudit's judges: its default judge plus one judge per named
+    config, with the library's names and descriptions (idempotent by rubric:
+    a workspace judge already on that rubric counts)."""
     made = []
-    for key in STARTER_RUBRICS:
-        if key not in rubrics():
+    for key, info in rubrics().items():
+        if JudgeVersion.objects.filter(judge__project=project, rubric=key).exists():
             continue
-        name = rubrics()[key]["name"].removesuffix(" Judge")
-        if Judge.objects.filter(project=project, name=name).exists():
-            continue
-        create_judge(project=project, name=name, rubric=key,
-                     description=rubrics()[key]["description"], user=user)
+        name = unique_name(project, info["name"])
+        create_judge(project=project, name=name, rubric=key, description=info["description"], user=user)
         made.append(name)
     return made
 
 
-DEFAULT_JUDGE_NAME = "Safety"
+def default_judge(project):
+    """SimpleAudit's default judge in this workspace (rubric ""), if any: what a
+    run is graded with when no judge is picked, as in the library."""
+    version = JudgeVersion.objects.filter(judge__project=project, rubric="").select_related("judge").order_by(
+        "judge__created_at", "-version").first()
+    return version.judge if version else None
 
 
 def default_judge_version(project, user=None) -> JudgeVersion:
-    """The judge used when none is picked (API, quick runs): the Safety judge's
-    latest version, created from SimpleAudit's safety rubric if missing."""
-    judge = Judge.objects.filter(project=project, name=DEFAULT_JUDGE_NAME).first()
-    if judge is None or judge.latest is None:
-        judge = create_judge(project=project, name=unique_name(project, DEFAULT_JUDGE_NAME),
-                             rubric="safety" if "safety" in rubrics() else "",
-                             description=rubric("safety")["description"], user=user)
+    """The judge used when none is picked (API, demo runs): the latest version of
+    SimpleAudit's default judge, created if the workspace has none."""
+    judge = default_judge(project)
+    if judge is None:
+        info = rubrics()[""]
+        judge = create_judge(project=project, name=unique_name(project, info["name"]), rubric="",
+                             description=info["description"], user=user)
     return judge.latest
 
 
