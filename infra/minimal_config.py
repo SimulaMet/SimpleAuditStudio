@@ -102,6 +102,9 @@ def _kill_stale_sidecars() -> None:
             ["ps", "-axo", "pid=,ppid=,command="],
             capture_output=True, text=True, timeout=10,
         ).stdout
+    except FileNotFoundError:
+        # Minimal containers (e.g. HF Spaces) may lack `ps`; skip silently.
+        return
     except Exception:  # noqa: BLE001
         logger.warning("Could not enumerate processes for stale sidecar cleanup", exc_info=True)
         return
