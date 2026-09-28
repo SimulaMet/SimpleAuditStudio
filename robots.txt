@@ -1,4 +1,4 @@
 User-agent: *
 Allow: /
 
-Sitemap: https://sushantgautam.github.io/SimpleAuditStudio/sitemap.xml
+Sitemap: https://simpleauditstudio.sushant.no/sitemap.xml
