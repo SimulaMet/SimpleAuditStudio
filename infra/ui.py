@@ -757,20 +757,11 @@ class NewExperimentView(ProjectMixin, TemplateView):
         """One run setup: launch it (unless starting later) and, if repeating, monitor it."""
         from django.db import transaction
 
+        from audits.experiments import spec_to_run
         from audits.monitors import create_monitor
 
         p = request.project
-        run_spec = {
-            "version": spec["scenario_set"],
-            "target": spec["target"],
-            "auditor": spec["auditor"],
-            "judge_model": spec["judge_model"],
-            "judge": spec["judge"],
-            "max_turns": spec["max_turns"],
-            "language": spec["language"],
-            "n_repetitions": spec["n_repetitions"],
-            "gen_config": spec["gen_config"],
-        }
+        run_spec = spec_to_run(spec, name="")
         run = monitor = None
         try:
             with transaction.atomic():
@@ -2267,14 +2258,19 @@ class RunExportView(ProjectMixin, View):
 
 
 class RunScriptView(ProjectMixin, View):
-    """Download a standalone Python script that re-runs this run with the
-    plain ``simpleaudit`` library (frozen scenarios, models, judge, settings)."""
+    """A standalone Python script that re-runs this run with the plain
+    ``simpleaudit`` library (frozen scenarios, models, judge, settings).
+
+    Served as a file download by default, or as JSON (``?format=json``) for
+    the run page's copy/download modal."""
 
     def get(self, request, run_id):
         run = get_object_or_404(AuditRun, pk=run_id, project=request.project)
         from infra.codegen import generate_run_script
 
         script = generate_run_script(run)
+        if request.GET.get("format") == "json":
+            return JsonResponse({"script": script})
         response = HttpResponse(script, content_type="text/x-python; charset=utf-8")
         safe_name = "".join(c if c.isalnum() or c in "-_." else "_" for c in run.name)[:60] or "run"
         response["Content-Disposition"] = f'attachment; filename="rerun_{safe_name}_{run.id}.py"'

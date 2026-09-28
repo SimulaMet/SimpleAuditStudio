@@ -221,6 +221,23 @@ def expand(design: dict) -> list[dict]:
     return specs
 
 
+def spec_to_run(spec: dict, name: str) -> dict:
+    """A design spec (from ``expand``) as a planned run: the ``launch_experiment``
+    run item shape, also used by script generation (infra.codegen)."""
+    return {
+        "name": name,
+        "version": spec["scenario_set"],
+        "target": spec["target"],
+        "auditor": spec["auditor"],
+        "judge_model": spec["judge_model"],
+        "judge": spec["judge"],
+        "max_turns": spec["max_turns"],
+        "language": spec["language"],
+        "n_repetitions": spec["n_repetitions"],
+        "gen_config": spec["gen_config"],
+    }
+
+
 def factor_value_label(key: str, value) -> str:
     if value is None:
         return "default"

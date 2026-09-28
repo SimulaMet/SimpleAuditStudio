@@ -1,11 +1,18 @@
-"""Generate a standalone SimpleAudit script from a frozen AuditRun.
+"""Generate a standalone SimpleAudit script from a run's frozen inputs.
 
-The generated script reproduces one run outside the platform using only the
+Two entry points feed one renderer:
+
+- ``generate_run_script(run)`` — re-run an existing ``AuditRun`` from its
+  frozen snapshots (the "Re-run script" button on the run page);
+- ``generate_run_script_from_spec(run_spec)`` — a script for a planned run
+  (a ``spec_to_run`` item) before it launches, freezing the same inputs
+  ``create_audit_run`` would.
+
+The generated script reproduces the run outside the platform using only the
 ``simpleaudit`` library: the exact scenarios (frozen revisions), the three
-models (target / auditor / judge) as they were when the run was created, the
-judge spec, and the generation settings. It is deterministic — the same run
-always yields the same script — so it can be committed next to results for
-reproducibility.
+models (target / auditor / judge), the judge spec, and the generation
+settings. It is deterministic — the same inputs always yield the same script
+— so it can be committed next to results for reproducibility.
 
 Secrets are never inlined. Each model's API key is read at run time from the
 environment variable named by its connection's ``secret_reference``; when a
@@ -26,8 +33,23 @@ def _py(value) -> str:
     return json.dumps(value, indent=4, ensure_ascii=False)
 
 
-def _endpoint_block(role: str, snap: dict, *, role_suffix: str = "") -> list[str]:
-    """Constructor kwargs for one endpoint from its frozen snapshot."""
+def _endpoint_block(snap: dict, *, prefix: str, indent: str = "") -> list:
+    """Lines for one endpoint from its frozen snapshot.
+
+    Returns a list of items: plain strings are code lines; a
+    ``("#", text)`` item is a comment line (rendered without a trailing comma).
+
+    ``prefix`` is "target"/"auditor"/"judge" for constructor keyword
+    arguments (ModelAuditor, or AuditExperiment's non-target roles). An empty
+    prefix emits plain dict entries (quoted keys) for the target inside
+    AuditExperiment's ``models`` list. ``indent`` is the base indentation for
+    every emitted line.
+
+    When the connection stores its API key directly in Studio (no
+    ``secret_reference``), no live api_key line is emitted — instead a
+    commented placeholder sits exactly where the line belongs, so the user can
+    uncomment and fill it in.
+    """
     provider = (snap.get("provider") or "").strip().lower()
     base_url = snap.get("base_url") or None
     # Mirror infra.engine._normalize_provider: an unrecognised label with a
@@ -35,19 +57,40 @@ def _endpoint_block(role: str, snap: dict, *, role_suffix: str = "") -> list[str
     known = {"openai", "anthropic", "grok", "ollama", "vllm"}
     if provider not in known:
         provider = "openai" if base_url else (provider or "openai")
-    lines = [f'{role}_model="{snap.get("model_id")}"', f'{role}_provider="{provider}"']
-    if base_url:
-        lines.append(f'{role}_base_url="{base_url}"')
     ref = (snap.get("secret_reference") or "").strip()
+    env = f"**{(prefix or 'TARGET').upper()}_API_KEY**"
+
+    if prefix:
+        p = f"{prefix}_"
+        items = [
+            f'{indent}{p}model="{snap.get("model_id")}"',
+            f'{indent}{p}provider="{provider}"',
+        ]
+        if base_url:
+            items.append(f'{indent}{p}base_url="{base_url}"')
+        if ref:
+            items.append(f'{indent}{p}api_key=os.environ["{ref}"]')
+        else:
+            items.append(("#", f'{indent}# {p}api_key=os.environ["{env}"]  # uncomment & export {env}'))
+        return items
+    # Plain dict entries for the models list.
+    items = [
+        f'{indent}"model": "{snap.get("model_id")}"',
+        f'{indent}"provider": "{provider}"',
+    ]
+    if base_url:
+        items.append(f'{indent}"base_url": "{base_url}"')
     if ref:
-        lines.append(f'{role}_api_key=os.environ["{ref}"]')
-    return lines
+        items.append(f'{indent}"api_key": os.environ["{ref}"]')
+    else:
+        items.append(("#", f'{indent}# "api_key": os.environ["{env}"],  # uncomment & export {env}'))
+    return items
 
 
-def _scenario_dicts(run: AuditRun) -> list[dict]:
-    """The frozen scenario content of the run, in set order."""
+def _scenario_dicts(version) -> list[dict]:
+    """The scenario content of a set version, in set order."""
     items = (
-        ScenarioSetVersionItem.objects.filter(version=run.scenario_set_version)
+        ScenarioSetVersionItem.objects.filter(version=version)
         .select_related("scenario", "revision")
         .order_by("position")
     )
@@ -65,38 +108,23 @@ def _scenario_dicts(run: AuditRun) -> list[dict]:
     return out
 
 
-def generate_run_script(run: AuditRun) -> str:
-    """Build the standalone script that re-runs ``run`` with plain simpleaudit."""
-    gen = run.generation_parameters_snapshot or {}
-    judge_snap = run.judge_config_snapshot or {}
+def _render(header: str, *, version, target: dict, auditor: dict, judge_snap: dict, gen: dict) -> str:
+    """Emit the script from a normalized context (frozen snapshots + settings)."""
     grading = judge_snap.get("judge") or {}
     spec = grading.get("spec") or {}
-
-    target = run.target_config_snapshot or {}
-    auditor = run.auditor_config_snapshot or {}
 
     n_reps = int(gen.get("n_repetitions") or 1)
     max_turns = int(gen.get("max_turns") or 5)
     language = gen.get("language") or "English"
     system_prompt = gen.get("system_prompt") or None
 
-    header = (
-        '"""Re-run of Studio run #%d "%s".\n'
-        "\n"
-        "Generated by SimpleAudit Studio — edit freely.\n"
-        "Requires: pip install simpleaudit\n"
-        "Set the API-key environment variables noted below, then:\n"
-        "    python this_file.py\n"
-        '"""\n'
-    ) % (run.id, run.name)
-
-    imports = ["import os"]
+    imports = ["import os", "from simpleaudit import ModelAuditor"]
     body_parts: list[str] = []
 
     # --- Scenarios ---------------------------------------------------------
-    scenarios = _scenario_dicts(run)
-    set_name = run.scenario_set_version.scenario_set.name
-    set_version = run.scenario_set_version.version
+    scenarios = _scenario_dicts(version)
+    set_name = version.scenario_set.name
+    set_version = version.version
     body_parts.append(
         f"# Scenarios: \"{set_name}\" v{set_version} ({len(scenarios)} scenarios, frozen)\n"
         f"scenarios = {_py(scenarios)}"
@@ -135,41 +163,50 @@ def generate_run_script(run: AuditRun) -> str:
     if probe_prompt:
         judge_lines.append(f"probe_prompt={_py(probe_prompt)}")
 
-    # --- Endpoint blocks ----------------------------------------------------
-    target_lines = _endpoint_block("target", target)
-    auditor_lines = _endpoint_block("auditor", auditor)
-    judge_endpoint_lines = _endpoint_block("judge", judge_snap)
+    # --- Assemble the constructor ------------------------------------------
+    # Every line is an item: a plain string renders with a trailing comma, a
+    # ("comment", text) item renders as-is (no comma). Endpoint blocks emit
+    # commented api_key placeholders where the key is stored directly in Studio.
+    def render(items) -> str:
+        return "".join(
+            f"{it[1]}\n" if isinstance(it, tuple) else f"{it},\n" for it in items
+        )
 
-    ctor = target_lines + auditor_lines + judge_endpoint_lines + judge_lines
+    IND = "    "
+    judge_items = [(IND + line) for line in judge_lines]
+    extra = []
     if system_prompt:
-        ctor.append(f"system_prompt={_py(system_prompt)}")
+        extra.append(IND + f"system_prompt={_py(system_prompt)}")
     if max_turns != 5:
-        ctor.append(f"max_turns={max_turns}")
-    ctor.append(f"show_progress=True")
+        extra.append(IND + f"max_turns={max_turns}")
 
-    # --- Run ----------------------------------------------------------------
     if n_reps > 1:
-        # AuditExperiment takes the target as a models list; auditor and judge
-        # stay constructor kwargs.
-        model_entry = "{\n" + ",\n".join(f"    {line}" for line in target_lines) + ",\n}"
-        ctor = [f"models=[{model_entry}]"]
-        ctor += [line for line in (auditor_lines + judge_endpoint_lines + judge_lines)]
-        if system_prompt:
-            ctor.append(f"system_prompt={_py(system_prompt)}")
-        if max_turns != 5:
-            ctor.append(f"max_turns={max_turns}")
-        ctor.append(f"n_repetitions={n_reps}")
-        ctor.append("show_progress=True")
-        imports[-1] = "from simpleaudit import AuditExperiment"
+        # AuditExperiment takes the target as a models list (plain keys);
+        # auditor and judge stay constructor kwargs. The dict opens on its own
+        # line: "models=[{" would tokenize as a set display.
+        model_entry = (
+            "[\n    {\n"
+            + render(_endpoint_block(target, prefix="", indent="        "))
+            + "    }\n]"
+        )
+        items = [IND + f"models={model_entry}"]
+        items += _endpoint_block(auditor, prefix="auditor", indent=IND)
+        items += _endpoint_block(judge_snap, prefix="judge", indent=IND)
+        items += judge_items + extra + [IND + f"n_repetitions={n_reps}", IND + "show_progress=True"]
+        imports[imports.index("from simpleaudit import ModelAuditor")] = (
+            "from simpleaudit import AuditExperiment"
+        )
         var_name, cls = "experiment", "AuditExperiment"
         run_call = f"results = experiment.run(scenarios, language={_py(language)})"
     else:
-        imports[-1] = "from simpleaudit import ModelAuditor"
+        items = _endpoint_block(target, prefix="target", indent=IND)
+        items += _endpoint_block(auditor, prefix="auditor", indent=IND)
+        items += _endpoint_block(judge_snap, prefix="judge", indent=IND)
+        items += judge_items + extra + [IND + "show_progress=True"]
         var_name, cls = "auditor", "ModelAuditor"
         run_call = f"results = auditor.run(scenarios, language={_py(language)})"
 
-    ctor_text = "".join(f"    {line},\n" for line in ctor)
-    body_parts.append(f"{var_name} = {cls}(\n{ctor_text})")
+    body_parts.append(f"{var_name} = {cls}(\n{render(items)})")
 
     body_parts.append(
         f"{run_call}\n"
@@ -177,17 +214,64 @@ def generate_run_script(run: AuditRun) -> str:
         'results.save("results.json")'
     )
 
-    # --- Secret reminders ----------------------------------------------------
-    notes = []
-    for role, snap in (("target", target), ("auditor", auditor), ("judge", judge_snap)):
-        ref = (snap.get("secret_reference") or "").strip()
-        if not ref:
-            notes.append(
-                f"# NOTE: the {role} connection stored its API key directly in Studio;\n"
-                f"# export it as {role.upper()}_API_KEY (or edit the api_key kwarg above) before running."
-            )
-    if notes:
-        body_parts.insert(0, "\n".join(notes))
-
     script = header + "\n".join(dict.fromkeys(imports)) + "\n\n\n" + "\n\n\n".join(body_parts) + "\n"
     return script
+
+
+def generate_run_script(run: AuditRun) -> str:
+    """Build the standalone script that re-runs ``run`` with plain simpleaudit."""
+    header = (
+        f'"""Re-run of Studio run #{run.id} "{run.name}".\n'
+        "\n"
+        "Generated by SimpleAudit Studio — edit freely.\n"
+        "Requires: pip install simpleaudit\n"
+        "Set the API-key environment variables noted below, then:\n"
+        "    python this_file.py\n"
+        '"""\n'
+    )
+    return _render(
+        header,
+        version=run.scenario_set_version,
+        target=run.target_config_snapshot or {},
+        auditor=run.auditor_config_snapshot or {},
+        judge_snap=run.judge_config_snapshot or {},
+        gen=run.generation_parameters_snapshot or {},
+    )
+
+
+def generate_run_script_from_spec(run_spec: dict) -> str:
+    """Script for a planned run (a ``spec_to_run`` item) before it is launched.
+
+    Freezes the same inputs ``create_audit_run`` would, so the script matches
+    the run that launching the spec produces.
+    """
+    from audits.services import frozen_inputs
+
+    name = run_spec.get("name") or "planned run"
+    header = (
+        f'"""SimpleAudit run script for "{name}" (planned, not yet launched).\n'
+        "\n"
+        "Generated by SimpleAudit Studio — edit freely.\n"
+        "Requires: pip install simpleaudit\n"
+        "Set the API-key environment variables noted below, then:\n"
+        "    python this_file.py\n"
+        '"""\n'
+    )
+    frozen = frozen_inputs(
+        target_model=run_spec["target"],
+        auditor_model=run_spec["auditor"],
+        judge_model=run_spec["judge_model"],
+        judge=run_spec["judge"],
+        max_turns_override=run_spec["max_turns"],
+        language_override=run_spec["language"],
+        n_repetitions_override=run_spec["n_repetitions"],
+        gen_config_override=run_spec["gen_config"],
+    )
+    return _render(
+        header,
+        version=run_spec["version"],
+        target=frozen["target_config_snapshot"],
+        auditor=frozen["auditor_config_snapshot"],
+        judge_snap=frozen["judge_config_snapshot"],
+        gen=frozen["generation_parameters_snapshot"],
+    )

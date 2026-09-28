@@ -1,0 +1,96 @@
+{% comment %}
+Reusable "view / copy / download a text file" modal. Page-specific JS calls
+TextFileModal.open({url, filename, title, description}) to fetch ``url`` (plain
+text or {"script": "..."} JSON) and show it; Copy uses the clipboard, Download
+saves ``filename``. Closes via the ✕, backdrop click, or Escape.
+
+Include this partial once per page that needs it.
+{% endcomment %}
+<div id="text-file-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" role="dialog" aria-modal="true" aria-label="File preview">
+  <div class="bg-surface-raised rounded-xl border border-gray-700 w-full max-w-2xl mx-auto flex flex-col max-h-[85vh]">
+    <div class="flex items-center justify-between px-5 py-3 border-b border-gray-800">
+      <h3 id="text-file-modal-title" class="text-sm font-semibold text-gray-200">File</h3>
+      <button type="button" data-tfm-close aria-label="Close" class="text-gray-500 hover:text-gray-200 text-lg leading-none">✕</button>
+    </div>
+    <p id="text-file-modal-desc" class="px-5 pt-3 text-xs text-gray-500"></p>
+    <pre id="text-file-modal-content" class="mx-5 mt-3 flex-1 overflow-auto rounded-lg bg-surface-overlay border border-gray-800 p-3 text-xs text-gray-300 font-mono whitespace-pre"></pre>
+    <div class="flex gap-2 justify-end px-5 py-3">
+      <button type="button" id="text-file-modal-copy" class="px-3 py-1.5 rounded-lg bg-surface-overlay border border-gray-700 text-xs text-gray-200 hover:text-white">Copy</button>
+      <button type="button" id="text-file-modal-download" class="px-3 py-1.5 rounded-lg bg-accent text-white text-xs font-medium">Download</button>
+    </div>
+  </div>
+</div>
+<script>
+// Generic text-file viewer: fetch a URL, show it, let the user copy or download.
+const TextFileModal = (() => {
+  const root = document.getElementById('text-file-modal');
+  const titleEl = document.getElementById('text-file-modal-title');
+  const descEl = document.getElementById('text-file-modal-desc');
+  const contentEl = document.getElementById('text-file-modal-content');
+  const copyBtn = document.getElementById('text-file-modal-copy');
+  const downloadBtn = document.getElementById('text-file-modal-download');
+  let text = '';
+  let filename = 'file.txt';
+
+  function close() { root.classList.add('hidden'); }
+
+  async function open(opts) {
+    titleEl.textContent = opts.title || 'File';
+    descEl.innerHTML = opts.description || '';
+    descEl.classList.toggle('hidden', !opts.description);
+    filename = opts.filename || 'file.txt';
+    contentEl.textContent = 'Loading…';
+    root.classList.remove('hidden');
+    try {
+      const resp = await fetch(opts.url, { credentials: 'same-origin' });
+      if (!resp.ok) throw new Error('HTTP ' + resp.status);
+      const ct = resp.headers.get('content-type') || '';
+      if (ct.includes('application/json')) {
+        const data = await resp.json();
+        // Run-script endpoint wraps the code in {"script": "..."}; other
+        // endpoints (e.g. scenario-set export) return a plain JSON object —
+        // show that pretty-printed so it can be re-imported.
+        text = typeof data === 'string' ? data
+          : (data && typeof data.script === 'string') ? data.script
+          : JSON.stringify(data, null, 2);
+      } else {
+        text = await resp.text();
+      }
+      contentEl.textContent = text;
+    } catch (e) {
+      contentEl.textContent = 'Could not load the file: ' + e.message;
+    }
+  }
+
+  async function copy() {
+    if (!text) return;
+    try { await navigator.clipboard.writeText(text); }
+    catch (e) {
+      const ta = document.createElement('textarea');
+      ta.value = text; document.body.appendChild(ta); ta.select();
+      document.execCommand('copy'); ta.remove();
+    }
+    const old = copyBtn.textContent;
+    copyBtn.textContent = 'Copied ✓';
+    setTimeout(() => { copyBtn.textContent = old; }, 1500);
+  }
+
+  function download() {
+    if (!text) return;
+    const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = filename;
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(url);
+  }
+
+  root.querySelector('[data-tfm-close]').addEventListener('click', close);
+  root.addEventListener('click', e => { if (e.target === root) close(); });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape' && !root.classList.contains('hidden')) close(); });
+  copyBtn.addEventListener('click', copy);
+  downloadBtn.addEventListener('click', download);
+
+  return { open, close };
+})();
+</script>
