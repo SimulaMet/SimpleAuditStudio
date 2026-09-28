@@ -158,6 +158,14 @@ def robots_txt(request):
         "",
         "User-agent: *",
         "Allow: /",
+        # The og:image lives under /static/. The blanket Disallow below would
+        # block social crawlers (facebookexternalhit, Twitterbot, etc.) from
+        # fetching it, so they report the share image as "could not be
+        # processed". A more-specific Allow wins over the Disallow (robots.txt
+        # precedence: longest matching path), so the share card renders while
+        # the rest of /static/ stays out of search indexes.
+        "Allow: /static/og-image.png",
+        "Allow: /static/logo.png",
         "Disallow: /admin/",
         "Disallow: /api/",
         "Disallow: /login/",
