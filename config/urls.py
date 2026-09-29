@@ -16,6 +16,7 @@ from infra.seo import LandingView, llms_txt, robots_txt, sitemap_xml
 from infra.ui import (
     AdminView,
     CompareView,
+    ConnectionCheckView,
     ConnectionDeleteView,
     ConnectionsView,
     DashboardView,
@@ -178,6 +179,7 @@ urlpatterns = [
     path("scenarios/<int:set_id>/import/", ScenarioImportView.as_view(), name="scenario_import"),
     path("connections/", ConnectionsView.as_view(), name="connections"),
     path("connections/discover/", DiscoverModelsView.as_view(), name="models_discover"),
+    path("connections/check/", ConnectionCheckView.as_view(), name="connection_check"),
     path("connections/<int:conn_id>/delete/", ConnectionDeleteView.as_view(), name="connection_delete"),
     path("judges/", JudgesView.as_view(), name="judges"),
     path("judges/new/", JudgeDetailView.as_view(), name="judge_new"),

@@ -146,3 +146,78 @@ class DiscoverModelsKeyTests(TestCase):
 
         other = ModelConnection.objects.create(project=ProjectFactory(), name="Other", base_url="https://x.invalid/v1")
         self.assertEqual(self.client.post("/connections/discover/", {"connection_id": other.id}).status_code, 404)
+
+
+class ConnectionCheckTests(TestCase):
+    """The connection dialog's Check tries unsaved settings before saving."""
+
+    def setUp(self):
+        from unittest import mock
+
+        self.mock = mock
+        self.user = UserFactory()
+        self.user.set_password("pw")
+        self.user.save()
+        self.project = ProjectFactory()
+        self.membership = MembershipFactory(user=self.user, project=self.project, role="admin")
+        self.client = Client()
+        self.client.login(username=self.user.username, password="pw")
+
+    def _server(self, ids=("a", "b")):
+        fake = self.mock.MagicMock()
+        fake.json.return_value = {"data": [{"id": i} for i in ids]}
+        return self.mock.patch("model_registry.services.httpx.get", return_value=fake)
+
+    def test_typed_settings_are_tried(self):
+        with self._server(["m1", "m2"]) as get:
+            out = self.client.post("/connections/check/", {
+                "conn_provider": "openai", "conn_base_url": "https://new.invalid/v1",
+                "key_mode": "stored", "conn_api_key": "sk-typed",
+            }).json()
+        self.assertEqual(out, {"ok": True, "count": 2, "models": ["m1", "m2"]})
+        self.assertEqual(get.call_args.args[0], "https://new.invalid/v1/models")
+        self.assertEqual(get.call_args.kwargs["headers"]["Authorization"], "Bearer sk-typed")
+        self.assertFalse(ModelConnection.objects.exists())   # nothing saved
+
+    def test_editing_with_blank_key_uses_the_stored_one(self):
+        conn = ModelConnection.objects.create(project=self.project, name="C", base_url="https://c.invalid/v1",
+                                              api_key_direct="sk-stored")
+        with self._server() as get:
+            self.client.post("/connections/check/", {"conn_id": conn.id, "conn_base_url": conn.base_url,
+                                                     "key_mode": "stored", "conn_api_key": ""})
+        self.assertEqual(get.call_args.kwargs["headers"]["Authorization"], "Bearer sk-stored")
+
+    def test_another_workspaces_key_is_never_used(self):
+        other = ModelConnection.objects.create(project=ProjectFactory(), name="O", base_url="https://o.invalid/v1",
+                                               api_key_direct="sk-not-yours")
+        with self._server() as get:
+            self.client.post("/connections/check/", {"conn_id": other.id, "conn_base_url": other.base_url,
+                                                     "key_mode": "stored"})
+        self.assertNotIn("Authorization", get.call_args.kwargs["headers"])
+
+    def test_errors_are_reported(self):
+        import httpx
+
+        self.assertIn("base URL", self.client.post("/connections/check/", {"conn_base_url": ""}).json()["error"])
+        with self.mock.patch("model_registry.services.httpx.get", side_effect=httpx.ConnectError("refused")):
+            out = self.client.post("/connections/check/", {"conn_base_url": "https://down.invalid/v1"}).json()
+        self.assertFalse(out["ok"])
+        self.assertTrue(out["error"])
+
+    def test_a_web_page_is_explained(self):
+        fake = self.mock.MagicMock()
+        fake.json.side_effect = ValueError("Expecting value")
+        with self.mock.patch("model_registry.services.httpx.get", return_value=fake):
+            out = self.client.post("/connections/check/", {"conn_base_url": "https://site.invalid"}).json()
+        self.assertIn("usually ends in /v1", out["error"])
+
+    def test_viewers_cannot_check(self):
+        self.membership.role = "viewer"
+        self.membership.save()
+        self.assertEqual(self.client.post("/connections/check/", {"conn_base_url": "https://x.invalid/v1"}).status_code, 403)
+
+    def test_each_provider_listed_once(self):
+        ModelConnection.objects.create(project=self.project, name="G", provider="gemini", base_url="https://g.invalid")
+        providers = self.client.get("/connections/").context["providers"]
+        self.assertEqual(providers.count("openai"), 1)
+        self.assertIn("gemini", providers)   # a connection's own provider stays pickable
