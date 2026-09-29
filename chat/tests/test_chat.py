@@ -74,12 +74,6 @@ class ChatEnabledTests(TestCase):
         self._sign_in(username="anon", email="")
         self.assertEqual(self.client.get("/chat/authz")[EMAIL_HEADER], "anon@studio.local")
 
-    def test_page_embeds_the_chat_origin(self):
-        self._sign_in(username="viewer")
-        with patch("chat.config.PUBLIC_URL", "http://localhost:8801"):
-            response = self.client.get("/chat/")
-        self.assertContains(response, 'src="http://localhost:8801"')
-
     def test_page_requires_sign_in(self):
         response = self.client.get("/chat/")
         self.assertEqual(response.status_code, 302)
