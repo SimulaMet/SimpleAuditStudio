@@ -1731,6 +1731,9 @@ class ConnectionsView(ProjectMixin, TemplateView):
             conn_data=conn_data,
             model_total=sum(len(c.model_list) for c in connections),
             provider_presets=PROVIDER_PRESETS,
+            # Each provider once: presets share some (OpenAI and "Custom" are
+            # both openai), and a connection's own provider must stay pickable.
+            providers=list(dict.fromkeys([p[2] for p in PROVIDER_PRESETS] + [c.provider for c in connections if c.provider])),
             share_targets=share_targets,
             visibility_choices=[(v, label) for v, label in ModelConnection.Visibility.choices],
         )
@@ -1883,6 +1886,40 @@ def _base_url_error(raw: str) -> str | None:
     except ValidationError:
         return "Base URL must be an http(s) URL, e.g. https://api.openai.com/v1."
     return None
+
+
+class ConnectionCheckView(ProjectMixin, View):
+    """Try the connection dialog's values before saving: list the server's
+    models with that base URL, provider and key. Editing with the key left
+    blank uses the connection's stored key."""
+
+    def post(self, request):
+        from model_registry.models import ModelConnection
+        from model_registry.services import (
+            can_edit_connection,
+            fetch_remote_model_ids,
+            http_error_detail,
+        )
+
+        blocked = _require_write_access(request)
+        if blocked:
+            return JsonResponse({"ok": False, "error": "You don't have permission to change connections."}, status=403)
+        post = request.POST
+        mode = post.get("key_mode", "stored")
+        conn = ModelConnection(provider=(post.get("conn_provider") or "openai").strip(),
+                               base_url=(post.get("conn_base_url") or "").strip())
+        if mode == "stored":
+            conn.api_key_direct = (post.get("conn_api_key") or "").strip()
+            saved = ModelConnection.objects.filter(pk=_int(post.get("conn_id"))).first()
+            if not conn.api_key_direct and saved is not None and can_edit_connection(request.user, saved):
+                conn.api_key_direct = saved.api_key_direct
+        elif mode == "env":
+            conn.secret_reference = (post.get("conn_secret_ref") or "").strip()
+        try:
+            ids = fetch_remote_model_ids(conn)
+        except Exception as e:  # noqa: BLE001 - any failure is the answer the user asked for
+            return JsonResponse({"ok": False, "error": http_error_detail(e)})
+        return JsonResponse({"ok": True, "count": len(ids), "models": ids[:6]})
 
 
 class DiscoverModelsView(ProjectMixin, View):
