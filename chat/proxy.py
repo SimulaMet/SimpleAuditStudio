@@ -55,7 +55,22 @@ _STRIP_FROM_RESPONSE = _HOP_BY_HOP | {"x-frame-options"}
 class _Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     studio_url = "http://127.0.0.1:8000"    # set by serve()
-    client: httpx.Client                     # set by serve()
+    transport: httpx.HTTPTransport           # set by serve()
+
+    def client(self) -> httpx.Client:
+        """A client for one request, over the shared connection pool.
+
+        Never a client shared between requests: httpx clients keep a cookie jar,
+        and one jar here would mean one browser's session cookie — or Open
+        WebUI's token — being sent on the next browser's request. Every identity
+        this proxy forwards must come from the request it is handling, and
+        nothing may be remembered between them.
+        """
+        return httpx.Client(
+            transport=self.transport,
+            timeout=httpx.Timeout(None, connect=10.0),
+            follow_redirects=False,
+        )
 
     def log_message(self, fmt, *args):
         logger.debug("chat-proxy %s", fmt % args)
@@ -83,7 +98,7 @@ class _Handler(BaseHTTPRequestHandler):
         body = self.rfile.read(length) if length else None
 
         try:
-            with self.client.stream(
+            with self.client().stream(
                 self.command, chat.UPSTREAM + self.path, headers=headers, content=body,
             ) as upstream:
                 self.send_response(upstream.status_code)
@@ -172,7 +187,7 @@ class _Handler(BaseHTTPRequestHandler):
     def _identify(self, cookie: str) -> dict[str, str] | None:
         """Ask Studio who this browser is. None when signed out."""
         try:
-            response = self.client.get(
+            response = self.client().get(
                 f"{self.studio_url}/chat/authz",
                 headers={"Cookie": cookie} if cookie else {},
             )
@@ -206,7 +221,8 @@ def _pipe(source: socket.socket, destination: socket.socket) -> None:
 def serve(studio_port: int) -> ThreadingHTTPServer:
     """Start the proxy on chat.PROXY_PORT in a daemon thread."""
     _Handler.studio_url = f"http://127.0.0.1:{studio_port}"
-    _Handler.client = httpx.Client(timeout=httpx.Timeout(None, connect=10.0), follow_redirects=False)
+    # One pool for every request; the clients that borrow it are per request.
+    _Handler.transport = httpx.HTTPTransport()
     server = ThreadingHTTPServer(("0.0.0.0", chat.PROXY_PORT), _Handler)
     server.daemon_threads = True
     threading.Thread(target=server.serve_forever, daemon=True).start()
