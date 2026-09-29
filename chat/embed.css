@@ -27,3 +27,24 @@
 #sidebar-toggle-button {
   display: none !important;
 }
+
+/* The model picker in the input bar. The embed shows the active model in
+ * Studio's own banner instead, so the dropdown goes. Hiding the button is
+ * enough: its wrapper is an empty flex box and collapses with it. */
+#model-selector-model-button {
+  display: none !important;
+}
+
+/* The "New Chat" button in the top bar. A fresh chat is started from Studio,
+ * not inside the frame, so it is hidden here. Matched by aria-label (no id);
+ * the embed is English-only, so the label is stable. */
+button[aria-label="New Chat"] {
+  display: none !important;
+}
+
+/* The "..." (Chat actions) menu button in the top bar. It opens per-chat
+ * actions (rename, delete, share, ...) that don't apply to a temporary,
+ * single-model embed, so it goes. Stable id, so no aria-label matching. */
+#chat-context-menu-button {
+  display: none !important;
+}

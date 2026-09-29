@@ -46,6 +46,9 @@ def push_now(payloads: list[dict] | None = None) -> dict[str, int]:
     # Studio never serves Ollama; leaving it on costs a failing request per page
     # load and an empty section in Open WebUI's settings.
     api.disable_ollama()
+    # The embed is a throwaway surface: keep every chat temporary so nothing
+    # piles up in Open WebUI's history.
+    api.enforce_temporary_chats()
     return result
 
 

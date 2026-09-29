@@ -128,6 +128,24 @@ class ChatAPI:
             "OLLAMA_API_CONFIGS": current.get("OLLAMA_API_CONFIGS") or {},
         })
 
+    def enforce_temporary_chats(self) -> None:
+        """Make every chat in the embed temporary (never saved to history).
+
+        The embed is a throwaway, single-model surface, so no chat should
+        accumulate in Open WebUI's history. That is the ``chat.temporary_enforced``
+        user permission. The environment variable only seeds a fresh instance;
+        an instance that already has a stored ``user.permissions`` config keeps
+        its value, so the stored config has to be told too (same reason as
+        ``disable_ollama``).
+        """
+        current = self.request("GET", "/api/v1/users/default/permissions")
+        chat_permissions = current.get("chat") or {}
+        if chat_permissions.get("temporary_enforced") is True:
+            return
+        chat_permissions["temporary_enforced"] = True
+        current["chat"] = chat_permissions
+        self.request("POST", "/api/v1/users/default/permissions", json=current)
+
     # --- pull: Open WebUI knowledge -> Studio -------------------------------
     def knowledge_bases(self) -> list[dict[str, Any]]:
         """Every knowledge base this user can read, as plain dicts."""

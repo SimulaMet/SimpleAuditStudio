@@ -468,6 +468,11 @@ def _spawn(home: Path) -> subprocess.Popen:
         # (a 500 per poll in the console) and shows an empty section in settings.
         "ENABLE_OLLAMA_API": "false",
         "WEBUI_URL": chat.public_url(),
+        # The embed is a throwaway, single-model surface: every chat should be
+        # temporary (never persisted to the chat history). This sets the
+        # default user permission `chat.temporary_enforced`, which the frontend
+        # reads and forces temporary mode on for every user.
+        "USER_PERMISSIONS_CHAT_TEMPORARY_ENFORCED": "true",
     }
     # Open WebUI keeps its signing key in ``.webui_secret_key`` in the working
     # directory, with no setting for it: running it from its own data folder
