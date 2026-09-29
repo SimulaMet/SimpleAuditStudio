@@ -1,7 +1,7 @@
 """CLI entry point for `uvx simpleaudit-studio`.
 
 Boots the full SimpleAudit Studio stack in a single process (minimal config):
-  1. Django setup + migrate (SQLite)
+  1. Django setup + migrate (SQLite in ~/.simpleaudit-studio; see simpleaudit_studio.paths)
   2. Bootstrap admin user + seed scenario packs + model connections
   3. Start embedded Hatchet engine (sidecar binary + embedded Postgres)
   4. Point model connections at OpenAI's real base URL (or --mock for the built-in mock)
@@ -53,9 +53,18 @@ def main() -> None:
 
     import django
 
+    from simpleaudit_studio.paths import adopt_legacy_database, data_dir
+
     print("=" * 60)
     print("  SimpleAudit Studio — Local Minimal Config")
     print("=" * 60)
+    print()
+    print(f"💾 Data folder: {data_dir()}  (set SIMPLEAUDIT_DATA_DIR to change)")
+    adopted = adopt_legacy_database()
+    if adopted:
+        source, runs = adopted
+        print(f"   Brought over your data from an earlier version ({runs} run{'s' if runs != 1 else ''}):")
+        print(f"   {source}")
     print()
 
     # --- Step 1: Django setup + migrate ---

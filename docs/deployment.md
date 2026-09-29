@@ -25,6 +25,14 @@ uvx simpleaudit-studio --mock   # built-in mock model server, simulated results
 seeds scenario packs and model connections, starts embedded Hatchet and runs the
 web server and worker in one process.
 
+Data lives in `~/.simpleaudit-studio/` (`SIMPLEAUDIT_DATA_DIR` changes it):
+`studio.sqlite3` is the database and `embedded-pg/` is the embedded Hatchet
+queue. It is outside the installed package, so upgrades and `uv cache clean`
+keep it, and nothing is written to the folder you run from. Before 0.5.2 the
+database lived inside the package, so each new version started empty; the
+first start of 0.5.2 copies in the most recently used of those old databases
+and says so. Back up that folder to back up your audits.
+
 The root `Dockerfile` builds the same thing for the Hugging Face Space
 (`CMD python -m simpleaudit_studio.cli`, port 7860). It sets demo defaults
 (`DEMO_MODE=true`, user `studio` / `admin123`); override secrets in the Space
@@ -78,7 +86,8 @@ Only these are read by the code.
 | `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_HOST`, `POSTGRES_PORT`, `POSTGRES_CONN_MAX_AGE` | PostgreSQL connection. |
 | `SIMPLEAUDIT_LOCAL_SQLITE` | `1` = local SQLite database (`local_test.sqlite3`). |
 | `SIMPLEAUDIT_MINIMAL` | `1` = single-process demo mode (set by the CLI). |
-| `SIMPLEAUDIT_EMBEDDED_PG_DIR` | Data directory for embedded Hatchet's PostgreSQL. |
+| `SIMPLEAUDIT_DATA_DIR` | Where single-process mode keeps its data (default `~/.simpleaudit-studio`): the SQLite database and embedded Hatchet's PostgreSQL. |
+| `SIMPLEAUDIT_EMBEDDED_PG_DIR` | Override just embedded Hatchet's PostgreSQL directory (default `<data dir>/embedded-pg`). |
 | `HATCHET_SERVER_URL`, `HATCHET_GRPC_URL`, `HATCHET_API_KEY`, `HATCHET_TOKEN_FILE`, `HATCHET_TLS_STRATEGY` | External Hatchet connection. |
 | `HATCHET_EMBEDDED_HANDSHAKE` | Set internally by `dev_server --embedded` so web and worker find the embedded engine; don't set it yourself. |
 | `WORKER_POOL` | Worker label (`cpu` by default). |
