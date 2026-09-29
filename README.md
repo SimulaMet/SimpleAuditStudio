@@ -104,26 +104,27 @@ cp .env.example .env
 docker compose up -d
 ```
 
-Services: Web UI (:8000), PostgreSQL, Hatchet queue (:8888), Worker. Optional profiles: `--profile mock` (mock model API), `--profile chat` (Open WebUI).
+Services: Web UI (:8000), PostgreSQL, Hatchet queue (:8888), Worker. Chat (Open WebUI) is included via `.env`; optional profile `--profile mock` adds a mock model API.
 
 See [docs/deployment.md](docs/deployment.md) for production hardening, backups, and upgrades.
 
-## 💬 Chat (optional)
+## 💬 Chat
 
-SimpleAudit Studio can embed [Open WebUI](https://openwebui.com) under `/chat/`,
-signed in as your Studio user — workspace admins become Open WebUI admins. It is
-off unless you turn it on, and nothing else changes when you do.
+SimpleAudit Studio embeds [Open WebUI](https://openwebui.com) at `/chat/`, signed
+in as your Studio user — workspace admins become Open WebUI admins.
 
-```bash
-uvx simpleaudit-studio --chat          # local: starts Open WebUI alongside Studio
-```
+The local one-liner bundles it; Docker Compose includes it when `.env` says so
+(`.env.example` ships both lines set):
 
 ```bash
-# Docker: add to .env, then
-#   SIMPLEAUDIT_CHAT=docker
-#   SIMPLEAUDIT_CHAT_URL=http://localhost:8801
-docker compose --profile chat up -d
+uvx simpleaudit-studio                 # chat included
+uvx simpleaudit-studio --disable-chat  # without it
+
+docker compose up -d                   # includes chat via .env
 ```
+
+To leave it out of a Compose deployment, comment out `SIMPLEAUDIT_CHAT` and
+`COMPOSE_PROFILES` in `.env`.
 
 See [docs/chat.md](docs/chat.md) for how single sign-on works and what must stay
 private.

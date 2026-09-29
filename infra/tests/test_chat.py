@@ -8,8 +8,18 @@ from unittest.mock import patch
 from django.test import Client, TestCase
 
 from accounts.models import ProjectMembership
-from infra.chat import EMAIL_HEADER, NAME_HEADER, ROLE_HEADER
+from infra.chat import EMAIL_HEADER, NAME_HEADER, ROLE_HEADER, is_disabled
 from infra.tests.factories import MembershipFactory, ProjectFactory, UserFactory
+
+
+class ChatSwitchTests(TestCase):
+    def test_spellings_that_turn_chat_off(self):
+        for value in (None, "", "off", "disabled", "DISABLED", " no ", "false", "0"):
+            self.assertTrue(is_disabled(value), value)
+
+    def test_spellings_that_turn_chat_on(self):
+        for value in ("embedded", "docker", "on"):
+            self.assertFalse(is_disabled(value), value)
 
 
 class ChatDisabledTests(TestCase):
