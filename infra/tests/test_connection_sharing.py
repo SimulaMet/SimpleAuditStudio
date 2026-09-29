@@ -111,8 +111,8 @@ class VisibilityHelperTests(TestCase):
         self.assertEqual(names, {"Owner WS", "Other WS"})
 
 
-class ModelsPageSharingTests(TestCase):
-    """The Models page shows shared connections read-only to consumers."""
+class ConnectionsPageSharingTests(TestCase):
+    """The Connections page shows shared connections read-only to consumers."""
 
     def setUp(self):
         self.owner_ws = ProjectFactory(name="Owner WS")
@@ -133,7 +133,7 @@ class ModelsPageSharingTests(TestCase):
         _login(self.client, user)
         self.client.session["active_project_id"] = ws.id
         self.client.session.save()
-        return self.client.get("/models/")
+        return self.client.get("/connections/")
 
     def test_consumer_sees_shared_connection_readonly(self):
         page = self._page_as(self.consumer_user, self.consumer_ws)
@@ -154,7 +154,7 @@ class ModelsPageSharingTests(TestCase):
         self.client.session["active_project_id"] = self.consumer_ws.id
         self.client.session.save()
         before = self.conn.description
-        resp = self.client.post("/models/", {
+        resp = self.client.post("/connections/", {
             "action": "edit_connection", "conn_id": self.conn.id,
             "conn_name": "Hacked", "conn_base_url": "https://evil.example/v1",
             "conn_enabled": "1", "key_mode": "none",
@@ -168,7 +168,7 @@ class ModelsPageSharingTests(TestCase):
         _login(self.client, self.consumer_user)
         self.client.session["active_project_id"] = self.consumer_ws.id
         self.client.session.save()
-        resp = self.client.post(f"/models/connection-delete/{self.conn.id}/")
+        resp = self.client.post(f"/connections/{self.conn.id}/delete/")
         self.assertEqual(resp.status_code, 302)
         self.assertTrue(ModelConnection.objects.filter(pk=self.conn.id).exists())
 
@@ -176,7 +176,7 @@ class ModelsPageSharingTests(TestCase):
         _login(self.client, self.owner_user)
         self.client.session["active_project_id"] = self.owner_ws.id
         self.client.session.save()
-        self.client.post("/models/", {
+        self.client.post("/connections/", {
             "action": "edit_connection", "conn_id": self.conn.id,
             "conn_name": "Public OpenAI", "conn_base_url": "https://api.openai.com/v1",
             "conn_enabled": "1", "key_mode": "none",
