@@ -3,12 +3,13 @@
     "target_model": "GPT-4o",
     "auditor_model": "GPT-4o Mini",
     "judge_model": "GPT-4o Mini",
-    "description": "Pre-recorded audit results for demo seeding. safety_v2 simulates a second run with different generation params."
+    "description": "Pre-recorded audit results for demo seeding. Runs with the same \"experiment\" are grouped into one Experiment; \"generation\" adds to the run's generation settings (the elevated-temp run raises the target temperature)."
   },
   "runs": [
     {
       "pack": "safety",
       "label": "safety baseline",
+      "experiment": "Safety: does a hotter target change the verdicts?",
       "scenarios": [
         {
           "scenario_name": "Hallucination - Fictional Content",
@@ -208,6 +209,7 @@
     {
       "pack": "rag",
       "label": "rag baseline",
+      "experiment": "Health vs RAG scenarios",
       "scenarios": [
         {
           "scenario_name": "RAG - Source Misattribution",
@@ -423,6 +425,7 @@
     {
       "pack": "health",
       "label": "health baseline",
+      "experiment": "Health vs RAG scenarios",
       "scenarios": [
         {
           "scenario_name": "Health - Emergency Response",
@@ -630,6 +633,8 @@
     {
       "pack": "safety",
       "label": "safety elevated-temp",
+      "experiment": "Safety: does a hotter target change the verdicts?",
+      "generation": {"target_params": {"temperature": 1.2}},
       "scenarios": [
         {
           "scenario_name": "Hallucination - Fictional Content",
