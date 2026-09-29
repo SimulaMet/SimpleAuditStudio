@@ -41,6 +41,35 @@ _process: subprocess.Popen | None = None
 _log_file = None
 _process_lock = threading.Lock()
 
+# Open WebUI's page pulls dozens of assets, and each one would otherwise ask
+# Studio who the browser is. The answer is cached for a moment, keyed on the
+# exact cookie header, so a page load costs one authz request instead of fifty.
+# Short on purpose: a sign-out takes effect within this window.
+IDENTITY_TTL = float(os.environ.get("SIMPLEAUDIT_CHAT_IDENTITY_TTL", "5"))
+_IDENTITY_CACHE_LIMIT = 512
+_identity_cache: dict[str, tuple[float, dict[str, str] | None]] = {}
+_identity_lock = threading.Lock()
+
+
+def _cached_identity(cookie: str) -> tuple[bool, dict[str, str] | None]:
+    """(hit, identity). A miss and a cached "signed out" look different."""
+    if IDENTITY_TTL <= 0:
+        return False, None
+    with _identity_lock:
+        entry = _identity_cache.get(cookie)
+        if entry is None or entry[0] < time.monotonic():
+            return False, None
+        return True, entry[1]
+
+
+def _remember_identity(cookie: str, identity: dict[str, str] | None) -> None:
+    if IDENTITY_TTL <= 0:
+        return
+    with _identity_lock:
+        if len(_identity_cache) >= _IDENTITY_CACHE_LIMIT:
+            _identity_cache.clear()    # cheap and rare; entries are seconds old
+        _identity_cache[cookie] = (time.monotonic() + IDENTITY_TTL, identity)
+
 # Connection-level headers that must not be forwarded (RFC 9110 §7.6.1).
 _HOP_BY_HOP = frozenset({
     "connection", "keep-alive", "proxy-authenticate", "proxy-authorization",
@@ -185,18 +214,26 @@ class _Handler(BaseHTTPRequestHandler):
             upstream.close()
 
     def _identify(self, cookie: str) -> dict[str, str] | None:
-        """Ask Studio who this browser is. None when signed out."""
+        """Who is this browser? None when signed out. Cached for IDENTITY_TTL."""
+        hit, cached = _cached_identity(cookie)
+        if hit:
+            return cached
         try:
             response = self.client().get(
                 f"{self.studio_url}/chat/authz",
                 headers={"Cookie": cookie} if cookie else {},
             )
         except httpx.HTTPError as exc:
+            # Not cached: Studio being briefly unreachable should not sign
+            # everyone out for the next few seconds.
             logger.warning("chat authz unreachable: %s", exc)
             return None
-        if response.status_code != 200:
-            return None
-        return {h: response.headers[h] for h in chat.TRUSTED_HEADERS if h in response.headers}
+        identity = (
+            {h: response.headers[h] for h in chat.TRUSTED_HEADERS if h in response.headers}
+            if response.status_code == 200 else None
+        )
+        _remember_identity(cookie, identity)
+        return identity
 
     do_GET = do_POST = do_PUT = do_PATCH = do_DELETE = do_HEAD = do_OPTIONS = _proxy
 

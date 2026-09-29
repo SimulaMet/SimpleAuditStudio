@@ -103,6 +103,12 @@ headers attached, and once Open WebUI answers 101 the two sockets are piped
 together — nothing in the proxy understands WebSocket framing. Socket.IO
 therefore behaves as it does behind Caddy instead of falling back to polling.
 
+The proxy keeps no state between requests — an HTTP client with a cookie jar
+would hand one browser's session to the next — except a few seconds of "who is
+this cookie" (`SIMPLEAUDIT_CHAT_IDENTITY_TTL`, default 5s, 0 to disable). A page
+load pulls dozens of assets, and without it each one would ask Django again; a
+sign-out takes effect within that window.
+
 Ollama is switched off (nothing in a Studio deployment serves it). Left on, Open
 WebUI polls it on every page load — a failing request in the browser console each
 time — and shows an empty Ollama section in its connection settings. The
@@ -146,6 +152,8 @@ cookie. Different registrable domains will not work.
 | `SIMPLEAUDIT_CHAT_UPSTREAM_PORT`| `8080`                   | Open WebUI's port (docker mode)            |
 | `SIMPLEAUDIT_STUDIO_URL`        | `http://localhost:8000`  | where signed-out users are sent (docker)   |
 | `SIMPLEAUDIT_CHAT_CMD`          | auto                     | command that starts Open WebUI             |
+| `SIMPLEAUDIT_CHAT_IDENTITY_TTL` | `5`                      | seconds the proxy caches who a cookie is   |
+| `SIMPLEAUDIT_CHAT_SYNC_DELAY`   | `2`                      | seconds a model-connection push waits      |
 
 ## Syncing with Studio (scaffolding)
 
