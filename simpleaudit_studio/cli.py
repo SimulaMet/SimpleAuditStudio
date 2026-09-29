@@ -136,18 +136,23 @@ def main() -> None:
     from infra import chat as chat_config
 
     if chat_config.ENABLED:
-        from infra.chat_proxy import serve as serve_chat_proxy
-        from infra.chat_proxy import start_open_webui
+        from infra import chat_proxy
 
+        print("💬 Starting chat (Open WebUI)...")
+        if chat_proxy.is_first_run():
+            print("   First start downloads it (~1 GB via uvx) and can take a few minutes.")
+            print("   Studio is usable right away; /chat/ works once the download finishes.")
+        print(f"   Its data: {chat_proxy.home_dir()}")
+        print(f"   Its log:  {chat_proxy.log_path()}")
         try:
-            chat_process = start_open_webui()
-            serve_chat_proxy(port)
-            print(f"💬 Chat (Open WebUI) at {chat_config.PUBLIC_URL} — also at /chat/ in Studio.")
-            print("   First start downloads it; the tab stays blank until it is ready.\n")
+            chat_process = start_chat(chat_proxy, port)
         except (OSError, RuntimeError) as exc:
-            # Missing open-webui, a taken port, a failed spawn: chat is optional,
-            # so the rest of the stack still comes up.
-            print(f"⚠️  Chat could not start ({exc}); continuing without it.\n")
+            # No open-webui to run, a taken port, a failed spawn: chat is one
+            # part of the stack, so the rest still comes up without it.
+            print(f"⚠️  Chat could not start ({exc}); continuing without it.")
+            print("   Skip it with --disable-chat.\n")
+        else:
+            print()
 
     username = os.environ.get("BOOTSTRAP_USERNAME", "studio")
     password = os.environ.get("BOOTSTRAP_PASSWORD", "admin123")
@@ -203,6 +208,30 @@ def main() -> None:
                 chat_process.terminate()
             if mock_server is not None:
                 mock_server.shutdown()
+
+
+def start_chat(chat_proxy, studio_port: int):
+    """Start Open WebUI and its proxy, and report readiness in the background.
+
+    Open WebUI takes minutes to be ready on a first run (it is fetched, then it
+    migrates its database), so the wait happens in a thread: Studio and the
+    worker come up meanwhile, and one line says when /chat/ is live.
+    """
+    process = chat_proxy.start_open_webui()
+    chat_proxy.serve(studio_port)
+
+    def report():
+        if chat_proxy.wait_until_ready(process):
+            print(f"\n✅ Chat is ready — http://localhost:{studio_port}/chat/\n")
+        elif process.poll() is not None:
+            print(f"\n⚠️  Chat stopped (exit {process.returncode}). Studio is unaffected.")
+            print(f"   What happened: {chat_proxy.log_path()}\n")
+        else:
+            print("\n⚠️  Chat is still not answering. Studio is unaffected.")
+            print(f"   What it is doing: {chat_proxy.log_path()}\n")
+
+    threading.Thread(target=report, daemon=True).start()
+    return process
 
 
 def _check_port_available(port: int) -> None:

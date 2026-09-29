@@ -1,8 +1,8 @@
 """The forward-auth proxy that fronts Open WebUI in embedded mode.
 
 Docker deployments use Caddy for this (see deploy/compose/Caddyfile.chat); this
-module is the no-Docker equivalent, so ``uvx simpleaudit-studio --chat`` needs
-nothing but Python. Both do the same three things:
+module is the no-Docker equivalent, so ``uvx simpleaudit-studio`` needs nothing
+but Python. Both do the same three things:
 
   1. strip any client-supplied trusted header (otherwise anyone could forge one),
   2. ask Studio ``GET /chat/authz`` who the browser is, forwarding its cookies,
@@ -19,7 +19,9 @@ import os
 import shutil
 import subprocess
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from urllib.parse import urlsplit
 
 import httpx
@@ -121,15 +123,53 @@ def serve(studio_port: int) -> ThreadingHTTPServer:
     return server
 
 
+def home_dir() -> Path:
+    """Open WebUI's data folder, beside Studio's own."""
+    from simpleaudit_studio.paths import data_dir
+
+    return data_dir() / "openwebui"
+
+
+def log_path() -> Path:
+    """Where Open WebUI's own output goes — it is far too chatty for the console."""
+    return home_dir() / "server.log"
+
+
+def is_first_run() -> bool:
+    """True when Open WebUI has never started here, so it has to be fetched."""
+    return not (home_dir() / "webui.db").exists()
+
+
+def wait_until_ready(process: subprocess.Popen, timeout: float = 900.0) -> bool:
+    """Poll Open WebUI until it answers, the process dies, or time runs out.
+
+    Uses urllib rather than httpx so a start-up that takes minutes does not
+    write a request log line every two seconds to the console.
+    """
+    import urllib.error
+    import urllib.request
+
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if process.poll() is not None:
+            return False
+        try:
+            with urllib.request.urlopen(chat.UPSTREAM + "/health", timeout=3.0) as response:
+                if response.status == 200:
+                    return True
+        except (urllib.error.URLError, OSError):
+            pass
+        time.sleep(2.0)
+    return False
+
+
 def start_open_webui() -> subprocess.Popen:
     """Start Open WebUI bound to loopback, in trusted-header mode.
 
     Uses the ``open-webui`` command when it is installed, otherwise ``uvx``
     fetches it on first run. SIMPLEAUDIT_CHAT_CMD overrides both.
     """
-    from simpleaudit_studio.paths import data_dir
-
-    home = data_dir() / "openwebui"
+    home = home_dir()
     home.mkdir(parents=True, exist_ok=True)
     host = urlsplit(chat.UPSTREAM).hostname or "127.0.0.1"
     port = urlsplit(chat.UPSTREAM).port or 8080
@@ -165,4 +205,5 @@ def start_open_webui() -> subprocess.Popen:
     # directory, with no setting for it: running it from its own data folder
     # keeps that out of wherever Studio was started and stable across restarts
     # (a new key signs every session out).
-    return subprocess.Popen(argv, env=env, cwd=str(home))
+    log = log_path().open("a")
+    return subprocess.Popen(argv, env=env, cwd=str(home), stdout=log, stderr=subprocess.STDOUT)
