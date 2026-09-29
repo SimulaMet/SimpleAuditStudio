@@ -88,3 +88,31 @@ class ChatEnabledTests(TestCase):
     def test_sidebar_links_to_chat(self):
         self._sign_in(username="nav")
         self.assertContains(self.client.get("/"), 'href="/chat/"')
+
+
+@patch("chat.config.ENABLED", True)
+class ChatOriginTests(TestCase):
+    """The iframe must load the chat from the same host the page came from.
+
+    Cookies are per host, not per port: a page served from 127.0.0.1 that embeds
+    localhost:8801 sends the proxy no session cookie, and the frame bounces back
+    to Studio — which embeds the frame again.
+    """
+
+    def setUp(self):
+        self.client = Client()
+        user = UserFactory(username="origin")
+        MembershipFactory(user=user, project=ProjectFactory())
+        self.client.force_login(user)
+
+    def test_the_iframe_follows_the_host_in_the_address_bar(self):
+        with patch("chat.config.PUBLIC_URL", ""), patch("chat.config.PROXY_PORT", 8801):
+            page = self.client.get("/chat/", HTTP_HOST="127.0.0.1:8000")
+            self.assertContains(page, 'src="http://127.0.0.1:8801"')
+            page = self.client.get("/chat/", HTTP_HOST="localhost:8000")
+            self.assertContains(page, 'src="http://localhost:8801"')
+
+    def test_an_explicit_chat_url_always_wins(self):
+        with patch("chat.config.PUBLIC_URL", "https://chat.example.com"):
+            page = self.client.get("/chat/", HTTP_HOST="127.0.0.1:8000")
+            self.assertContains(page, 'src="https://chat.example.com"')

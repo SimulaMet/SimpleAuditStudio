@@ -71,10 +71,7 @@ class _Handler(BaseHTTPRequestHandler):
 
         identity = self._identify(cookie)
         if identity is None:
-            self.send_response(302)
-            self.send_header("Location", f"{self.studio_url}/chat/")
-            self.send_header("Content-Length", "0")
-            self.end_headers()
+            self._send_to_studio()
             return
         headers.update(identity)
 
@@ -106,6 +103,26 @@ class _Handler(BaseHTTPRequestHandler):
             self.send_error(502, "Chat backend unavailable")
         except (BrokenPipeError, ConnectionResetError):
             pass    # the browser navigated away mid-stream
+
+    def _send_to_studio(self) -> None:
+        """Signed out: send the whole tab to Studio, not just this frame.
+
+        A redirect would load Studio's chat page *inside* the iframe, which
+        embeds this origin again — a loop that ends as a blank frame. Breaking
+        out of the frame makes the real problem (usually no session cookie here)
+        visible as Studio's login page.
+        """
+        target = f"{self.studio_url}/login/?next=/chat/"
+        body = (
+            "<!doctype html><meta charset=utf-8>"
+            f'<script>top.location.replace("{target}")</script>'
+            f'<p>Not signed in. <a href="{target}" target="_top">Sign in to Studio</a>.</p>'
+        ).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
 
     def _tunnel(self, identity: dict[str, str]) -> None:
         """Hand a WebSocket handshake to Open WebUI and then get out of the way.
@@ -371,7 +388,7 @@ def _spawn(home: Path) -> subprocess.Popen:
         # Nothing here serves Ollama, and Open WebUI polls it on every page load
         # (a 500 per poll in the console) and shows an empty section in settings.
         "ENABLE_OLLAMA_API": "false",
-        "WEBUI_URL": chat.PUBLIC_URL,
+        "WEBUI_URL": chat.public_url(),
     }
     # Open WebUI keeps its signing key in ``.webui_secret_key`` in the working
     # directory, with no setting for it: running it from its own data folder

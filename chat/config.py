@@ -49,8 +49,10 @@ ENABLED = not is_disabled(MODE)
 UPSTREAM = os.environ.get("SIMPLEAUDIT_CHAT_UPSTREAM", "http://127.0.0.1:8080").rstrip("/")
 #: The port the bundled forward-auth proxy listens on (embedded mode).
 PROXY_PORT = int(os.environ.get("SIMPLEAUDIT_CHAT_PROXY_PORT", "8801"))
-#: What the iframe points at — the proxy's origin, as the browser sees it.
-PUBLIC_URL = os.environ.get("SIMPLEAUDIT_CHAT_URL", f"http://localhost:{PROXY_PORT}").rstrip("/")
+#: What the iframe points at — the proxy's origin, as the browser sees it. When
+#: it is not configured, ``public_url(request)`` derives it from the page's own
+#: host, because the host has to match for the session cookie to be sent.
+PUBLIC_URL = (os.environ.get("SIMPLEAUDIT_CHAT_URL") or "").rstrip("/")
 
 EMAIL_HEADER = "X-Studio-Email"
 NAME_HEADER = "X-Studio-Name"
@@ -58,6 +60,24 @@ ROLE_HEADER = "X-Studio-Role"
 #: Every header the proxy injects — it must strip all of them off the incoming
 #: request before adding its own, or a client could forge them.
 TRUSTED_HEADERS = (EMAIL_HEADER, NAME_HEADER, ROLE_HEADER)
+
+
+def public_url(request=None) -> str:
+    """The origin the browser should load the chat from.
+
+    SIMPLEAUDIT_CHAT_URL wins (a deployment behind TLS or on its own hostname
+    knows better than we do). Otherwise it is the host the browser is already on,
+    with the proxy's port: cookies are per host, not per port, so a page served
+    from 127.0.0.1 must embed 127.0.0.1 and one served from localhost must embed
+    localhost — otherwise the proxy gets no session cookie and bounces the iframe
+    back to Studio.
+    """
+    if PUBLIC_URL:
+        return PUBLIC_URL
+    if request is None:
+        return f"http://localhost:{PROXY_PORT}"
+    host = request.get_host().split(":")[0]
+    return f"{request.scheme}://{host}:{PROXY_PORT}"
 
 
 def identity(user) -> dict[str, str]:
