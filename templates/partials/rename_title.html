@@ -1,0 +1,40 @@
+{% comment %}
+A page title with a ✎ to rename it in place (runs, experiments).
+Context: name; action (the rename URL, which takes POST "name"); kind ("run",
+"experiment"); suffix (optional, shown after the name, e.g. "(Run #12)").
+{% endcomment %}
+<div class="min-w-0" data-rename>
+  <div class="flex items-center gap-2 min-w-0" data-rename-view>
+    <h1 class="text-lg font-semibold text-gray-100 break-words min-w-0">{{ name }}{% if suffix %} <span class="text-gray-500 font-normal text-sm">{{ suffix }}</span>{% endif %}</h1>
+    <button type="button" data-write data-rename-toggle title="Rename this {{ kind }}" aria-label="Rename this {{ kind }}"
+            class="shrink-0 inline-flex items-center justify-center w-7 h-7 rounded-md text-gray-500 hover:text-accent hover:bg-surface-overlay transition-colors">
+      <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/></svg>
+    </button>
+  </div>
+  <form method="post" action="{{ action }}" data-rename-form class="hidden flex flex-wrap items-center gap-2">
+    {% csrf_token %}
+    <input type="text" name="name" value="{{ name }}" maxlength="250" required aria-label="New {{ kind }} name"
+           class="px-3 py-1.5 rounded-lg bg-surface-overlay border border-gray-700 text-sm text-gray-200 focus:outline-none focus:ring-2 focus:ring-accent/50 w-full max-w-sm min-w-0">
+    <button type="submit" class="px-3 py-1.5 rounded-lg bg-accent text-white text-xs font-medium hover:bg-accent-hover">Save</button>
+    <button type="button" data-rename-toggle class="px-3 py-1.5 rounded-lg bg-surface-overlay text-gray-400 text-xs font-medium hover:text-gray-200">Cancel</button>
+  </form>
+</div>
+<script>
+if (!window.renameTitleWired) {
+  window.renameTitleWired = true;
+  const toggle = box => {
+    const form = box.querySelector('[data-rename-form]');
+    box.querySelector('[data-rename-view]').classList.toggle('hidden');
+    form.classList.toggle('hidden');
+    if (!form.classList.contains('hidden')) form.elements.name.select();
+  };
+  document.addEventListener('click', e => {
+    const btn = e.target.closest('[data-rename-toggle]');
+    if (btn) toggle(btn.closest('[data-rename]'));
+  });
+  document.addEventListener('keydown', e => {
+    const box = e.key === 'Escape' && e.target.closest && e.target.closest('[data-rename-form]');
+    if (box) toggle(box.closest('[data-rename]'));
+  });
+}
+</script>
