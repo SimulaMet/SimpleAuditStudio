@@ -4,6 +4,8 @@ Everything about *why* it works this way is in chat/config.py.
 """
 from __future__ import annotations
 
+from urllib.parse import urlencode
+
 from django.http import Http404, HttpResponse
 from django.shortcuts import redirect
 from django.views.generic import TemplateView
@@ -44,4 +46,9 @@ class ChatView(TemplateView):
         return super().get(request, *args, **kwargs)
 
     def get_context_data(self, **kwargs):
-        return super().get_context_data(chat_url=config.public_url(self.request), **kwargs)
+        chat_url = config.public_url(self.request)
+        # Pin the embedded chat to one model: Open WebUI reads ?model= from the
+        # URL, so the frame opens on it and the (hidden) picker never matters.
+        if config.MODEL:
+            chat_url = f"{chat_url}?{urlencode({'model': config.MODEL})}"
+        return super().get_context_data(chat_url=chat_url, **kwargs)

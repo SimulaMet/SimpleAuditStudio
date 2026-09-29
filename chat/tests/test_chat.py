@@ -100,13 +100,39 @@ class ChatOriginTests(TestCase):
         self.client.force_login(user)
 
     def test_the_iframe_follows_the_host_in_the_address_bar(self):
-        with patch("chat.config.PUBLIC_URL", ""), patch("chat.config.PROXY_PORT", 8801):
+        with patch("chat.config.PUBLIC_URL", ""), patch("chat.config.PROXY_PORT", 8801), \
+             patch("chat.config.MODEL", ""):
             page = self.client.get("/chat/", HTTP_HOST="127.0.0.1:8000")
             self.assertContains(page, 'src="http://127.0.0.1:8801"')
             page = self.client.get("/chat/", HTTP_HOST="localhost:8000")
             self.assertContains(page, 'src="http://localhost:8801"')
 
     def test_an_explicit_chat_url_always_wins(self):
-        with patch("chat.config.PUBLIC_URL", "https://chat.example.com"):
+        with patch("chat.config.PUBLIC_URL", "https://chat.example.com"), \
+             patch("chat.config.MODEL", ""):
             page = self.client.get("/chat/", HTTP_HOST="127.0.0.1:8000")
             self.assertContains(page, 'src="https://chat.example.com"')
+
+
+@patch("chat.config.ENABLED", True)
+class ChatModelPinTests(TestCase):
+    """The iframe URL carries ?model= so Open WebUI opens on the pinned model."""
+
+    def setUp(self):
+        self.client = Client()
+        user = UserFactory(username="pin")
+        MembershipFactory(user=user, project=ProjectFactory())
+        self.client.force_login(user)
+
+    def test_pinned_model_is_appended_to_the_iframe_url(self):
+        with patch("chat.config.PUBLIC_URL", "http://127.0.0.1:8801"), \
+             patch("chat.config.MODEL", "Qwen3.8-27B"):
+            page = self.client.get("/chat/", HTTP_HOST="127.0.0.1:8000")
+            self.assertContains(page, 'src="http://127.0.0.1:8801?model=Qwen3.8-27B"')
+
+    def test_no_param_when_no_model_is_pinned(self):
+        with patch("chat.config.PUBLIC_URL", "http://127.0.0.1:8801"), \
+             patch("chat.config.MODEL", ""):
+            page = self.client.get("/chat/", HTTP_HOST="127.0.0.1:8000")
+            self.assertContains(page, 'src="http://127.0.0.1:8801"')
+            self.assertNotContains(page, "model=")

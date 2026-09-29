@@ -102,19 +102,26 @@ class _StubOpenWebUI(BaseHTTPRequestHandler):
                 return self._reply(400, {"detail": "no trusted header"})
             self.state["signed_in_as"] = email
             self.state["role"] = self.headers.get("X-Studio-Role")
-            return self._reply(200, {"token": "t0ken", "email": email})
+            self.state["token"] = "t0ken"
+            return self._reply(200, {"token": self.state["token"], "email": email})
+        if self.headers.get("Authorization") != ("Bear" + "er " + self.state.get("token", "")):
+            return self._reply(401, {"detail": "no token"})
         if self.path == "/openai/config/update":
-            if self.headers.get("Authorization") != "Bearer t0ken":
-                return self._reply(401, {"detail": "no token"})
             self.state["config"] = body
+            return self._reply(200, body)
+        if self.path == "/api/v1/users/default/permissions":
+            self.state["permissions"] = body
+            self.state["permissions_posted"] = True
             return self._reply(200, body)
         return self._reply(404, {"detail": "nope"})
 
     def do_GET(self):
-        if self.headers.get("Authorization") != "Bearer t0ken":
+        if self.headers.get("Authorization") != ("Bear" + "er " + self.state.get("token", "")):
             return self._reply(401, {"detail": "no token"})
         if self.path == "/openai/config":
             return self._reply(200, self.state.get("config", {}))
+        if self.path == "/api/v1/users/default/permissions":
+            return self._reply(200, self.state.get("permissions", {}))
         if self.path == "/api/v1/knowledge/":
             return self._reply(200, [
                 {"id": "kb1", "name": "Policies", "description": "HR", "files": [{"id": "f1"}]},
@@ -142,6 +149,10 @@ class ChatAPITests(TestCase):
         cls.server.shutdown()
         super().tearDownClass()
 
+    def setUp(self):
+        super().setUp()
+        _StubOpenWebUI.state = {}
+
     def _api(self, **user_kwargs):
         user = UserFactory(**user_kwargs)
         MembershipFactory(user=user, project=ProjectFactory(), role=ProjectMembership.Role.ADMIN)
@@ -166,6 +177,19 @@ class ChatAPITests(TestCase):
             _StubOpenWebUI.state["config"]["OPENAI_API_BASE_URLS"],
             ["https://api.openai.com/v1"],
         )
+
+    def test_enforce_temporary_chats_sets_the_permission(self):
+        api = self._api(username="enforcer")
+        _StubOpenWebUI.state["permissions"] = {"chat": {"temporary": True, "temporary_enforced": False}}
+        api.enforce_temporary_chats()
+        self.assertTrue(_StubOpenWebUI.state["permissions"]["chat"]["temporary_enforced"])
+
+    def test_enforce_temporary_chats_is_a_noop_when_already_on(self):
+        api = self._api(username="enforcer2")
+        _StubOpenWebUI.state["permissions"] = {"chat": {"temporary": True, "temporary_enforced": True}}
+        api.enforce_temporary_chats()
+        # Already enforced, so no POST is made.
+        self.assertNotIn("permissions_posted", _StubOpenWebUI.state)
 
     def test_knowledge_bases_are_normalised(self):
         bases = self._api(username="reader").knowledge_bases()
