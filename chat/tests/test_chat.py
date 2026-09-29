@@ -130,14 +130,16 @@ class ChatModelPinTests(TestCase):
             page = self.client.get("/chat/", HTTP_HOST="127.0.0.1:8000")
             # The & is HTML-escaped to &amp; in the rendered template.
             self.assertContains(
-                page, 'src="http://127.0.0.1:8801?model=Qwen3.8-27B&amp;temporary-chat=true"')
+                page, 'src="http://127.0.0.1:8801?models=Qwen3.8-27B&amp;temporary-chat=true"')
 
     def test_no_model_param_when_no_model_is_pinned(self):
         with patch("chat.config.PUBLIC_URL", "http://127.0.0.1:8801"), \
              patch("chat.config.MODEL", ""):
             page = self.client.get("/chat/", HTTP_HOST="127.0.0.1:8000")
+            # The iframe src carries no models= (the picker's checkbox values
+            # are value="...", not models=, so this is unambiguous).
             self.assertContains(page, 'src="http://127.0.0.1:8801?temporary-chat=true"')
-            self.assertNotContains(page, "model=")
+            self.assertNotContains(page, "8801?models=")
 
     def test_the_iframe_is_always_forced_into_temporary_mode(self):
         # The embed is a throwaway surface: every chat must be temporary so
@@ -148,3 +150,70 @@ class ChatModelPinTests(TestCase):
              patch("chat.config.MODEL", "Qwen3.8-27B"):
             page = self.client.get("/chat/", HTTP_HOST="127.0.0.1:8000")
             self.assertContains(page, "temporary-chat=true")
+
+
+@patch("chat.config.ENABLED", True)
+class ChatModelPickerTests(TestCase):
+    """The top-bar picker offers the user's visible models, grouped by
+    connection, and pre-checks the pinned default(s)."""
+
+    def setUp(self):
+        self.project = ProjectFactory()
+        self.client = Client()
+        user = UserFactory(username="picker")
+        MembershipFactory(user=user, project=self.project)
+        self.client.force_login(user)
+
+    def test_visible_models_are_listed_and_default_is_checked(self):
+        from infra.tests.factories import ModelConnectionFactory, RegisteredModelFactory
+
+        conn = ModelConnectionFactory(project=self.project, name="OpenAI")
+        RegisteredModelFactory(connection=conn, project=self.project,
+                               display_name="Qwen", model_id="Qwen3.8-27B")
+        RegisteredModelFactory(connection=conn, project=self.project,
+                               display_name="GPT", model_id="gpt-4o")
+        with patch("chat.config.PUBLIC_URL", "http://127.0.0.1:8801"), \
+             patch("chat.config.MODEL", "Qwen3.8-27B"):
+            page = self.client.get("/chat/", HTTP_HOST="127.0.0.1:8000")
+        self.assertContains(page, 'value="Qwen3.8-27B" checked')
+        self.assertContains(page, 'value="gpt-4o"')
+        self.assertNotContains(page, 'value="gpt-4o" checked')
+        self.assertContains(page, ">OpenAI<")
+
+    def test_models_from_other_workspaces_are_hidden(self):
+        from infra.tests.factories import ModelConnectionFactory, RegisteredModelFactory
+
+        other = ProjectFactory()
+        conn = ModelConnectionFactory(project=other, name="Secret")
+        RegisteredModelFactory(connection=conn, project=other,
+                               display_name="Hidden", model_id="hidden-model")
+        with patch("chat.config.PUBLIC_URL", "http://127.0.0.1:8801"), \
+             patch("chat.config.MODEL", ""):
+            page = self.client.get("/chat/", HTTP_HOST="127.0.0.1:8000")
+        self.assertNotContains(page, "hidden-model")
+        self.assertContains(page, "No models yet")
+
+    def test_disabled_connection_is_not_offered(self):
+        from infra.tests.factories import ModelConnectionFactory, RegisteredModelFactory
+
+        conn = ModelConnectionFactory(project=self.project, name="Off", enabled=False)
+        RegisteredModelFactory(connection=conn, project=self.project,
+                               display_name="Dead", model_id="dead-model")
+        with patch("chat.config.PUBLIC_URL", "http://127.0.0.1:8801"), \
+             patch("chat.config.MODEL", ""):
+            page = self.client.get("/chat/", HTTP_HOST="127.0.0.1:8000")
+        self.assertNotContains(page, "dead-model")
+
+    def test_search_box_and_backdrop_are_rendered(self):
+        from infra.tests.factories import ModelConnectionFactory, RegisteredModelFactory
+
+        conn = ModelConnectionFactory(project=self.project, name="OpenAI")
+        RegisteredModelFactory(connection=conn, project=self.project,
+                               display_name="Qwen", model_id="Qwen3.8-27B")
+        with patch("chat.config.PUBLIC_URL", "http://127.0.0.1:8801"), \
+             patch("chat.config.MODEL", ""):
+            page = self.client.get("/chat/", HTTP_HOST="127.0.0.1:8000")
+        # The filter input and the click-outside backdrop are present.
+        self.assertContains(page, 'id="model-picker-search"')
+        self.assertContains(page, 'id="picker-backdrop"')
+        self.assertContains(page, 'id="model-picker-list"')
