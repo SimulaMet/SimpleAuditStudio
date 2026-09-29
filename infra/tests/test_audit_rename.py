@@ -89,4 +89,5 @@ class AuditRenameTest(TestCase):
         resp = self.client.get(f"/runs/{self.run.id}/")
         html = resp.content.decode()
         self.assertIn(f"/runs/{self.run.id}/rename/", html)
-        self.assertIn('id="rename-form"', html)
+        self.assertIn("data-rename-form", html)
+        self.assertIn("Rename this run", html)
