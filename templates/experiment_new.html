@@ -92,10 +92,11 @@
   </div>
 
 
-  {# Row 2 (wide screens): run settings | schedule. #}
+  {# Row 2 (wide screens): run settings | schedule + name. #}
   <div class="grid grid-cols-1 xl:grid-cols-2 gap-4 items-start">
   <div class="min-w-0">{% include "partials/run_settings.html" %}</div>
 
+  <div class="min-w-0 space-y-4">
   <!-- Schedule: run once, or repeat (creates monitors) -->
   <div class="bg-surface-raised rounded-xl border border-gray-800 p-4 min-w-0" id="schedule-card">
     <h3 class="text-sm font-semibold text-gray-300 mb-1">Schedule</h3>
@@ -142,6 +143,15 @@
         </div>
       </fieldset>
     </div>
+  </div>
+
+  <!-- Name (optional): the run's, its monitor's, or the experiment's -->
+  <div class="bg-surface-raised rounded-xl border border-gray-800 p-4 min-w-0">
+    <label for="design-name" class="block text-sm font-semibold text-gray-300 mb-1"><span data-name-label>Run name</span> <span class="text-xs font-normal text-gray-500">(optional)</span></label>
+    <p class="text-xs text-gray-500 mb-3" data-name-hint>Left empty, the run is named after its start time.</p>
+    <input type="text" name="name" id="design-name" maxlength="250" value="{{ rep.name|default:'' }}" placeholder="e.g. Baseline before the prompt change"
+           class="w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-accent/50">
+  </div>
   </div>
   </div>
 
@@ -218,6 +228,12 @@
     summary.innerHTML = text;
     btn.textContent = label;
     btn.dataset.busyLabel = runs === 1 ? 'Working…' : 'Preparing review…';
+    // The optional name: the run's (or its monitor's), or the experiment's when there are several runs.
+    form.querySelector('[data-name-label]').textContent = runs > 1 ? 'Experiment name' : (repeating ? 'Name' : 'Run name');
+    form.querySelector('[data-name-hint]').textContent = runs > 1
+      ? 'Left empty, it is named after what it compares. You can edit it and each run\'s name on the next step.'
+      : repeating ? 'Names the monitor and its runs. Left empty, it is named after the target and scenario set.'
+      : 'Left empty, the run is named after its start time.';
 
     // Schedule card: reveal details only when repeating.
     form.querySelectorAll('[data-repeat-only]').forEach(el => el.classList.toggle('hidden', !repeating));

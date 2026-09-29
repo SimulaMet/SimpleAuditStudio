@@ -22,6 +22,7 @@ from infra.ui import (
     DashboardView,
     DiscoverModelsView,
     ExperimentDetailView,
+    ExperimentRenameView,
     ExperimentsView,
     HealthView,
     JudgeScriptView,
@@ -159,6 +160,7 @@ urlpatterns = [
     path("experiments/new/", NewExperimentView.as_view(), name="new_experiment"),
     path("experiments/", ExperimentsView.as_view(), name="experiments"),
     path("experiments/<int:experiment_id>/", ExperimentDetailView.as_view(), name="experiment_detail"),
+    path("experiments/<int:experiment_id>/rename/", ExperimentRenameView.as_view(), name="experiment_rename"),
     path("monitors/", MonitorsView.as_view(), name="monitors"),
     path("monitors/<int:monitor_id>/", MonitorDetailView.as_view(), name="monitor_detail"),
     path(
