@@ -1,14 +1,14 @@
 """The optional Open WebUI module: off by default, forward-auth when on.
 
 Run:
-    SIMPLEAUDIT_LOCAL_SQLITE=1 uv run manage.py test infra.tests.test_chat
+    SIMPLEAUDIT_LOCAL_SQLITE=1 uv run manage.py test chat
 """
 from unittest.mock import patch
 
 from django.test import Client, TestCase
 
 from accounts.models import ProjectMembership
-from infra.chat import EMAIL_HEADER, NAME_HEADER, ROLE_HEADER, is_disabled
+from chat.config import EMAIL_HEADER, NAME_HEADER, ROLE_HEADER, is_disabled
 from infra.tests.factories import MembershipFactory, ProjectFactory, UserFactory
 
 
@@ -39,7 +39,7 @@ class ChatDisabledTests(TestCase):
         self.assertNotContains(client.get("/"), 'href="/chat/"')
 
 
-@patch("infra.chat.ENABLED", True)
+@patch("chat.config.ENABLED", True)
 class ChatEnabledTests(TestCase):
     def setUp(self):
         self.project = ProjectFactory()
@@ -76,7 +76,7 @@ class ChatEnabledTests(TestCase):
 
     def test_page_embeds_the_chat_origin(self):
         self._sign_in(username="viewer")
-        with patch("infra.chat.PUBLIC_URL", "http://localhost:8801"):
+        with patch("chat.config.PUBLIC_URL", "http://localhost:8801"):
             response = self.client.get("/chat/")
         self.assertContains(response, 'src="http://localhost:8801"')
 

@@ -107,7 +107,7 @@ def nav(request):
     if user is None or not user.is_authenticated:
         return {}
     from accounts.services import is_any_project_admin
-    from infra.chat import ENABLED as chat_enabled
+    from chat.config import ENABLED as chat_enabled
 
     admin = is_any_project_admin(user)
     path = request.path

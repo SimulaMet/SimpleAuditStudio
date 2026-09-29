@@ -1,4 +1,6 @@
-"""Optional Open WebUI chat module. Disabled unless SIMPLEAUDIT_CHAT is set.
+"""What the chat module is configured to do, and who Studio says you are.
+
+Disabled unless SIMPLEAUDIT_CHAT is set.
 
 Open WebUI serves from the root of an origin only — it has no base-path/sub-path
 setting, and its HTML references ``/static``, ``/api`` and ``/ws`` absolutely. So
@@ -22,7 +24,7 @@ instance. Bind it to loopback (embedded mode) or keep it on an internal compose
 network with no published port (docker mode).
 
 Modes (``SIMPLEAUDIT_CHAT``):
-    embedded  the CLI starts Open WebUI and the proxy in infra.chat_proxy
+    embedded  the CLI starts Open WebUI and the proxy in chat.proxy
     docker    an external proxy (Caddy) does forward-auth; Studio only serves
               the iframe page and /chat/authz
     off       the URLs 404 and nothing starts — also "disabled", "false", "no",
@@ -31,9 +33,6 @@ Modes (``SIMPLEAUDIT_CHAT``):
 from __future__ import annotations
 
 import os
-
-from django.http import Http404, HttpResponse
-from django.views.generic import TemplateView
 
 # --- Configuration ---------------------------------------------------------
 #: Spellings of "no chat", so nobody has to guess which one this reads.
@@ -79,39 +78,3 @@ def identity(user) -> dict[str, str]:
         NAME_HEADER: user.get_full_name() or user.username,
         ROLE_HEADER: "admin" if is_admin else "user",
     }
-
-
-def authz(request):
-    """Forward-auth endpoint: who is this browser?
-
-    200 with the trusted headers when signed in, 401 otherwise. The proxy copies
-    the headers onto the upstream request and turns a 401 into a redirect to
-    Studio's login page.
-    """
-    if not ENABLED:
-        raise Http404
-    user = request.user
-    if not user.is_authenticated:
-        return HttpResponse(status=401)
-    response = HttpResponse(status=200)
-    for header, value in identity(user).items():
-        response[header] = value
-    return response
-
-
-class ChatView(TemplateView):
-    """The Studio page that embeds Open WebUI."""
-
-    template_name = "chat.html"
-
-    def get(self, request, *args, **kwargs):
-        if not ENABLED:
-            raise Http404
-        if not request.user.is_authenticated:
-            from django.shortcuts import redirect
-
-            return redirect(f"/login/?next={request.path}")
-        return super().get(request, *args, **kwargs)
-
-    def get_context_data(self, **kwargs):
-        return super().get_context_data(chat_url=PUBLIC_URL, **kwargs)

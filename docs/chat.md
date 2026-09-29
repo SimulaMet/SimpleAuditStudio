@@ -1,7 +1,19 @@
 # Chat (Open WebUI)
 
 A module that embeds [Open WebUI](https://openwebui.com) in Studio at `/chat/`,
-signed in as the Studio user. It is part of the bundle the local one-liner starts
+signed in as the Studio user. It lives in one Django app, `chat/`:
+
+```
+chat/
+  config.py          what the module is configured to do, and who you are
+  views.py urls.py   the iframe page and /chat/authz
+  proxy.py           the forward-auth proxy + Open WebUI's lifecycle (embedded)
+  api.py             talking to Open WebUI's API, both directions
+  management/        sync_chat_models, chat_knowledge
+  templates/ tests/
+```
+
+It is part of the bundle the local one-liner starts
 and of the Compose deployment `.env.example` describes, and it can be left out
 entirely: with `SIMPLEAUDIT_CHAT` set to `off` (or `disabled`, `false`, `no`,
 `0`) or unset in a deployment that does not set it, `/chat/` and `/chat/authz`
@@ -127,11 +139,55 @@ cookie. Different registrable domains will not work.
 | `SIMPLEAUDIT_STUDIO_URL`        | `http://localhost:8000`  | where signed-out users are sent (docker)   |
 | `SIMPLEAUDIT_CHAT_CMD`          | auto                     | command that starts Open WebUI             |
 
+## Syncing with Studio (scaffolding)
+
+`chat/api.py` talks to Open WebUI's API in both directions. It authenticates the
+same way the proxy makes the browser authenticate — POST the trusted identity
+headers to `/api/v1/auths/signin`, use the token that comes back — so there is no
+API key to provision and every call runs as a real Open WebUI user with that
+user's role.
+
+**Push — Studio model connections become Open WebUI providers.** A Studio
+connection is a base URL plus a key, which is exactly Open WebUI's
+OpenAI-compatible provider config (`OPENAI_API_BASE_URLS` / `OPENAI_API_KEYS` /
+`OPENAI_API_CONFIGS`):
+
+```bash
+python manage.py sync_chat_models --dry-run   # show what would be pushed
+python manage.py sync_chat_models             # push every enabled connection
+python manage.py sync_chat_models --project demo
+```
+
+Those lists are also editable by hand in Open WebUI, so each pushed entry carries
+a `simpleaudit_connection_id` marker in its config. A sync replaces the marked
+entries and leaves everything else where it is — the command says how many of
+each. Pushing provider config needs an Open WebUI admin, so the command acts as a
+Studio superuser.
+
+**Pull — what Open WebUI holds.** Knowledge bases come back as plain dicts, so
+Studio code never sees Open WebUI's schema:
+
+```bash
+python manage.py chat_knowledge            # id, name, file count
+python manage.py chat_knowledge --id <id>  # one, with its file names
+```
+
+```python
+from chat.api import ChatAPI
+
+bases = ChatAPI.as_user(request.user).knowledge_bases()
+```
+
+Both directions are deliberately explicit for now: nothing syncs on save, and
+nothing is scheduled. Wiring a signal or a monitor onto `push_connections` is the
+next step when the shape has settled.
+
 ## Removing it
 
-Set `SIMPLEAUDIT_CHAT=disabled`, or pass `--disable-chat` to the CLI. To drop the code, delete `infra/chat.py`,
-`infra/chat_proxy.py`, `infra/tests/test_chat.py`, `templates/chat.html`,
-`deploy/compose/Caddyfile.chat`, the two `chat/` routes in `config/urls.py`, the
-Chat entry in `infra/context_processors.py`, the `--chat` flag in
-`simpleaudit_studio/cli.py` and the `chat` profile in `docker-compose.yml`.
-Nothing else refers to it.
+Set `SIMPLEAUDIT_CHAT=disabled`, or pass `--disable-chat` to the CLI.
+
+To drop the code, delete the `chat/` app and `deploy/compose/Caddyfile.chat`,
+then remove its four references: `"chat"` in `INSTALLED_APPS`, the `chat/` route
+in `config/urls.py`, the Chat entry in `infra/context_processors.py`, the
+`--chat` flag in `simpleaudit_studio/cli.py`, and the `chat` profile in
+`docker-compose.yml`. Nothing else refers to it.
