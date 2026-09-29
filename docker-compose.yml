@@ -167,7 +167,46 @@ services:
     # instead of being printed once into a container nobody looks at.
     restart: unless-stopped
 
+  # Optional chat module: `docker compose --profile chat up`, with
+  # SIMPLEAUDIT_CHAT=docker and SIMPLEAUDIT_CHAT_URL=http://localhost:8801 in
+  # .env so the web service serves /chat/. See infra/chat.py.
+  #
+  # Open WebUI deliberately publishes NO port: chat-proxy is the only route to
+  # it, because it trusts the identity headers on any request it receives.
+  open-webui:
+    profiles: ["chat"]
+    image: ${OPEN_WEBUI_IMAGE:-ghcr.io/open-webui/open-webui:main}
+    environment:
+      WEBUI_AUTH_TRUSTED_EMAIL_HEADER: X-Studio-Email
+      WEBUI_AUTH_TRUSTED_NAME_HEADER: X-Studio-Name
+      WEBUI_AUTH_TRUSTED_ROLE_HEADER: X-Studio-Role
+      ENABLE_SIGNUP: "false"
+      WEBUI_URL: ${SIMPLEAUDIT_CHAT_URL:-http://localhost:8801}
+    # Open WebUI's own CLI flags: it ignores HOST/PORT.
+    command: open-webui serve --host 0.0.0.0 --port ${SIMPLEAUDIT_CHAT_UPSTREAM_PORT:-8080}
+    volumes:
+      - open_webui_data:/app/backend/data
+    restart: unless-stopped
+
+  chat-proxy:
+    profiles: ["chat"]
+    image: ${CADDY_IMAGE:-caddy:2-alpine}
+    environment:
+      STUDIO_URL: ${SIMPLEAUDIT_STUDIO_URL:-http://localhost:8000}
+      SIMPLEAUDIT_CHAT_PROXY_PORT: ${SIMPLEAUDIT_CHAT_PROXY_PORT:-8801}
+      SIMPLEAUDIT_CHAT_UPSTREAM_PORT: ${SIMPLEAUDIT_CHAT_UPSTREAM_PORT:-8080}
+      STUDIO_UPSTREAM: web:8000
+    volumes:
+      - ./deploy/compose/Caddyfile.chat:/etc/caddy/Caddyfile:ro
+    ports:
+      - "${SIMPLEAUDIT_CHAT_PROXY_PORT:-8801}:${SIMPLEAUDIT_CHAT_PROXY_PORT:-8801}"
+    depends_on:
+      - open-webui
+      - web
+    restart: unless-stopped
+
 volumes:
   postgres_data:
+  open_webui_data:
   # Shared Hatchet config; carries the auth-disabled worker JWT from server -> worker.
   hatchet_config:

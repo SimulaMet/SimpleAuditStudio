@@ -10,6 +10,7 @@ from django.views.static import serve as _static_serve
 from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView
 
 from accounts.views import healthz, readyz
+from infra import chat as _chat
 from infra.health_api import health_panel_api
 from infra.runs_table import PreferenceView, RunsBulkView, RunsDataView, RunsExportView
 from infra.seo import LandingView, llms_txt, robots_txt, sitemap_xml
@@ -202,3 +203,12 @@ urlpatterns = [
     path("runs/export.csv", RunsExportView.as_view(), name="runs_export"),
     path("me/preferences/", PreferenceView.as_view(), name="preferences"),
 ]
+
+# Optional Open WebUI module. The chat UI itself lives on its own origin; these
+# are the iframe page and the forward-auth endpoint its proxy calls. Both 404
+# unless SIMPLEAUDIT_CHAT is set. See infra/chat.py.
+urlpatterns += [
+    path("chat/", _chat.ChatView.as_view(), name="chat"),
+    path("chat/authz", _chat.authz, name="chat_authz"),
+]
+
