@@ -37,8 +37,8 @@ def models_url(conn) -> str:
 def fetch_remote_model_ids(conn, *, timeout: float = 10) -> list[str]:
     """Model ids the connection's OpenAI-compatible ``/models`` endpoint lists, sorted.
 
-    Raises ``ValueError`` when the connection has no base URL and ``httpx.HTTPError``
-    on network or HTTP failures.
+    Raises ``ValueError`` when the connection has no base URL or the reply isn't
+    a JSON model list, and ``httpx.HTTPError`` on network or HTTP failures.
     """
     if not (conn.base_url or "").strip():
         raise ValueError("This connection has no base URL.")
@@ -48,7 +48,13 @@ def fetch_remote_model_ids(conn, *, timeout: float = 10) -> list[str]:
         headers["Authorization"] = f"Bearer {key}"
     resp = httpx.get(models_url(conn), headers=headers, timeout=timeout)
     resp.raise_for_status()
-    data = resp.json()
+    try:
+        data = resp.json()
+    except ValueError as exc:   # e.g. a web page: the URL isn't the API root
+        raise ValueError(
+            f"{models_url(conn)} didn't return a model list (the reply isn't JSON). "
+            "Check the base URL: it usually ends in /v1."
+        ) from exc
     items = data.get("data", []) if isinstance(data, dict) else data if isinstance(data, list) else []
     ids = {item if isinstance(item, str) else (item.get("id") or item.get("model") or "")
            for item in items if isinstance(item, (str, dict))}

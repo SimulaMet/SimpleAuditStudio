@@ -193,7 +193,7 @@
                class="mt-1 w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm text-gray-100 focus:outline-none focus:ring-2 focus:ring-accent/50"></label>
       <label class="block text-xs text-gray-500">Provider
         <select name="conn_provider" class="mt-1 w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm text-gray-100">
-          {% for key, label, provider, url, env in provider_presets %}{% ifchanged provider %}<option value="{{ provider }}">{{ provider }}</option>{% endifchanged %}{% endfor %}
+          {% for provider in providers %}<option value="{{ provider }}">{{ provider }}</option>{% endfor %}
         </select></label>
     </div>
     <label class="block text-xs text-gray-500">Description <span class="text-gray-600">(optional)</span>
@@ -254,7 +254,10 @@
     <p class="hidden text-[11px] text-amber-300 bg-amber-900/20 rounded px-2 py-1.5" id="key-drop-warning">Saving deletes the stored API key for this connection.</p>
     <label class="hidden items-center gap-2 text-xs text-gray-400" data-edit-only>
       <input type="checkbox" name="conn_enabled" value="1" checked class="accent-accent"> Enabled — its models can be picked for new runs</label>
-    <div class="flex justify-end gap-2 pt-1">
+    <p class="hidden text-xs rounded px-2 py-1.5 break-words" id="conn-check-result" role="status" aria-live="polite"></p>
+    <div class="flex items-center justify-end gap-2 pt-1">
+      <button type="button" id="conn-check" title="Try these settings now: list the server's models with this URL and key, without saving"
+              class="mr-auto px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm text-gray-300 hover:text-white disabled:opacity-50">Check</button>
       <button type="button" data-dialog-close class="px-3 py-2 rounded-lg text-sm text-gray-400 hover:text-gray-200">Cancel</button>
       <button type="submit" class="px-4 py-2 rounded-lg bg-accent text-white text-sm font-medium hover:bg-accent-hover" id="conn-submit">Add connection</button>
     </div>
@@ -366,6 +369,7 @@
   connForm.addEventListener('click', e => { const chip = e.target.closest('[data-preset-chip]'); if (chip) applyPreset(chip.dataset.presetChip); });
   function openConn(id, preset) {
     connForm.reset();
+    clearCheck();
     const f = connForm.elements, c = CONNS[id];
     const editing = id !== 'new' && c;
     storedKeyMode = editing ? c.key_mode : null;
@@ -505,6 +509,38 @@
     // Already-added models are shown ticked but disabled (not submitted); add the manual ID if typed.
     const manual = $('#manual-id').value.trim();
     if (manual) modelsForm.insertAdjacentHTML('beforeend', `<input type="hidden" name="model_id" value="${esc(manual)}">`);
+  });
+  // ---------- Check the dialog's settings before saving ----------
+  const checkBtn = $('#conn-check'), checkResult = $('#conn-check-result');
+  function clearCheck() { checkResult.classList.add('hidden'); checkResult.textContent = ''; }
+  function showCheck(ok, text) {
+    checkResult.className = `text-xs rounded px-2 py-1.5 break-words ${ok ? 'text-green-300 bg-green-900/20' : 'text-red-300 bg-red-900/20'}`;
+    checkResult.textContent = text;
+  }
+  connForm.addEventListener('input', clearCheck);
+  checkBtn.addEventListener('click', async () => {
+    if (!connForm.elements.conn_base_url.value.trim()) { showCheck(false, 'Enter the base URL first.'); return; }
+    checkBtn.disabled = true;
+    showCheck(true, 'Checking…');
+    checkResult.className = 'text-xs rounded px-2 py-1.5 text-gray-400 bg-surface-overlay';
+    try {
+      const resp = await fetch('{% url "connection_check" %}', {
+        method: 'POST', headers: { 'X-CSRFToken': csrfToken() }, body: new FormData(connForm),
+      });
+      const data = await resp.json();
+      if (data.ok) {
+        const names = data.models.join(', ') + (data.count > data.models.length ? ', …' : '');
+        showCheck(true, data.count
+          ? `✓ Reached the server: ${data.count} model${data.count === 1 ? '' : 's'} (${names}).`
+          : '✓ Reached the server, but it listed no models. You can still add models by ID.');
+      } else {
+        showCheck(false, `✗ ${data.error || 'The check failed.'}`);
+      }
+    } catch (err) {
+      showCheck(false, `✗ Couldn't run the check: ${err.message}`);
+    } finally {
+      checkBtn.disabled = false;
+    }
   });
 })();
 </script>
