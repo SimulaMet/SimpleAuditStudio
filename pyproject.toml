@@ -59,6 +59,7 @@ packages = [
     "infra",
     "scenarios",
     "model_registry",
+    "judges",
     "deploy",
     "templates",
     "static",
