@@ -5,7 +5,8 @@
 
 <div class="flex flex-wrap items-start justify-between gap-3 mb-4">
   <div class="min-w-0">
-    <h1 class="text-lg font-semibold text-gray-100 break-words">{{ experiment.name }}</h1>
+    {% url 'experiment_rename' experiment.id as rename_url %}
+    {% include "partials/rename_title.html" with name=experiment.name action=rename_url kind="experiment" %}
     <p class="text-xs text-gray-500 mt-1">
       {{ summary.total }} run setup{{ summary.total|pluralize }}{% if monitors %} · repeats {{ monitors.0.interval_display }}{% endif %} · compares {{ factor_labels|join:" × "|default:"—" }}
       · created <time data-local datetime="{{ experiment.created_at|date:'c' }}">{{ experiment.created_at|date:"M j, H:i" }} UTC</time>{% if experiment.created_by %} by {{ experiment.created_by.username }}{% endif %}

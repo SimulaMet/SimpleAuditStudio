@@ -6,20 +6,10 @@
 </div>
 
 <div class="flex flex-wrap items-center justify-between gap-y-2 mb-6">
-  <div class="flex items-center gap-2 min-w-0 flex-1 basis-48">
-    <h1 class="text-lg font-semibold text-gray-100 truncate">{{ run.name }} <span class="text-gray-500 font-normal text-sm">(Run #{{ run.id }})</span></h1>
-    <button type="button" onclick="toggleRename()" title="Rename this run" aria-label="Rename this run" class="shrink-0 inline-flex items-center justify-center w-7 h-7 rounded-md text-gray-500 hover:text-accent hover:bg-surface-overlay transition-colors">
-      <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/></svg>
-    </button>
+  <div class="min-w-0 flex-1 basis-48">
+    {% url 'run_rename' run.id as rename_url %}
+    {% include "partials/rename_title.html" with name=run.name action=rename_url kind="run" suffix=title_suffix %}
   </div>
-  <form id="rename-form" method="post" action="{% url 'run_rename' run.id %}" class="hidden flex items-center gap-2 mb-6">
-    {% csrf_token %}
-    <input type="text" name="name" value="{{ run.name }}" maxlength="250" required
-           class="px-3 py-1.5 rounded-lg bg-surface-overlay border border-gray-700 text-sm text-gray-200 focus:outline-none focus:ring-2 focus:ring-accent/50 w-full max-w-xs min-w-0"
-           onkeydown="if(event.key==='Enter')this.form.submit();if(event.key==='Escape')toggleRename()">
-    <button type="submit" class="px-3 py-1.5 rounded-lg bg-accent text-white text-xs font-medium hover:bg-accent-hover">Save</button>
-    <button type="button" onclick="toggleRename()" class="px-3 py-1.5 rounded-lg bg-surface-overlay text-gray-400 text-xs font-medium hover:text-gray-200">Cancel</button>
-  </form>
   <div class="flex items-center gap-2 shrink-0">
     {% if run.experiment %}
     <a href="{% url 'experiment_detail' run.experiment.id %}" title="Part of experiment “{{ run.experiment.name }}” — open its comparison" class="inline-flex items-center gap-1.5 h-8 px-2.5 rounded-lg bg-surface-overlay text-gray-300 text-xs font-medium hover:text-accent transition-colors">
@@ -73,11 +63,6 @@ function openScriptModal() {
 }
 </script>
 
-<script>
-function toggleRename() {
-  document.getElementById('rename-form').classList.toggle('hidden');
-}
-</script>
 
 <!-- Live Progress (SSE) -->
 {% if run.status != "completed" and run.status != "failed" and run.status != "cancelled" %}

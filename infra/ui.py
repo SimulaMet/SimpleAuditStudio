@@ -731,7 +731,8 @@ class NewExperimentView(ProjectMixin, TemplateView):
         return super().get_context_data(**kw)
 
     def _redesign(self, post, error=None):
-        rep = {k: post.get(k, "") for k in ("repeat", "timezone", "cron_expression", "start", "first_run_at", "clone_from")}
+        rep = {k: post.get(k, "") for k in ("repeat", "timezone", "cron_expression", "start", "first_run_at", "clone_from",
+                                            "name")}
         rep["repeat"] = rep["repeat"] or "once"
         source = None
         if rep["clone_from"].isdigit():
@@ -749,7 +750,10 @@ class NewExperimentView(ProjectMixin, TemplateView):
             return blocked
         action = request.POST.get("action", "design")
         if action == "edit":
-            return self._redesign(_design_from_review(request.POST))
+            design = _design_from_review(request.POST)
+            if "experiment_name" in request.POST:   # a name edited on review comes back too
+                design["name"] = request.POST["experiment_name"]
+            return self._redesign(design)
         if action == "launch":
             return self._launch(request)
         from audits.monitors import parse_repeat
@@ -773,6 +777,7 @@ class NewExperimentView(ProjectMixin, TemplateView):
 
         p = request.project
         run_spec = spec_to_run(spec, name="")
+        custom_name = request.POST.get("name", "").strip()[:250]
         run = monitor = None
         try:
             with transaction.atomic():
@@ -780,7 +785,7 @@ class NewExperimentView(ProjectMixin, TemplateView):
                     run = create_audit_run(
                         project=p,
                         user=request.user,
-                        name=f"Run {timezone.now():%Y-%m-%d %H:%M}",
+                        name=custom_name or f"Run {timezone.now():%Y-%m-%d %H:%M}",
                         scenario_set_version=run_spec["version"],
                         target_model=run_spec["target"],
                         auditor_model=run_spec["auditor"],
@@ -798,7 +803,7 @@ class NewExperimentView(ProjectMixin, TemplateView):
                     monitor = create_monitor(
                         project=p,
                         user=request.user,
-                        name=f"{spec['target'].display_name} · {ex_label(spec)}",
+                        name=custom_name or f"{spec['target'].display_name} · {ex_label(spec)}",
                         run=run_spec,
                         repeat=repeat,
                         first_point=first_point,
@@ -898,7 +903,8 @@ class NewExperimentView(ProjectMixin, TemplateView):
         ]
         design_post = [(k, v) for k, vs in request.POST.lists() if k not in ("csrfmiddlewaretoken", "action") for v in vs]
         return self._render_review(
-            request, rows=rows, experiment_name=ex.default_experiment_name(design, factors),
+            request, rows=rows,
+            experiment_name=request.POST.get("name", "").strip()[:250] or ex.default_experiment_name(design, factors),
             design_post=design_post, repeat=repeat,
         )
 
@@ -2119,6 +2125,7 @@ class RunDetailView(ProjectMixin, DetailView):
         ctx["set_id"] = set_id
         ctx["progress_pct"] = (run.completed_scenarios * 100 // run.total_scenarios) if run.total_scenarios else 0
         ctx["stages"] = ["queued", "preparing", "target_execution", "auditing", "judging", "aggregation", "completed"]
+        ctx["title_suffix"] = f"(Run #{self.object.pk})"
         ctx["duration"] = run.duration_display
         from audits.monitors import has_write_role
 
@@ -2157,6 +2164,26 @@ class RunArchiveView(ProjectMixin, View):
             run.archived = not run.archived
             run.save(update_fields=["archived"])
         return redirect(request.META.get("HTTP_REFERER") or f"/runs/{run_id}/")
+
+
+class ExperimentRenameView(ProjectMixin, View):
+    """Rename an experiment (a display label; its runs are unchanged)."""
+
+    def post(self, request, experiment_id):
+        from audits.models import Experiment
+
+        blocked = _require_write_access(request)
+        if blocked:
+            return blocked
+        experiment = get_object_or_404(Experiment, pk=experiment_id, project=request.project)
+        name = request.POST.get("name", "").strip()
+        if name and len(name) <= 250:
+            experiment.name = name
+            experiment.save(update_fields=["name", "updated_at"])
+            messages.success(request, "Experiment renamed.")
+        else:
+            messages.error(request, "Name must be 1-250 characters.")
+        return redirect("experiment_detail", experiment_id)
 
 
 class RunRenameView(ProjectMixin, View):

@@ -466,3 +466,46 @@ class JudgeAndSystemPromptTests(_ExperimentBase):
         self.assertEqual(exp.factors, ["judge_model"])
         self.assertEqual({r.judge_model_id for r in exp.runs.all()}, {self.judge.id, self.t2.id})
         self.assertEqual({r.judge_version_id for r in exp.runs.all()}, {judge_for(self.judge).id})
+
+
+class NamingTests(_ExperimentBase):
+    """The optional name on New Experiment, and renaming an experiment."""
+
+    def test_one_run_takes_the_name(self):
+        self.client.post("/experiments/new/", self._design(target_model=[self.t1.id], max_turns="3", name="Before the fix"))
+        self.assertEqual(AuditRun.objects.get().name, "Before the fix")
+
+    def test_a_repeating_run_names_its_monitor(self):
+        from audits.models import Monitor
+
+        self.client.post("/experiments/new/", self._design(
+            target_model=[self.t1.id], max_turns="3", name="Weekly GPT", repeat="168", timezone="UTC", start="now"))
+        self.assertEqual((Monitor.objects.get().name, AuditRun.objects.get().name), ("Weekly GPT", "Weekly GPT"))
+
+    def test_several_runs_prefill_the_experiment_name(self):
+        review = self.client.post("/experiments/new/", self._design(name="Targets study"))
+        self.assertEqual(review.context["experiment_name"], "Targets study")
+        default = self.client.post("/experiments/new/", self._design())
+        self.assertNotEqual(default.context["experiment_name"], "")
+
+    def test_back_to_design_keeps_the_edited_name(self):
+        review = self.client.post("/experiments/new/", self._design(name="First"))
+        payload = self._review_to_launch_payload(review, action="edit", experiment_name="Edited on review")
+        page = self.client.post("/experiments/new/", payload)
+        self.assertEqual(page.context["rep"]["name"], "Edited on review")
+        self.assertContains(page, 'value="Edited on review"')
+
+    def test_rename_experiment(self):
+        self.client.post("/experiments/new/", self._review_to_launch_payload(
+            self.client.post("/experiments/new/", self._design())))
+        exp = Experiment.objects.get()
+        page = self.client.get(f"/experiments/{exp.id}/")
+        self.assertContains(page, "Rename this experiment")
+        self.client.post(f"/experiments/{exp.id}/rename/", {"name": "  Renamed  "})
+        exp.refresh_from_db()
+        self.assertEqual(exp.name, "Renamed")
+        self.client.post(f"/experiments/{exp.id}/rename/", {"name": " "})
+        exp.refresh_from_db()
+        self.assertEqual(exp.name, "Renamed")
+        other = Experiment.objects.create(project=ProjectFactory(), name="Theirs")
+        self.assertEqual(self.client.post(f"/experiments/{other.id}/rename/", {"name": "x"}).status_code, 404)
