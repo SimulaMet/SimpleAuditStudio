@@ -47,6 +47,10 @@ class ChatView(TemplateView):
 
     def get_context_data(self, **kwargs):
         chat_base = config.public_url(self.request)
+        # Which model(s) to pin. A ?model= on the Studio page wins over the
+        # configured default — the /connections "chat" icon links here with the
+        # model's id, so clicking it opens the chat already on that model.
+        pinned = (self.request.GET.get("model") or "").strip() or config.MODEL
         # Shape the embedded chat through URL params, which Open WebUI reads on
         # load:
         #   ?models=         pin to one or more models, comma-separated (the
@@ -57,8 +61,8 @@ class ChatView(TemplateView):
         # The New Chat button is hidden, so a fresh chat only ever starts from a
         # full page load — which re-reads these params — so the param is enough.
         params = {}
-        if config.MODEL:
-            params["models"] = config.MODEL
+        if pinned:
+            params["models"] = pinned
         params["temporary-chat"] = "true"
         chat_url = f"{chat_base}?{urlencode(params)}"
         return super().get_context_data(
@@ -66,7 +70,7 @@ class ChatView(TemplateView):
             chat_model_data={
                 "base": chat_base,
                 "groups": self._chat_model_groups(),
-                "defaults": [m.strip() for m in config.MODEL.split(",") if m.strip()],
+                "defaults": [m.strip() for m in pinned.split(",") if m.strip()],
             },
             **kwargs,
         )

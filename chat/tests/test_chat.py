@@ -141,6 +141,16 @@ class ChatModelPinTests(TestCase):
             self.assertContains(page, 'src="http://127.0.0.1:8801?temporary-chat=true"')
             self.assertNotContains(page, "8801?models=")
 
+    def test_a_model_query_param_overrides_the_default(self):
+        # The /connections "chat" icon links to /chat/?model=<id>; that must
+        # pin the iframe to that model instead of the configured default.
+        with patch("chat.config.PUBLIC_URL", "http://127.0.0.1:8801"), \
+             patch("chat.config.MODEL", "Qwen3.8-27B"):
+            page = self.client.get("/chat/?model=gpt-4o", HTTP_HOST="127.0.0.1:8000")
+            self.assertContains(
+                page, 'src="http://127.0.0.1:8801?models=gpt-4o&amp;temporary-chat=true"')
+            self.assertNotContains(page, "models=Qwen3.8-27B")
+
     def test_the_iframe_is_always_forced_into_temporary_mode(self):
         # The embed is a throwaway surface: every chat must be temporary so
         # nothing accumulates in Open WebUI's history. The New Chat button is
