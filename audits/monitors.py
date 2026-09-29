@@ -348,6 +348,27 @@ def create_monitor(*, project, user, name: str, run: dict, repeat: dict, experim
     return monitor
 
 
+def due_monitors(now):
+    """Claim every enabled monitor that is due, locking only the monitor rows.
+
+    ``of=("self",)`` is required, not a refinement. ``last_run`` and ``created_by``
+    are both nullable, so ``select_related`` joins them with a LEFT OUTER JOIN, and
+    PostgreSQL rejects ``FOR UPDATE`` against the nullable side of an outer join:
+
+        FOR UPDATE cannot be applied to the nullable side of an outer join
+
+    Without ``of``, every tick raises that on PostgreSQL -- so no monitor ever runs
+    on a production database, while the sweeper logs the failure and carries on.
+    SQLite omits ``FOR UPDATE`` entirely, which is why the test suite stayed green.
+    """
+    return (
+        Monitor.objects.select_for_update(of=("self",), skip_locked=True)
+        .filter(enabled=True, next_run_at__lte=now)
+        .select_related("last_run", "project", "created_by")
+        .order_by("next_run_at")
+    )
+
+
 def run_due_monitors(now=None) -> list[int]:
     """Launch every enabled monitor whose ``next_run_at`` has passed.
 
@@ -362,12 +383,7 @@ def run_due_monitors(now=None) -> list[int]:
     now = now or timezone.now()
     created: list[AuditRun] = []
     with transaction.atomic():
-        due = (
-            Monitor.objects.select_for_update(skip_locked=True)
-            .filter(enabled=True, next_run_at__lte=now)
-            .select_related("last_run", "project", "created_by")
-            .order_by("next_run_at")
-        )
+        due = due_monitors(now)
         for monitor in due:
             monitor.next_run_at = next_after(monitor, now)
             monitor.last_tick_at = now
