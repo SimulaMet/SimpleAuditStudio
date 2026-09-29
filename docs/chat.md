@@ -1,9 +1,11 @@
 # Chat (Open WebUI)
 
-An optional module that embeds [Open WebUI](https://openwebui.com) in Studio at
-`/chat/`, signed in as the Studio user. It is disabled by default: with
-`SIMPLEAUDIT_CHAT` unset, `/chat/` and `/chat/authz` return 404, the sidebar has
-no Chat entry, and nothing extra runs.
+A module that embeds [Open WebUI](https://openwebui.com) in Studio at `/chat/`,
+signed in as the Studio user. It is part of the bundle the local one-liner starts
+and of the Compose deployment `.env.example` describes, and it can be left out
+entirely: with `SIMPLEAUDIT_CHAT` set to `off` (or `disabled`, `false`, `no`,
+`0`) or unset in a deployment that does not set it, `/chat/` and `/chat/authz`
+return 404, the sidebar has no Chat entry, and nothing extra runs.
 
 ## Why it is an iframe, not a sub-path
 
@@ -52,7 +54,8 @@ own — if you put your own proxy in front, it must do the same.
 ## Local (no Docker)
 
 ```bash
-uvx simpleaudit-studio --chat
+uvx simpleaudit-studio                 # chat is part of the bundle
+uvx simpleaudit-studio --disable-chat  # leave it out
 ```
 
 Starts Open WebUI (via `open-webui` if installed, otherwise `uvx`) on
@@ -71,14 +74,21 @@ long-polling. Chat responses stream over SSE and are unaffected.
 
 ## Docker
 
+`.env.example` ships with both switches set, so the ordinary command starts chat
+too:
+
 ```bash
 # .env
-SIMPLEAUDIT_CHAT=docker
+SIMPLEAUDIT_CHAT=docker                        # web serves /chat/
+COMPOSE_PROFILES=chat                          # the two chat containers start
 SIMPLEAUDIT_CHAT_URL=http://localhost:8801     # what the browser opens
 SIMPLEAUDIT_STUDIO_URL=http://localhost:8000   # where signed-out users are sent
 
-docker compose --profile chat up -d
+docker compose up -d
 ```
+
+Comment both switches out to deploy without chat; they are independent, and
+setting only `SIMPLEAUDIT_CHAT` gives a `/chat/` page with nothing behind it.
 
 This runs `open-webui` (no published port) behind `chat-proxy`, a Caddy container
 configured by [deploy/compose/Caddyfile.chat](../deploy/compose/Caddyfile.chat).
@@ -92,7 +102,7 @@ cookie. Different registrable domains will not work.
 
 | Variable                        | Default                  | Meaning                                    |
 |---------------------------------|--------------------------|--------------------------------------------|
-| `SIMPLEAUDIT_CHAT`              | `off`                    | `embedded`, `docker` or `off`              |
+| `SIMPLEAUDIT_CHAT`              | `embedded` (CLI), unset elsewhere | `embedded`, `docker`, or `off`/`disabled`/`false`/`no`/`0` |
 | `SIMPLEAUDIT_CHAT_URL`          | `http://localhost:8801`  | the origin the iframe loads                |
 | `SIMPLEAUDIT_CHAT_UPSTREAM`     | `http://127.0.0.1:8080`  | where Open WebUI listens                   |
 | `SIMPLEAUDIT_CHAT_PROXY_PORT`   | `8801`                   | the proxy's port (both modes)              |
@@ -102,7 +112,7 @@ cookie. Different registrable domains will not work.
 
 ## Removing it
 
-Leave `SIMPLEAUDIT_CHAT` unset. To drop the code, delete `infra/chat.py`,
+Set `SIMPLEAUDIT_CHAT=disabled`, or pass `--disable-chat` to the CLI. To drop the code, delete `infra/chat.py`,
 `infra/chat_proxy.py`, `infra/tests/test_chat.py`, `templates/chat.html`,
 `deploy/compose/Caddyfile.chat`, the two `chat/` routes in `config/urls.py`, the
 Chat entry in `infra/context_processors.py`, the `--chat` flag in

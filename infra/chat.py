@@ -22,10 +22,11 @@ instance. Bind it to loopback (embedded mode) or keep it on an internal compose
 network with no published port (docker mode).
 
 Modes (``SIMPLEAUDIT_CHAT``):
-    off       the default — the URLs 404 and nothing starts
     embedded  the CLI starts Open WebUI and the proxy in infra.chat_proxy
     docker    an external proxy (Caddy) does forward-auth; Studio only serves
               the iframe page and /chat/authz
+    off       the URLs 404 and nothing starts — also "disabled", "false", "no",
+              "0", or leaving the variable unset, which is the default
 """
 from __future__ import annotations
 
@@ -35,8 +36,15 @@ from django.http import Http404, HttpResponse
 from django.views.generic import TemplateView
 
 # --- Configuration ---------------------------------------------------------
-MODE = (os.environ.get("SIMPLEAUDIT_CHAT") or "off").strip().lower()
-ENABLED = MODE in ("embedded", "docker")
+#: Spellings of "no chat", so nobody has to guess which one this reads.
+DISABLED_VALUES = frozenset({"", "off", "disabled", "disable", "false", "no", "none", "0"})
+
+def is_disabled(value: str | None) -> bool:
+    return (value or "").strip().lower() in DISABLED_VALUES
+
+
+MODE = (os.environ.get("SIMPLEAUDIT_CHAT") or "").strip().lower()
+ENABLED = not is_disabled(MODE)
 
 #: Where Open WebUI itself listens. Never exposed to browsers.
 UPSTREAM = os.environ.get("SIMPLEAUDIT_CHAT_UPSTREAM", "http://127.0.0.1:8080").rstrip("/")
