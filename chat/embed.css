@@ -18,9 +18,12 @@
  *   - an expanded panel, which on desktop has no id (only role="navigation"
  *     and a data-state attribute)
  * Both are the "Chat history" navigation, so hide by those hooks rather than a
- * localized aria-label. The resizer is the drag handle between sidebar and chat. */
+ * localized aria-label. The resizer is the drag handle between sidebar and chat.
+ * The toggle button in the top bar opens the sidebar, so it goes too — with the
+ * panel hidden it would only open a blank gap. */
 #sidebar,
 [role="navigation"][data-state],
-#sidebar-resizer {
+#sidebar-resizer,
+#sidebar-toggle-button {
   display: none !important;
 }
