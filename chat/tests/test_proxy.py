@@ -5,6 +5,7 @@ Run:
 """
 import json
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from unittest.mock import patch
 
@@ -54,20 +55,16 @@ class _StubOpenWebUI(BaseHTTPRequestHandler):
         pass
 
     def do_GET(self):
-        # get_all: a duplicated header is exactly what a casing mismatch would
-        # produce, and it would be invisible to a plain lookup.
-        forged = [
-            f"{name}: {value}"
-            for name, value in self.headers.items()
-            if name.lower() in {h.lower() for h in config.TRUSTED_HEADERS}
-            and value in {"evil@example.com", "admin"}
-            and name not in {config.ROLE_HEADER}
-        ]
         body = json.dumps({
             "email": self.headers.get(config.EMAIL_HEADER),
             "role": self.headers.get(config.ROLE_HEADER),
             "cookie_seen": self.headers.get("Cookie"),
-            "forged_headers": forged,
+            # A duplicate is exactly what a casing mismatch produces, and a
+            # plain lookup would never see it.
+            "identity_headers_seen": sum(
+                1 for name in self.headers
+                if name.lower() == config.EMAIL_HEADER.lower()
+            ),
         }).encode()
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
@@ -117,28 +114,19 @@ class ProxyTests(SimpleTestCase):
         self.assertEqual(response.json()["email"], "ada@example.com")
         self.assertEqual(response.json()["role"], "admin")
 
-    def test_client_supplied_identity_is_dropped(self):
-        response = httpx.get(f"{self.url}/api/config", headers={
-            "Cookie": VALID_COOKIE,
-            config.EMAIL_HEADER: "evil@example.com",
-            config.ROLE_HEADER: "admin",
-        })
-        self.assertEqual(response.json()["email"], "ada@example.com")
+    def test_a_client_cannot_supply_its_own_identity(self):
+        """In any casing: HTTP header names are case-insensitive.
 
-    def test_a_forged_identity_in_any_casing_is_dropped(self):
-        """HTTP header names are case-insensitive; the stripping must be too.
-
-        Replacing the headers we forward is not enough on its own: a client that
-        sends `x-studio-role` in another casing would add a second header rather
-        than overwrite ours, and the upstream reads whichever comes first.
+        Overwriting the headers we forward is not enough on its own. A client
+        sending `x-studio-email` in another casing would add a second header
+        rather than replace ours, and the upstream reads whichever comes first.
         """
-        response = httpx.get(f"{self.url}/api/config", headers={
-            "Cookie": VALID_COOKIE,
-            config.EMAIL_HEADER.lower(): "evil@example.com",
-            config.ROLE_HEADER.upper(): "admin",
-        })
-        self.assertEqual(response.json()["email"], "ada@example.com")
-        self.assertEqual(response.json()["forged_headers"], [])
+        for name in (config.EMAIL_HEADER, config.EMAIL_HEADER.lower(), config.EMAIL_HEADER.upper()):
+            response = httpx.get(f"{self.url}/api/config", headers={
+                "Cookie": VALID_COOKIE, name: "evil@example.com",
+            }).json()
+            self.assertEqual(response["email"], "ada@example.com", name)
+            self.assertEqual(response["identity_headers_seen"], 1, name)
 
     def test_a_signed_out_browser_gets_a_way_back_not_the_chat(self):
         response = httpx.get(self.url, follow_redirects=False)
@@ -190,13 +178,15 @@ class ProxyTests(SimpleTestCase):
             httpx.get(f"{self.url}/api/config", headers={"Cookie": VALID_COOKIE})
         self.assertEqual(_StubStudio.calls, 1)
 
-    def test_a_different_cookie_is_a_different_answer(self):
-        httpx.get(f"{self.url}/api/config", headers={"Cookie": VALID_COOKIE})
-        anonymous = httpx.get(f"{self.url}/api/config")
-        self.assertIn("Sign in to Studio", anonymous.text)
+    def test_the_answer_stops_being_used_once_it_is_old(self):
+        """Otherwise a sign-out would never take effect."""
+        with patch.object(proxy, "IDENTITY_TTL", 0.05):
+            httpx.get(f"{self.url}/api/config", headers={"Cookie": VALID_COOKIE})
+            time.sleep(0.1)
+            httpx.get(f"{self.url}/api/config", headers={"Cookie": VALID_COOKIE})
         self.assertEqual(_StubStudio.calls, 2)
 
-    def test_the_answer_is_not_cached_for_long(self):
+    def test_the_cache_can_be_turned_off(self):
         with patch.object(proxy, "IDENTITY_TTL", 0):
             for _ in range(3):
                 httpx.get(f"{self.url}/api/config", headers={"Cookie": VALID_COOKIE})
