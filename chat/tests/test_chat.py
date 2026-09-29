@@ -141,15 +141,15 @@ class ChatModelPinTests(TestCase):
             self.assertContains(page, 'src="http://127.0.0.1:8801?temporary-chat=true"')
             self.assertNotContains(page, "8801?models=")
 
-    def test_a_model_query_param_overrides_the_default(self):
-        # The /connections "chat" icon links to /chat/?model=<id>; that must
-        # pin the iframe to that model instead of the configured default.
+    def test_a_model_query_param_on_chat_is_ignored(self):
+        # A hand-typed ?model= on /chat/ must not pin the chat — only the
+        # /connections handoff (which validates the model) can.
         with patch("chat.config.PUBLIC_URL", "http://127.0.0.1:8801"), \
              patch("chat.config.MODEL", "Qwen3.8-27B"):
             page = self.client.get("/chat/?model=gpt-4o", HTTP_HOST="127.0.0.1:8000")
             self.assertContains(
-                page, 'src="http://127.0.0.1:8801?models=gpt-4o&amp;temporary-chat=true"')
-            self.assertNotContains(page, "models=Qwen3.8-27B")
+                page, 'src="http://127.0.0.1:8801?models=Qwen3.8-27B&amp;temporary-chat=true"')
+            self.assertNotContains(page, "models=gpt-4o")
 
     def test_the_iframe_is_always_forced_into_temporary_mode(self):
         # The embed is a throwaway surface: every chat must be temporary so
@@ -160,6 +160,50 @@ class ChatModelPinTests(TestCase):
              patch("chat.config.MODEL", "Qwen3.8-27B"):
             page = self.client.get("/chat/", HTTP_HOST="127.0.0.1:8000")
             self.assertContains(page, "temporary-chat=true")
+
+
+@patch("chat.config.ENABLED", True)
+class ChatWithHandoffTests(TestCase):
+    """/chat/with/<model_id> validates the model, stashes it in the session,
+    and redirects to /chat/ — where it is consumed exactly once."""
+
+    def setUp(self):
+        from infra.tests.factories import ModelConnectionFactory, RegisteredModelFactory
+
+        self.project = ProjectFactory()
+        user = UserFactory(username="handoff")
+        MembershipFactory(user=user, project=self.project)
+        self.client = Client()
+        self.client.force_login(user)
+        conn = ModelConnectionFactory(project=self.project, name="OpenAI",
+                                       base_url="http://localhost:9999/v1")
+        self.model = RegisteredModelFactory(connection=conn, project=self.project,
+                                             display_name="GPT", model_id="gpt-4o")
+
+    def test_handoff_pins_the_model_for_one_load(self):
+        with patch("chat.config.PUBLIC_URL", "http://127.0.0.1:8801"), \
+             patch("chat.config.MODEL", "Qwen3.8-27B"):
+            resp = self.client.get(f"/chat/with/{self.model.model_id}")
+            # fetch_redirect_response=False so the redirect isn't followed here
+            # (following it would consume the one-shot session value).
+            self.assertRedirects(resp, "/chat/", fetch_redirect_response=False)
+            page = self.client.get("/chat/")
+            self.assertContains(
+                page, 'src="http://127.0.0.1:8801?models=gpt-4o&amp;temporary-chat=true"')
+            # Consumed: a refresh falls back to the default.
+            page2 = self.client.get("/chat/")
+            self.assertContains(
+                page2, 'src="http://127.0.0.1:8801?models=Qwen3.8-27B&amp;temporary-chat=true"')
+
+    def test_handoff_ignores_a_model_the_user_cannot_see(self):
+        with patch("chat.config.PUBLIC_URL", "http://127.0.0.1:8801"), \
+             patch("chat.config.MODEL", "Qwen3.8-27B"):
+            resp = self.client.get("/chat/with/does-not-exist")
+            self.assertRedirects(resp, "/chat/", fetch_redirect_response=False)
+            page = self.client.get("/chat/")
+            self.assertContains(
+                page, 'src="http://127.0.0.1:8801?models=Qwen3.8-27B&amp;temporary-chat=true"')
+            self.assertNotContains(page, "models=does-not-exist")
 
 
 @patch("chat.config.ENABLED", True)
