@@ -35,12 +35,13 @@ def is_minimal_config() -> bool:
 def _data_dir() -> str:
     """Return (and create) the persistent data dir for the embedded Postgres.
 
-    A fixed location avoids re-running initdb (~218M, ~15s) on every start.
-    Override with SIMPLEAUDIT_EMBEDDED_PG_DIR if needed.
+    A fixed location avoids re-running initdb (~218M, ~15s) on every start:
+    <data dir>/embedded-pg (simpleaudit_studio.paths). Override with
+    SIMPLEAUDIT_EMBEDDED_PG_DIR if needed.
     """
-    d = os.path.expanduser(
-        os.environ.get("SIMPLEAUDIT_EMBEDDED_PG_DIR", "~/.simpleaudit-studio/embedded-pg")
-    )
+    from simpleaudit_studio.paths import data_dir
+
+    d = os.path.expanduser(os.environ.get("SIMPLEAUDIT_EMBEDDED_PG_DIR") or str(data_dir() / "embedded-pg"))
     os.makedirs(d, exist_ok=True)
     return d
 

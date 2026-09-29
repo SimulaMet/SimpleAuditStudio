@@ -179,10 +179,15 @@ SQLITE_OPTIONS = {
 # explicit, opt-in LOCAL-ONLY conveniences. They are never the default and
 # must not be used in any deployment.
 if MINIMAL_CONFIG:
+    # Kept outside the installed package (simpleaudit_studio.paths), so an
+    # upgrade or `uv cache clean` doesn't start from an empty database.
+    from simpleaudit_studio.paths import database_path
+
+    database_path().parent.mkdir(parents=True, exist_ok=True)
     DATABASES = {
         "default": {
             "ENGINE": "django.db.backends.sqlite3",
-            "NAME": BASE_DIR / "demo.sqlite3",
+            "NAME": database_path(),
             "OPTIONS": SQLITE_OPTIONS,
         }
     }
