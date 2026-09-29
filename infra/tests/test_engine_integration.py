@@ -140,8 +140,9 @@ class AuditorKwargsTest(TestCase):
         self.assertEqual(language, "Norwegian")
         self.assertEqual((kwargs["model"], kwargs["auditor_model"], kwargs["judge_model"]), ("tgt", "aud", "jdg"))
         self.assertEqual(kwargs["judge_base_url"], "http://jdg.local/v1")
-        self.assertEqual(kwargs["auditor_kwargs"], {"timeout": 5})
-        self.assertEqual(kwargs["judge_kwargs"], {"timeout": 9})
+        # An endpoint's own timeout wins over the default; max_retries is the default.
+        self.assertEqual(kwargs["auditor_kwargs"], {"timeout": 5, "max_retries": 1})
+        self.assertEqual(kwargs["judge_kwargs"], {"timeout": 9, "max_retries": 1})
         self.assertEqual(kwargs["judge_params"], {"temperature": 0, "top_p": 1})
         self.assertEqual(kwargs["target_params"], {"temperature": 0.1})
         self.assertEqual(kwargs["system_prompt"], "Be brief.")
@@ -196,7 +197,7 @@ class AuditorKwargsTest(TestCase):
         entry = captured["entry"]
         self.assertEqual((entry["model"], entry["auditor_model"], entry["judge_model"]), ("tgt", "aud", "jdg"))
         self.assertEqual(entry["judge_base_url"], "http://jdg.local/v1")
-        self.assertEqual(entry["judge_kwargs"], {"timeout": 9})
+        self.assertEqual(entry["judge_kwargs"], {"timeout": 9, "max_retries": 1})
 
 
 class ProviderNormalizationTest(TestCase):
@@ -772,6 +773,24 @@ class ResumableExecutionTest(TestCase):
         submit.assert_not_called()
         run.refresh_from_db()
         self.assertEqual(run.status, AuditRun.Status.COMPLETED)
+
+
+class ClientDefaultsTest(TestCase):
+    """A stuck endpoint must not hang a run: requests get a bounded timeout."""
+
+    def test_default_timeout_and_endpoint_override(self):
+        from infra.engine import CLIENT_TIMEOUT_S, auditor_kwargs
+
+        kwargs, _ = auditor_kwargs(target=_snap("t"), auditor=_snap("a", default_parameters={"max_retries": 4}),
+                                   judge=_snap("j"))
+        self.assertEqual(kwargs["target_kwargs"], {"timeout": CLIENT_TIMEOUT_S, "max_retries": 1})
+        self.assertEqual(kwargs["auditor_kwargs"], {"timeout": CLIENT_TIMEOUT_S, "max_retries": 4})
+
+    def test_provider_without_support_gets_none(self):
+        from infra import engine
+
+        engine._CLIENT_DEFAULTS.pop("nosuchprovider", None)
+        self.assertEqual(engine._client_defaults("nosuchprovider"), {})
 
 
 class RealAuditorScenarioTest(TestCase):
