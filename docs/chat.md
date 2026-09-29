@@ -26,6 +26,17 @@ and its HTML references `/static`, `/api` and `/ws` absolutely, so proxying it
 under `https://studio/chat/` serves a broken page. It therefore gets its own
 origin (a port locally, a host in production) which Studio embeds.
 
+## Hiding the sidebar in the iframe
+
+Open WebUI has no embed mode, but its app shell loads `/static/custom.css` on
+every page. The proxy answers that one request with [chat/embed.css](../chat/embed.css)
+instead of forwarding it, so the iframe renders without the chat-history
+sidebar (both its collapsed rail and expanded panel are hidden; the chat fills
+the width). The rule lives in
+this repo, not in a copy of Open WebUI, so it survives upgrades. Both modes
+serve the same file: the Python proxy reads it directly, and the Caddy config
+mounts it read-only. To change what the iframe shows, edit `chat/embed.css`.
+
 ## How sign-on works
 
 Open WebUI's *trusted header* mode: it accepts the identity of whoever calls it

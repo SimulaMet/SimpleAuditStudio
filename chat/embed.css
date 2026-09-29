@@ -1,0 +1,26 @@
+/* Studio embed stylesheet.
+ *
+ * Served as Open WebUI's /static/custom.css. Open WebUI's app shell loads that
+ * file on every page (see its src/app.html), so Studio can shape the iframe
+ * without forking or rebuilding Open WebUI. The proxy answers the request with
+ * these bytes:
+ *   - embedded (no-Docker) mode: chat/proxy.py serves this file directly
+ *   - Docker mode: Caddy mounts this file and file_server serves it
+ *
+ * Both modes read this one repo file, so the rule survives Open WebUI upgrades
+ * and has a single source of truth.
+ *
+ * Goal: show only the chat, no chat-history sidebar.
+ */
+
+/* The chat-history sidebar. Open WebUI renders it two ways on desktop:
+ *   - a collapsed 42px rail, which always carries id="sidebar"
+ *   - an expanded panel, which on desktop has no id (only role="navigation"
+ *     and a data-state attribute)
+ * Both are the "Chat history" navigation, so hide by those hooks rather than a
+ * localized aria-label. The resizer is the drag handle between sidebar and chat. */
+#sidebar,
+[role="navigation"][data-state],
+#sidebar-resizer {
+  display: none !important;
+}
