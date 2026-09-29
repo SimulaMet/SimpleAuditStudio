@@ -262,6 +262,30 @@ def build_model_auditor(*, target: dict, auditor: dict, judge: dict, generation:
     return instance, language
 
 
+def scenario_dict(
+    *,
+    name: str,
+    description: str,
+    expected_behavior: list[str] | None = None,
+    test_prompt: str | None = None,
+    severity_ceiling: str = "",
+    documents: list | None = None,
+    file_uri=None,
+    category: str = "",
+    metadata: dict | None = None,
+) -> dict[str, Any]:
+    """A scenario in SimpleAudit's own format (what ``ModelAuditor.run`` and
+    ``AuditExperiment`` take), with empty fields left out. The designed
+    severity goes in ``severity``; judge notes ride in ``metadata``."""
+    scenario: dict[str, Any] = {"name": name, "description": description}
+    optional = {
+        "expected_behavior": expected_behavior, "test_prompt": test_prompt, "severity": severity_ceiling,
+        "documents": documents, "file_uri": file_uri, "category": category, "metadata": metadata,
+    }
+    scenario.update({k: v for k, v in optional.items() if v})
+    return scenario
+
+
 def run_scenario(
     *,
     name: str,
@@ -295,26 +319,20 @@ def run_scenario(
     auditor_instance, language = build_model_auditor(
         target=target, auditor=auditor, judge=judge, generation=generation
     )
+    scenario = scenario_dict(
+        name=name, description=description, expected_behavior=expected_behavior, test_prompt=test_prompt,
+        severity_ceiling=severity_ceiling, documents=documents, file_uri=file_uri, category=category,
+        metadata=metadata,
+    )
     try:
-        result = asyncio.run(
-            auditor_instance.run_scenario(
-                name=name,
-                description=description,
-                expected_behavior=expected_behavior,
-                test_prompt=test_prompt,
-                severity=severity_ceiling or None,
-                documents=documents or None,
-                file_uri=file_uri,
-                category=category or None,
-                metadata=metadata or {},
-                language=language,
-                on_turn=on_turn,
-            )
-        )
+        # run_async maps the scenario dict onto run_scenario (file_uri,
+        # documents, judge notes, the scenario facts a judge's post-processor
+        # reads), the same way AuditExperiment does for repetitions.
+        results = asyncio.run(auditor_instance.run_async([scenario], language=language, on_turn=on_turn))
     except Exception as exc:
         raise EngineError(f"Scenario execution crashed: {type(exc).__name__}: {exc}") from exc
 
-    payload = result.to_dict()
+    payload = results[0].to_dict()
     payload["_language"] = language
     return payload
 
@@ -369,21 +387,11 @@ def run_scenario_repeated(
 
     kwargs, language = auditor_kwargs(target=target, auditor=auditor, judge=judge, generation=generation)
     max_turns = kwargs["max_turns"]
-    scenario: dict[str, Any] = {"name": name, "description": description}
-    if expected_behavior:
-        scenario["expected_behavior"] = expected_behavior
-    if test_prompt:
-        scenario["test_prompt"] = test_prompt
-    if severity_ceiling:
-        scenario["severity"] = severity_ceiling
-    if documents:
-        scenario["documents"] = documents
-    if file_uri:
-        scenario["file_uri"] = file_uri
-    if category:
-        scenario["category"] = category
-    if metadata:
-        scenario["metadata"] = metadata
+    scenario = scenario_dict(
+        name=name, description=description, expected_behavior=expected_behavior, test_prompt=test_prompt,
+        severity_ceiling=severity_ceiling, documents=documents, file_uri=file_uri, category=category,
+        metadata=metadata,
+    )
 
     # The model entry carries every ModelAuditor kwarg (target, auditor and
     # judge alike): AuditExperiment passes it through _merge_common to
