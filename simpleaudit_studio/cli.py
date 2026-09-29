@@ -39,6 +39,10 @@ def main() -> None:
         help="Use the built-in mock model server (zero-setup demo; results are simulated)",
     )
     parser.add_argument(
+        "--chat", action="store_true",
+        help="Also run Open WebUI, signed in as your Studio user (needs `uvx` or `open-webui`)",
+    )
+    parser.add_argument(
         "--no-browser", action="store_true",
         help="Do not auto-open the web UI in the default browser",
     )
@@ -46,6 +50,8 @@ def main() -> None:
 
     # Set local mode BEFORE Django reads settings
     os.environ["SIMPLEAUDIT_MINIMAL"] = "1"
+    if args.chat:
+        os.environ["SIMPLEAUDIT_CHAT"] = "embedded"
     os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings")
     os.environ.setdefault("DJANGO_SECRET_KEY", "local-insecure-key-change-for-shared-use")
     os.environ.setdefault("DJANGO_ALLOWED_HOSTS", "localhost,127.0.0.1")
@@ -121,6 +127,23 @@ def main() -> None:
     # Give the web server a moment to bind
     time.sleep(1)
 
+    # --- Optional: Open WebUI + its forward-auth proxy ---
+    chat_process = None
+    if args.chat:
+        from infra import chat as chat_config
+        from infra.chat_proxy import serve as serve_chat_proxy
+        from infra.chat_proxy import start_open_webui
+
+        try:
+            chat_process = start_open_webui()
+            serve_chat_proxy(port)
+            print(f"💬 Chat (Open WebUI) at {chat_config.PUBLIC_URL} — also at /chat/ in Studio.")
+            print("   First start downloads it; the tab stays blank until it is ready.\n")
+        except (OSError, RuntimeError) as exc:
+            # Missing open-webui, a taken port, a failed spawn: chat is optional,
+            # so the rest of the stack still comes up.
+            print(f"⚠️  Chat could not start ({exc}); continuing without it.\n")
+
     username = os.environ.get("BOOTSTRAP_USERNAME", "studio")
     password = os.environ.get("BOOTSTRAP_PASSWORD", "admin123")
 
@@ -169,6 +192,8 @@ def main() -> None:
         try:
             stop_embedded_hatchet()
         finally:
+            if chat_process is not None:
+                chat_process.terminate()
             if mock_server is not None:
                 mock_server.shutdown()
 

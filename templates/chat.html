@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block title %}Chat — SimpleAudit{% endblock %}
+{% comment %}
+Open WebUI runs on its own origin (it cannot be served under a sub-path), so it
+is embedded here. Sign-in is automatic: the proxy in front of it identifies the
+browser through /chat/authz. See infra/chat.py.
+{% endcomment %}
+{% block content %}
+<iframe src="{{ chat_url }}" title="Chat"
+        class="w-full rounded-xl border border-gray-800 bg-surface-raised"
+        style="height: calc(100vh - 7rem)"
+        allow="clipboard-write; microphone"></iframe>
+{% endblock %}
