@@ -223,14 +223,16 @@ def start_chat(chat_proxy, studio_port: int):
     chat_proxy.serve(studio_port)
 
     def report():
+        # flush: this lands minutes later, and stdout is block-buffered when the
+        # CLI's output is a file or a pipe rather than a terminal.
         if chat_proxy.wait_until_ready(process):
-            print(f"\n✅ Chat is ready — http://localhost:{studio_port}/chat/\n")
+            print(f"\n✅ Chat is ready — http://localhost:{studio_port}/chat/\n", flush=True)
         elif process.poll() is not None:
             print(f"\n⚠️  Chat stopped (exit {process.returncode}). Studio is unaffected.")
-            print(f"   What happened: {chat_proxy.log_path()}\n")
+            print(f"   What happened: {chat_proxy.log_path()}\n", flush=True)
         else:
             print("\n⚠️  Chat is still not answering. Studio is unaffected.")
-            print(f"   What it is doing: {chat_proxy.log_path()}\n")
+            print(f"   What it is doing: {chat_proxy.log_path()}\n", flush=True)
 
     threading.Thread(target=report, daemon=True).start()
     return process
