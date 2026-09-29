@@ -1680,6 +1680,19 @@ class ScenarioImportView(ProjectMixin, View):
 DESCRIPTION_MAX = 1000
 
 
+def config_chat_enabled() -> bool:
+    """Whether the chat module is on, without importing it at module load.
+
+    The chat app is optional (SIMPLEAUDIT_CHAT); importing it eagerly would
+    couple the core UI to an optional dependency.
+    """
+    try:
+        from chat import config
+    except ImportError:
+        return False
+    return config.ENABLED
+
+
 class ConnectionsView(ProjectMixin, TemplateView):
     """Connections (a server and its API key) and the models registered on each."""
 
@@ -1735,6 +1748,9 @@ class ConnectionsView(ProjectMixin, TemplateView):
             connections=connections,
             conn_data=conn_data,
             model_total=sum(len(c.model_list) for c in connections),
+            # The per-model "open in chat" icon only makes sense when the chat
+            # module is on; otherwise /chat/ 404s.
+            chat_enabled=config_chat_enabled(),
             provider_presets=PROVIDER_PRESETS,
             # Each provider once: presets share some (OpenAI and "Custom" are
             # both openai), and a connection's own provider must stay pickable.

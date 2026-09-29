@@ -144,6 +144,19 @@ class ConnectionsPageSharingTests(TestCase):
         self.assertNotContains(page, f'data-conn-open="{self.conn.id}"')
         self.assertNotContains(page, f'data-discover="{self.conn.id}"')
 
+    def test_chat_icon_links_to_chat_with_the_model(self):
+        # With chat enabled, each model row offers a chat icon that opens
+        # /chat/ pinned to that model's id.
+        with mock.patch("chat.config.ENABLED", True):
+            page = self._page_as(self.owner_user, self.owner_ws)
+        self.assertContains(page, f'/chat/?model={self.model.model_id}')
+        self.assertContains(page, "Open a chat with")
+
+    def test_chat_icon_hidden_when_chat_is_disabled(self):
+        with mock.patch("chat.config.ENABLED", False):
+            page = self._page_as(self.owner_user, self.owner_ws)
+        self.assertNotContains(page, "/chat/?model=")
+
     def test_owner_sees_edit_controls(self):
         page = self._page_as(self.owner_user, self.owner_ws)
         self.assertContains(page, f'data-conn-open="{self.conn.id}"')
