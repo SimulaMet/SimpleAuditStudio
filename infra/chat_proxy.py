@@ -14,9 +14,11 @@ stream over plain HTTP (SSE) and are unaffected.
 """
 from __future__ import annotations
 
+import atexit
 import logging
 import os
 import shutil
+import signal
 import subprocess
 import threading
 import time
@@ -29,6 +31,13 @@ import httpx
 from infra import chat
 
 logger = logging.getLogger(__name__)
+
+# Open WebUI is managed like the embedded Hatchet engine: one instance per
+# process, stopped on the way out (atexit as well as the CLI's own shutdown),
+# and a run that was hard-killed has its leftovers cleaned up by the next start.
+_process: subprocess.Popen | None = None
+_log_file = None
+_process_lock = threading.Lock()
 
 # Connection-level headers that must not be forwarded (RFC 9110 §7.6.1).
 _HOP_BY_HOP = frozenset({
@@ -140,6 +149,87 @@ def is_first_run() -> bool:
     return not (home_dir() / "webui.db").exists()
 
 
+def pid_file() -> Path:
+    """Records the running Open WebUI, so the next start can clean up after a
+    run that never got to stop it."""
+    return home_dir() / "open-webui.pid"
+
+
+def _stop_stale() -> None:
+    """Stop an Open WebUI left behind by a hard-killed run.
+
+    It holds the upstream port, so the next start would fail to bind. Only a
+    leftover is touched: a process whose parent is gone. One with a live parent
+    belongs to another running Studio and is left alone (that start then fails
+    on the port, which is the honest outcome).
+
+    Best-effort: any error is logged and swallowed so startup proceeds.
+    """
+    from infra.minimal_config import _orphaned, _parent_pid, _pid_alive
+
+    file = pid_file()
+    try:
+        if not file.exists():
+            return
+        raw = file.read_text().strip()
+        pid = int(raw) if raw.isdigit() else 0
+        if pid and _pid_alive(pid):
+            parent = _parent_pid(pid)
+            if parent is not None and not _orphaned(parent):
+                return
+            logger.warning("Stopping orphaned Open WebUI (PID %d) left by a killed run", pid)
+            _terminate(pid)
+        file.unlink(missing_ok=True)
+    except Exception:    # cleanup must never block startup
+        logger.warning("Could not clean up a leftover Open WebUI", exc_info=True)
+
+
+def _terminate(pid: int, grace: float = 10.0) -> None:
+    """SIGTERM the process group, then SIGKILL whatever is still there.
+
+    The group matters: ``uvx open-webui`` is a launcher with the real server as
+    its child, so signalling only the launcher leaves the server running.
+    """
+    from infra.minimal_config import _pid_alive, _wait_gone
+
+    for sig, wait in ((signal.SIGTERM, grace), (signal.SIGKILL, 5.0)):
+        if not _pid_alive(pid):
+            return
+        try:
+            os.killpg(os.getpgid(pid), sig)
+        except (ProcessLookupError, PermissionError):
+            return
+        except (AttributeError, OSError):
+            # No process groups (Windows): fall back to the process itself.
+            try:
+                os.kill(pid, sig)
+            except (ProcessLookupError, PermissionError):
+                return
+        _wait_gone([pid], wait)
+
+
+def stop_open_webui() -> None:
+    """Stop the Open WebUI this process started. Safe to call more than once."""
+    global _process, _log_file
+    with _process_lock:
+        process, _process = _process, None
+        if process is not None and process.poll() is None:
+            _terminate(process.pid)
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                logger.warning("Open WebUI (PID %d) did not exit", process.pid)
+        if _log_file is not None:
+            _log_file.close()
+            _log_file = None
+        if process is not None:
+            pid_file().unlink(missing_ok=True)
+
+
+# Best-effort clean shutdown even if the caller forgets to stop explicitly.
+atexit.register(stop_open_webui)
+
+
 def wait_until_ready(process: subprocess.Popen, timeout: float = 900.0) -> bool:
     """Poll Open WebUI until it answers, the process dies, or time runs out.
 
@@ -168,9 +258,24 @@ def start_open_webui() -> subprocess.Popen:
 
     Uses the ``open-webui`` command when it is installed, otherwise ``uvx``
     fetches it on first run. SIMPLEAUDIT_CHAT_CMD overrides both.
+
+    One instance per process: a second call returns the running one. Leftovers
+    from a hard-killed previous run are stopped first.
     """
-    home = home_dir()
-    home.mkdir(parents=True, exist_ok=True)
+    with _process_lock:
+        if _process is not None and _process.poll() is None:
+            return _process
+
+        home = home_dir()
+        home.mkdir(parents=True, exist_ok=True)
+        _stop_stale()
+        return _spawn(home)
+
+
+def _spawn(home: Path) -> subprocess.Popen:
+    """Build the command and environment, and start the server."""
+    global _process, _log_file
+
     host = urlsplit(chat.UPSTREAM).hostname or "127.0.0.1"
     port = urlsplit(chat.UPSTREAM).port or 8080
 
@@ -205,5 +310,12 @@ def start_open_webui() -> subprocess.Popen:
     # directory, with no setting for it: running it from its own data folder
     # keeps that out of wherever Studio was started and stable across restarts
     # (a new key signs every session out).
-    log = log_path().open("a")
-    return subprocess.Popen(argv, env=env, cwd=str(home), stdout=log, stderr=subprocess.STDOUT)
+    _log_file = log_path().open("a")
+    # Its own process group, so stopping it reaches the server that `uvx` (or
+    # any other launcher) starts as a child, not just the launcher.
+    _process = subprocess.Popen(
+        argv, env=env, cwd=str(home),
+        stdout=_log_file, stderr=subprocess.STDOUT, start_new_session=True,
+    )
+    pid_file().write_text(str(_process.pid))
+    return _process

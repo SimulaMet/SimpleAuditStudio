@@ -205,7 +205,9 @@ def main() -> None:
             stop_embedded_hatchet()
         finally:
             if chat_process is not None:
-                chat_process.terminate()
+                from infra.chat_proxy import stop_open_webui
+
+                stop_open_webui()
             if mock_server is not None:
                 mock_server.shutdown()
 

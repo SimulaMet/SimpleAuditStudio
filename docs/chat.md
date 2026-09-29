@@ -74,6 +74,18 @@ Studio passes `--host`/`--port` explicitly. If you override the command with
 `SIMPLEAUDIT_CHAT_CMD`, pass those flags yourself — binding it to all interfaces
 is what the warning above is about.
 
+Open WebUI is managed like the embedded Hatchet engine: one instance per Studio
+process, started in its own process group, and stopped on the way out — by the
+CLI's shutdown and by `atexit`, so Ctrl+C, `kill`, and an unhandled exit all take
+it with them. The group matters because `uvx` is only a launcher; signalling it
+alone would leave the server running.
+
+A run that is hard-killed (SIGKILL, a crash, a closed terminal) cannot stop
+anything, so its Open WebUI keeps holding the port. The next start finds it
+through `openwebui/open-webui.pid` and stops it first — but only when it is a
+genuine leftover, i.e. its parent is gone. One that belongs to another running
+Studio is left alone, and that start fails on the port instead.
+
 WebSockets are not proxied; Open WebUI's Socket.IO client falls back to HTTP
 long-polling. Chat responses stream over SSE and are unaffected.
 
