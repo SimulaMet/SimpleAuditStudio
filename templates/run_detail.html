@@ -837,7 +837,7 @@ function toggleRename() {
       {% for m in frozen_models %}
       <div class="flex justify-between gap-2"><span class="text-gray-500 shrink-0">{% if m.role == "judge" %}Judge model{% else %}{{ m.role|capfirst }}{% endif %}</span>
         <span class="min-w-0 text-right">
-          <a href="/models/#conn-{{ m.connection_id }}" class="text-gray-300 break-all hover:text-accent transition-colors" title="{{ m.provider }} · {{ m.base_url }} (as used by this run)">{{ m.display_name }} <span class="text-gray-500 font-mono">({{ m.model_id }})</span></a>
+          <a href="{% url 'connections' %}#conn-{{ m.connection_id }}" class="text-gray-300 break-all hover:text-accent transition-colors" title="{{ m.provider }} · {{ m.base_url }} (as used by this run)">{{ m.display_name }} <span class="text-gray-500 font-mono">({{ m.model_id }})</span></a>
           {% if m.changes %}<span class="block text-[10px] text-amber-400/90" title="This run used the values above. Since then: {{ m.changes|join:'; ' }}">edited since this run</span>{% endif %}
         </span>
       </div>

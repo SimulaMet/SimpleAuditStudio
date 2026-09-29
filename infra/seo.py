@@ -175,7 +175,7 @@ def robots_txt(request):
         "Disallow: /health/",
         "Disallow: /runs/",
         "Disallow: /scenarios/",
-        "Disallow: /models/",
+        "Disallow: /connections/",
         "Disallow: /compare/",
         "Disallow: /auth/",
         "Disallow: /static/",

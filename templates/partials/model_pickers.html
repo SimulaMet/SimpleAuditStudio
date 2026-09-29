@@ -6,7 +6,7 @@ Field names match the single-select partial so one-run posts look the same.
 <div class="bg-surface-raised rounded-xl border border-gray-800 p-4 h-full">
   <div class="flex items-center justify-between mb-1">
     <h3 class="text-sm font-semibold text-gray-300">Models</h3>
-    <a href="{% url 'models' %}" target="_blank" class="text-xs text-accent hover:text-accent-hover hover:underline">＋ New</a>
+    <a href="{% url 'connections' %}" target="_blank" title="Add a connection or register its models, in a new tab" class="text-xs text-accent hover:text-accent-hover hover:underline">＋ New</a>
   </div>
   <p class="text-xs text-gray-500 mb-3">Pick one model per role, or several to compare them.</p>
   {% if connections %}
@@ -55,7 +55,7 @@ Field names match the single-select partial so one-run posts look the same.
   </div>
   {% else %}
   <p class="text-xs text-gray-500">
-    No models yet? <a href="{% url 'models' %}" target="_blank" class="text-accent hover:underline">Register a model connection →</a>
+    No models yet? <a href="{% url 'connections' %}" target="_blank" class="text-accent hover:underline">Register a model connection →</a>
   </p>
   {% include "partials/need_help.html" %}
   {% endif %}

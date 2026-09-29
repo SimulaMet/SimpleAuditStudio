@@ -80,7 +80,7 @@ class AllPagesSmokeTest(TestCase):
 
     def test_main_pages(self):
         self._ok("/scenarios/", "Scenario Library")
-        self._ok("/models/", "Models")
+        self._ok("/connections/", "Connections")
         self._ok("/workspaces/", "Workspaces")
         self._ok("/profile/", "Profile")
 

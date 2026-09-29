@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Models — SimpleAudit{% endblock %}
+{% block title %}Connections — SimpleAudit{% endblock %}
 {% block head %}
 <style>
   dialog.sa-dialog::backdrop { background: rgb(0 0 0 / .6); backdrop-filter: blur(2px); }
@@ -10,7 +10,7 @@
 {% block content %}
 <div class="flex flex-wrap items-start justify-between gap-3 mb-5">
   <div>
-    <h1 class="text-lg font-semibold text-gray-100">Models</h1>
+    <h1 class="text-lg font-semibold text-gray-100">Connections</h1>
     <p class="text-sm text-gray-500 mt-0.5 max-w-2xl">
       {{ connections|length }} connection{{ connections|length|pluralize }} · {{ model_total }} model{{ model_total|pluralize }}.
       A connection is one server and its API key; register the models it serves to use them as target, auditor or judge.

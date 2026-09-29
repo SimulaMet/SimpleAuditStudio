@@ -34,10 +34,10 @@ class ConnectionDeleteTest(TestCase):
         conn = ModelConnectionFactory(project=self.project, name="unused-conn")
         RegisteredModelFactory(connection=conn, project=self.project)
 
-        resp = self.client.post(f"/models/connection-delete/{conn.id}/")
+        resp = self.client.post(f"/connections/{conn.id}/delete/")
 
         assert resp.status_code == 302
-        assert resp.url == "/models/"
+        assert resp.url == "/connections/"
         assert not conn.__class__.objects.filter(pk=conn.id).exists()
 
     def test_delete_referenced_connection_is_blocked_with_message(self):
@@ -45,16 +45,16 @@ class ConnectionDeleteTest(TestCase):
         pinned_model = RegisteredModelFactory(connection=conn, project=self.project)
         AuditRunFactory(project=self.project, target_model=pinned_model)
 
-        resp = self.client.post(f"/models/connection-delete/{conn.id}/")
+        resp = self.client.post(f"/connections/{conn.id}/delete/")
 
         assert resp.status_code == 302
-        assert resp.url == "/models/"
+        assert resp.url == "/connections/"
         # Connection and its models must still exist.
         assert conn.__class__.objects.filter(pk=conn.id).exists()
         assert pinned_model.__class__.objects.filter(pk=pinned_model.id).exists()
         # The error banner is rendered on the next page load (base.html iterates
         # the messages framework), so follow the redirect and check the body.
-        get_resp = self.client.get("/models/")
+        get_resp = self.client.get("/connections/")
         body = get_resp.content.decode()
         assert "runs or monitors use it" in body
 
@@ -62,7 +62,7 @@ class ConnectionDeleteTest(TestCase):
         other_project = ProjectFactory()
         conn = ModelConnectionFactory(project=other_project, name="foreign-conn")
 
-        resp = self.client.post(f"/models/connection-delete/{conn.id}/")
+        resp = self.client.post(f"/connections/{conn.id}/delete/")
 
         assert resp.status_code == 302
         assert conn.__class__.objects.filter(pk=conn.id).exists()
@@ -89,7 +89,7 @@ class RegisteredModelDeleteTest(TestCase):
         conn = ModelConnectionFactory(project=self.project, name="conn-a")
         rm = RegisteredModelFactory(connection=conn, project=self.project)
 
-        resp = self.client.post("/models/", {"action": "delete_model", "rm_id": rm.id}, follow=True)
+        resp = self.client.post("/connections/", {"action": "delete_model", "rm_id": rm.id}, follow=True)
 
         assert resp.status_code == 200
         assert not RegisteredModel.objects.filter(pk=rm.id).exists()
@@ -101,7 +101,7 @@ class RegisteredModelDeleteTest(TestCase):
         rm = RegisteredModelFactory(connection=conn, project=self.project)
         AuditRunFactory(project=self.project, target_model=rm)
 
-        resp = self.client.post("/models/", {"action": "delete_model", "rm_id": rm.id}, follow=True)
+        resp = self.client.post("/connections/", {"action": "delete_model", "rm_id": rm.id}, follow=True)
 
         assert resp.status_code == 200
         # Model must still exist.
@@ -111,7 +111,7 @@ class RegisteredModelDeleteTest(TestCase):
 
 
 class DiscoverModelsKeyTests(TestCase):
-    """The Models page must never render API keys; discover resolves them server-side."""
+    """The Connections page must never render API keys; discover resolves them server-side."""
 
     def setUp(self):
         self.user = UserFactory()
@@ -127,7 +127,7 @@ class DiscoverModelsKeyTests(TestCase):
         )
 
     def test_models_page_does_not_contain_the_key(self):
-        page = self.client.get("/models/")
+        page = self.client.get("/connections/")
         self.assertEqual(page.status_code, 200)
         self.assertNotContains(page, "sk-super-secret-123")
         self.assertContains(page, f'data-discover="{self.conn.id}"')
@@ -138,11 +138,11 @@ class DiscoverModelsKeyTests(TestCase):
         fake = mock.MagicMock()
         fake.json.return_value = {"data": [{"id": "gpt-x"}]}
         with mock.patch("model_registry.services.httpx.get", return_value=fake) as get:
-            resp = self.client.post("/models/discover/", {"connection_id": self.conn.id})
+            resp = self.client.post("/connections/discover/", {"connection_id": self.conn.id})
         self.assertEqual(resp.json()["models"], ["gpt-x"])
         url, kwargs = get.call_args.args[0], get.call_args.kwargs
         self.assertEqual(kwargs["headers"]["Authorization"], "Bearer sk-super-secret-123")
         self.assertEqual(url, "https://api.example.invalid/v1/models")
 
         other = ModelConnection.objects.create(project=ProjectFactory(), name="Other", base_url="https://x.invalid/v1")
-        self.assertEqual(self.client.post("/models/discover/", {"connection_id": other.id}).status_code, 404)
+        self.assertEqual(self.client.post("/connections/discover/", {"connection_id": other.id}).status_code, 404)

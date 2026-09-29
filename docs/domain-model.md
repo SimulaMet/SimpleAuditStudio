@@ -216,7 +216,7 @@ Rules:
 A connection authenticates with either `api_key_direct` (stored on the
 connection) or `secret_reference`, the name of an environment variable read at
 execution time (e.g. `OPENAI_API_KEY`). The direct key wins when both are set.
-Keys are never rendered into pages: the models page and model discovery look the
+Keys are never rendered into pages: the Connections page and model discovery look the
 connection up server-side (`model_registry.services`).
 
 ### 4.4 `Judge` and `JudgeVersion` (`judges/`)
