@@ -1,0 +1,185 @@
+"""Talking to Open WebUI: the merge rules, and a round trip against a stub.
+
+Run:
+    SIMPLEAUDIT_LOCAL_SQLITE=1 uv run manage.py test chat.tests.test_api
+"""
+import json
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+from django.test import SimpleTestCase, TestCase
+
+from accounts.models import ProjectMembership
+from chat.api import STUDIO_MARKER, ChatAPI, ChatAPIError, plan_openai_config
+from infra.tests.factories import MembershipFactory, ProjectFactory, UserFactory
+
+
+class PlanOpenAIConfigTests(SimpleTestCase):
+    """The merge that keeps hand-added providers and replaces Studio's own."""
+
+    def test_pushes_connections_into_an_empty_config(self):
+        planned = plan_openai_config({}, [
+            {"id": 7, "name": "OpenAI", "base_url": "https://api.openai.com/v1",
+             "api_key": "sk-x", "enabled": True},
+        ])
+        self.assertEqual(planned["OPENAI_API_BASE_URLS"], ["https://api.openai.com/v1"])
+        self.assertEqual(planned["OPENAI_API_KEYS"], ["sk-x"])
+        self.assertEqual(planned["OPENAI_API_CONFIGS"]["0"][STUDIO_MARKER], 7)
+        self.assertIs(planned["ENABLE_OPENAI_API"], True)
+
+    def test_keeps_providers_added_in_open_webui(self):
+        current = {
+            "OPENAI_API_BASE_URLS": ["https://theirs.example/v1"],
+            "OPENAI_API_KEYS": ["theirs"],
+            "OPENAI_API_CONFIGS": {"0": {"enable": True}},
+        }
+        planned = plan_openai_config(current, [
+            {"id": 1, "name": "Ours", "base_url": "https://ours.example/v1",
+             "api_key": "ours", "enabled": True},
+        ])
+        self.assertEqual(
+            planned["OPENAI_API_BASE_URLS"],
+            ["https://theirs.example/v1", "https://ours.example/v1"],
+        )
+        self.assertNotIn(STUDIO_MARKER, planned["OPENAI_API_CONFIGS"]["0"])
+        self.assertEqual(planned["OPENAI_API_CONFIGS"]["1"][STUDIO_MARKER], 1)
+
+    def test_replaces_what_studio_pushed_before(self):
+        current = plan_openai_config({}, [
+            {"id": 1, "name": "Old", "base_url": "https://old.example/v1",
+             "api_key": "old", "enabled": True},
+        ])
+        planned = plan_openai_config(current, [
+            {"id": 2, "name": "New", "base_url": "https://new.example/v1",
+             "api_key": "new", "enabled": True},
+        ])
+        self.assertEqual(planned["OPENAI_API_BASE_URLS"], ["https://new.example/v1"])
+
+    def test_dropping_every_connection_leaves_only_foreign_entries(self):
+        current = {
+            "OPENAI_API_BASE_URLS": ["https://theirs.example/v1", "https://ours.example/v1"],
+            "OPENAI_API_KEYS": ["theirs", "ours"],
+            "OPENAI_API_CONFIGS": {"0": {}, "1": {STUDIO_MARKER: 4}},
+        }
+        planned = plan_openai_config(current, [])
+        self.assertEqual(planned["OPENAI_API_BASE_URLS"], ["https://theirs.example/v1"])
+        self.assertEqual(planned["OPENAI_API_KEYS"], ["theirs"])
+
+    def test_shorter_key_list_does_not_lose_urls(self):
+        current = {
+            "OPENAI_API_BASE_URLS": ["https://a.example/v1", "https://b.example/v1"],
+            "OPENAI_API_KEYS": ["only-one"],
+            "OPENAI_API_CONFIGS": {},
+        }
+        planned = plan_openai_config(current, [])
+        self.assertEqual(len(planned["OPENAI_API_BASE_URLS"]), 2)
+        self.assertEqual(planned["OPENAI_API_KEYS"], ["only-one", ""])
+
+
+class _StubOpenWebUI(BaseHTTPRequestHandler):
+    """Just enough Open WebUI to answer sign-in, config and knowledge."""
+
+    protocol_version = "HTTP/1.1"
+    state: dict = {}
+
+    def log_message(self, *args):
+        pass
+
+    def _reply(self, status, payload):
+        body = json.dumps(payload).encode()
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_POST(self):
+        length = int(self.headers.get("Content-Length") or 0)
+        body = json.loads(self.rfile.read(length) or b"{}")
+        if self.path == "/api/v1/auths/signin":
+            email = self.headers.get("X-Studio-Email")
+            if not email:
+                return self._reply(400, {"detail": "no trusted header"})
+            self.state["signed_in_as"] = email
+            self.state["role"] = self.headers.get("X-Studio-Role")
+            return self._reply(200, {"token": "t0ken", "email": email})
+        if self.path == "/openai/config/update":
+            if self.headers.get("Authorization") != "Bearer t0ken":
+                return self._reply(401, {"detail": "no token"})
+            self.state["config"] = body
+            return self._reply(200, body)
+        return self._reply(404, {"detail": "nope"})
+
+    def do_GET(self):
+        if self.headers.get("Authorization") != "Bearer t0ken":
+            return self._reply(401, {"detail": "no token"})
+        if self.path == "/openai/config":
+            return self._reply(200, self.state.get("config", {}))
+        if self.path == "/api/v1/knowledge/":
+            return self._reply(200, [
+                {"id": "kb1", "name": "Policies", "description": "HR", "files": [{"id": "f1"}]},
+            ])
+        if self.path == "/api/v1/knowledge/kb1":
+            return self._reply(200, {
+                "id": "kb1", "name": "Policies", "description": "HR",
+                "files": [{"id": "f1", "meta": {"name": "handbook.pdf"}}],
+            })
+        return self._reply(404, {"detail": "nope"})
+
+
+class ChatAPITests(TestCase):
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        _StubOpenWebUI.state = {}
+        cls.server = ThreadingHTTPServer(("127.0.0.1", 0), _StubOpenWebUI)
+        cls.server.daemon_threads = True
+        threading.Thread(target=cls.server.serve_forever, daemon=True).start()
+        cls.url = f"http://127.0.0.1:{cls.server.server_address[1]}"
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.server.shutdown()
+        super().tearDownClass()
+
+    def _api(self, **user_kwargs):
+        user = UserFactory(**user_kwargs)
+        MembershipFactory(user=user, project=ProjectFactory(), role=ProjectMembership.Role.ADMIN)
+        from chat.config import identity
+
+        return ChatAPI(identity(user), base_url=self.url)
+
+    def test_signs_in_with_the_trusted_headers(self):
+        api = self._api(username="pusher")
+        api.sign_in()
+        self.assertEqual(_StubOpenWebUI.state["signed_in_as"], "pusher@test.com")
+        self.assertEqual(_StubOpenWebUI.state["role"], "admin")
+
+    def test_push_connections_reports_what_it_did(self):
+        api = self._api(username="pusher2")
+        result = api.push_connections([
+            {"id": 1, "name": "OpenAI", "base_url": "https://api.openai.com/v1",
+             "api_key": "sk-x", "enabled": True},
+        ])
+        self.assertEqual(result, {"pushed": 1, "kept": 0})
+        self.assertEqual(
+            _StubOpenWebUI.state["config"]["OPENAI_API_BASE_URLS"],
+            ["https://api.openai.com/v1"],
+        )
+
+    def test_knowledge_bases_are_normalised(self):
+        bases = self._api(username="reader").knowledge_bases()
+        self.assertEqual(bases, [{
+            "id": "kb1", "name": "Policies", "description": "HR",
+            "file_count": 1, "updated_at": None,
+        }])
+
+    def test_knowledge_base_lists_file_names(self):
+        base = self._api(username="reader2").knowledge_base("kb1")
+        self.assertEqual(base["files"], [{"id": "f1", "name": "handbook.pdf"}])
+
+    def test_an_unreachable_open_webui_is_reported_clearly(self):
+        api = ChatAPI({"X-Studio-Email": "x@y.z"}, base_url="http://127.0.0.1:1")
+        with self.assertRaises(ChatAPIError) as caught:
+            api.knowledge_bases()
+        self.assertIn("Could not reach Open WebUI", str(caught.exception))

@@ -120,6 +120,10 @@ INSTALLED_APPS = [
     "judges",
     "audits",
     "infra",
+    # Optional module: its URLs 404 and nothing runs unless SIMPLEAUDIT_CHAT is
+    # set (chat/config.py). Installed either way so its templates, management
+    # commands and tests resolve.
+    "chat",
 ]
 
 MIDDLEWARE = [

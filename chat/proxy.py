@@ -28,7 +28,7 @@ from urllib.parse import urlsplit
 
 import httpx
 
-from infra import chat
+from chat import config as chat
 
 logger = logging.getLogger(__name__)
 

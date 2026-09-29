@@ -133,10 +133,10 @@ def main() -> None:
 
     # --- Chat: Open WebUI + its forward-auth proxy ---
     chat_process = None
-    from infra import chat as chat_config
+    from chat import config as chat_config
 
     if chat_config.ENABLED:
-        from infra import chat_proxy
+        from chat import proxy as chat_proxy
 
         print("💬 Starting chat (Open WebUI)...")
         if chat_proxy.is_first_run():
@@ -205,7 +205,7 @@ def main() -> None:
             stop_embedded_hatchet()
         finally:
             if chat_process is not None:
-                from infra.chat_proxy import stop_open_webui
+                from chat.proxy import stop_open_webui
 
                 stop_open_webui()
             if mock_server is not None:
