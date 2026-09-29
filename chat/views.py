@@ -46,18 +46,52 @@ class ChatView(TemplateView):
         return super().get(request, *args, **kwargs)
 
     def get_context_data(self, **kwargs):
-        chat_url = config.public_url(self.request)
+        chat_base = config.public_url(self.request)
         # Shape the embedded chat through URL params, which Open WebUI reads on
         # load:
-        #   ?model=          pin to one model (the picker is hidden, so this is
-        #                    the only way to choose it)
+        #   ?models=         pin to one or more models, comma-separated (the
+        #                    in-frame picker is hidden, so this is the only way
+        #                    to choose them). The top-bar picker rebuilds this.
         #   ?temporary-chat  start in temporary mode, so nothing is saved to the
         #                    chat history. The embed is a throwaway surface.
         # The New Chat button is hidden, so a fresh chat only ever starts from a
         # full page load — which re-reads these params — so the param is enough.
         params = {}
         if config.MODEL:
-            params["model"] = config.MODEL
+            params["models"] = config.MODEL
         params["temporary-chat"] = "true"
-        chat_url = f"{chat_url}?{urlencode(params)}"
-        return super().get_context_data(chat_url=chat_url, **kwargs)
+        chat_url = f"{chat_base}?{urlencode(params)}"
+        return super().get_context_data(
+            chat_url=chat_url,
+            chat_model_data={
+                "base": chat_base,
+                "groups": self._chat_model_groups(),
+                "defaults": [m.strip() for m in config.MODEL.split(",") if m.strip()],
+            },
+            **kwargs,
+        )
+
+    def _chat_model_groups(self):
+        """The models the top-bar picker offers, grouped by connection.
+
+        Same visibility rule as the experiments page: this workspace's own
+        connections plus any shared into it. Each value is the raw model_id —
+        that is what Open WebUI's ?model=/ ?models= params expect for
+        OpenAI-compatible connections.
+        """
+        from model_registry.services import visible_connections_for
+
+        project = getattr(self.request, "project", None)
+        if project is None:
+            return []
+        groups = []
+        for conn in visible_connections_for(self.request.user, project):
+            if not conn.enabled or not (conn.base_url or "").strip():
+                continue
+            models = [
+                {"id": m.model_id, "name": m.display_name, "has_key": m.has_key}
+                for m in conn.models.filter(enabled=True)
+            ]
+            if models:
+                groups.append({"connection": conn.name, "models": models})
+        return groups
