@@ -140,6 +140,33 @@ def _split_endpoint_params(params: dict[str, Any]) -> tuple[dict | None, dict | 
     return (gen_params or None), (client_kwargs or None)
 
 
+# A slow or stuck endpoint must fail and be retried, not hang a run: the
+# OpenAI client's own default is 600 s per request with 2 retries, and
+# SimpleAudit retries on top. An endpoint's default_parameters can set
+# "timeout" / "max_retries" to override these.
+CLIENT_TIMEOUT_S = 180
+CLIENT_MAX_RETRIES = 1
+_CLIENT_DEFAULTS: dict[str, dict] = {}
+
+
+def _client_defaults(provider: str) -> dict:
+    """``timeout`` / ``max_retries`` client kwargs, when the provider's client
+    takes them (probed once by building one; construction opens no connection).
+    Providers that don't, or can't be built here, get none."""
+    cached = _CLIENT_DEFAULTS.get(provider)
+    if cached is None:
+        defaults = {"timeout": CLIENT_TIMEOUT_S, "max_retries": CLIENT_MAX_RETRIES}
+        try:
+            from any_llm import AnyLLM
+
+            AnyLLM.create(provider, api_key="probe", **defaults)
+            cached = defaults
+        except Exception:  # noqa: BLE001 - unsupported kwargs or provider extras not installed
+            cached = {}
+        _CLIENT_DEFAULTS[provider] = cached
+    return dict(cached)
+
+
 def _auditor_kwargs_from_snapshot(snapshot: dict[str, Any], resolve_key=snapshot_api_key) -> dict[str, Any]:
     """Map a frozen endpoint snapshot onto ModelAuditor constructor kwargs.
 
@@ -159,12 +186,13 @@ def _auditor_kwargs_from_snapshot(snapshot: dict[str, Any], resolve_key=snapshot
     # same convention the engine's own preflight probe uses (api_key="probe").
     if not api_key:
         api_key = "no-auth"
+    provider = _normalize_provider(snapshot.get("provider"), base_url)
     return {
         "model": snapshot.get("model_id"),
-        "provider": _normalize_provider(snapshot.get("provider"), base_url),
+        "provider": provider,
         "base_url": base_url,
         "api_key": api_key,
-        "kwargs": client_kwargs,
+        "kwargs": {**_client_defaults(provider), **(client_kwargs or {})} or None,
         "gen_params": gen_params,
     }
 
