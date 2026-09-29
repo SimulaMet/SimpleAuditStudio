@@ -61,8 +61,13 @@ uvx simpleaudit-studio --disable-chat  # leave it out
 Starts Open WebUI (via `open-webui` if installed, otherwise `uvx`) on
 127.0.0.1:8080, plus the forward-auth proxy from `infra/chat_proxy.py` on :8801.
 Open WebUI's data lives beside Studio's, in `~/.simpleaudit-studio/openwebui/`,
-and it runs from that folder so its signing key stays there too. The first start
-downloads it (a few hundred MB), so `/chat/` stays blank for a minute or two.
+and it runs from that folder so its signing key stays there too.
+
+The CLI reports what it is doing: it says when chat is starting, warns on a first
+run that Open WebUI is being downloaded (~1 GB via `uvx`, a few minutes), prints
+where its data and log live, and prints one line when `/chat/` is actually ready
+— or why it stopped. Open WebUI's own output goes to `openwebui/server.log`, not
+the console. Studio and the worker come up while all this happens.
 
 `open-webui serve` ignores `HOST`/`PORT` and defaults to **0.0.0.0**:8080, so
 Studio passes `--host`/`--port` explicitly. If you override the command with
