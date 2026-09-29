@@ -103,15 +103,15 @@ class ChatOriginTests(TestCase):
         with patch("chat.config.PUBLIC_URL", ""), patch("chat.config.PROXY_PORT", 8801), \
              patch("chat.config.MODEL", ""):
             page = self.client.get("/chat/", HTTP_HOST="127.0.0.1:8000")
-            self.assertContains(page, 'src="http://127.0.0.1:8801"')
+            self.assertContains(page, 'src="http://127.0.0.1:8801?temporary-chat=true"')
             page = self.client.get("/chat/", HTTP_HOST="localhost:8000")
-            self.assertContains(page, 'src="http://localhost:8801"')
+            self.assertContains(page, 'src="http://localhost:8801?temporary-chat=true"')
 
     def test_an_explicit_chat_url_always_wins(self):
         with patch("chat.config.PUBLIC_URL", "https://chat.example.com"), \
              patch("chat.config.MODEL", ""):
             page = self.client.get("/chat/", HTTP_HOST="127.0.0.1:8000")
-            self.assertContains(page, 'src="https://chat.example.com"')
+            self.assertContains(page, 'src="https://chat.example.com?temporary-chat=true"')
 
 
 @patch("chat.config.ENABLED", True)
@@ -128,11 +128,23 @@ class ChatModelPinTests(TestCase):
         with patch("chat.config.PUBLIC_URL", "http://127.0.0.1:8801"), \
              patch("chat.config.MODEL", "Qwen3.8-27B"):
             page = self.client.get("/chat/", HTTP_HOST="127.0.0.1:8000")
-            self.assertContains(page, 'src="http://127.0.0.1:8801?model=Qwen3.8-27B"')
+            # The & is HTML-escaped to &amp; in the rendered template.
+            self.assertContains(
+                page, 'src="http://127.0.0.1:8801?model=Qwen3.8-27B&amp;temporary-chat=true"')
 
-    def test_no_param_when_no_model_is_pinned(self):
+    def test_no_model_param_when_no_model_is_pinned(self):
         with patch("chat.config.PUBLIC_URL", "http://127.0.0.1:8801"), \
              patch("chat.config.MODEL", ""):
             page = self.client.get("/chat/", HTTP_HOST="127.0.0.1:8000")
-            self.assertContains(page, 'src="http://127.0.0.1:8801"')
+            self.assertContains(page, 'src="http://127.0.0.1:8801?temporary-chat=true"')
             self.assertNotContains(page, "model=")
+
+    def test_the_iframe_is_always_forced_into_temporary_mode(self):
+        # The embed is a throwaway surface: every chat must be temporary so
+        # nothing accumulates in Open WebUI's history. The New Chat button is
+        # hidden, so a fresh chat only ever starts from a full page load, which
+        # re-reads this param.
+        with patch("chat.config.PUBLIC_URL", "http://127.0.0.1:8801"), \
+             patch("chat.config.MODEL", "Qwen3.8-27B"):
+            page = self.client.get("/chat/", HTTP_HOST="127.0.0.1:8000")
+            self.assertContains(page, "temporary-chat=true")

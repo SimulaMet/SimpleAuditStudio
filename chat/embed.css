@@ -48,3 +48,18 @@ button[aria-label="New Chat"] {
 #chat-context-menu-button {
   display: none !important;
 }
+
+/* The "Temporary Chat" toggle in the top bar. The embed always starts in
+ * temporary mode (via ?temporary-chat=), so the toggle to switch back to a
+ * normal, persisted chat goes too — otherwise a user could opt out of the
+ * throwaway behaviour. Stable id, so no aria-label matching. */
+#temporary-chat-button {
+  display: none !important;
+}
+
+/* The "Save Chat" button that appears in the top bar once a temporary chat
+ * has messages. It would persist the throwaway chat into history, which
+ * defeats the point of the embed, so it goes as well. Stable id. */
+#save-temporary-chat-button {
+  display: none !important;
+}

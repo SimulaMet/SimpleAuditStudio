@@ -47,8 +47,17 @@ class ChatView(TemplateView):
 
     def get_context_data(self, **kwargs):
         chat_url = config.public_url(self.request)
-        # Pin the embedded chat to one model: Open WebUI reads ?model= from the
-        # URL, so the frame opens on it and the (hidden) picker never matters.
+        # Shape the embedded chat through URL params, which Open WebUI reads on
+        # load:
+        #   ?model=          pin to one model (the picker is hidden, so this is
+        #                    the only way to choose it)
+        #   ?temporary-chat  start in temporary mode, so nothing is saved to the
+        #                    chat history. The embed is a throwaway surface.
+        # The New Chat button is hidden, so a fresh chat only ever starts from a
+        # full page load — which re-reads these params — so the param is enough.
+        params = {}
         if config.MODEL:
-            chat_url = f"{chat_url}?{urlencode({'model': config.MODEL})}"
+            params["model"] = config.MODEL
+        params["temporary-chat"] = "true"
+        chat_url = f"{chat_url}?{urlencode(params)}"
         return super().get_context_data(chat_url=chat_url, **kwargs)
