@@ -78,9 +78,11 @@ hidden (chat/embed.css), so this bar is the only way to choose models.
       font-size: .65rem; font-weight: 600;
     }
     .picker .menu {
-      position: absolute; top: calc(100% + .35rem); left: 0;
+      position: fixed;
       /* Both bounds track the viewport so the menu never overflows, even on
-         a very narrow screen where 16rem would be wider than the window. */
+         a very narrow screen where 16rem would be wider than the window. The
+         exact left/top are set in JS (see setOpen) so it clamps to the window
+         instead of being anchored to the centered toggle. */
       min-width: min(16rem, calc(100vw - 1.5rem));
       max-width: min(22rem, calc(100vw - 1.5rem));
       max-height: min(22rem, 60vh); overflow-y: auto;
@@ -91,8 +93,6 @@ hidden (chat/embed.css), so this bar is the only way to choose models.
          the menu must opt back in or its checkboxes click through to the iframe. */
       pointer-events: auto;
     }
-    /* Flipped: the menu would overflow the right edge, so anchor it there. */
-    .picker.flip .menu { left: auto; right: 0; }
     /* Narrow screens: the back pill keeps only its arrow + logo. */
     @media (max-width: 480px) {
       .back span { display: none; }
@@ -198,20 +198,36 @@ hidden (chat/embed.css), so this bar is the only way to choose models.
       // Open/close the picker. The backdrop is what actually catches "click
       // outside": it covers the iframe (which swallows its own clicks) and
       // sits just below the bar, so a click anywhere but the picker closes it.
+      // Size and place the fixed menu so it always fits the viewport: cap the
+      // width to the window, anchor it to the toggle, shift left if it would
+      // overflow the right edge, and open upward if it would overflow the
+      // bottom. Runs on open and on resize, so a live window resize keeps it
+      // on screen.
+      function positionMenu() {
+        var menu = document.getElementById("model-picker-menu");
+        var t = toggle.getBoundingClientRect();
+        var gap = 6;
+        var mw = Math.min(352, window.innerWidth - 16); // 22rem cap
+        menu.style.width = mw + "px";
+        var mh = menu.offsetHeight;
+        var left = Math.min(t.left, Math.max(8, window.innerWidth - mw - 8));
+        var top = t.bottom + gap;
+        if (top + mh > window.innerHeight - 8) top = Math.max(8, t.top - mh - gap);
+        menu.style.left = left + "px";
+        menu.style.top = top + "px";
+      }
       function setOpen(open) {
         picker.classList.toggle("open", open);
         toggle.setAttribute("aria-expanded", open ? "true" : "false");
         backdrop.hidden = !open;
         if (open) {
-          // Flip to the right edge if the menu would overflow the viewport.
-          var menu = document.getElementById("model-picker-menu");
-          var r = menu.getBoundingClientRect();
-          picker.classList.toggle("flip", r.right > window.innerWidth - 8);
+          positionMenu();
           if (search) search.focus();
-        } else {
-          picker.classList.remove("flip");
         }
       }
+      window.addEventListener("resize", function () {
+        if (picker.classList.contains("open")) positionMenu();
+      });
 
       // Rewrite the iframe's ?models= and reload it. Open WebUI reads the param
       // on load and pre-selects the listed models (comma-separated).
