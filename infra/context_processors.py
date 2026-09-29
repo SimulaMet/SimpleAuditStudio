@@ -92,7 +92,7 @@ _NAV = (
     ("experiments", "Experiments", "⊞", ("/experiments/",), False),
     ("monitors", "Monitors", "↻", ("/monitors/",), False),
     ("scenarios", "Scenarios", "▤", ("/scenarios/",), False),
-    ("models", "Models", "⬡", ("/models/",), False),
+    ("connections", "Connections", "⬡", ("/connections/",), False),
     ("judges", "Judges", "⚖", ("/judges/",), False),
     ("compare", "Compare", "⇄", ("/compare/",), False),
     ("health", "Health", "⚕", ("/health/",), True),

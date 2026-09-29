@@ -33,7 +33,7 @@ class ViewerWriteTests(_Base):
         self.assertFalse(ScenarioSet.objects.filter(name="Sneaky").exists())
 
     def test_viewer_cannot_add_connection(self):
-        resp = self.client.post("/models/", {
+        resp = self.client.post("/connections/", {
             "action": "add_connection", "conn_name": "X", "conn_base_url": "https://api.example.com/v1",
         }, follow=True)
         self.assertContains(resp, "Admin or auditor role required")
@@ -48,10 +48,10 @@ class AuditorWriteTests(_Base):
         self.assertTrue(ScenarioSet.objects.filter(project=self.project, name="Allowed").exists())
 
     def test_connection_base_url_is_validated(self):
-        resp = self.client.post("/models/", {"action": "add_connection", "conn_name": "Bad", "conn_base_url": "not a url"}, follow=True)
+        resp = self.client.post("/connections/", {"action": "add_connection", "conn_name": "Bad", "conn_base_url": "not a url"}, follow=True)
         self.assertContains(resp, "Base URL must be an http(s) URL")
         self.assertFalse(ModelConnection.objects.filter(project=self.project).exists())
-        self.client.post("/models/", {"action": "add_connection", "conn_name": "Ok", "conn_base_url": "http://mock-model:8080/v1"})
+        self.client.post("/connections/", {"action": "add_connection", "conn_name": "Ok", "conn_base_url": "http://mock-model:8080/v1"})
         self.assertTrue(ModelConnection.objects.filter(project=self.project, name="Ok").exists())
 
 
@@ -80,7 +80,7 @@ class ModelsPageTests(_Base):
 
         conn = ModelConnectionFactory(project=self.project)
         RegisteredModel.objects.create(connection=conn, project=self.project, model_id="a", display_name="a")
-        resp = self.client.post("/models/", {"action": "add_models", "conn_id": conn.id, "model_id": ["a", "b", "c"]})
+        resp = self.client.post("/connections/", {"action": "add_models", "conn_id": conn.id, "model_id": ["a", "b", "c"]})
         self.assertEqual(resp.status_code, 302)   # redirect after save: refresh won't resubmit
         self.assertEqual(sorted(conn.models.values_list("model_id", flat=True)), ["a", "b", "c"])
         page = self.client.get(resp.url)
@@ -90,17 +90,17 @@ class ModelsPageTests(_Base):
         conn = ModelConnectionFactory(project=self.project, api_key_direct="sk-old", secret_reference="")
         data = {"action": "edit_connection", "conn_id": conn.id, "conn_name": conn.name,
                 "conn_base_url": "https://api.example.com/v1", "conn_enabled": "1"}
-        self.client.post("/models/", {**data, "key_mode": "stored", "conn_api_key": ""})
+        self.client.post("/connections/", {**data, "key_mode": "stored", "conn_api_key": ""})
         conn.refresh_from_db()
         self.assertEqual(conn.api_key_direct, "sk-old")   # blank keeps the stored key
-        resp = self.client.post("/models/", {**data, "key_mode": "env", "conn_secret_ref": ""}, follow=True)
+        resp = self.client.post("/connections/", {**data, "key_mode": "env", "conn_secret_ref": ""}, follow=True)
         self.assertContains(resp, "Enter the environment variable")
         conn.refresh_from_db()
         self.assertEqual(conn.api_key_direct, "sk-old")   # rejected: nothing changed
-        self.client.post("/models/", {**data, "key_mode": "env", "conn_secret_ref": "MY_KEY"})
+        self.client.post("/connections/", {**data, "key_mode": "env", "conn_secret_ref": "MY_KEY"})
         conn.refresh_from_db()
         self.assertEqual((conn.api_key_direct, conn.secret_reference), ("", "MY_KEY"))
-        self.client.post("/models/", {**data, "key_mode": "none"})
+        self.client.post("/connections/", {**data, "key_mode": "none"})
         conn.refresh_from_db()
         self.assertEqual((conn.api_key_direct, conn.secret_reference), ("", ""))
 
@@ -108,24 +108,24 @@ class ModelsPageTests(_Base):
         from infra.tests.factories import RegisteredModelFactory
 
         conn = ModelConnectionFactory(project=self.project)
-        self.client.post("/models/", {"action": "edit_connection", "conn_id": conn.id, "conn_name": conn.name,
+        self.client.post("/connections/", {"action": "edit_connection", "conn_id": conn.id, "conn_name": conn.name,
                                       "conn_base_url": "https://api.example.com/v1", "conn_enabled": "1",
                                       "key_mode": "none", "conn_description": "  Team account  "})
         rm = RegisteredModelFactory(connection=conn, project=self.project)
-        self.client.post("/models/", {"action": "edit_model", "rm_id": rm.id, "model_id_new": rm.model_id,
+        self.client.post("/connections/", {"action": "edit_model", "rm_id": rm.id, "model_id_new": rm.model_id,
                                       "model_display_name": "Fast", "model_description": "Cheap & quick"})
-        self.client.post("/models/", {"action": "add_models", "conn_id": conn.id, "model_id": ["solo"],
+        self.client.post("/connections/", {"action": "add_models", "conn_id": conn.id, "model_id": ["solo"],
                                       "model_description": "Single add"})
         conn.refresh_from_db()
         rm.refresh_from_db()
         self.assertEqual(conn.description, "Team account")
         self.assertEqual((rm.display_name, rm.description), ("Fast", "Cheap & quick"))
         self.assertEqual(conn.models.get(model_id="solo").description, "Single add")
-        page = self.client.get("/models/")
+        page = self.client.get("/connections/")
         self.assertContains(page, "Team account")
         self.assertContains(page, "Cheap &amp; quick")
         # Bulk adds don't copy one description onto every model.
-        self.client.post("/models/", {"action": "add_models", "conn_id": conn.id, "model_id": ["x", "y"],
+        self.client.post("/connections/", {"action": "add_models", "conn_id": conn.id, "model_id": ["x", "y"],
                                       "model_description": "ignored"})
         self.assertFalse(conn.models.filter(model_id__in=["x", "y"]).exclude(description="").exists())
 
@@ -135,7 +135,7 @@ class ModelsPageTests(_Base):
         conn = ModelConnectionFactory(project=self.project)
         used = RegisteredModelFactory(connection=conn, project=self.project)
         AuditRunFactory(project=self.project, target_model=used)
-        page = self.client.get("/models/").content.decode()
+        page = self.client.get("/connections/").content.decode()
         self.assertIn("1 run", page)
         self.assertNotIn(f'value="{used.id}">\n                <button title="Remove model"', page)
         self.assertIn("kept for reproducibility", page)

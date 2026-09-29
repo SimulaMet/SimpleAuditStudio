@@ -14,6 +14,7 @@ from django.contrib.auth.mixins import LoginRequiredMixin
 from django.db.models import Count, F, Max, ProtectedError, Q, RestrictedError
 from django.http import Http404, HttpResponse, HttpResponseForbidden, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
+from django.urls import reverse
 from django.utils import timezone
 from django.views.generic import DetailView, TemplateView, View
 
@@ -1674,10 +1675,10 @@ class ScenarioImportView(ProjectMixin, View):
 DESCRIPTION_MAX = 1000
 
 
-class ModelsView(ProjectMixin, TemplateView):
-    """Model registry: connections (server + key) and the models each one serves."""
+class ConnectionsView(ProjectMixin, TemplateView):
+    """Connections (a server and its API key) and the models registered on each."""
 
-    template_name = "models.html"
+    template_name = "connections.html"
 
     def get_context_data(self, **kw):
         from model_registry.models import ModelConnection
@@ -1748,7 +1749,7 @@ class ModelsView(ProjectMixin, TemplateView):
 
         def fail(msg):
             messages.error(request, msg)
-            return redirect(f"/models/{anchor}")
+            return redirect(reverse("connections") + anchor)
 
         if action in ("add_connection", "edit_connection"):
             name = post.get("conn_name", "").strip()
@@ -1842,7 +1843,7 @@ class ModelsView(ProjectMixin, TemplateView):
                 except (ProtectedError, RestrictedError):
                     # Runs pin models (RESTRICT FKs); deleting would break their records.
                     return fail(f"Can't delete “{rm.display_name}”: runs or monitors use it. Kept for reproducibility.")
-        return redirect(f"/models/{anchor}")
+        return redirect(reverse("connections") + anchor)
 
 
 class ConnectionDeleteView(ProjectMixin, View):
@@ -1866,7 +1867,7 @@ class ConnectionDeleteView(ProjectMixin, View):
                     request,
                     "Cannot delete: this connection's models are referenced by audit runs or monitors.",
                 )
-        return redirect("/models/")
+        return redirect("connections")
 
 
 def _base_url_error(raw: str) -> str | None:
