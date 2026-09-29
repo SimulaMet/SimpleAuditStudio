@@ -98,8 +98,16 @@ through `openwebui/open-webui.pid` and stops it first — but only when it is a
 genuine leftover, i.e. its parent is gone. One that belongs to another running
 Studio is left alone, and that start fails on the port instead.
 
-WebSockets are not proxied; Open WebUI's Socket.IO client falls back to HTTP
-long-polling. Chat responses stream over SSE and are unaffected.
+WebSocket upgrades are tunnelled: the handshake is forwarded with the identity
+headers attached, and once Open WebUI answers 101 the two sockets are piped
+together — nothing in the proxy understands WebSocket framing. Socket.IO
+therefore behaves as it does behind Caddy instead of falling back to polling.
+
+Ollama is switched off (nothing in a Studio deployment serves it). Left on, Open
+WebUI polls it on every page load — a failing request in the browser console each
+time — and shows an empty Ollama section in its connection settings. The
+environment variable only seeds the first start, so a sync also turns it off
+through the API.
 
 ## Docker
 
@@ -178,9 +186,22 @@ from chat.api import ChatAPI
 bases = ChatAPI.as_user(request.user).knowledge_bases()
 ```
 
-Both directions are deliberately explicit for now: nothing syncs on save, and
-nothing is scheduled. Wiring a signal or a monitor onto `push_connections` is the
-next step when the shape has settled.
+**The push is automatic.** `chat/signals.py` follows `ModelConnection` and
+`RegisteredModel`, so adding a connection, changing a key, disabling one or
+registering a model all reach chat on their own. The command stays for a manual
+run and for `--dry-run`.
+
+The push is kept off the request's path. It happens `on_commit`, so Open WebUI
+never sees a row that was rolled back; in a background thread, so saving does not
+wait on a second service; debounced by `SIMPLEAUDIT_CHAT_SYNC_DELAY` (2s), so an
+edit that writes a connection and its models is one push; and best-effort — a
+chat that is down or still starting is logged and forgotten, because Studio's own
+data is the source of truth. The CLI also syncs once as soon as chat answers,
+which covers connections that changed while it was off.
+
+A connection's registered models become that provider's `model_ids` in Open
+WebUI, so chat offers what Studio registered. A connection with no registered
+models is left unrestricted.
 
 ## Removing it
 

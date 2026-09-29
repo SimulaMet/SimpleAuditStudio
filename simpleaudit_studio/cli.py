@@ -226,7 +226,8 @@ def start_chat(chat_proxy, studio_port: int):
         # flush: this lands minutes later, and stdout is block-buffered when the
         # CLI's output is a file or a pipe rather than a terminal.
         if chat_proxy.wait_until_ready(process):
-            print(f"\n✅ Chat is ready — http://localhost:{studio_port}/chat/\n", flush=True)
+            print(f"\n✅ Chat is ready — http://localhost:{studio_port}/chat/", flush=True)
+            print(f"   {_sync_chat_models()}\n", flush=True)
         elif process.poll() is not None:
             print(f"\n⚠️  Chat stopped (exit {process.returncode}). Studio is unaffected.")
             print(f"   What happened: {chat_proxy.log_path()}\n", flush=True)
@@ -236,6 +237,23 @@ def start_chat(chat_proxy, studio_port: int):
 
     threading.Thread(target=report, daemon=True).start()
     return process
+
+
+def _sync_chat_models() -> str:
+    """Give the fresh chat Studio's model connections, and say how it went.
+
+    Signals keep it in step afterwards (chat/signals.py); this is the first one,
+    for a chat that has just started or was off while connections changed.
+    """
+    from chat.api import ChatAPIError
+    from chat.sync import push_now
+
+    try:
+        result = push_now()
+    except ChatAPIError as exc:
+        return f"Models not synced to chat: {exc}"
+    kept = f", kept {result['kept']} added in chat" if result["kept"] else ""
+    return f"Synced {result['pushed']} model connection(s) to chat{kept}."
 
 
 def _check_port_available(port: int) -> None:

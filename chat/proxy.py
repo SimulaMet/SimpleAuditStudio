@@ -8,9 +8,10 @@ but Python. Both do the same three things:
   2. ask Studio ``GET /chat/authz`` who the browser is, forwarding its cookies,
   3. forward the request to Open WebUI with the returned headers added.
 
-WebSockets are not proxied: an ``Upgrade`` request gets 501, which makes Open
-WebUI's Socket.IO client stay on its HTTP long-polling transport. Chat responses
-stream over plain HTTP (SSE) and are unaffected.
+WebSocket upgrades are tunnelled: the handshake is forwarded with the identity
+headers attached, and once the upstream answers 101 the two sockets are simply
+piped together. Open WebUI's Socket.IO then behaves as it does behind Caddy,
+rather than falling back to long-polling and logging failed upgrades.
 """
 from __future__ import annotations
 
@@ -19,6 +20,7 @@ import logging
 import os
 import shutil
 import signal
+import socket
 import subprocess
 import threading
 import time
@@ -59,10 +61,6 @@ class _Handler(BaseHTTPRequestHandler):
         logger.debug("chat-proxy %s", fmt % args)
 
     def _proxy(self):
-        if self.headers.get("Upgrade", "").lower() == "websocket":
-            self.send_error(501, "WebSocket not proxied")
-            return
-
         headers = {k: v for k, v in self.headers.items() if k.lower() not in _STRIP_FROM_REQUEST}
         # The body is forwarded byte for byte, so the upstream may only use an
         # encoding this client asked for. Without this httpx adds its own
@@ -79,6 +77,10 @@ class _Handler(BaseHTTPRequestHandler):
             self.end_headers()
             return
         headers.update(identity)
+
+        if self.headers.get("Upgrade", "").lower() == "websocket":
+            self._tunnel(identity)
+            return
 
         length = int(self.headers.get("Content-Length") or 0)
         body = self.rfile.read(length) if length else None
@@ -105,6 +107,51 @@ class _Handler(BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError):
             pass    # the browser navigated away mid-stream
 
+    def _tunnel(self, identity: dict[str, str]) -> None:
+        """Hand a WebSocket handshake to Open WebUI and then get out of the way.
+
+        Nothing here understands WebSocket framing: once the upstream has agreed
+        to the upgrade, the two sockets carry bytes in both directions until one
+        of them closes. The identity headers go on the handshake, which is the
+        only part Open WebUI authenticates.
+        """
+        upstream_url = urlsplit(chat.UPSTREAM)
+        host, port = upstream_url.hostname or "127.0.0.1", upstream_url.port or 80
+        try:
+            upstream = socket.create_connection((host, port), timeout=10)
+        except OSError as exc:
+            logger.warning("chat websocket upstream unreachable: %s", exc)
+            self.send_error(502, "Chat backend unavailable")
+            return
+
+        # The handshake keeps the hop-by-hop headers this time (Connection,
+        # Upgrade and the Sec-WebSocket-* set are the handshake), minus any
+        # identity the client tried to supply.
+        forwarded = {
+            key: value for key, value in self.headers.items()
+            if key.lower() not in {h.lower() for h in chat.TRUSTED_HEADERS} | {"host"}
+        }
+        forwarded["Host"] = f"{host}:{port}"
+        forwarded.update(identity)
+        request = f"GET {self.path} HTTP/1.1\r\n" + "".join(
+            f"{key}: {value}\r\n" for key, value in forwarded.items()
+        ) + "\r\n"
+
+        self.close_connection = True
+        client = self.connection
+        try:
+            upstream.sendall(request.encode("latin-1"))
+            upstream.settimeout(None)
+            client.settimeout(None)
+            pump = threading.Thread(target=_pipe, args=(client, upstream), daemon=True)
+            pump.start()
+            _pipe(upstream, client)
+            pump.join(timeout=1)
+        except OSError:
+            pass    # either side hung up; nothing to salvage
+        finally:
+            upstream.close()
+
     def _identify(self, cookie: str) -> dict[str, str] | None:
         """Ask Studio who this browser is. None when signed out."""
         try:
@@ -120,6 +167,23 @@ class _Handler(BaseHTTPRequestHandler):
         return {h: response.headers[h] for h in chat.TRUSTED_HEADERS if h in response.headers}
 
     do_GET = do_POST = do_PUT = do_PATCH = do_DELETE = do_HEAD = do_OPTIONS = _proxy
+
+
+def _pipe(source: socket.socket, destination: socket.socket) -> None:
+    """Copy bytes one way until the source closes, then half-close the other end."""
+    try:
+        while True:
+            chunk = source.recv(65536)
+            if not chunk:
+                break
+            destination.sendall(chunk)
+    except OSError:
+        pass
+    finally:
+        try:
+            destination.shutdown(socket.SHUT_WR)
+        except OSError:
+            pass
 
 
 def serve(studio_port: int) -> ThreadingHTTPServer:
@@ -304,6 +368,9 @@ def _spawn(home: Path) -> subprocess.Popen:
         "WEBUI_AUTH_TRUSTED_NAME_HEADER": chat.NAME_HEADER,
         "WEBUI_AUTH_TRUSTED_ROLE_HEADER": chat.ROLE_HEADER,
         "ENABLE_SIGNUP": "false",
+        # Nothing here serves Ollama, and Open WebUI polls it on every page load
+        # (a 500 per poll in the console) and shows an empty section in settings.
+        "ENABLE_OLLAMA_API": "false",
         "WEBUI_URL": chat.PUBLIC_URL,
     }
     # Open WebUI keeps its signing key in ``.webui_secret_key`` in the working

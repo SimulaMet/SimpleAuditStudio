@@ -110,6 +110,24 @@ class ChatAPI:
             "kept": len(planned["OPENAI_API_BASE_URLS"]) - len(connections),
         }
 
+    def disable_ollama(self) -> None:
+        """Turn Ollama off in Open WebUI's settings.
+
+        Nothing in a Studio deployment serves Ollama, but Open WebUI polls it on
+        every page load — a 500 in the browser console each time — and shows an
+        empty Ollama section in the connection settings. The environment variable
+        only seeds the first start, so an instance that already has it on has to
+        be told.
+        """
+        current = self.request("GET", "/ollama/config")
+        if current.get("ENABLE_OLLAMA_API") is False:
+            return
+        self.request("POST", "/ollama/config/update", json={
+            "ENABLE_OLLAMA_API": False,
+            "OLLAMA_BASE_URLS": current.get("OLLAMA_BASE_URLS") or [],
+            "OLLAMA_API_CONFIGS": current.get("OLLAMA_API_CONFIGS") or {},
+        })
+
     # --- pull: Open WebUI knowledge -> Studio -------------------------------
     def knowledge_bases(self) -> list[dict[str, Any]]:
         """Every knowledge base this user can read, as plain dicts."""
@@ -132,7 +150,12 @@ class ChatAPI:
 
 # --- pure helpers (no I/O, so they are cheap to test) ----------------------
 def connection_payload(conn) -> dict[str, Any]:
-    """The part of a Studio ModelConnection that Open WebUI needs."""
+    """The part of a Studio ModelConnection that Open WebUI needs.
+
+    ``model_ids`` narrows the connection to the models Studio has registered
+    under it; empty means Studio has registered none, and Open WebUI then offers
+    whatever the provider lists.
+    """
     from model_registry.services import connection_api_key
 
     return {
@@ -141,6 +164,10 @@ def connection_payload(conn) -> dict[str, Any]:
         "base_url": (conn.base_url or "").strip().rstrip("/"),
         "api_key": connection_api_key(conn),
         "enabled": conn.enabled,
+        "project_slug": conn.project.slug,
+        "model_ids": sorted(
+            conn.models.filter(enabled=True).values_list("model_id", flat=True).distinct()
+        ),
     }
 
 
@@ -170,6 +197,8 @@ def plan_openai_config(current: dict[str, Any], connections: list[dict[str, Any]
                 "enable": bool(connection.get("enabled", True)),
                 # Shown in Open WebUI's admin UI, so it reads as the Studio name.
                 "name": connection["name"],
+                # Open WebUI treats an empty list as "no restriction".
+                "model_ids": list(connection.get("model_ids") or []),
             },
         )
         for connection in connections
