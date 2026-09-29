@@ -12,13 +12,16 @@ Fixture structure:
 {
   "_meta": {"target_model": "GPT-4o", "auditor_model": "GPT-4o Mini", ...},
   "runs": [
-    {"pack": "safety", "label": "safety baseline", "scenarios": [...]},
+    {"pack": "safety", "label": "safety baseline", "experiment": "...", "scenarios": [...]},
+    {"pack": "safety", "label": "...", "experiment": "...", "generation": {"target_params": {...}}, ...},
     ...
   ]
 }
 
 Multiple runs can share the same "pack" (scenario set), enabling meaningful
-comparison via intersection.
+comparison via intersection. Runs with the same "experiment" are grouped into
+one Experiment, whose factors are the inputs that differ between its runs;
+"generation" is added to a run's generation settings.
 
 Usage:
     python manage.py seed_demo_audits [--project 1] [--force]
@@ -95,14 +98,20 @@ class Command(BaseCommand):
                 "Run 'manage.py seed_platform' first to create default models."
             )
 
-        from audits.models import AuditRun
+        from audits.models import AuditRun, Experiment
         existing = AuditRun.objects.filter(project=project, runtime_metadata__demo_seed=True)
         if existing.exists():
             if options["force"]:
                 self.stdout.write(f"Deleting {existing.count()} existing demo run(s)...")
+                experiment_ids = set(existing.exclude(experiment=None).values_list("experiment_id", flat=True))
                 existing.delete()
+                # Demo experiments left without runs go too (never a user's own).
+                Experiment.objects.filter(pk__in=experiment_ids, runs__isnull=True).delete()
             else:
-                self.stdout.write(f"{existing.count()} demo audit(s) already exist. Use --force to re-seed.")
+                # Seeded before demo experiments existed: group those runs now.
+                made = self._group_into_experiments(project, user, runs_spec, list(existing))
+                note = f" Grouped them into {made} experiment(s)." if made else ""
+                self.stdout.write(f"{existing.count()} demo audit(s) already exist. Use --force to re-seed.{note}")
                 return
 
         self.stdout.write(
@@ -111,16 +120,40 @@ class Command(BaseCommand):
             f"  Source: pre-recorded fixture (no API calls)"
         )
 
-        created = 0
-        for i, run_spec in enumerate(runs_spec):
+        runs = []
+        for run_spec in runs_spec:
             pack = run_spec["pack"]
-            label = run_spec.get("label", pack)
-            scenarios = run_spec["scenarios"]
-            ok = self._create_run(project, user, pack, label, scenarios, target_ep, auditor_ep, judge_ep)
-            if ok:
-                created += 1
+            run = self._create_run(project, user, pack, run_spec.get("label", pack), run_spec["scenarios"],
+                                   target_ep, auditor_ep, judge_ep, generation=run_spec.get("generation"))
+            if run is not None:
+                runs.append(run)
+        made = self._group_into_experiments(project, user, runs_spec, runs)
 
-        self.stdout.write(self.style.SUCCESS(f"\nDone. Created {created} demo audit run(s)."))
+        self.stdout.write(self.style.SUCCESS(
+            f"\nDone. Created {len(runs)} demo audit run(s) in {made} experiment(s)."))
+
+    @staticmethod
+    def _group_into_experiments(project, user, runs_spec: list[dict], runs: list) -> int:
+        """Put demo runs into the experiments the fixture names ("experiment"),
+        with factors computed from what differs between each one's runs.
+        Runs already in an experiment are left alone. Returns how many were made."""
+        from audits.experiments import FACTORS, run_factor_values
+        from audits.models import Experiment
+
+        by_label = {f"Demo: {spec.get('label', spec['pack'])}": spec.get("experiment") for spec in runs_spec}
+        groups: dict[str, list] = {}
+        for run in runs:
+            name = by_label.get(run.name)
+            if name and run.experiment_id is None:
+                groups.setdefault(name, []).append(run)
+        for name, members in groups.items():
+            values = [run_factor_values(r) for r in members]
+            factors = [key for key in FACTORS if len({v[key] for v in values}) > 1]
+            experiment = Experiment.objects.create(project=project, name=name, factors=factors, created_by=user)
+            for run in members:
+                run.experiment = experiment
+                run.save(update_fields=["experiment"])
+        return len(groups)
 
     @staticmethod
     def _judge(project, user):
@@ -130,7 +163,8 @@ class Command(BaseCommand):
         return default_judge_version(project, user)
 
     def _create_run(self, project, user, pack: str, label: str, scenarios: list[dict],
-                    target_ep, auditor_ep, judge_ep) -> bool:
+                    target_ep, auditor_ep, judge_ep, generation: dict | None = None):
+        """Create one completed demo run from recorded results; None when its set is missing."""
         from audits.events import append_event, upsert_scenario_result
         from audits.models import AuditRun
         from infra.simpleaudit_package import resolve_engine_provenance
@@ -139,11 +173,11 @@ class Command(BaseCommand):
         set_obj = ScenarioSet.objects.filter(project=project, name=f"SimpleAudit: {pack}").first()
         if not set_obj:
             self.stderr.write(f"  No scenario set '{pack}' — skipping.")
-            return False
+            return None
         version = set_obj.versions.order_by("-version").first()
         if not version:
             self.stderr.write(f"  No published version for '{pack}' — skipping.")
-            return False
+            return None
 
         from audits.services import _endpoint_snapshot as _snap
         from judges.services import judge_snapshot
@@ -154,10 +188,8 @@ class Command(BaseCommand):
         now = timezone.now()
         n = len(scenarios)
 
-        # Vary generation params slightly for non-baseline runs to make comparison interesting
-        gen_params = {"max_turns": 3, "language": "English"}
-        if "elevated" in label:
-            gen_params["temperature_target"] = 1.2
+        # The fixture's "generation" (e.g. a hotter target) on top of the defaults.
+        gen_params = {"max_turns": 3, "language": "English", **(generation or {})}
 
         run = AuditRun.objects.create(
             project=project,
@@ -226,7 +258,7 @@ class Command(BaseCommand):
         append_event(run.id, "_run", "run_completed", {"scenarios": successful + failed})
 
         self.stdout.write(f"  ✓ #{run.id} {label}: {successful}/{successful + failed} passed")
-        return True
+        return run
 
 
 def _count_severities(severities: list[str]) -> dict:
