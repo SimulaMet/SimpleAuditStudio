@@ -57,14 +57,43 @@ def _pid_alive(pid: int) -> bool:
     return True
 
 
+def _orphaned(ppid: int) -> bool:
+    """Whether a process with this parent PID was left behind by a dead parent.
+
+    A process whose parent dies is re-parented to PID 1 (init / launchd), which
+    is always alive, so "the parent is gone" alone never matches a real orphan.
+    In a container this process can itself be PID 1: its own children aren't orphans.
+    """
+    if ppid == os.getpid():
+        return False
+    return ppid == 1 or not _pid_alive(ppid)
+
+
+def _parent_pid(pid: int) -> int | None:
+    try:
+        out = subprocess.run(["ps", "-o", "ppid=", "-p", str(pid)],
+                             capture_output=True, text=True, timeout=10, check=False).stdout.strip()
+    except (FileNotFoundError, subprocess.SubprocessError):
+        return None
+    return int(out) if out.isdigit() else None
+
+
+def _wait_gone(pids: list[int], seconds: float) -> None:
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline and any(_pid_alive(p) for p in pids):
+        time.sleep(0.2)
+
+
 def _cleanup_stale_embedded_pg(data_dir: str) -> None:
     """Remove a stale ``postmaster.pid`` left by a hard-killed previous run.
 
     If a prior dev server / CLI was killed (SIGKILL, crash, terminal close),
     its bundled Postgres can leave ``data/postmaster.pid`` behind. The next
     sidecar then fails to start with ``FATAL: lock file "postmaster.pid"
-    already exists``. We only remove the lock when the recorded postmaster PID
-    is no longer running — a live Postgres is never touched.
+    already exists``. We remove the lock when the recorded postmaster PID is no
+    longer running. A Postgres still running for this data dir whose sidecar
+    is gone (orphaned: its sidecar was hard-killed too) is shut down first; one
+    with a live parent (another running instance) is never touched.
 
     Best-effort: any error is logged and swallowed so startup proceeds.
     """
@@ -77,8 +106,16 @@ def _cleanup_stale_embedded_pg(data_dir: str) -> None:
             return
         pid = int(raw[0].strip())
         if _pid_alive(pid):
-            # A real Postgres owns this data dir right now; leave it alone.
-            return
+            ppid = _parent_pid(pid)
+            if ppid is None or not _orphaned(ppid):
+                # A running instance owns this data dir right now; leave it alone.
+                return
+            logger.warning("Stopping orphaned embedded Postgres (PID %d) left by a killed run", pid)
+            os.kill(pid, signal.SIGINT)   # Postgres "fast" shutdown: removes its own lock
+            _wait_gone([pid], 15)
+            if _pid_alive(pid):
+                os.kill(pid, signal.SIGKILL)
+                _wait_gone([pid], 5)
         logger.warning(
             "Removing stale embedded Postgres lock %s (recorded PID %d is not running)",
             pid_file, pid,
@@ -125,8 +162,7 @@ def _kill_stale_sidecars() -> None:
             continue
         if pid == me:
             continue
-        # Orphaned = parent no longer exists (init/launchd reparents to 1).
-        if not _pid_alive(ppid):
+        if _orphaned(ppid):
             orphans.append(pid)
 
     if not orphans:
@@ -139,9 +175,7 @@ def _kill_stale_sidecars() -> None:
         except ProcessLookupError:
             pass
     # Give them a moment to shut down their bundled Postgres before we proceed.
-    deadline = time.monotonic() + 10
-    while time.monotonic() < deadline and any(_pid_alive(p) for p in orphans):
-        time.sleep(0.2)
+    _wait_gone(orphans, 10)
     for pid in orphans:
         if _pid_alive(pid):
             try:
