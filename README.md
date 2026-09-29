@@ -99,7 +99,8 @@ For teams or multi-user setups, use Docker Compose:
 git clone https://github.com/SushantGautam/SimpleAuditStudio
 cd SimpleAuditStudio
 cp .env.example .env
-# edit POSTGRES_PASSWORD and BOOTSTRAP_PASSWORD at minimum
+# edit DJANGO_SECRET_KEY, POSTGRES_PASSWORD and BOOTSTRAP_PASSWORD at minimum —
+# startup refuses to boot while any of them is empty or still `change-me`
 docker compose up -d
 ```
 

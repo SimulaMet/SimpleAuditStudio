@@ -160,6 +160,12 @@ services:
       interval: 30s
       timeout: 5s
       retries: 5
+    # Matches the worker. The whole command is idempotent (migrate, bootstrap
+    # and seed all skip what already exists), so a restart is safe and a
+    # gunicorn crash or a Postgres blip no longer leaves the UI down for good.
+    # A bad .env still fails every attempt, but the error repeats in the logs
+    # instead of being printed once into a container nobody looks at.
+    restart: unless-stopped
 
 volumes:
   postgres_data:
