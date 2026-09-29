@@ -105,6 +105,15 @@ class _Handler(BaseHTTPRequestHandler):
         logger.debug("chat-proxy %s", fmt % args)
 
     def _proxy(self):
+        # Studio's embed stylesheet: Open WebUI loads /static/custom.css on every
+        # page (see its app.html). Answering it ourselves lets the iframe render
+        # without the chat-history sidebar, and keeps the rule in this repo
+        # (chat/embed.css) rather than in a copy of Open WebUI an upgrade would
+        # overwrite. A static asset, so it needs no identity.
+        if self.command == "GET" and urlsplit(self.path).path == "/static/custom.css":
+            self._serve_embed_css()
+            return
+
         headers = {k: v for k, v in self.headers.items() if k.lower() not in _STRIP_FROM_REQUEST}
         # The body is forwarded byte for byte, so the upstream may only use an
         # encoding this client asked for. Without this httpx adds its own
@@ -147,6 +156,23 @@ class _Handler(BaseHTTPRequestHandler):
             self.send_error(502, "Chat backend unavailable")
         except (BrokenPipeError, ConnectionResetError):
             pass    # the browser navigated away mid-stream
+
+    def _serve_embed_css(self) -> None:
+        """Serve chat/embed.css as Open WebUI's /static/custom.css.
+
+        The bytes come from this repo, not the upstream, so the embed styling
+        survives Open WebUI upgrades and lives in one place shared with the
+        Docker mode (which mounts the same file for Caddy).
+        """
+        css = (Path(__file__).parent / "embed.css").read_bytes()
+        self.send_response(200)
+        self.send_header("Content-Type", "text/css; charset=utf-8")
+        self.send_header("Content-Length", str(len(css)))
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Connection", "close")
+        self.close_connection = True
+        self.end_headers()
+        self.wfile.write(css)
 
     def _send_to_studio(self) -> None:
         """Signed out: send the whole tab to Studio, not just this frame.

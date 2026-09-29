@@ -201,6 +201,9 @@ services:
       STUDIO_UPSTREAM: web:8000
     volumes:
       - ./deploy/compose/Caddyfile.chat:/etc/caddy/Caddyfile:ro
+      # Served as Open WebUI's /static/custom.css (see Caddyfile.chat) so the
+      # iframe hides the chat-history sidebar.
+      - ./chat/embed.css:/etc/caddy/embed/static/custom.css:ro
     ports:
       - "${SIMPLEAUDIT_CHAT_PROXY_PORT:-8801}:${SIMPLEAUDIT_CHAT_PROXY_PORT:-8801}"
     depends_on:

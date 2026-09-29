@@ -30,5 +30,14 @@
 	# Studio embeds this origin in an iframe.
 	header -X-Frame-Options
 
+	# Studio's embed stylesheet: Open WebUI loads /static/custom.css on every
+	# page. Serve it from the repo (mounted read-only) so the iframe renders
+	# without the chat-history sidebar and the rule survives Open WebUI upgrades.
+	# Same file the no-Docker proxy serves, so both modes share one source.
+	handle /static/custom.css {
+		root * /etc/caddy/embed
+		file_server
+	}
+
 	reverse_proxy open-webui:{$SIMPLEAUDIT_CHAT_UPSTREAM_PORT:8080}
 }

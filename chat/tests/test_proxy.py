@@ -195,3 +195,17 @@ class ProxyTests(SimpleTestCase):
     def test_the_frame_blocking_header_is_removed(self):
         response = httpx.get(f"{self.url}/api/config", headers={"Cookie": VALID_COOKIE})
         self.assertNotIn("x-frame-options", response.headers)
+
+    def test_the_embed_stylesheet_comes_from_studio_not_the_upstream(self):
+        """Open WebUI loads /static/custom.css on every page.
+
+        The proxy answers it with chat/embed.css (which hides the
+        chat-history sidebar in the iframe) instead of forwarding, so the rule
+        lives in this repo and survives Open WebUI upgrades. It is a static
+        asset, so it must not require a signed-in browser.
+        """
+        response = httpx.get(f"{self.url}/static/custom.css")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("text/css", response.headers["Content-Type"])
+        self.assertIn("#sidebar", response.text)
+        self.assertNotIn("email", response.text)   # not the upstream's echo
