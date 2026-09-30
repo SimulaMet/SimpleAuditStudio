@@ -149,12 +149,26 @@ class ChatAPI:
 
 
 # --- pure helpers (no I/O, so they are cheap to test) ----------------------
+def chat_model_prefix(connection) -> str:
+    """The Open WebUI ``prefix_id`` for a connection.
+
+    Open WebUI identifies a model by ``<prefix_id>.<model_id>`` and strips the
+    prefix before forwarding the request upstream. Without a prefix, the same
+    ``model_id`` registered under two different connections collides in Open
+    WebUI's model list (one silently shadows the other). Keying the prefix on
+    the connection's primary key makes every pushed model id globally unique
+    while the upstream request still carries the bare model id.
+    """
+    return str(connection.id)
+
+
 def connection_payload(conn) -> dict[str, Any]:
     """The part of a Studio ModelConnection that Open WebUI needs.
 
     ``model_ids`` narrows the connection to the models Studio has registered
     under it; empty means Studio has registered none, and Open WebUI then offers
-    whatever the provider lists.
+    whatever the provider lists. ``prefix_id`` namespaces those ids so the same
+    model id under two connections does not collide in Open WebUI.
     """
     from model_registry.services import connection_api_key
 
@@ -168,6 +182,7 @@ def connection_payload(conn) -> dict[str, Any]:
         "model_ids": sorted(
             conn.models.filter(enabled=True).values_list("model_id", flat=True).distinct()
         ),
+        "prefix_id": chat_model_prefix(conn),
     }
 
 
@@ -199,6 +214,9 @@ def plan_openai_config(current: dict[str, Any], connections: list[dict[str, Any]
                 "name": connection["name"],
                 # Open WebUI treats an empty list as "no restriction".
                 "model_ids": list(connection.get("model_ids") or []),
+                # Namespaces the model ids so the same id under two connections
+                # does not collide in Open WebUI's model list.
+                "prefix_id": connection.get("prefix_id"),
             },
         )
         for connection in connections

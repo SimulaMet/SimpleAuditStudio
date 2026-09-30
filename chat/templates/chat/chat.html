@@ -242,6 +242,16 @@ hidden (chat/embed.css), so this bar is the only way to choose models.
           Array.from(picker.querySelectorAll('input[type="checkbox"]:checked')).map(function (c) { return c.value; })
         ));
       }
+      // Remember the selection so the next visit opens on it. The value is the
+      // comma-separated selection ("" clears it back to the first available).
+      function savePreference(models) {
+        var token = (document.cookie.match(/(?:^|;\s*)csrftoken=([^;]+)/) || [])[1] || '';
+        fetch('/me/preferences/', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-CSRFToken': token },
+          body: JSON.stringify({ key: 'chat_model', value: models.length ? models.join(',') : null }),
+        }).catch(function () { /* best-effort; the pin still applies this load */ });
+      }
       function refresh() {
         var n = selected().length;
         count.hidden = n === 0;
@@ -281,7 +291,9 @@ hidden (chat/embed.css), so this bar is the only way to choose models.
       }
       picker.addEventListener("change", function () {
         refresh();
-        load(selected());
+        var models = selected();
+        load(models);
+        savePreference(models);
       });
       newChat.addEventListener("click", function () {
         picker.querySelectorAll('input[type="checkbox"]').forEach(function (c) { c.checked = false; });
