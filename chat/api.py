@@ -147,6 +147,22 @@ class ChatAPI:
         ]
         return summary
 
+    def list_models(self) -> list[str]:
+        """Every model id Open WebUI currently registers, as plain strings.
+
+        This is the id space the ``?models=`` pin is checked against: Open
+        WebUI only pins a model whose id exactly matches one of these. For an
+        OpenAI-compatible provider these are the ids the upstream ``/v1/models``
+        endpoint returns, which may differ from Studio's own ``model_id``.
+        """
+        payload = self.request("GET", "/api/v1/models/")
+        models = payload.get("models") if isinstance(payload, dict) else payload
+        return [
+            str(model["id"])
+            for model in (models or [])
+            if isinstance(model, dict) and model.get("id")
+        ]
+
 
 # --- pure helpers (no I/O, so they are cheap to test) ----------------------
 def chat_model_prefix(connection) -> str:
@@ -192,17 +208,36 @@ def plan_openai_config(current: dict[str, Any], connections: list[dict[str, Any]
     Entries Studio pushed before (they carry ``STUDIO_MARKER``) are replaced;
     entries somebody added in Open WebUI itself are kept, in their order, with
     their config re-keyed to their new index.
+
+    Open WebUI stores the three structures as parallel, index-aligned lists,
+    but a hand edit or a partially failed write can leave them out of sync.
+    The merge therefore pairs strictly by index over the union of the indices
+    present in any of the three: a missing key defaults to ``""`` and a
+    missing config to ``{}``, so a key can never end up attached to a URL
+    from a different index. An entry is kept only if it has a base URL — a
+    bare key or config with no URL is dropped, since a URL is what makes a
+    provider usable.
     """
     urls = list(current.get("OPENAI_API_BASE_URLS") or [])
     keys = list(current.get("OPENAI_API_KEYS") or [])
     configs = dict(current.get("OPENAI_API_CONFIGS") or {})
-    keys += [""] * (len(urls) - len(keys))
 
-    kept = [
-        (url, keys[index], configs.get(str(index), {}))
-        for index, url in enumerate(urls)
-        if STUDIO_MARKER not in configs.get(str(index), {})
-    ]
+    indices = set(range(len(urls))) | set(range(len(keys)))
+    for config_key in configs:
+        if config_key.isdigit() and str(int(config_key)) == config_key:
+            indices.add(int(config_key))
+
+    kept = []
+    for index in sorted(indices):
+        url = urls[index] if index < len(urls) else None
+        if url is None:
+            continue  # a bare key or config with no URL is not a usable provider
+        api_key = keys[index] if index < len(keys) else ""
+        raw_config = configs.get(str(index))
+        config = raw_config if isinstance(raw_config, dict) else {}
+        if STUDIO_MARKER in config:
+            continue
+        kept.append((url, api_key, config))
     ours = [
         (
             connection["base_url"],
