@@ -22,6 +22,7 @@ suggestion); --yes skips the confirmation.
 from __future__ import annotations
 
 import os
+import secrets
 import signal
 import threading
 import time
@@ -171,7 +172,11 @@ def main() -> None:
     username = os.environ.get("BOOTSTRAP_USERNAME", "studio")
     password = os.environ.get("BOOTSTRAP_PASSWORD", "admin123")
 
-    auto_login_url = f"http://localhost:{port}/auto-login/"
+    # One-time sign-in token: the browser opens the URL below, and the first
+    # request that presents it is the only one that works (see auto_login_view).
+    auto_login_token = secrets.token_urlsafe(32)
+    os.environ["SIMPLEAUDIT_AUTO_LOGIN_TOKEN"] = auto_login_token
+    auto_login_url = f"http://localhost:{port}/auto-login/?token={auto_login_token}"
     print("┌─────────────────────────────────────────────────────────┐")
     print("│                                                         │")
     print("│   🚀 SimpleAudit Studio is running!                     │")
@@ -190,12 +195,16 @@ def main() -> None:
     print("│   Press Ctrl+C to stop.                                 │")
     print("└─────────────────────────────────────────────────────────┘")
     print()
+    # Single-use sign-in link: opens the browser signed in; if no browser
+    # opens, the user can paste this URL manually (it works exactly once).
+    print(f"🔑 One-time sign-in link: {auto_login_url}")
+    print()
 
     # Open the default browser signed-in (non-fatal; skip with --no-browser).
     if not args.no_browser:
         threading.Thread(
             target=_open_browser_when_ready,
-            args=(auto_login_url,),
+            args=(auto_login_url, port),
             daemon=True,
         ).start()
 
@@ -308,19 +317,20 @@ def _ensure_ports_available(args) -> None:
     )
 
 
-def _open_browser_when_ready(url: str, timeout: float = 30.0) -> None:
+def _open_browser_when_ready(url: str, port: int, timeout: float = 30.0) -> None:
     """Wait until the web server answers, then open `url` in the default browser.
 
-    The URL is /auto-login/, which signs the visitor in and redirects to the
-    dashboard. Runs in a daemon thread; any failure just prints a hint.
+    The URL is the one-time /auto-login/?token=... link, which signs the
+    visitor in and redirects to the dashboard. Readiness is polled on /healthz
+    (unauthenticated) so the single-use token is not consumed by the probe.
+    Runs in a daemon thread; any failure just prints a hint.
     """
     import requests
 
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         try:
-            # allow_redirects=False: we only need proof the endpoint exists.
-            if requests.get(url, timeout=2).status_code in (200, 302):
+            if requests.get(f"http://localhost:{port}/healthz", timeout=2).status_code == 200:
                 break
         except requests.RequestException:
             time.sleep(0.5)
