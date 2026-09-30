@@ -24,6 +24,7 @@ This module never talks to the proxy — it addresses Open WebUI directly on
 """
 from __future__ import annotations
 
+import json as jsonlib
 import logging
 from typing import Any
 
@@ -88,7 +89,15 @@ class ChatAPI:
             raise ChatAPIError(f"Could not reach Open WebUI at {url}: {exc}") from exc
         if response.status_code >= 400:
             raise ChatAPIError(f"{method} {path} failed ({response.status_code}): {response.text[:300]}")
-        return response.json() if response.content else None
+        if not response.content:
+            return None
+        try:
+            return response.json()
+        except (jsonlib.JSONDecodeError, UnicodeDecodeError) as exc:
+            raise ChatAPIError(
+                f"{method} {path} returned non-JSON content "
+                f"({response.status_code}, {response.headers.get('content-type', 'unknown')})"
+            ) from exc
 
     # --- push: Studio connections -> Open WebUI providers -------------------
     def openai_config(self) -> dict[str, Any]:
@@ -155,8 +164,8 @@ class ChatAPI:
         OpenAI-compatible provider these are the ids the upstream ``/v1/models``
         endpoint returns, which may differ from Studio's own ``model_id``.
         """
-        payload = self.request("GET", "/api/v1/models/")
-        models = payload.get("models") if isinstance(payload, dict) else payload
+        payload = self.request("GET", "/api/models")
+        models = payload.get("data") if isinstance(payload, dict) else payload
         return [
             str(model["id"])
             for model in (models or [])

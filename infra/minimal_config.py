@@ -17,7 +17,9 @@ import signal
 import subprocess
 import threading
 import time
+from contextlib import contextmanager
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -184,6 +186,31 @@ def _kill_stale_sidecars() -> None:
                 pass
 
 
+@contextmanager
+def _isolated_embedded_process():
+    """Keep terminal signals away from the engine until the worker has drained.
+
+    Hatchet SDK 1.41.0 offers no process-session option. Adapt only its module
+    reference, never subprocess.Popen globally. The SDK retains ownership of
+    stdin and termination, including its parent-exit cleanup.
+    """
+    from hatchet_sdk import embedded
+
+    original = embedded.subprocess
+
+    def spawn(*args, **kwargs):
+        kwargs["start_new_session"] = True
+        return original.Popen(*args, **kwargs)
+
+    embedded.subprocess = SimpleNamespace(**{
+        **vars(original), "Popen": spawn,
+    })
+    try:
+        yield
+    finally:
+        embedded.subprocess = original
+
+
 def start_embedded_hatchet() -> Any:
     """Start an embedded Hatchet engine and return the client.
 
@@ -218,7 +245,8 @@ def start_embedded_hatchet() -> Any:
         )
 
         print("\n⏳ Starting embedded Hatchet engine (first run may take ~15s)...")
-        client = Hatchet.from_embedded(config)
+        with _isolated_embedded_process():
+            client = Hatchet.from_embedded(config)
         _embedded_client = client
         print("✅ Hatchet engine ready.\n")
         return client

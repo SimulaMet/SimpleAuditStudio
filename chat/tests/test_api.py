@@ -217,9 +217,17 @@ class _StubOpenWebUI(BaseHTTPRequestHandler):
                 "id": "kb1", "name": "Policies", "description": "HR",
                 "files": [{"id": "f1", "meta": {"name": "handbook.pdf"}}],
             })
-        if self.path == "/api/v1/models/":
+        if self.path == "/api/v1/models/" or self.state.get("html_response"):
+            body = b"<!doctype html><html>Open WebUI</html>"
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        if self.path == "/api/models":
             return self._reply(200, self.state.get("models", {
-                "models": [
+                "data": [
                     {"id": "gpt-4o", "object": "model"},
                     {"id": "gpt-4o-mini", "object": "model"},
                 ],
@@ -291,6 +299,11 @@ class ChatAPITests(TestCase):
     def test_list_models_copes_with_a_bare_list_payload(self):
         _StubOpenWebUI.state["models"] = [{"id": "local-model"}]
         self.assertEqual(self._api(username="reader4").list_models(), ["local-model"])
+
+    def test_html_success_response_is_reported_as_chat_api_error(self):
+        _StubOpenWebUI.state["html_response"] = True
+        with self.assertRaisesRegex(ChatAPIError, "GET /api/models.*non-JSON"):
+            self._api(username="html-reader").list_models()
 
     def test_an_unreachable_open_webui_is_reported_clearly(self):
         api = ChatAPI({"X-Studio-Email": "x@y.z"}, base_url="http://127.0.0.1:1")
