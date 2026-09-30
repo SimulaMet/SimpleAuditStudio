@@ -308,3 +308,62 @@ class ChatModelPickerTests(TestCase):
         self.assertContains(page, 'id="model-picker-search"')
         self.assertContains(page, 'id="picker-backdrop"')
         self.assertContains(page, 'id="model-picker-list"')
+
+
+@patch("chat.config.ENABLED", True)
+class ChatNoModelsTests(TestCase):
+    """A user with no project membership (request.project is None) or no
+    visible models gets a friendly "no models" state, not a broken empty page."""
+
+    def setUp(self):
+        self.client = Client()
+
+    def _sign_in_no_project(self, username="nomember"):
+        # No MembershipFactory: the user has no project at all, so
+        # ProjectMiddleware leaves request.project as None.
+        user = UserFactory(username=username)
+        self.client.force_login(user)
+        return user
+
+    def test_no_project_membership_shows_no_models_state(self):
+        self._sign_in_no_project()
+        page = self.client.get("/chat/")
+        self.assertEqual(page.status_code, 200)
+        self.assertFalse(page.context["has_models"])
+        self.assertIn("no_models_message", page.context)
+        # The friendly state is rendered, and the picker/iframe are not.
+        self.assertContains(page, "No models available")
+        self.assertContains(page, "no-models")
+        self.assertNotContains(page, 'id="model-picker"')
+        self.assertNotContains(page, 'id="chat-frame"')
+
+    def test_user_with_visible_models_still_gets_the_picker(self):
+        from infra.tests.factories import ModelConnectionFactory, RegisteredModelFactory
+
+        project = ProjectFactory()
+        user = UserFactory(username="hasmodels")
+        MembershipFactory(user=user, project=project)
+        self.client.force_login(user)
+        conn = ModelConnectionFactory(project=project, name="OpenAI")
+        RegisteredModelFactory(connection=conn, project=project,
+                               display_name="Qwen", model_id="Qwen3.8-27B")
+        with patch("chat.config.PUBLIC_URL", "http://127.0.0.1:8801"):
+            page = self.client.get("/chat/", HTTP_HOST="127.0.0.1:8000")
+        self.assertEqual(page.status_code, 200)
+        self.assertTrue(page.context["has_models"])
+        self.assertNotIn("no_models_message", page.context)
+        # The normal picker and iframe render as before.
+        self.assertContains(page, 'id="model-picker"')
+        self.assertContains(page, 'id="chat-frame"')
+        # The single model is the default, so its prefixed id is pre-checked.
+        self.assertContains(page, f'value="{conn.id}.Qwen3.8-27B" checked')
+        self.assertNotContains(page, "No models available")
+
+    def test_handoff_without_a_project_redirects_to_chat(self):
+        # No project membership: the model can't be seen, so the handoff must
+        # not pin it and must simply redirect to /chat/ (no 500, no 404).
+        self._sign_in_no_project(username="handoff-noproj")
+        resp = self.client.get("/chat/with/1/gpt-4o")
+        self.assertRedirects(resp, "/chat/", fetch_redirect_response=False)
+        # And the chat page itself degrades gracefully rather than erroring.
+        self.assertEqual(self.client.get("/chat/").status_code, 200)
