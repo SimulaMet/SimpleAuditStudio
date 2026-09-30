@@ -12,6 +12,11 @@ Usage:
   uvx simpleaudit-studio              # full stack; models point at OpenAI (add your key in the UI)
   uvx simpleaudit-studio --mock       # use the built-in mock model server (zero-setup demo)
   uvx simpleaudit-studio --port 9000  # custom port
+
+When a needed port is held by another Studio instance or one of its
+derivatives (Open WebUI, the Hatchet sidecar), the CLI offers to stop it and
+spin cleanly. --no-force-kill declines that offer (and exits with a free-port
+suggestion); --yes skips the confirmation.
 """
 
 from __future__ import annotations
@@ -45,6 +50,15 @@ def main() -> None:
     parser.add_argument(
         "--no-browser", action="store_true",
         help="Do not auto-open the web UI in the default browser",
+    )
+    parser.add_argument(
+        "--no-force-kill", action="store_true",
+        help="Never stop another Studio instance or its derivatives to free a "
+             "port; exit with a free-port suggestion instead",
+    )
+    parser.add_argument(
+        "--yes", action="store_true",
+        help="Answer yes to the force-kill confirmation without asking",
     )
     args = parser.parse_args()
 
@@ -93,7 +107,7 @@ def main() -> None:
     print("✅ Demo data ready.\n")
 
     # --- Step 3: Pre-check port availability ---
-    _check_port_available(args.port)
+    _ensure_ports_available(args)
 
     # --- Step 4: Start embedded Hatchet ---
     from infra.minimal_config import start_embedded_hatchet, stop_embedded_hatchet
@@ -256,19 +270,42 @@ def _sync_chat_models() -> str:
     return f"Synced {result['pushed']} model connection(s) to chat{kept}."
 
 
-def _check_port_available(port: int) -> None:
-    """Exit early with a clear message if the web port is already in use."""
-    import socket
+def _ensure_ports_available(args) -> None:
+    """Make sure every port the run needs is free, or exit with advice.
 
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        try:
-            s.bind(("0.0.0.0", port))
-        except OSError:
-            print(f"\n✗ Port {port} is already in use.")
-            print("  Is another SimpleAudit Studio instance running?")
-            print(f"  Try a different port: spin --port {port + 1}\n")
-            raise SystemExit(1)
+    The web port always; with chat, Open WebUI's upstream and the proxy's too.
+    A port held by another Studio instance or one of its derivatives can be
+    stopped (offered, or automatic with --yes); anything else — or a declined
+    offer — ends the run with a free port and the exact flag or environment
+    variable that moves the conflicting one.
+    """
+    from urllib.parse import urlsplit
+
+    from simpleaudit_studio import ports
+
+    force_kill = not args.no_force_kill
+    yes = args.yes
+
+    ports.resolve_port_conflict(
+        args.port, "the web server", f"spin --port <free port>",
+        force_kill=force_kill, yes=yes,
+    )
+
+    from chat import config as chat_config
+
+    if not chat_config.ENABLED:
+        return
+    upstream_port = urlsplit(chat_config.UPSTREAM).port or 8080
+    ports.resolve_port_conflict(
+        upstream_port, "chat's Open WebUI",
+        f"SIMPLEAUDIT_CHAT_UPSTREAM=http://127.0.0.1:<free port>",
+        force_kill=force_kill, yes=yes,
+    )
+    ports.resolve_port_conflict(
+        chat_config.PROXY_PORT, "chat's proxy",
+        f"SIMPLEAUDIT_CHAT_PROXY_PORT=<free port>",
+        force_kill=force_kill, yes=yes,
+    )
 
 
 def _open_browser_when_ready(url: str, timeout: float = 30.0) -> None:
