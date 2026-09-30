@@ -204,6 +204,8 @@ services:
       # Served as Open WebUI's /static/custom.css (see Caddyfile.chat) so the
       # iframe hides the chat-history sidebar.
       - ./chat/embed.css:/etc/caddy/embed/static/custom.css:ro
+      # Served as Open WebUI's favicon (see Caddyfile.chat).
+      - ./static/logo.svg:/etc/caddy/branding/logo.svg:ro
     ports:
       - "${SIMPLEAUDIT_CHAT_PROXY_PORT:-8801}:${SIMPLEAUDIT_CHAT_PROXY_PORT:-8801}"
     depends_on:

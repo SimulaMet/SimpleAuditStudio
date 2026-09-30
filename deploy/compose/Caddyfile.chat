@@ -30,6 +30,16 @@
 	# Studio embeds this origin in an iframe.
 	header -X-Frame-Options
 
+	# Open WebUI requests favicon files from absolute /static paths. Serve the
+	# Studio logo mounted at /etc/caddy/branding so Docker and embedded mode share
+	# the same browser tab branding.
+	@studio_favicon path /favicon* /static/favicon*
+	handle @studio_favicon {
+		root * /etc/caddy/branding
+		rewrite * /logo.svg
+		file_server
+	}
+
 	# Studio's embed stylesheet: Open WebUI loads /static/custom.css on every
 	# page. Serve it from the repo (mounted read-only) so the iframe renders
 	# without the chat-history sidebar and the rule survives Open WebUI upgrades.
