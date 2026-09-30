@@ -4,12 +4,14 @@ Run:
     SIMPLEAUDIT_LOCAL_SQLITE=1 uv run manage.py test chat.tests.test_sync
 """
 import time
+from unittest import mock
 from unittest.mock import patch
 
 from django.test import TestCase, TransactionTestCase
 
 from chat import sync
 from chat.api import ChatAPIError
+from chat.sync import NoAdminError
 from infra.tests.factories import (
     ModelConnectionFactory,
     ProjectFactory,
@@ -74,6 +76,103 @@ class SchedulePushTests(TestCase):
         with patch.object(sync, "push_now", side_effect=ChatAPIError("not running")):
             sync.schedule_push("test")
             self._settle()   # the failure is logged, the caller never sees it
+
+
+class RunTests(TestCase):
+    """_run is the background worker: it must never raise, and it must tell
+    a misconfiguration (no superuser) apart from a transient skip."""
+
+    def test_no_superuser_is_logged_loudly_with_an_actionable_message(self):
+        with patch.object(
+            sync, "push_now",
+            side_effect=NoAdminError("No superuser to act as; Open WebUI's provider config needs an admin."),
+        ), self.assertLogs("chat.sync", level="WARNING") as captured:
+            sync._run("test")
+        self.assertTrue(
+            any("no Studio superuser" in line for line in captured.output),
+            captured.output,
+        )
+        self.assertTrue(
+            any("manage.py sync_chat_models" in line for line in captured.output),
+            captured.output,
+        )
+
+    def test_a_transient_failure_is_a_quiet_skip_not_a_no_superuser_warning(self):
+        with patch.object(sync, "push_now", side_effect=ChatAPIError("not running")), \
+                self.assertLogs("chat.sync", level="INFO") as captured:
+            sync._run("test")
+        self.assertTrue(
+            any("Chat model sync skipped" in line and "not running" in line for line in captured.output),
+            captured.output,
+        )
+        self.assertFalse(
+            any("no Studio superuser" in line for line in captured.output),
+            captured.output,
+        )
+
+
+class ReconcileModelIdsTests(TestCase):
+    """push_now warns when a pinned Studio model id is not one Open WebUI
+    registers — the case where the ?models= pin would silently no-op."""
+
+    def _push(self, registered, model_ids):
+        api = mock.Mock()
+        api.push_connections.return_value = {"pushed": 1, "kept": 0}
+        api.list_models.return_value = registered
+        with patch.object(sync, "ChatAPI") as chat_api, \
+                patch.object(sync, "_admin", return_value=object()):
+            chat_api.as_user.return_value = api
+            sync.push_now([
+                {"id": 1, "name": "OpenAI", "base_url": "https://api.openai.com/v1",
+                 "api_key": "sk-x", "enabled": True, "model_ids": model_ids},
+            ])
+        return api
+
+    def test_a_missing_model_id_is_logged_loudly(self):
+        with self.assertLogs("chat.sync", level="WARNING") as captured:
+            api = self._push(["gpt-4o"], ["gpt-4o", "studio-internal-id"])
+        self.assertTrue(
+            any("will not work for connection 'OpenAI'" in line
+                and "studio-internal-id" in line
+                for line in captured.output),
+            captured.output,
+        )
+        api.list_models.assert_called_once()
+
+    def test_all_ids_registered_logs_no_warning(self):
+        import logging
+
+        records = []
+
+        class _Capture(logging.Handler):
+            def emit(self, record):
+                records.append(record.getMessage())
+
+        handler = _Capture(level=logging.WARNING)
+        with mock.patch.object(logging.getLogger("chat.sync"), "handlers", [handler]):
+            self._push(["gpt-4o", "gpt-4o-mini"], ["gpt-4o", "gpt-4o-mini"])
+        self.assertFalse(
+            any("will not work" in line for line in records),
+            records,
+        )
+
+    def test_a_connection_without_model_ids_is_not_checked(self):
+        api = self._push(["gpt-4o"], [])
+        api.list_models.assert_not_called()
+
+    def test_a_models_endpoint_failure_skips_reconciliation(self):
+        api = mock.Mock()
+        api.push_connections.return_value = {"pushed": 1, "kept": 0}
+        api.list_models.side_effect = ChatAPIError("not ready")
+        with patch.object(sync, "ChatAPI") as chat_api, \
+                patch.object(sync, "_admin", return_value=object()):
+            chat_api.as_user.return_value = api
+            sync.push_now([
+                {"id": 1, "name": "OpenAI", "base_url": "https://api.openai.com/v1",
+                 "api_key": "sk-x", "enabled": True, "model_ids": ["gpt-4o"]},
+            ])
+        # The push itself still reports success.
+        self.assertEqual(api.push_connections.call_count, 1)
 
 
 class SignalTests(TransactionTestCase):

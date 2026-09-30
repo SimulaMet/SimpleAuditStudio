@@ -75,6 +75,98 @@ class PlanOpenAIConfigTests(SimpleTestCase):
         self.assertEqual(len(planned["OPENAI_API_BASE_URLS"]), 2)
         self.assertEqual(planned["OPENAI_API_KEYS"], ["only-one", ""])
 
+    def _assert_aligned(self, planned):
+        """The three structures are the same length and keyed by the same indices."""
+        urls = planned["OPENAI_API_BASE_URLS"]
+        keys = planned["OPENAI_API_KEYS"]
+        configs = planned["OPENAI_API_CONFIGS"]
+        self.assertEqual(len(urls), len(keys))
+        self.assertEqual(len(urls), len(configs))
+        self.assertEqual(set(configs), {str(index) for index in range(len(urls))})
+        for index, url in enumerate(urls):
+            self.assertIsInstance(configs[str(index)], dict)
+            self.assertIsInstance(keys[index], str)
+            self.assertIn(url, urls)
+
+    def test_orphan_key_beyond_the_url_list_is_dropped_not_mispaired(self):
+        current = {
+            "OPENAI_API_BASE_URLS": ["https://a.example/v1"],
+            "OPENAI_API_KEYS": ["key-a", "orphan-key"],
+            "OPENAI_API_CONFIGS": {"0": {"enable": True}},
+        }
+        planned = plan_openai_config(current, [
+            {"id": 1, "name": "Ours", "base_url": "https://ours.example/v1",
+             "api_key": "ours", "enabled": True},
+        ])
+        self.assertEqual(planned["OPENAI_API_BASE_URLS"],
+                         ["https://a.example/v1", "https://ours.example/v1"])
+        # The orphan key must not ride along on the second URL.
+        self.assertEqual(planned["OPENAI_API_KEYS"], ["key-a", "ours"])
+        self.assertNotIn("orphan-key", planned["OPENAI_API_KEYS"])
+        self.assertEqual(planned["OPENAI_API_CONFIGS"]["0"], {"enable": True})
+        self.assertEqual(planned["OPENAI_API_CONFIGS"]["1"][STUDIO_MARKER], 1)
+        self._assert_aligned(planned)
+
+    def test_config_index_without_a_url_is_dropped(self):
+        current = {
+            "OPENAI_API_BASE_URLS": ["https://a.example/v1"],
+            "OPENAI_API_KEYS": ["key-a"],
+            "OPENAI_API_CONFIGS": {"0": {"enable": True}, "5": {"enable": True}},
+        }
+        planned = plan_openai_config(current, [
+            {"id": 2, "name": "Ours", "base_url": "https://ours.example/v1",
+             "api_key": "ours", "enabled": True},
+        ])
+        self.assertEqual(planned["OPENAI_API_BASE_URLS"],
+                         ["https://a.example/v1", "https://ours.example/v1"])
+        self.assertEqual(planned["OPENAI_API_KEYS"], ["key-a", "ours"])
+        self.assertEqual(planned["OPENAI_API_CONFIGS"]["0"], {"enable": True})
+        self.assertEqual(planned["OPENAI_API_CONFIGS"]["1"][STUDIO_MARKER], 2)
+        self._assert_aligned(planned)
+
+    def test_url_without_a_key_gets_an_empty_key_at_its_own_index(self):
+        current = {
+            "OPENAI_API_BASE_URLS": ["https://a.example/v1", "https://b.example/v1"],
+            "OPENAI_API_KEYS": ["key-a"],
+            "OPENAI_API_CONFIGS": {},
+        }
+        planned = plan_openai_config(current, [
+            {"id": 3, "name": "Ours", "base_url": "https://ours.example/v1",
+             "api_key": "ours", "enabled": True},
+        ])
+        self.assertEqual(planned["OPENAI_API_BASE_URLS"],
+                         ["https://a.example/v1", "https://b.example/v1", "https://ours.example/v1"])
+        # key-a stays with a.example; b.example gets its own empty key, not key-a.
+        self.assertEqual(planned["OPENAI_API_KEYS"], ["key-a", "", "ours"])
+        self.assertEqual(planned["OPENAI_API_CONFIGS"]["0"], {})
+        self.assertEqual(planned["OPENAI_API_CONFIGS"]["1"], {})
+        self.assertEqual(planned["OPENAI_API_CONFIGS"]["2"][STUDIO_MARKER], 3)
+        self._assert_aligned(planned)
+
+    def test_aligned_input_with_mixed_entries_merges_as_before(self):
+        current = {
+            "OPENAI_API_BASE_URLS": [
+                "https://theirs1.example/v1", "https://theirs2.example/v1", "https://old.example/v1",
+            ],
+            "OPENAI_API_KEYS": ["k1", "k2", "old"],
+            "OPENAI_API_CONFIGS": {
+                "0": {"enable": True},
+                "1": {"name": "Theirs 2"},
+                "2": {STUDIO_MARKER: 9},
+            },
+        }
+        planned = plan_openai_config(current, [
+            {"id": 3, "name": "Ours", "base_url": "https://ours.example/v1",
+             "api_key": "ours", "enabled": True},
+        ])
+        self.assertEqual(planned["OPENAI_API_BASE_URLS"],
+                         ["https://theirs1.example/v1", "https://theirs2.example/v1", "https://ours.example/v1"])
+        self.assertEqual(planned["OPENAI_API_KEYS"], ["k1", "k2", "ours"])
+        self.assertEqual(planned["OPENAI_API_CONFIGS"]["0"], {"enable": True})
+        self.assertEqual(planned["OPENAI_API_CONFIGS"]["1"], {"name": "Theirs 2"})
+        self.assertEqual(planned["OPENAI_API_CONFIGS"]["2"][STUDIO_MARKER], 3)
+        self._assert_aligned(planned)
+
 
 class _StubOpenWebUI(BaseHTTPRequestHandler):
     """Just enough Open WebUI to answer sign-in, config and knowledge."""
@@ -125,6 +217,13 @@ class _StubOpenWebUI(BaseHTTPRequestHandler):
                 "id": "kb1", "name": "Policies", "description": "HR",
                 "files": [{"id": "f1", "meta": {"name": "handbook.pdf"}}],
             })
+        if self.path == "/api/v1/models/":
+            return self._reply(200, self.state.get("models", {
+                "models": [
+                    {"id": "gpt-4o", "object": "model"},
+                    {"id": "gpt-4o-mini", "object": "model"},
+                ],
+            }))
         return self._reply(404, {"detail": "nope"})
 
 
@@ -182,6 +281,16 @@ class ChatAPITests(TestCase):
     def test_knowledge_base_lists_file_names(self):
         base = self._api(username="reader2").knowledge_base("kb1")
         self.assertEqual(base["files"], [{"id": "f1", "name": "handbook.pdf"}])
+
+    def test_list_models_returns_the_registered_ids(self):
+        self.assertEqual(
+            self._api(username="reader3").list_models(),
+            ["gpt-4o", "gpt-4o-mini"],
+        )
+
+    def test_list_models_copes_with_a_bare_list_payload(self):
+        _StubOpenWebUI.state["models"] = [{"id": "local-model"}]
+        self.assertEqual(self._api(username="reader4").list_models(), ["local-model"])
 
     def test_an_unreachable_open_webui_is_reported_clearly(self):
         api = ChatAPI({"X-Studio-Email": "x@y.z"}, base_url="http://127.0.0.1:1")
