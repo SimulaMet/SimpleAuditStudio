@@ -72,7 +72,7 @@
         <span class="text-sm font-semibold text-gray-200 truncate">{% for item in nav_items %}{% if item.active %}{{ item.label }}{% endif %}{% empty %}SimpleAudit{% endfor %}</span>
       </a>
     </header>
-    <main class="flex-1 overflow-y-auto px-4 pt-4 pb-0 md:px-6 md:pt-6 md:pb-0 flex flex-col min-h-full">
+    <main class="relative flex-1 overflow-y-auto px-4 pt-4 pb-0 md:px-6 md:pt-6 md:pb-0 flex flex-col min-h-full">
       <div class="flex-1">
       {% if messages %}
       <div class="mb-4 space-y-2">
