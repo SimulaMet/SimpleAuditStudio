@@ -32,7 +32,7 @@ uvx simpleaudit-studio@latest
 Want the **latest unreleased code** from this repo instead of the PyPI release? Same one-liner, pointed at git:
 
 ```bash
-uvx --from "git+https://github.com/SushantGautam/SimpleAuditStudio" spin
+uvx --from "git+https://github.com/SushantGautam/SimpleAuditStudio@main" spin
 ```
 
 
