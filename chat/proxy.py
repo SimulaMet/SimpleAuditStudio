@@ -466,7 +466,16 @@ def stop_open_webui() -> None:
             _log_file.close()
             _log_file = None
         if process is not None:
-            pid_file().unlink(missing_ok=True)
+            # Only remove a file that records *this* process: a failed start
+            # may have found the file already holding another run's live
+            # Open WebUI, and deleting it would orphan that one from the
+            # next run's cleanup.
+            file = pid_file()
+            try:
+                if file.read_text().strip() == str(process.pid):
+                    file.unlink(missing_ok=True)
+            except OSError:
+                pass
 
 
 # Best-effort clean shutdown even if the caller forgets to stop explicitly.
@@ -488,7 +497,10 @@ def wait_until_ready(process: subprocess.Popen, timeout: float = 900.0) -> bool:
             return False
         try:
             with urllib.request.urlopen(chat.UPSTREAM + "/health", timeout=3.0) as response:
-                if response.status == 200:
+                # The health URL is fixed, so a 200 can come from *another*
+                # Open WebUI already on this port (ours then died on the bind).
+                # Only trust it while our own process is still alive.
+                if response.status == 200 and process.poll() is None:
                     return True
         except (urllib.error.URLError, OSError):
             pass
@@ -518,6 +530,8 @@ def start_open_webui() -> subprocess.Popen:
 def _spawn(home: Path) -> subprocess.Popen:
     """Build the command and environment, and start the server."""
     global _process, _log_file
+
+    from infra.minimal_config import _pid_alive
 
     host = urlsplit(chat.UPSTREAM).hostname or "127.0.0.1"
     port = urlsplit(chat.UPSTREAM).port or 8080
@@ -563,5 +577,20 @@ def _spawn(home: Path) -> subprocess.Popen:
         argv, env=env, cwd=str(home),
         stdout=_log_file, stderr=subprocess.STDOUT, start_new_session=True,
     )
-    pid_file().write_text(str(_process.pid))
+    # Never overwrite a file that records a *live* Open WebUI: that one
+    # belongs to another run, and trampling it would orphan it from the
+    # next run's cleanup. A dead PID is a stale leftover — safe to replace.
+    file = pid_file()
+    try:
+        raw = file.read_text().strip()
+        if raw.isdigit() and _pid_alive(int(raw)):
+            logger.warning(
+                "Open WebUI (PID %s) is already running; recording our PID %d "
+                "would orphan it, so the pid file is left as-is",
+                raw, _process.pid,
+            )
+        else:
+            file.write_text(str(_process.pid))
+    except OSError:
+        file.write_text(str(_process.pid))
     return _process

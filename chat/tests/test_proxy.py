@@ -4,12 +4,17 @@ Run:
     SIMPLEAUDIT_LOCAL_SQLITE=1 uv run manage.py test chat.tests.test_proxy
 """
 import json
+import os
 import socket
+import subprocess
+import sys
+import tempfile
 import threading
 import time
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from unittest.mock import patch
+from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import httpx
 from django.test import SimpleTestCase
@@ -336,3 +341,106 @@ class ProxyTests(SimpleTestCase):
                 self.assertTrue(chunk, "the tunnel closed before the echo")
                 buffer += chunk
         self.assertTrue(_StubWebSocketUpstream.saw_identity)
+
+
+class ReadinessTests(SimpleTestCase):
+    """wait_until_ready must not be fooled by *another* Open WebUI on the port.
+
+    The health URL is fixed, so a 200 can come from an instance that was
+    already there when ours died on the bind.
+    """
+
+    def setUp(self):
+        self.upstream = _serve(_StubOpenWebUI)
+        self.patcher = patch.object(config, "UPSTREAM",
+                                    f"http://127.0.0.1:{self.upstream.server_address[1]}")
+        self.patcher.start()
+
+    def tearDown(self):
+        self.patcher.stop()
+        self.upstream.shutdown()
+        super().tearDown()
+
+    def test_a_200_from_a_dead_process_is_not_readiness(self):
+        process = MagicMock()
+        process.poll.return_value = 0   # ours died on the bind
+        self.assertFalse(proxy.wait_until_ready(process, timeout=5))
+
+    def test_a_200_from_a_live_process_is_readiness(self):
+        process = MagicMock()
+        process.poll.return_value = None
+        self.assertTrue(proxy.wait_until_ready(process, timeout=5))
+
+
+class PidFileTests(SimpleTestCase):
+    """The pid file must never trample or orphan another run's Open WebUI."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.tmp = Path(self._tmp.name)
+        self.file_patcher = patch.object(proxy, "pid_file", lambda: self.tmp / "open-webui.pid")
+        self.file_patcher.start()
+        self._process = proxy._process
+        proxy._process = None
+
+    def tearDown(self):
+        proxy._process = self._process
+        self.file_patcher.stop()
+        self._tmp.cleanup()
+        super().tearDown()
+
+    def test_stop_does_not_delete_a_file_recording_someone_elses_pid(self):
+        file = self.tmp / "open-webui.pid"
+        file.write_text("424242")
+        process = MagicMock()
+        process.pid = 1234
+        process.poll.return_value = 0   # already dead: nothing to terminate
+        proxy._process = process
+        proxy.stop_open_webui()
+        self.assertEqual(file.read_text().strip(), "424242")
+
+    def test_stop_deletes_a_file_recording_our_pid(self):
+        file = self.tmp / "open-webui.pid"
+        process = MagicMock()
+        process.pid = 1234
+        process.poll.return_value = 0
+        proxy._process = process
+        file.write_text("1234")
+        proxy.stop_open_webui()
+        self.assertFalse(file.exists())
+
+    def test_spawn_does_not_overwrite_a_file_recording_a_live_pid(self):
+        file = self.tmp / "open-webui.pid"
+        file.write_text("424242")
+        fake = MagicMock()
+        fake.pid = 1234
+        with patch.object(proxy.subprocess, "Popen", return_value=fake), \
+             patch.object(proxy, "log_path", lambda: self.tmp / "server.log"), \
+             patch("infra.minimal_config._pid_alive", return_value=True):
+            proxy._spawn(self.tmp)
+        self.assertEqual(file.read_text().strip(), "424242")
+        proxy._process = None
+
+    def test_spawn_overwrites_a_file_recording_a_dead_pid(self):
+        file = self.tmp / "open-webui.pid"
+        file.write_text("424242")
+        fake = MagicMock()
+        fake.pid = 1234
+        with patch.object(proxy.subprocess, "Popen", return_value=fake), \
+             patch.object(proxy, "log_path", lambda: self.tmp / "server.log"), \
+             patch("infra.minimal_config._pid_alive", return_value=False):
+            proxy._spawn(self.tmp)
+        self.assertEqual(file.read_text().strip(), "1234")
+        proxy._process = None
+
+    def test_stop_stale_leaves_a_live_parented_process_alone(self):
+        """A recorded PID with a live parent belongs to another running run."""
+        file = self.tmp / "open-webui.pid"
+        file.write_text(str(os.getpid()))   # alive, parented by this test process
+        with patch("infra.minimal_config._pid_alive", return_value=True), \
+             patch("infra.minimal_config._parent_pid", return_value=os.getpid()), \
+             patch("infra.minimal_config._orphaned", return_value=False), \
+             patch.object(proxy, "_terminate") as terminate:
+            proxy._stop_stale()
+        terminate.assert_not_called()
+        self.assertTrue(file.exists())
