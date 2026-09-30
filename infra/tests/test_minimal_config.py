@@ -13,7 +13,10 @@ import os
 import urllib.request
 from unittest.mock import patch
 
-from django.test import TestCase, tag
+from django.contrib.auth import get_user_model
+from django.test import TestCase, override_settings, tag
+
+User = get_user_model()
 
 
 class TestDemoBootSequence(TestCase):
@@ -157,3 +160,70 @@ class TestEmbeddedHatchetLifecycle(TestCase):
                 self.assertIs(c, self._hatchet_client)
             finally:
                 w._CLIENT = None
+
+
+class TestAutoLoginToken(TestCase):
+    """The /auto-login/ endpoint must be one-time: a single-use token URL.
+
+    The demo server binds 0.0.0.0, so the token is what keeps other machines
+    on the LAN from signing in as the bootstrap user.
+    """
+
+    TOKEN = "test-one-time-token-123"
+
+    def setUp(self):
+        self.user = User.objects.create_user(username="studio", password="x")
+
+    def tearDown(self):
+        os.environ.pop("SIMPLEAUDIT_AUTO_LOGIN_TOKEN", None)
+
+    def _login(self, token=None):
+        url = "/auto-login/"
+        if token is not None:
+            url += f"?token={token}"
+        # follow=True: the view 302s to the dashboard after signing in.
+        return self.client.get(url, follow=True)
+
+    @override_settings(MINIMAL_CONFIG=True)
+    def test_valid_token_logs_in_and_consumes(self):
+        with patch.dict(os.environ, {"SIMPLEAUDIT_AUTO_LOGIN_TOKEN": self.TOKEN}):
+            response = self._login(self.TOKEN)
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.wsgi_request.user.username, "studio")
+            # The token is single-use: it must be gone after the first login.
+            self.assertNotIn("SIMPLEAUDIT_AUTO_LOGIN_TOKEN", os.environ)
+
+    @override_settings(MINIMAL_CONFIG=True)
+    def test_token_cannot_be_replayed(self):
+        with patch.dict(os.environ, {"SIMPLEAUDIT_AUTO_LOGIN_TOKEN": self.TOKEN}):
+            first = self._login(self.TOKEN)
+            self.assertEqual(first.status_code, 200)
+            # Second use of the same URL: token already consumed -> 404.
+            second = self._login(self.TOKEN)
+        self.assertEqual(second.status_code, 404)
+
+    @override_settings(MINIMAL_CONFIG=True)
+    def test_invalid_token_rejected(self):
+        with patch.dict(os.environ, {"SIMPLEAUDIT_AUTO_LOGIN_TOKEN": self.TOKEN}):
+            response = self._login("wrong-token")
+            self.assertEqual(response.status_code, 404)
+            # Token must survive a failed attempt so the real URL still works.
+            self.assertEqual(os.environ.get("SIMPLEAUDIT_AUTO_LOGIN_TOKEN"), self.TOKEN)
+
+    @override_settings(MINIMAL_CONFIG=True)
+    def test_missing_token_rejected(self):
+        with patch.dict(os.environ, {"SIMPLEAUDIT_AUTO_LOGIN_TOKEN": self.TOKEN}):
+            response = self._login()
+        self.assertEqual(response.status_code, 404)
+
+    @override_settings(MINIMAL_CONFIG=True)
+    def test_no_token_configured_rejects_everything(self):
+        os.environ.pop("SIMPLEAUDIT_AUTO_LOGIN_TOKEN", None)
+        response = self._login(self.TOKEN)
+        self.assertEqual(response.status_code, 404)
+
+    @override_settings(MINIMAL_CONFIG=False)
+    def test_disabled_outside_minimal_config(self):
+        with patch.dict(os.environ, {"SIMPLEAUDIT_AUTO_LOGIN_TOKEN": self.TOKEN}):
+            response = self._login(self.TOKEN)
+        self.assertEqual(response.status_code, 404)
