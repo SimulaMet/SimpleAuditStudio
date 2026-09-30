@@ -257,6 +257,13 @@ class ProxyTests(SimpleTestCase):
         self.assertIn("#sidebar", response.text)
         self.assertNotIn("email", response.text)   # not the upstream's echo
 
+    def test_open_webui_favicon_comes_from_studio_without_auth(self):
+        response = httpx.get(f"{self.url}/static/favicon-32x32.svg")
+        expected = (Path(proxy.__file__).resolve().parents[1] / "static" / "logo.svg").read_bytes()
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers["Content-Type"], "image/svg+xml")
+        self.assertEqual(response.content, expected)
+
     @contextmanager
     def _tunnel_upstream(self, reply: bytes):
         """A fresh stub upstream that answers the upgrade with ``reply``."""

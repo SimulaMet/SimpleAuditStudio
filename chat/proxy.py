@@ -80,6 +80,21 @@ _STRIP_FROM_REQUEST = _HOP_BY_HOP | {h.lower() for h in chat.TRUSTED_HEADERS}
 # X-Frame-Options has no origin allow-list, so it can only be removed.
 _STRIP_FROM_RESPONSE = _HOP_BY_HOP | {"x-frame-options"}
 
+# Open WebUI references its favicon with absolute paths from its own static
+# directory. Serve Studio's branding at those paths so the embedded origin
+# keeps the same favicon as the Studio shell.
+_BRANDED_ASSETS = {
+    "/favicon.svg": ("logo.svg", "image/svg+xml"),
+    "/favicon.png": ("logo.png", "image/png"),
+    "/favicon.ico": ("logo.svg", "image/svg+xml"),
+    "/static/favicon.svg": ("logo.svg", "image/svg+xml"),
+    "/static/favicon-16x16.svg": ("logo.svg", "image/svg+xml"),
+    "/static/favicon-32x32.svg": ("logo.svg", "image/svg+xml"),
+    "/static/favicon.png": ("logo.png", "image/png"),
+    "/static/favicon-16x16.png": ("logo.png", "image/png"),
+    "/static/favicon-32x32.png": ("logo.png", "image/png"),
+}
+
 
 class _Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
@@ -105,6 +120,11 @@ class _Handler(BaseHTTPRequestHandler):
         logger.debug("chat-proxy %s", fmt % args)
 
     def _proxy(self):
+        branded_asset = _BRANDED_ASSETS.get(urlsplit(self.path).path)
+        if self.command == "GET" and branded_asset:
+            self._serve_branded_asset(*branded_asset)
+            return
+
         # Studio's embed stylesheet: Open WebUI loads /static/custom.css on every
         # page (see its app.html). Answering it ourselves lets the iframe render
         # without the chat-history sidebar, and keeps the rule in this repo
@@ -173,6 +193,18 @@ class _Handler(BaseHTTPRequestHandler):
         self.close_connection = True
         self.end_headers()
         self.wfile.write(css)
+
+    def _serve_branded_asset(self, filename: str, content_type: str) -> None:
+        """Serve Studio branding for Open WebUI's absolute favicon URLs."""
+        asset = (Path(__file__).resolve().parents[1] / "static" / filename).read_bytes()
+        self.send_response(200)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(asset)))
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Connection", "close")
+        self.close_connection = True
+        self.end_headers()
+        self.wfile.write(asset)
 
     def _send_to_studio(self) -> None:
         """Signed out: send the whole tab to Studio, not just this frame.
