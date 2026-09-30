@@ -113,18 +113,17 @@ See [docs/deployment.md](docs/deployment.md) for production hardening, backups, 
 SimpleAudit Studio embeds [Open WebUI](https://openwebui.com) at `/chat/`, signed
 in as your Studio user — workspace admins become Open WebUI admins.
 
-The local one-liner bundles it; Docker Compose includes it when `.env` says so
-(`.env.example` ships both lines set):
+Chat is opt-in. The local one-liner bundles it by default (pass
+`--disable-chat` to turn it off); Docker Compose leaves it out unless `.env`
+says otherwise — uncomment `SIMPLEAUDIT_CHAT` and `COMPOSE_PROFILES` in
+`.env.example` to include it:
 
 ```bash
 uvx simpleaudit-studio                 # chat included
 uvx simpleaudit-studio --disable-chat  # without it
 
-docker compose up -d                   # includes chat via .env
+docker compose up -d                   # chat only if enabled in .env
 ```
-
-To leave it out of a Compose deployment, comment out `SIMPLEAUDIT_CHAT` and
-`COMPOSE_PROFILES` in `.env`.
 
 See [docs/chat.md](docs/chat.md) for how single sign-on works and what must stay
 private.

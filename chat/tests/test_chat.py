@@ -38,6 +38,35 @@ class ChatDisabledTests(TestCase):
         client.force_login(user)
         self.assertNotContains(client.get("/"), 'href="/chat/"')
 
+    def test_chat_model_preference_rejected_when_off(self):
+        user = UserFactory(username="off-pref")
+        MembershipFactory(user=user, project=ProjectFactory())
+        client = Client()
+        client.force_login(user)
+        resp = client.post("/me/preferences/", data='{"key": "chat_model", "value": "m"}',
+                           content_type="application/json")
+        self.assertEqual(resp.status_code, 400)
+        user.refresh_from_db()
+        self.assertNotIn("chat_model", user.preferences)
+
+
+@patch("chat.config.ENABLED", True)
+class ChatPreferenceKeyTests(TestCase):
+    """The chat app contributes its own preference key while it is on."""
+
+    def setUp(self):
+        self.user = UserFactory(username="on-pref")
+        MembershipFactory(user=self.user, project=ProjectFactory())
+        self.client = Client()
+        self.client.force_login(self.user)
+
+    def test_chat_model_preference_accepted_when_on(self):
+        resp = self.client.post("/me/preferences/", data='{"key": "chat_model", "value": "m"}',
+                                content_type="application/json")
+        self.assertEqual(resp.status_code, 200)
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.preferences["chat_model"], "m")
+
 
 @patch("chat.config.ENABLED", True)
 class ChatEnabledTests(TestCase):
