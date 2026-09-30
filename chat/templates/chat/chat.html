@@ -143,6 +143,15 @@ hidden (chat/embed.css), so this bar is the only way to choose models.
       opacity: 1; color: var(--text-strong); border-color: #394052;
     }
     iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; display: block; }
+    /* No models to offer: a calm, centered explanation instead of an empty
+       picker and a dead iframe. Reuses the pill for the call to action. */
+    .empty-state {
+      position: absolute; inset: 0;
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      gap: .75rem; text-align: center; padding: 1rem;
+    }
+    .empty-state h1 { margin: 0; font-size: 1.1rem; font-weight: 600; color: var(--text-strong); }
+    .empty-state p { margin: 0; font-size: .85rem; max-width: 26rem; }
   </style>
 </head>
 <body>
@@ -153,6 +162,7 @@ hidden (chat/embed.css), so this bar is the only way to choose models.
       <img src="{% static 'logo.svg' %}?v=3" alt="">
       <span>Back to Studio</span>
     </a>
+    {% if has_models %}
     <div class="picker" id="model-picker">
       <button type="button" id="model-picker-toggle" aria-haspopup="true" aria-expanded="false">
         <span id="model-picker-label">Model</span>
@@ -181,12 +191,28 @@ hidden (chat/embed.css), so this bar is the only way to choose models.
       </div>
     </div>
     <button type="button" class="newchat" id="new-chat" title="New chat" aria-label="New chat">＋</button>
+    {% else %}
+    <a class="pill" href="{% url 'connections' %}" target="_blank">
+      <span>No models yet — register a connection →</span>
+    </a>
+    {% endif %}
   </header>
+  {% if has_models %}
   <iframe id="chat-frame" src="{{ chat_url }}" title="Chat" allow="clipboard-write; microphone"></iframe>
+  {% else %}
+  <main class="empty-state" id="no-models">
+    <h1>No models available</h1>
+    <p>{{ no_models_message }}</p>
+    <a class="pill" href="{% url 'connections' %}" target="_blank">Go to Connections →</a>
+  </main>
+  {% endif %}
   <script>
     (function () {
-      var frame = document.getElementById("chat-frame");
+      // No models: the picker and iframe aren't rendered, so there is nothing
+      // to wire up.
       var picker = document.getElementById("model-picker");
+      if (!picker) return;
+      var frame = document.getElementById("chat-frame");
       var toggle = document.getElementById("model-picker-toggle");
       var label = document.getElementById("model-picker-label");
       var count = document.getElementById("model-picker-count");

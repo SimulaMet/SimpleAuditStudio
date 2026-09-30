@@ -112,15 +112,28 @@ class ChatView(TemplateView):
             params["models"] = pinned
         params["temporary-chat"] = "true"
         chat_url = f"{chat_base}?{urlencode(params)}"
-        return super().get_context_data(
-            chat_url=chat_url,
-            chat_model_data={
+        groups = self._chat_model_groups()
+        # The full-page "no models" state is only for a user with no project at
+        # all (request.project is None) — that is the case where the chat is
+        # genuinely unusable and there is no workspace to point at. A user who
+        # has a project but no models yet still gets the normal page: the
+        # picker shows its own "No models yet" hint and the iframe loads.
+        has_project = getattr(self.request, "project", None) is not None
+        context = {
+            "chat_url": chat_url,
+            "chat_model_data": {
                 "base": chat_base,
-                "groups": self._chat_model_groups(),
+                "groups": groups,
                 "defaults": [m.strip() for m in pinned.split(",") if m.strip()],
             },
-            **kwargs,
-        )
+            "has_models": has_project,
+        }
+        if not has_project:
+            context["no_models_message"] = (
+                "No models are available for this workspace yet. "
+                "Register a connection to start chatting."
+            )
+        return super().get_context_data(**context, **kwargs)
 
     def _visible_models(self):
         """The models the user can chat with, as ``{"id", "name", "has_key"}``.
