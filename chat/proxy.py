@@ -200,7 +200,9 @@ class _Handler(BaseHTTPRequestHandler):
         Nothing here understands WebSocket framing: once the upstream has agreed
         to the upgrade, the two sockets carry bytes in both directions until one
         of them closes. The identity headers go on the handshake, which is the
-        only part Open WebUI authenticates.
+        only part Open WebUI authenticates. The handshake reply is checked
+        first: only a 101 is piped, anything else is forwarded as a plain HTTP
+        error so the browser sees a real response, not raw bytes.
         """
         upstream_url = urlsplit(chat.UPSTREAM)
         host, port = upstream_url.hostname or "127.0.0.1", upstream_url.port or 80
@@ -228,16 +230,62 @@ class _Handler(BaseHTTPRequestHandler):
         client = self.connection
         try:
             upstream.sendall(request.encode("latin-1"))
+            # Read the handshake reply before piping anything. The upgrade is
+            # only a WebSocket once the upstream answers 101; any other status
+            # (a 401 when trusted-header auth is not applied to the Socket.IO
+            # path, a 500, ...) is an ordinary HTTP error that must be
+            # forwarded as one — piping it would hand the browser raw error
+            # bytes dressed up as WebSocket frames.
+            header, leftover = _read_headers(upstream)
+            status = _status_code(header)
+            if status != 101:
+                self._forward_handshake_error(header, status, leftover)
+                return
+            # The browser is still waiting for its own handshake reply, so the
+            # 101 goes to it first. The read above may also have swallowed the
+            # first frame bytes along with the headers; hand those back to the
+            # pipe so nothing is lost.
+            client.sendall(header)
             upstream.settimeout(None)
             client.settimeout(None)
             pump = threading.Thread(target=_pipe, args=(client, upstream), daemon=True)
             pump.start()
-            _pipe(upstream, client)
+            _pipe(upstream, client, leftover)
             pump.join(timeout=1)
         except OSError:
             pass    # either side hung up; nothing to salvage
         finally:
             upstream.close()
+
+    def _forward_handshake_error(self, header: bytes, status: int,
+                                 body: bytes = b"") -> None:
+        """The upstream refused the upgrade: answer the browser with a real
+        HTTP response instead of piping the error as if it were a WebSocket.
+
+        The upstream's own status and safe headers are forwarded when it
+        answered with a well-formed response; otherwise a clean 502 stands in
+        so the client always gets something it can parse. ``body`` is the part
+        of the error body already read off the socket; the connection-close
+        delimits it, so the upstream's Content-Length is not forwarded.
+        """
+        try:
+            if status is None:
+                self.send_error(502, "Chat backend unavailable")
+                return
+            self.send_response(status)
+            for line in header.split(b"\r\n")[1:]:
+                if not line or b":" not in line:
+                    continue
+                name, _, value = line.partition(b":")
+                if name.strip().lower() in _STRIP_FROM_RESPONSE:
+                    continue
+                self.send_header(name.decode("latin-1"), value.strip().decode("latin-1"))
+            self.send_header("Connection", "close")
+            self.end_headers()
+            if body:
+                self.wfile.write(body)
+        except OSError:
+            pass    # the browser already went away
 
     def _identify(self, cookie: str) -> dict[str, str] | None:
         """Who is this browser? None when signed out. Cached for IDENTITY_TTL."""
@@ -264,9 +312,44 @@ class _Handler(BaseHTTPRequestHandler):
     do_GET = do_POST = do_PUT = do_PATCH = do_DELETE = do_HEAD = do_OPTIONS = _proxy
 
 
-def _pipe(source: socket.socket, destination: socket.socket) -> None:
-    """Copy bytes one way until the source closes, then half-close the other end."""
+def _read_headers(upstream: socket.socket) -> tuple[bytes, bytes]:
+    """Read the upstream's handshake reply up to the first blank line.
+
+    Returns (header_bytes, leftover): the leftover is anything read past the
+    ``\\r\\r\\n`` terminator (the first frame bytes, when the upstream sent
+    them in the same packet) and must be replayed before the pipe starts.
+    """
+    buffer = b""
+    while b"\r\n\r\n" not in buffer:
+        chunk = upstream.recv(65536)
+        if not chunk:
+            break
+        buffer += chunk
+    index = buffer.find(b"\r\n\r\n")
+    if index < 0:
+        return buffer, b""
+    return buffer[: index + 4], buffer[index + 4:]
+
+
+def _status_code(header: bytes) -> int | None:
+    """The status code of a response head, or None when it is not a response."""
+    line = header.split(b"\r\n", 1)[0]
+    parts = line.split(b" ", 2)
+    if len(parts) < 2 or not parts[1].isdigit():
+        return None
+    return int(parts[1])
+
+
+def _pipe(source: socket.socket, destination: socket.socket,
+          initial: bytes = b"") -> None:
+    """Copy bytes one way until the source closes, then half-close the other end.
+
+    ``initial`` is data already read off the source (the bytes that followed
+    the handshake headers) and goes out first, so nothing is lost.
+    """
     try:
+        if initial:
+            destination.sendall(initial)
         while True:
             chunk = source.recv(65536)
             if not chunk:
