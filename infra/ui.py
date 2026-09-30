@@ -171,6 +171,9 @@ class RegisterView(TemplateView):
             error = "Username already taken."
         else:
             user = User.objects.create_user(username=username, password=password, email=email)
+            from accounts.services import grant_default_project
+
+            grant_default_project(user)
             login(request, user)
             return redirect("dashboard")
         return self.render_to_response(self.get_context_data(error=error))
@@ -286,16 +289,12 @@ class WorkOSVerifyView(TemplateView):
 def _grant_default_project(user):
     """Give first-time WorkOS users membership in the 'Default' project (viewer).
 
-    The 'Default' workspace is reserved for this purpose — it is created during
-    platform bootstrap and serves as the shared landing space for new users.
+    Thin wrapper over the shared ``grant_default_project`` service so every
+    user-creation path lands new users in the same shared landing space.
     """
-    from accounts.models import Project, ProjectMembership
+    from accounts.services import grant_default_project
 
-    project = Project.objects.filter(slug="default").first()
-    if project:
-        ProjectMembership.objects.get_or_create(
-            project=project, user=user, defaults={"role": ProjectMembership.Role.VIEWER}
-        )
+    grant_default_project(user)
 
 
 # ─── Dashboard ───────────────────────────────────────────────────────────────
