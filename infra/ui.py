@@ -1,6 +1,7 @@
 """Server-rendered UI — Django CBVs + Forms + HTMX."""
 import csv
 import hashlib
+import hmac
 import io
 import itertools
 import json
@@ -182,10 +183,12 @@ def logout_view(request):
 
 
 def auto_login_view(request):
-    """One-click sign-in for the local one-liner demo (`uvx simpleaudit-studio`).
+    """One-click, one-time sign-in for the local one-liner demo.
 
-    The CLI opens this URL in the default browser after startup; it logs the
-    visitor in as the shared bootstrap user and lands them on the dashboard.
+    The CLI generates a single-use token at startup, prints it, and opens
+    ``/auto-login/?token=...`` in the default browser. The token is checked in
+    constant time and consumed on first use, so the URL cannot be replayed by
+    another machine on the LAN (the demo server binds 0.0.0.0).
     Only enabled in MINIMAL_CONFIG (local demo) mode — 404 everywhere else.
     """
     from django.conf import settings
@@ -193,6 +196,12 @@ def auto_login_view(request):
 
     if not getattr(settings, "MINIMAL_CONFIG", False):
         raise Http404
+    token = request.GET.get("token", "")
+    expected = os.environ.get("SIMPLEAUDIT_AUTO_LOGIN_TOKEN", "")
+    if not expected or not hmac.compare_digest(token, expected):
+        raise Http404
+    # Single use: clear it so the URL stops working after this request.
+    os.environ.pop("SIMPLEAUDIT_AUTO_LOGIN_TOKEN", None)
     username = os.environ.get("BOOTSTRAP_USERNAME", "studio")
     user = User.objects.filter(username=username).first()
     if user is None:

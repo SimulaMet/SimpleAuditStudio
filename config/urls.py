@@ -155,7 +155,7 @@ urlpatterns = [
     # UI (server-rendered CBVs)
     path("login/", LoginView.as_view(), name="login"),
     # Local one-liner demo only (404 unless MINIMAL_CONFIG): the CLI opens this
-    # in the default browser to land the user signed-in on the dashboard.
+    # in the default browser with a single-use ?token=... to sign the user in.
     path("auto-login/", auto_login_view, name="auto_login"),
     path("register/", RegisterView.as_view(), name="register"),
     path("logout/", logout_view, name="logout"),
