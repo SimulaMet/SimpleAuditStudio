@@ -100,42 +100,60 @@ class ChatOriginTests(TestCase):
         self.client.force_login(user)
 
     def test_the_iframe_follows_the_host_in_the_address_bar(self):
-        with patch("chat.config.PUBLIC_URL", ""), patch("chat.config.PROXY_PORT", 8801), \
-             patch("chat.config.MODEL", ""):
+        with patch("chat.config.PUBLIC_URL", ""), patch("chat.config.PROXY_PORT", 8801):
             page = self.client.get("/chat/", HTTP_HOST="127.0.0.1:8000")
             self.assertContains(page, 'src="http://127.0.0.1:8801?temporary-chat=true"')
             page = self.client.get("/chat/", HTTP_HOST="localhost:8000")
             self.assertContains(page, 'src="http://localhost:8801?temporary-chat=true"')
 
     def test_an_explicit_chat_url_always_wins(self):
-        with patch("chat.config.PUBLIC_URL", "https://chat.example.com"), \
-             patch("chat.config.MODEL", ""):
+        with patch("chat.config.PUBLIC_URL", "https://chat.example.com"):
             page = self.client.get("/chat/", HTTP_HOST="127.0.0.1:8000")
             self.assertContains(page, 'src="https://chat.example.com?temporary-chat=true"')
 
 
 @patch("chat.config.ENABLED", True)
 class ChatModelPinTests(TestCase):
-    """The iframe URL carries ?model= so Open WebUI opens on the pinned model."""
+    """The iframe URL carries ?models= so Open WebUI opens on the pinned model.
+
+    The default is the first model the user can see (no hardcoded model), so a
+    user with a visible connection gets that model pinned; a user with none gets
+    no pin at all.
+    """
 
     def setUp(self):
+        from infra.tests.factories import ModelConnectionFactory, RegisteredModelFactory
+
         self.client = Client()
+        self.project = ProjectFactory()
         user = UserFactory(username="pin")
-        MembershipFactory(user=user, project=ProjectFactory())
+        MembershipFactory(user=user, project=self.project)
         self.client.force_login(user)
+        # A connection serving a model, so the default resolves to a prefixed
+        # id (the bare id alone is ambiguous across connections).
+        self.conn = ModelConnectionFactory(project=self.project, name="OpenAI")
+        RegisteredModelFactory(connection=self.conn, project=self.project,
+                               display_name="Qwen", model_id="Qwen3.8-27B")
 
     def test_pinned_model_is_appended_to_the_iframe_url(self):
-        with patch("chat.config.PUBLIC_URL", "http://127.0.0.1:8801"), \
-             patch("chat.config.MODEL", "Qwen3.8-27B"):
+        with patch("chat.config.PUBLIC_URL", "http://127.0.0.1:8801"):
             page = self.client.get("/chat/", HTTP_HOST="127.0.0.1:8000")
-            # The & is HTML-escaped to &amp; in the rendered template.
+            # The & is HTML-escaped to &amp; in the rendered template. The pin
+            # is the prefixed id, namespaced by the connection that serves it.
             self.assertContains(
-                page, 'src="http://127.0.0.1:8801?models=Qwen3.8-27B&amp;temporary-chat=true"')
+                page, f'src="http://127.0.0.1:8801?models={self.conn.id}.Qwen3.8-27B&amp;temporary-chat=true"')
 
-    def test_no_model_param_when_no_model_is_pinned(self):
-        with patch("chat.config.PUBLIC_URL", "http://127.0.0.1:8801"), \
-             patch("chat.config.MODEL", ""):
-            page = self.client.get("/chat/", HTTP_HOST="127.0.0.1:8000")
+    def test_no_model_param_when_the_user_has_no_models(self):
+        # A user with no visible connections has nothing to pin.
+        from infra.tests.factories import UserFactory
+
+        other = ProjectFactory()
+        user = UserFactory(username="pin-empty")
+        MembershipFactory(user=user, project=other)
+        client = Client()
+        client.force_login(user)
+        with patch("chat.config.PUBLIC_URL", "http://127.0.0.1:8801"):
+            page = client.get("/chat/", HTTP_HOST="127.0.0.1:8000")
             # The iframe src carries no models= (the picker's checkbox values
             # are value="...", not models=, so this is unambiguous).
             self.assertContains(page, 'src="http://127.0.0.1:8801?temporary-chat=true"')
@@ -144,11 +162,10 @@ class ChatModelPinTests(TestCase):
     def test_a_model_query_param_on_chat_is_ignored(self):
         # A hand-typed ?model= on /chat/ must not pin the chat — only the
         # /connections handoff (which validates the model) can.
-        with patch("chat.config.PUBLIC_URL", "http://127.0.0.1:8801"), \
-             patch("chat.config.MODEL", "Qwen3.8-27B"):
+        with patch("chat.config.PUBLIC_URL", "http://127.0.0.1:8801"):
             page = self.client.get("/chat/?model=gpt-4o", HTTP_HOST="127.0.0.1:8000")
             self.assertContains(
-                page, 'src="http://127.0.0.1:8801?models=Qwen3.8-27B&amp;temporary-chat=true"')
+                page, f'src="http://127.0.0.1:8801?models={self.conn.id}.Qwen3.8-27B&amp;temporary-chat=true"')
             self.assertNotContains(page, "models=gpt-4o")
 
     def test_the_iframe_is_always_forced_into_temporary_mode(self):
@@ -156,8 +173,7 @@ class ChatModelPinTests(TestCase):
         # nothing accumulates in Open WebUI's history. The New Chat button is
         # hidden, so a fresh chat only ever starts from a full page load, which
         # re-reads this param.
-        with patch("chat.config.PUBLIC_URL", "http://127.0.0.1:8801"), \
-             patch("chat.config.MODEL", "Qwen3.8-27B"):
+        with patch("chat.config.PUBLIC_URL", "http://127.0.0.1:8801"):
             page = self.client.get("/chat/", HTTP_HOST="127.0.0.1:8000")
             self.assertContains(page, "temporary-chat=true")
 
@@ -179,31 +195,53 @@ class ChatWithHandoffTests(TestCase):
                                        base_url="http://localhost:9999/v1")
         self.model = RegisteredModelFactory(connection=conn, project=self.project,
                                              display_name="GPT", model_id="gpt-4o")
+        # A second model that sorts before "GPT", so the default (first
+        # available) differs from the handoff pin — the refresh assertion below
+        # can then tell the one-shot pin apart from the fallback.
+        self.default_model = RegisteredModelFactory(
+            connection=conn, project=self.project,
+            display_name="Alpha", model_id="alpha-1")
 
     def test_handoff_pins_the_model_for_one_load(self):
-        with patch("chat.config.PUBLIC_URL", "http://127.0.0.1:8801"), \
-             patch("chat.config.MODEL", "Qwen3.8-27B"):
-            resp = self.client.get(f"/chat/with/{self.model.model_id}")
+        with patch("chat.config.PUBLIC_URL", "http://127.0.0.1:8801"):
+            resp = self.client.get(f"/chat/with/{self.model.connection_id}/{self.model.model_id}")
             # fetch_redirect_response=False so the redirect isn't followed here
             # (following it would consume the one-shot session value).
             self.assertRedirects(resp, "/chat/", fetch_redirect_response=False)
             page = self.client.get("/chat/")
+            # The pin is the prefixed id (connection id + bare model id).
             self.assertContains(
-                page, 'src="http://127.0.0.1:8801?models=gpt-4o&amp;temporary-chat=true"')
-            # Consumed: a refresh falls back to the default.
+                page, f'src="http://127.0.0.1:8801?models={self.model.connection_id}.gpt-4o&amp;temporary-chat=true"')
+            # Consumed: a refresh no longer carries the handoff pin — it falls
+            # back to the default (the first available model, alpha-1 here).
             page2 = self.client.get("/chat/")
+            self.assertNotContains(page2, f"?models={self.model.connection_id}.gpt-4o")
             self.assertContains(
-                page2, 'src="http://127.0.0.1:8801?models=Qwen3.8-27B&amp;temporary-chat=true"')
+                page2, f'src="http://127.0.0.1:8801?models={self.default_model.connection_id}.alpha-1&amp;temporary-chat=true"')
 
     def test_handoff_ignores_a_model_the_user_cannot_see(self):
-        with patch("chat.config.PUBLIC_URL", "http://127.0.0.1:8801"), \
-             patch("chat.config.MODEL", "Qwen3.8-27B"):
-            resp = self.client.get("/chat/with/does-not-exist")
+        with patch("chat.config.PUBLIC_URL", "http://127.0.0.1:8801"):
+            resp = self.client.get(f"/chat/with/{self.model.connection_id}/does-not-exist")
             self.assertRedirects(resp, "/chat/", fetch_redirect_response=False)
             page = self.client.get("/chat/")
-            self.assertContains(
-                page, 'src="http://127.0.0.1:8801?models=Qwen3.8-27B&amp;temporary-chat=true"')
+            # The invalid model is never pinned (the default may still be).
             self.assertNotContains(page, "models=does-not-exist")
+
+    def test_handoff_ignores_a_model_on_a_connection_the_user_cannot_see(self):
+        # The same bare model id exists on a connection in another workspace;
+        # pointing the handoff at that connection must not pin it.
+        from infra.tests.factories import ModelConnectionFactory, RegisteredModelFactory
+
+        other = ProjectFactory()
+        other_conn = ModelConnectionFactory(project=other, name="Other")
+        RegisteredModelFactory(connection=other_conn, project=other,
+                               display_name="GPT", model_id="gpt-4o")
+        with patch("chat.config.PUBLIC_URL", "http://127.0.0.1:8801"):
+            resp = self.client.get(f"/chat/with/{other_conn.id}/{self.model.model_id}")
+            self.assertRedirects(resp, "/chat/", fetch_redirect_response=False)
+            page = self.client.get("/chat/")
+            # The iframe never carries the other connection's prefixed id.
+            self.assertNotContains(page, f"?models={other_conn.id}.gpt-4o")
 
 
 @patch("chat.config.ENABLED", True)
@@ -226,12 +264,14 @@ class ChatModelPickerTests(TestCase):
                                display_name="Qwen", model_id="Qwen3.8-27B")
         RegisteredModelFactory(connection=conn, project=self.project,
                                display_name="GPT", model_id="gpt-4o")
-        with patch("chat.config.PUBLIC_URL", "http://127.0.0.1:8801"), \
-             patch("chat.config.MODEL", "Qwen3.8-27B"):
+        with patch("chat.config.PUBLIC_URL", "http://127.0.0.1:8801"):
             page = self.client.get("/chat/", HTTP_HOST="127.0.0.1:8000")
-        self.assertContains(page, 'value="Qwen3.8-27B" checked')
-        self.assertContains(page, 'value="gpt-4o"')
-        self.assertNotContains(page, 'value="gpt-4o" checked')
+        # Checkbox values are the prefixed ids (connection id + bare model id).
+        # The default is the first available model, ordered by display name, so
+        # "GPT" (gpt-4o) sorts before "Qwen" and is pre-checked.
+        self.assertContains(page, f'value="{conn.id}.gpt-4o" checked')
+        self.assertContains(page, f'value="{conn.id}.Qwen3.8-27B"')
+        self.assertNotContains(page, f'value="{conn.id}.Qwen3.8-27B" checked')
         self.assertContains(page, ">OpenAI<")
 
     def test_models_from_other_workspaces_are_hidden(self):
@@ -241,8 +281,7 @@ class ChatModelPickerTests(TestCase):
         conn = ModelConnectionFactory(project=other, name="Secret")
         RegisteredModelFactory(connection=conn, project=other,
                                display_name="Hidden", model_id="hidden-model")
-        with patch("chat.config.PUBLIC_URL", "http://127.0.0.1:8801"), \
-             patch("chat.config.MODEL", ""):
+        with patch("chat.config.PUBLIC_URL", "http://127.0.0.1:8801"):
             page = self.client.get("/chat/", HTTP_HOST="127.0.0.1:8000")
         self.assertNotContains(page, "hidden-model")
         self.assertContains(page, "No models yet")
@@ -253,8 +292,7 @@ class ChatModelPickerTests(TestCase):
         conn = ModelConnectionFactory(project=self.project, name="Off", enabled=False)
         RegisteredModelFactory(connection=conn, project=self.project,
                                display_name="Dead", model_id="dead-model")
-        with patch("chat.config.PUBLIC_URL", "http://127.0.0.1:8801"), \
-             patch("chat.config.MODEL", ""):
+        with patch("chat.config.PUBLIC_URL", "http://127.0.0.1:8801"):
             page = self.client.get("/chat/", HTTP_HOST="127.0.0.1:8000")
         self.assertNotContains(page, "dead-model")
 
@@ -264,8 +302,7 @@ class ChatModelPickerTests(TestCase):
         conn = ModelConnectionFactory(project=self.project, name="OpenAI")
         RegisteredModelFactory(connection=conn, project=self.project,
                                display_name="Qwen", model_id="Qwen3.8-27B")
-        with patch("chat.config.PUBLIC_URL", "http://127.0.0.1:8801"), \
-             patch("chat.config.MODEL", ""):
+        with patch("chat.config.PUBLIC_URL", "http://127.0.0.1:8801"):
             page = self.client.get("/chat/", HTTP_HOST="127.0.0.1:8000")
         # The filter input and the click-outside backdrop are present.
         self.assertContains(page, 'id="model-picker-search"')

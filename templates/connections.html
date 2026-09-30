@@ -124,7 +124,7 @@
             {% if conn.can_edit %}
             {% if chat_enabled %}
             <span class="opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
-              <a href="{% url 'chat_with' m.model_id %}" title="Open a chat with {{ m.display_name|default:m.model_id }}"
+              <a href="{% url 'chat_with' conn.id m.model_id %}" title="Open a chat with {{ m.display_name|default:m.model_id }}"
                  aria-label="Chat with {{ m.display_name|default:m.model_id }}"
                  class="w-7 h-7 inline-flex items-center justify-center rounded text-gray-500 hover:text-accent">
                 <svg class="w-4 h-4" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 1.5A6.5 6.5 0 0 0 1.5 8c0 1.1.27 2.15.75 3.08L1.5 14.5l3.55-.72A6.5 6.5 0 1 0 8 1.5Zm0 1.5a5 5 0 1 1-2.55 9.3l-.34-.18-2.06.42.43-1.98-.22-.34A5 5 0 0 1 8 3Z"/></svg>

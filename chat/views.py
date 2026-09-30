@@ -34,37 +34,48 @@ def authz(request):
     return response
 
 
-def chat_with(request, model_id):
+def chat_with(request, connection_id, model_id):
     """Hand off from /connections/ to the chat, pinned to one model.
 
     The icon links here (not straight to /chat/?model=) so the model is
     validated server-side and carried in the session, where ChatView consumes
     it once. A hand-typed ?model= on /chat/ is ignored — only a model the user
     can actually see, chosen through this view, can pin the chat.
+
+    The model is identified by its connection plus its bare model id, because
+    the same model id can be registered under more than one connection. The
+    session stores the prefixed id (``<connection id>.<model id>``) that Open
+    WebUI expects once Studio pushes a ``prefix_id`` per connection.
     """
     if not config.ENABLED:
         raise Http404
     if not request.user.is_authenticated:
         return redirect(f"/login/?next={request.path}")
     model_id = (model_id or "").strip()
-    if model_id and _user_can_see_model(request, model_id):
-        request.session["chat_pinned_model"] = model_id
+    if model_id and _user_can_see_model(request, connection_id, model_id):
+        request.session["chat_pinned_model"] = f"{connection_id}.{model_id}"
     return redirect(reverse("chat"))
 
 
-def _user_can_see_model(request, model_id) -> bool:
-    """True if the user has a visible, enabled connection serving model_id."""
+def _user_can_see_model(request, connection_id, model_id) -> bool:
+    """True if the user has a visible, enabled connection serving model_id.
+
+    The connection must be one the user can see in this workspace, enabled, and
+    actually serving the bare model id — so a hand-typed id for a connection the
+    user cannot see is rejected even if the bare id exists elsewhere.
+    """
     from model_registry.services import visible_connections_for
 
     project = getattr(request, "project", None)
     if project is None:
         return False
-    for conn in visible_connections_for(request.user, project):
-        if not conn.enabled or not (conn.base_url or "").strip():
-            continue
-        if conn.models.filter(enabled=True, model_id=model_id).exists():
-            return True
-    return False
+    conn = next(
+        (c for c in visible_connections_for(request.user, project) if c.id == connection_id),
+        None,
+    )
+    if conn is None or not conn.enabled or not (conn.base_url or "").strip():
+        return False
+    return conn.models.filter(enabled=True, model_id=model_id).exists()
 
 
 class ChatView(TemplateView):
@@ -84,8 +95,9 @@ class ChatView(TemplateView):
         # Which model(s) to pin. A model chosen through the /connections chat
         # icon is stashed in the session by chat_with and consumed here exactly
         # once (pop) — so it survives the redirect but not a refresh, and a
-        # hand-typed ?model= can never pin the chat. Falls back to the default.
-        pinned = self.request.session.pop("chat_pinned_model", None) or config.MODEL
+        # hand-typed ?model= can never pin the chat. Otherwise the user's saved
+        # preference, or the first model they can see.
+        pinned = self.request.session.pop("chat_pinned_model", None) or self._resolve_default_model()
         # Shape the embedded chat through URL params, which Open WebUI reads on
         # load:
         #   ?models=         pin to one or more models, comma-separated (the
@@ -110,14 +122,36 @@ class ChatView(TemplateView):
             **kwargs,
         )
 
-    def _chat_model_groups(self):
-        """The models the top-bar picker offers, grouped by connection.
+    def _visible_models(self):
+        """The models the user can chat with, as ``{"id", "name", "has_key"}``.
 
         Same visibility rule as the experiments page: this workspace's own
-        connections plus any shared into it. Each value is the raw model_id —
-        that is what Open WebUI's ?model=/ ?models= params expect for
-        OpenAI-compatible connections.
+        connections plus any shared into it, each enabled and reachable. Each
+        id is the prefixed id (``<connection id>.<model id>``) — that is what
+        Open WebUI's ?model=/ ?models= params expect once Studio pushes a
+        ``prefix_id`` per connection, and it is what disambiguates the same
+        model id under two connections.
         """
+        from chat.api import chat_model_prefix
+        from model_registry.services import visible_connections_for
+
+        project = getattr(self.request, "project", None)
+        if project is None:
+            return []
+        models = []
+        for conn in visible_connections_for(self.request.user, project):
+            if not conn.enabled or not (conn.base_url or "").strip():
+                continue
+            prefix = chat_model_prefix(conn)
+            models.extend(
+                {"id": f"{prefix}.{m.model_id}", "name": m.display_name, "has_key": m.has_key}
+                for m in conn.models.filter(enabled=True)
+            )
+        return models
+
+    def _chat_model_groups(self):
+        """The models the top-bar picker offers, grouped by connection."""
+        from chat.api import chat_model_prefix
         from model_registry.services import visible_connections_for
 
         project = getattr(self.request, "project", None)
@@ -127,10 +161,33 @@ class ChatView(TemplateView):
         for conn in visible_connections_for(self.request.user, project):
             if not conn.enabled or not (conn.base_url or "").strip():
                 continue
+            prefix = chat_model_prefix(conn)
             models = [
-                {"id": m.model_id, "name": m.display_name, "has_key": m.has_key}
+                {"id": f"{prefix}.{m.model_id}", "name": m.display_name, "has_key": m.has_key}
                 for m in conn.models.filter(enabled=True)
             ]
             if models:
                 groups.append({"connection": conn.name, "models": models})
         return groups
+
+    def _resolve_default_model(self):
+        """The model(s) to pin when no model was chosen through the handoff.
+
+        The user's saved preference wins if it still names models they can see
+        (a connection may have been deleted or a model removed since) — the
+        saved value is the comma-separated selection, and any ids that are no
+        longer available are dropped. Otherwise the first available model is
+        pinned, so the chat opens on something usable rather than an empty
+        picker. If the user has no visible models at all, nothing is pinned —
+        Open WebUI shows its own default.
+        """
+        available = self._visible_models()
+        if not available:
+            return ""
+        available_ids = {m["id"] for m in available}
+        saved = (self.request.user.preferences or {}).get("chat_model")
+        if saved:
+            saved_ids = [i for i in (s.strip() for s in saved.split(",")) if i in available_ids]
+            if saved_ids:
+                return ",".join(saved_ids)
+        return available[0]["id"]

@@ -53,10 +53,6 @@ PROXY_PORT = int(os.environ.get("SIMPLEAUDIT_CHAT_PROXY_PORT", "8801"))
 #: it is not configured, ``public_url(request)`` derives it from the page's own
 #: host, because the host has to match for the session cookie to be sent.
 PUBLIC_URL = (os.environ.get("SIMPLEAUDIT_CHAT_URL") or "").rstrip("/")
-#: The model the embedded chat is pinned to. Open WebUI reads it from the
-#: ``?model=`` query param on the chat URL, so the iframe opens already on this
-#: model and the picker is hidden (see chat/embed.css). Empty means "no pin".
-MODEL = (os.environ.get("SIMPLEAUDIT_CHAT_MODEL") or "Qwen3.8-27B").strip()
 
 EMAIL_HEADER = "X-Studio-Email"
 NAME_HEADER = "X-Studio-Name"

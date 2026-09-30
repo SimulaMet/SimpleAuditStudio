@@ -38,7 +38,7 @@ SORT_FIELDS = {
 }
 
 # Preference keys the UI may store (value size is capped).
-PREFERENCE_KEYS = {"dashboard_columns"}
+PREFERENCE_KEYS = {"dashboard_columns", "chat_model"}
 MAX_PREFERENCE_BYTES = 20_000
 
 

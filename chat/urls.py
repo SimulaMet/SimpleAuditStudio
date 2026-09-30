@@ -9,6 +9,6 @@ from chat.views import ChatView, authz, chat_with
 
 urlpatterns = [
     path("", ChatView.as_view(), name="chat"),
-    path("with/<str:model_id>", chat_with, name="chat_with"),
+    path("with/<int:connection_id>/<str:model_id>", chat_with, name="chat_with"),
     path("authz", authz, name="chat_authz"),
 ]
