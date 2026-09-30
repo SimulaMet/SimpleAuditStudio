@@ -4,8 +4,10 @@ Run:
     SIMPLEAUDIT_LOCAL_SQLITE=1 uv run manage.py test chat.tests.test_proxy
 """
 import json
+import socket
 import threading
 import time
+from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from unittest.mock import patch
 
@@ -73,6 +75,46 @@ class _StubOpenWebUI(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
+
+
+class _StubWebSocketUpstream(BaseHTTPRequestHandler):
+    """Answers a WebSocket upgrade, then plays the scripted reply.
+
+    ``reply`` is the exact byte string sent back to the handshake: a 101
+    switch (optionally with first frame bytes in the same packet) or an
+    ordinary HTTP error. After a 101 it echoes everything it receives, so a
+    tunnel that works in one direction works in both.
+    """
+
+    protocol_version = "HTTP/1.1"
+    reply = b""
+    saw_identity = False
+
+    def log_message(self, *args):
+        pass
+
+    def do_GET(self):
+        if (self.headers.get("Upgrade") or "").lower() != "websocket":
+            self.send_error(400)
+            return
+        type(self).saw_identity = (
+            self.headers.get(config.EMAIL_HEADER) == "ada@example.com"
+        )
+        self.wfile.write(type(self).reply)
+        self.wfile.flush()
+        if type(self).reply.startswith(b"HTTP/1.1 101"):
+            self._echo()
+
+    def _echo(self):
+        try:
+            while True:
+                chunk = self.connection.recv(65536)
+                if not chunk:
+                    break
+                self.wfile.write(chunk)
+                self.wfile.flush()
+        except OSError:
+            pass
 
 
 def _serve(handler):
@@ -209,3 +251,88 @@ class ProxyTests(SimpleTestCase):
         self.assertIn("text/css", response.headers["Content-Type"])
         self.assertIn("#sidebar", response.text)
         self.assertNotIn("email", response.text)   # not the upstream's echo
+
+    @contextmanager
+    def _tunnel_upstream(self, reply: bytes):
+        """A fresh stub upstream that answers the upgrade with ``reply``."""
+        _StubWebSocketUpstream.reply = reply
+        _StubWebSocketUpstream.saw_identity = False
+        server = _serve(_StubWebSocketUpstream)
+        with patch.object(config, "UPSTREAM",
+                          f"http://127.0.0.1:{server.server_address[1]}"):
+            yield server
+        server.shutdown()
+
+    def test_a_refused_upgrade_comes_back_as_an_http_error_not_a_websocket(self):
+        """A 401 from the upstream must reach the browser as a 401.
+
+        Before the fix the raw error bytes were piped as if they were
+        WebSocket frames, and the browser failed opaquely.
+        """
+        reply = (
+            b"HTTP/1.1 401 Unauthorized\r\n"
+            b"Content-Type: text/plain\r\n"
+            b"Content-Length: 13\r\n"
+            b"\r\n"
+            b"unauthorized\n"
+        )
+        with self._tunnel_upstream(reply):
+            response = httpx.get(
+                f"{self.url}/ws",
+                headers={
+                    "Cookie": VALID_COOKIE,
+                    "Connection": "Upgrade",
+                    "Upgrade": "websocket",
+                    "Sec-WebSocket-Version": "13",
+                    "Sec-WebSocket-Key": "dGhlIHNhbXBsZSBub25jZQ==",
+                },
+                timeout=10,
+            )
+        self.assertEqual(response.status_code, 401)
+        self.assertEqual(response.text, "unauthorized\n")
+        self.assertTrue(_StubWebSocketUpstream.saw_identity)
+
+    def test_a_successful_upgrade_is_piped_both_ways_without_losing_bytes(self):
+        """A 101 is tunnelled, and bytes sent with the 101 are not lost.
+
+        The stub answers the handshake and, in the same packet, sends the
+        first "frame" bytes; the tunnel must deliver them, and must carry
+        bytes back the other way too.
+        """
+        first = b"hello-from-upstream"
+        reply = (
+            b"HTTP/1.1 101 Switching Protocols\r\n"
+            b"Upgrade: websocket\r\n"
+            b"Connection: Upgrade\r\n"
+            b"\r\n"
+        ) + first
+        with self._tunnel_upstream(reply), socket.create_connection(
+            ("127.0.0.1", self.server.server_address[1]), timeout=10
+        ) as client:
+            client.sendall(
+                b"GET /ws HTTP/1.1\r\n"
+                b"Host: 127.0.0.1\r\n"
+                b"Connection: Upgrade\r\n"
+                b"Upgrade: websocket\r\n"
+                b"Sec-WebSocket-Version: 13\r\n"
+                b"Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
+                b"Cookie: " + VALID_COOKIE.encode() + b"\r\n"
+                b"\r\n"
+            )
+            # The 101 header, then the first bytes the stub sent with it.
+            buffer = b""
+            while not buffer.endswith(first):
+                chunk = client.recv(65536)
+                self.assertTrue(chunk, "the tunnel closed before the first bytes")
+                buffer += chunk
+            self.assertIn(b"101 Switching Protocols", buffer)
+            self.assertTrue(buffer.endswith(first))
+
+            # Client to upstream: the stub echoes it straight back.
+            client.sendall(b"ping-from-client")
+            buffer = b""
+            while b"ping-from-client" not in buffer:
+                chunk = client.recv(65536)
+                self.assertTrue(chunk, "the tunnel closed before the echo")
+                buffer += chunk
+        self.assertTrue(_StubWebSocketUpstream.saw_identity)
