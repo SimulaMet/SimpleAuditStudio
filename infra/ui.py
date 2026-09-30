@@ -24,6 +24,7 @@ from audits.comparison import compare_runs
 from audits.events import ScenarioResult
 from audits.models import AuditRun
 from audits.services import create_audit_run, frozen_name, submit_audit_run
+from infra.chat_feature import chat_enabled
 from infra.hashing import scenario_revision_hash
 from scenarios.models import (
     Scenario,
@@ -1680,19 +1681,6 @@ class ScenarioImportView(ProjectMixin, View):
 DESCRIPTION_MAX = 1000
 
 
-def config_chat_enabled() -> bool:
-    """Whether the chat module is on, without importing it at module load.
-
-    The chat app is optional (SIMPLEAUDIT_CHAT); importing it eagerly would
-    couple the core UI to an optional dependency.
-    """
-    try:
-        from chat import config
-    except ImportError:
-        return False
-    return config.ENABLED
-
-
 class ConnectionsView(ProjectMixin, TemplateView):
     """Connections (a server and its API key) and the models registered on each."""
 
@@ -1750,7 +1738,7 @@ class ConnectionsView(ProjectMixin, TemplateView):
             model_total=sum(len(c.model_list) for c in connections),
             # The per-model "open in chat" icon only makes sense when the chat
             # module is on; otherwise /chat/ 404s.
-            chat_enabled=config_chat_enabled(),
+            chat_enabled=chat_enabled(),
             provider_presets=PROVIDER_PRESETS,
             # Each provider once: presets share some (OpenAI and "Custom" are
             # both openai), and a connection's own provider must stay pickable.

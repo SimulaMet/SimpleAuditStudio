@@ -128,8 +128,8 @@ through the API.
 
 ## Docker
 
-`.env.example` ships with both switches set, so the ordinary command starts chat
-too:
+Chat is off by default in Compose. Uncomment both switches in `.env` (they are
+commented out in `.env.example`) to start chat too:
 
 ```bash
 # .env
@@ -141,8 +141,8 @@ SIMPLEAUDIT_STUDIO_URL=http://localhost:8000   # where signed-out users are sent
 docker compose up -d
 ```
 
-Comment both switches out to deploy without chat; they are independent, and
-setting only `SIMPLEAUDIT_CHAT` gives a `/chat/` page with nothing behind it.
+They are independent, and setting only `SIMPLEAUDIT_CHAT` gives a `/chat/`
+page with nothing behind it.
 
 This runs `open-webui` (no published port) behind `chat-proxy`, a Caddy container
 configured by [deploy/compose/Caddyfile.chat](../deploy/compose/Caddyfile.chat).
