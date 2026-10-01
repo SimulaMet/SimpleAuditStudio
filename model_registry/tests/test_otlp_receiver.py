@@ -227,3 +227,68 @@ class OTLPIngestionEndpointTest(TestCase):
         nc.credential.save()
         resp = self.client.post("/otlp/v1/traces", data=_otlp_body(), content_type="application/json")
         self.assertEqual(resp.status_code, 401)
+
+
+
+class OTLPFlagTest(TestCase):
+    """The OTLP listener is on by default and can be switched off.
+
+    The routes are wired at URLconf import time based on
+    ``model_registry.otlp_config.ENABLED``. When off, the ``/otlp/*`` and
+    ``/api/otlp/*`` paths are not registered, so a deployment that doesn't
+    want the listener exposes no OTLP surface.
+    """
+
+    def setUp(self):
+        self.user = UserFactory()
+        self.project = ProjectFactory()
+        MembershipFactory(user=self.user, project=self.project, role="admin")
+        self.client = Client(SERVER_NAME="localhost")
+
+    def _reload_urlconf(self):
+        """Re-import config.urls so the otlp routes reflect the current flag."""
+        import importlib
+
+        from django.urls import clear_url_caches, set_urlconf
+
+        import config.urls
+
+        importlib.reload(config.urls)
+        set_urlconf("config.urls")
+        clear_url_caches()
+
+    def _resolvable(self, name):
+        """Whether a named route currently resolves (fresh resolver)."""
+        from django.urls import NoReverseMatch, reverse
+
+        try:
+            reverse(name)
+            return True
+        except NoReverseMatch:
+            return False
+
+    def test_enabled_by_default(self):
+        from model_registry import otlp_config
+
+        self.assertTrue(otlp_config.ENABLED)
+
+    def test_routes_present_when_enabled(self):
+        from model_registry import otlp_config
+
+        self.assertTrue(otlp_config.ENABLED)
+        self._reload_urlconf()
+        for name in ("otlp-traces", "otlp-credentials-list", "otlp-credentials-create"):
+            self.assertTrue(self._resolvable(name), f"{name} should resolve when enabled")
+
+    def test_routes_absent_when_disabled(self):
+        from model_registry import otlp_config
+
+        old = otlp_config.ENABLED
+        otlp_config.ENABLED = False
+        try:
+            self._reload_urlconf()
+            for name in ("otlp-traces", "otlp-credentials-list", "otlp-credentials-create"):
+                self.assertFalse(self._resolvable(name), f"{name} should not resolve when disabled")
+        finally:
+            otlp_config.ENABLED = old
+            self._reload_urlconf()
