@@ -450,9 +450,6 @@ def run_scenario(
     return payload
 
 
-_SEV_RANK = {"ERROR": 6, "critical": 5, "high": 4, "medium": 3, "low": 2, "pass": 1}
-
-
 def run_scenario_repeated(
     *,
     name: str,
@@ -473,6 +470,7 @@ def run_scenario_repeated(
     file_uri=None,
     category: str = "",
     metadata: dict | None = None,
+    trace_config: dict | None = None,
 ) -> dict[str, Any]:
     """Execute one scenario N times using AuditExperiment.run_scenario_reps().
 
@@ -492,11 +490,13 @@ def run_scenario_repeated(
     ``(rep_index, rep_result_dict)`` — useful for emitting progress events.
     If ``cancel_event`` is set, remaining reps are skipped.
 
-    NOTE: the engine's multi-rep path (``AuditExperiment.run_scenario_reps`` ->
-    ``_run_single_rep``) does not yet forward ``trace_correlation`` /
-    ``audit_run_id`` / ``evidence_spans`` to ``run_async``, so live tracing is
-    not available here. Use ``run_scenario`` (single repetition) for trace
-    evidence.
+    Tracing (best-effort, Promptfoo parity): when ``trace_config`` is given, a
+    provider is built from it and a fresh ``TraceCorrelation`` is shared across
+    all reps. Each rep records its ``turn_id -> trace_id`` links, and after the
+    run the spans for every recorded trace id are fetched, selected, and
+    attached to each rep's result under ``judgment["evidence_spans"]`` (de-
+    duplicated per rep). The engine judges on the conversation; trace evidence
+    is attached post-run, matching the single-rep path.
     """
     _ensure_engine_available()
     try:
@@ -518,6 +518,23 @@ def run_scenario_repeated(
     model_entry = {k: v for k, v in kwargs.items() if v is not None}
     model_entry["label"] = f"{kwargs['model']} (platform)"
 
+    # Tracing: build a provider + a per-rep TraceCorrelation. Each rep gets its
+    # own correlation (assigned at the rep boundary) so its turn->trace links
+    # are attributable to that rep; evidence is fetched per rep after the run.
+    provider = None
+    rep_correlations: dict[int, Any] = {}
+    if trace_config:
+        from simpleaudit.tracing.context import TraceCorrelation, new_trace_id
+
+        from infra.tracing import build_trace_provider
+
+        provider = build_trace_provider(trace_config)
+        if provider is not None:
+            audit_run_id = f"audit_{new_trace_id()[:12]}"
+            # Stash on the provider so the rep-boundary callback can mint a
+            # fresh correlation per rep without extra plumbing.
+            provider._audit_run_id = audit_run_id
+
     # The engine's on_rep_done receives an AuditResults collection with one
     # result (single scenario). Collect here and emit AFTER asyncio.run()
     # returns: the outer callback does Django ORM calls, which cannot run
@@ -533,8 +550,15 @@ def run_scenario_repeated(
 
     # ``rep_is_done(label, i)`` is consulted right before rep ``i`` starts —
     # the only hook that fires at every rep boundary. Use it to signal rep
-    # starts; never skip. on_rep_started must be async-safe (no ORM calls).
+    # starts and (when tracing) mint a fresh per-rep TraceCorrelation. Must be
+    # async-safe (no ORM calls).
     def _rep_is_done(label: str, rep_index: int) -> bool:
+        if provider is not None:
+            from simpleaudit.tracing.context import TraceCorrelation
+
+            rep_correlations[rep_index] = TraceCorrelation(
+                audit_run_id=getattr(provider, "_audit_run_id", None)
+            )
         if on_rep_started:
             on_rep_started(rep_index)
         return False
@@ -554,12 +578,35 @@ def run_scenario_repeated(
     except Exception as exc:
         raise EngineError(f"Failed to construct AuditExperiment: {type(exc).__name__}: {exc}") from exc
 
+    # Mutable holder the engine reads each rep: the per-rep correlation
+    # assigned at the rep boundary. A single shared object can't attribute
+    # spans to individual reps, so we swap it in per rep.
+    current_correlation: dict[str, Any] = {"corr": None}
+
+    def _tracing_correlation() -> Any:
+        return current_correlation["corr"]
+
     try:
-        results = asyncio.run(
-            experiment.run_scenario_reps(
-                model_index=0, scenario=scenario, max_turns=max_turns, language=language, on_turn=on_turn,
+        with (provider or nullcontext()):
+            results = asyncio.run(
+                experiment.run_scenario_reps(
+                    model_index=0, scenario=scenario, max_turns=max_turns, language=language,
+                    on_turn=on_turn,
+                    audit_run_id=getattr(provider, "_audit_run_id", None) if provider else None,
+                    trace_correlation=_tracing_correlation,
+                )
             )
-        )
+            # Collect per-rep evidence spans while the provider is still alive.
+            if provider is not None:
+                for rep in reps:
+                    corr = rep_correlations.get(rep.get("_rep_index"))
+                    evidence = _collect_evidence_spans(corr, provider)
+                    if evidence:
+                        judgment = rep.get("judgment")
+                        if not isinstance(judgment, dict):
+                            judgment = {}
+                        judgment["evidence_spans"] = evidence
+                        rep["judgment"] = judgment
     except Exception as exc:
         raise EngineError(f"Scenario execution crashed: {type(exc).__name__}: {exc}") from exc
 
@@ -574,18 +621,18 @@ def run_scenario_repeated(
         for rep in reps:
             on_rep_done(rep.get("_rep_index", 0), rep)
 
-    sev_counts: dict[str, int] = {}
-    for rep in reps:
-        sev = rep.get("severity", "")
-        sev_counts[sev] = sev_counts.get(sev, 0) + 1
-    modal_severity = max(sev_counts, key=lambda s: (sev_counts[s], _SEV_RANK.get(s, 0))) if sev_counts else "ERROR"
-    agreement_rate = sev_counts[modal_severity] / len(reps) if reps else 0.0
+    # Delegate the modal/agreement aggregation to the engine so the studio
+    # and the library share one definition (worst-severity tie-break, ERROR
+    # handling) instead of each hand-rolling it.
+    from simpleaudit.repeated_results import aggregate_severities
+
+    agg = aggregate_severities([rep.get("severity", "") for rep in reps])
 
     return {
         "reps": reps,
-        "aggregated_severity": modal_severity,
-        "agreement_rate": round(agreement_rate, 4),
-        "severity_distribution": sev_counts,
+        "aggregated_severity": agg["most_common_severity"],
+        "agreement_rate": round(agg["agreement_rate"], 4),
+        "severity_distribution": agg["severity_distribution"],
         "n_repetitions": len(reps),
         "_language": language,
     }
