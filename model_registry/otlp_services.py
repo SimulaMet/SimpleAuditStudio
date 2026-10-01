@@ -42,9 +42,24 @@ def generate_password() -> str:
     return secrets.token_urlsafe(32)
 
 
+_BEARER_TOKEN_PREFIX = "sa_otlp_"
+# Length of the non-secret lookup prefix stored on a bearer credential.
+_TOKEN_LOOKUP_PREFIX_LEN = 16
+
+
 def generate_token() -> str:
     """A strong bearer token (prefixed for easy recognition in logs)."""
-    return "sa_otlp_" + secrets.token_urlsafe(32)
+    return _BEARER_TOKEN_PREFIX + secrets.token_urlsafe(32)
+
+
+def token_lookup_prefix(token: str) -> str:
+    """A short, non-secret prefix of a bearer token for indexed lookup.
+
+    This is stored on the credential so ``verify_bearer`` can narrow the
+    candidate set before hashing. It is deliberately short and never used for
+    authentication (only the salted hash is).
+    """
+    return (token or "")[:_TOKEN_LOOKUP_PREFIX_LEN]
 
 
 def _make_target_id(connection) -> str:
@@ -79,6 +94,7 @@ def create_credential(*, project, connection, auth_mode: str, user=None) -> NewC
     # target identity.
     existing = OTLPCredential.objects.filter(project=project, connection=connection).first()
     target_id = existing.target_id if existing else _make_target_id(connection)
+    token_prefix = ""
     if auth_mode == OTLPCredential.AuthMode.NONE:
         username = ""
         secret = ""
@@ -94,6 +110,7 @@ def create_credential(*, project, connection, auth_mode: str, user=None) -> NewC
         secret = generate_token()
         salt = _new_salt()
         secret_hash = _hash_secret(secret, salt)
+        token_prefix = token_lookup_prefix(secret)
 
     # Upsert: if a credential already exists for this connection, update it
     # in place (change auth mode, regenerate secret) instead of failing on
@@ -107,6 +124,7 @@ def create_credential(*, project, connection, auth_mode: str, user=None) -> NewC
             "username": username,
             "secret_hash": secret_hash,
             "salt": salt,
+            "token_prefix": token_prefix if auth_mode == OTLPCredential.AuthMode.BEARER else "",
             "enabled": True,
             "created_by": user,
         },
@@ -133,8 +151,9 @@ def rotate_credential(cred: OTLPCredential) -> NewCredential:
     salt = _new_salt()
     cred.secret_hash = _hash_secret(secret, salt)
     cred.salt = salt
+    cred.token_prefix = token_lookup_prefix(secret)
     cred.enabled = True  # rotation re-enables a revoked credential
-    cred.save(update_fields=["secret_hash", "salt", "enabled", "updated_at"])
+    cred.save(update_fields=["secret_hash", "salt", "token_prefix", "enabled", "updated_at"])
     return NewCredential(credential=cred, secret=secret)
 
 
@@ -153,15 +172,22 @@ def verify_basic(username: str, password: str) -> OTLPCredential | None:
 def verify_bearer(token: str) -> OTLPCredential | None:
     """Return the enabled bearer credential matching ``token``, else None.
 
-    Bearer tokens are looked up by hashing the presented token against each
-    stored salt (credential sets are small — one per target).
+    The token's short lookup prefix narrows the candidate set (an indexed
+    query), then the salted hash is verified in constant time. Falls back to
+    scanning all bearer credentials when the prefix is unset (e.g. rows
+    created before the ``token_prefix`` field existed) so verification never
+    regresses.
     """
-    if not token:
-        return None
-    for cred in OTLPCredential.objects.filter(
+    prefix = token_lookup_prefix(token)
+    qs = OTLPCredential.objects.filter(
         auth_mode=OTLPCredential.AuthMode.BEARER, enabled=True
-    ).only("salt", "secret_hash", "target_id", "id"):
-        if hmac.compare_digest(cred.secret_hash, _hash_secret(token, cred.salt)):
+    ).only("salt", "secret_hash", "target_id", "id", "token_prefix")
+    # Prefer the indexed prefix match; if none is stored, scan the (small) set.
+    candidates = qs.filter(token_prefix=prefix)
+    if not candidates.exists():
+        candidates = qs
+    for cred in candidates:
+        if cred.salt and hmac.compare_digest(cred.secret_hash, _hash_secret(token, cred.salt)):
             return cred
     return None
 

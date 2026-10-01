@@ -124,6 +124,10 @@ class OTLPCredential(models.Model):
     # Salted SHA-256 of the secret (password for basic, token for bearer).
     secret_hash = models.BinaryField(null=True, blank=True)
     salt = models.BinaryField(null=True, blank=True)
+    # Non-secret lookup prefix of a bearer token (e.g. "sa_otlp_abc123"). Lets
+    # verify_bearer do an indexed lookup instead of hashing against every
+    # credential. Never used for authentication — only the salted hash is.
+    token_prefix = models.CharField(max_length=32, blank=True, default="", db_index=True)
     # Stable identifier stamped onto every span this credential authenticates.
     target_id = models.CharField(max_length=250)
     enabled = models.BooleanField(default=True)

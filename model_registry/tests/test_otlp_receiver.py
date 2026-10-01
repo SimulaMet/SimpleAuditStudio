@@ -80,6 +80,21 @@ class OTLPCredentialServiceTest(TestCase):
     def test_verify_wrong_bearer_returns_none(self):
         self.assertIsNone(otlp.verify_bearer("sa_otlp_not_a_real_token"))
 
+    def test_bearer_stores_lookup_prefix(self):
+        nb = otlp.create_credential(project=self.project, connection=self.conn, auth_mode="bearer", user=self.user)
+        self.assertEqual(nb.credential.token_prefix, otlp.token_lookup_prefix(nb.secret))
+        # A token sharing the prefix but differing in the hash body must not match.
+        fake = nb.secret[:16] + "0" * (len(nb.secret) - 16)
+        self.assertNotEqual(fake, nb.secret)
+        self.assertIsNone(otlp.verify_bearer(fake))
+
+    def test_bearer_legacy_row_without_prefix_still_verifies(self):
+        """Rows created before token_prefix existed (empty prefix) still verify via fallback."""
+        nb = otlp.create_credential(project=self.project, connection=self.conn, auth_mode="bearer", user=self.user)
+        nb.credential.token_prefix = ""
+        nb.credential.save(update_fields=["token_prefix"])
+        self.assertIsNotNone(otlp.verify_bearer(nb.secret))
+
     def test_disabled_credential_not_verified(self):
         nc = otlp.create_credential(project=self.project, connection=self.conn, auth_mode="basic", user=self.user)
         nc.credential.enabled = False
