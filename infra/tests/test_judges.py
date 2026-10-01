@@ -3,7 +3,7 @@
 Run:
     SIMPLEAUDIT_LOCAL_SQLITE=1 uv run manage.py test infra.tests.test_judges
 """
-from django.test import Client, TestCase
+from django.test import Client, TestCase, tag
 
 from infra.tests.factories import (
     AuditRunFactory,
@@ -25,6 +25,7 @@ from judges.services import (
 )
 
 
+@tag("slow")
 class _Base(TestCase):
     role = "admin"
 

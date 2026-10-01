@@ -7,7 +7,7 @@ from datetime import UTC, timedelta
 from unittest import mock, skipUnless
 
 from django.db import connection
-from django.test import Client, TestCase
+from django.test import Client, TestCase, tag
 from django.utils import timezone
 
 from audits.models import AuditRun, Monitor
@@ -42,6 +42,7 @@ def _result(severities):
     return {"reps": [{"severity": s} for s in severities], "n_repetitions": len(severities)}
 
 
+@tag("slow")
 class MonitorTestBase(TestCase):
     def setUp(self):
         self.user = UserFactory()

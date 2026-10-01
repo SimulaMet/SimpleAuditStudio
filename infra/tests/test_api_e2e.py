@@ -6,6 +6,7 @@ submit audit run → verify frozen manifest → poll events → compare runs.
 This is the "another developer can run this" integration test that validates
 the entire user journey without requiring a live worker or Docker stack.
 """
+from django.test import tag
 from rest_framework.test import APITestCase
 
 from accounts.models import Project, ProjectMembership, User
@@ -16,6 +17,7 @@ from scenarios.models import (
 )
 
 
+@tag("slow")
 class APIE2ETest(APITestCase):
     """Full user journey via the REST API (no live worker)."""
 
