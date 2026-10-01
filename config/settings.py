@@ -300,6 +300,20 @@ if DEMO_MODE:
     SESSION_COOKIE_SECURE = True
     CSRF_COOKIE_SECURE = True
 
+# Production security headers (per Django's production checklist). The app runs
+# behind a TLS-terminating proxy (see SECURE_PROXY_SSL_HEADER above), so these
+# are safe to enable. They are gated off for local dev (http://localhost), the
+# local minimal/demo bundle, and DEMO_MODE (which sets its own cookie policy) so
+# they never break a non-HTTPS or cross-site-embedded setup.
+if not (DEBUG or MINIMAL_CONFIG or DEMO_MODE):
+    SECURE_SSL_REDIRECT = True
+    SECURE_HSTS_SECONDS = 60 * 60 * 24 * 365  # 1 year
+    SECURE_HSTS_INCLUDE_SUBDOMAINS = True
+    SECURE_HSTS_PRELOAD = True
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SECURE = True
+    SECURE_CONTENT_TYPE_NOSNIFF = True
+
 # Operational settings used by health checks and bootstrap commands.
 if MINIMAL_CONFIG:
     # In local demo mode the embedded Hatchet client provides its own connection

@@ -74,7 +74,10 @@ def main() -> None:
     os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings")
     os.environ.setdefault("DJANGO_SECRET_KEY", "local-insecure-key-change-for-shared-use")
     os.environ.setdefault("DJANGO_ALLOWED_HOSTS", "localhost,127.0.0.1")
-    os.environ.setdefault("DJANGO_DEBUG", "true")
+    # Local dev runs with DEBUG off by default so you experience the real
+    # production behavior (host checks, static serving, no debug error pages).
+    # Set DJANGO_DEBUG=true to get the debug tooling back.
+    os.environ.setdefault("DJANGO_DEBUG", "false")
 
     import django
 
