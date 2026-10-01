@@ -81,12 +81,17 @@ class CsrfCookieMiddleware(MiddlewareMixin):
     def process_request(self, request):
         if hasattr(request, "user") and request.user.is_authenticated:
             from django.conf import settings
-            from django.middleware.csrf import _add_new_csrf_cookie
+            from django.middleware.csrf import get_token
 
             # Only set the cookie if it's not already present in the request.
             existing = request.COOKIES.get(settings.CSRF_COOKIE_NAME)
             if not existing:
-                _add_new_csrf_cookie(request)
+                # get_token() is the public API: it populates
+                # request.META["CSRF_COOKIE"] (and flags the cookie for update),
+                # which CsrfViewMiddleware.process_response then reads. Calling
+                # the private _add_new_csrf_cookie() directly skips that META
+                # assignment and causes a KeyError in process_response.
+                get_token(request)
 
 
 class ProjectMiddleware(MiddlewareMixin):
@@ -111,3 +116,10 @@ class ProjectMiddleware(MiddlewareMixin):
             if membership:
                 request.project = membership.project
                 request.session["active_project_id"] = request.project.id
+        if not request.project:
+            # Backstop: a user with no membership (legacy/orphaned account)
+            # still lands in the shared Default workspace rather than crashing
+            # every view that dereferences request.project.
+            from accounts.services import DEFAULT_PROJECT_SLUG
+
+            request.project = Project.objects.filter(slug=DEFAULT_PROJECT_SLUG).first()

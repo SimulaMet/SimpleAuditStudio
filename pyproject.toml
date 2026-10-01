@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "simpleaudit-studio"
-version = "0.5.2"
+version = "0.5.3"
 description = "Production AI model audit platform — one-liner demo mode via uvx"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -26,13 +26,32 @@ dependencies = [
     # 0.2.1 adds the native on_turn per-phase progress callback.
     "simpleaudit==0.2.3",
     "cronsim==2.7",
+    "psutil>=7.2.2",
 ]
 
 [project.optional-dependencies]
 postgres = ["psycopg[binary]==3.2.13"]
 server = ["gunicorn==23.0.0"]
-dev = ["factory_boy==3.3.2", "ruff"]
+dev = [
+    "factory_boy==3.3.2",
+    "ruff",
+    # Test runner stack. xdist is pinned <3.8 because 3.8+ pulls in `greenlet`,
+    # which does not build on Python 3.11 (the project's lower bound).
+    "pytest>=8,<9",
+    "pytest-django>=4.8,<5",
+    "pytest-xdist>=3.6,<3.8",
+    "pytest-testmon>=2,<3",
+    "pytest-env>=1,<2",
+]
 e2e = ["playwright>=1.45"]
+
+# Local-dev override: point the engine at the in-repo SimpleAudit checkout so
+# the studio can use the tracing layer (simpleaudit.tracing) that is not yet in
+# the published 0.2.3 wheel. The published build still resolves simpleaudit
+# from PyPI (see the registry-dependency note above); uv.sources only affects
+# local `uv` resolution.
+[tool.uv.sources]
+simpleaudit = { path = "../SimpleAudit", editable = true }
 
 [project.scripts]
 simpleaudit-studio = "simpleaudit_studio.cli:main"
@@ -56,6 +75,7 @@ packages = [
     "config",
     "accounts",
     "audits",
+    "chat",
     "infra",
     "scenarios",
     "model_registry",

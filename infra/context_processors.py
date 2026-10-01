@@ -107,12 +107,14 @@ def nav(request):
     if user is None or not user.is_authenticated:
         return {}
     from accounts.services import is_any_project_admin
+    from infra.chat_feature import chat_enabled
 
     admin = is_any_project_admin(user)
     path = request.path
+    entries = _NAV + ((("chat", "Chat", "💬", ("/chat/",), False),) if chat_enabled() else ())
     items = [
         {"url": reverse(name), "label": label, "icon": icon, "prefixes": prefixes}
-        for name, label, icon, prefixes, admin_only in _NAV
+        for name, label, icon, prefixes, admin_only in entries
         if admin or not admin_only
     ]
 

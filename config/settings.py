@@ -120,6 +120,10 @@ INSTALLED_APPS = [
     "judges",
     "audits",
     "infra",
+    # Optional module: its URLs 404 and nothing runs unless SIMPLEAUDIT_CHAT is
+    # set (chat/config.py). Installed either way so its templates, management
+    # commands and tests resolve.
+    "chat",
 ]
 
 MIDDLEWARE = [
@@ -295,6 +299,26 @@ if DEMO_MODE:
     CSRF_COOKIE_SAMESITE = "None"
     SESSION_COOKIE_SECURE = True
     CSRF_COOKIE_SECURE = True
+
+# Production security headers (per Django's production checklist). The app runs
+# behind a TLS-terminating proxy (see SECURE_PROXY_SSL_HEADER above), so these
+# are safe to enable. They are gated off for local dev (http://localhost), the
+# local minimal/demo bundle, DEMO_MODE (which sets its own cookie policy), and
+# the test suite (which runs over http://localhost with DEBUG=false) so they
+# never break a non-HTTPS or cross-site-embedded setup.
+_TESTING = (
+    SECRET_KEY in {"test-secret-key-not-change-me", "ci-secret-key"}
+    or bool(os.environ.get("PYTEST_CURRENT_TEST"))
+    or env_bool("SIMPLEAUDIT_TESTING", False)
+)
+if not (DEBUG or MINIMAL_CONFIG or DEMO_MODE or _TESTING):
+    SECURE_SSL_REDIRECT = True
+    SECURE_HSTS_SECONDS = 60 * 60 * 24 * 365  # 1 year
+    SECURE_HSTS_INCLUDE_SUBDOMAINS = True
+    SECURE_HSTS_PRELOAD = True
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SECURE = True
+    SECURE_CONTENT_TYPE_NOSNIFF = True
 
 # Operational settings used by health checks and bootstrap commands.
 if MINIMAL_CONFIG:

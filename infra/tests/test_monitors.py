@@ -4,15 +4,17 @@ Run:
     SIMPLEAUDIT_LOCAL_SQLITE=1 uv run manage.py test infra.tests.test_monitors
 """
 from datetime import UTC, timedelta
-from unittest import mock
+from unittest import mock, skipUnless
 
-from django.test import Client, TestCase
+from django.db import connection
+from django.test import Client, TestCase, tag
 from django.utils import timezone
 
 from audits.models import AuditRun, Monitor
 from audits.monitors import (
     advance,
     drift_series,
+    due_monitors,
     run_due_monitors,
     two_proportion_z,
     wilson,
@@ -40,6 +42,7 @@ def _result(severities):
     return {"reps": [{"severity": s} for s in severities], "n_repetitions": len(severities)}
 
 
+@tag("slow")
 class MonitorTestBase(TestCase):
     def setUp(self):
         self.user = UserFactory()
@@ -524,3 +527,36 @@ class RepeatFlowTests(_ClientMixin, MonitorTestBase):
         self.assertEqual(len(page.context["current_runs"]), 2)
         pooled = self.client.get(f"/experiments/{exp.id}/?pool=1")
         self.assertTrue(pooled.context["pool"])
+
+
+class DueMonitorQueryTests(MonitorTestBase):
+    """The claim query must lock only the monitor rows.
+
+    ``select_related`` pulls in ``last_run`` and ``created_by``, both nullable, so
+    the join is a LEFT OUTER JOIN. PostgreSQL rejects ``FOR UPDATE`` against the
+    nullable side of one ("FOR UPDATE cannot be applied to the nullable side of an
+    outer join"), which made every tick fail on a production database while the
+    sweeper logged the error and carried on.
+
+    SQLite drops ``FOR UPDATE`` altogether, so the failure cannot be reproduced on
+    the suite's default backend. These assertions are on the query the ORM builds,
+    which is backend-independent; the execution test below runs on PostgreSQL only.
+    """
+
+    def test_claim_query_locks_only_monitor_rows(self):
+        query = due_monitors(timezone.now()).query
+        self.assertEqual(query.select_for_update_of, ("self",))
+        self.assertTrue(query.select_for_update_skip_locked)
+
+    def test_claim_query_still_joins_the_nullable_relations(self):
+        # If these stop being selected the `of` above is no longer load-bearing,
+        # and a future change could drop it without any test noticing.
+        self.assertEqual(
+            set(due_monitors(timezone.now()).query.select_related),
+            {"last_run", "project", "created_by"},
+        )
+
+    @skipUnless(connection.vendor == "postgresql", "outer-join locking is PostgreSQL-specific")
+    def test_tick_executes_on_postgresql(self):
+        # The regression itself: this raises NotSupportedError without `of`.
+        run_due_monitors()

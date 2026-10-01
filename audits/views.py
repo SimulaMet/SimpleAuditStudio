@@ -144,6 +144,7 @@ def create_audit_run_view(request, project_id):
         auditor_model=auditor_model,
         judge_model=judge_model,
         judge=judge,
+        trace_config=data.get("trace_config") or None,
     )
 
     # Enqueue durable work. This is best-effort: if the job system is unavailable

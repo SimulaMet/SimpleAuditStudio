@@ -64,6 +64,10 @@
         {% if conn.can_edit %}
         <button type="button" data-write data-discover="{{ conn.id }}" title="List the models this server offers and pick ones to add"
                 class="px-2.5 py-1 rounded-lg text-xs text-gray-300 bg-surface-overlay hover:text-white">+ Models</button>
+        {% if otlp_enabled %}
+        <button type="button" data-write data-otlp="{{ conn.id }}" title="Generate an OTLP credential so this target can push traces to Studio"
+                class="px-2.5 py-1 rounded-lg text-xs text-gray-300 bg-surface-overlay hover:text-white">OTLP</button>
+        {% endif %}
         <button type="button" data-write data-conn-open="{{ conn.id }}" title="Edit connection" aria-label="Edit connection {{ conn.name }}"
                 class="w-7 h-7 rounded-lg text-gray-400 hover:text-accent hover:bg-surface-overlay">✎</button>
         {% if conn.in_use %}
@@ -122,6 +126,15 @@
               title="Runs and monitors that use this model as target, auditor or judge">{% if m.usage %}{{ m.usage }} run{{ m.usage|pluralize }}{% else %}unused{% endif %}</td>
           <td class="px-4 py-1 text-right whitespace-nowrap model-view align-top">
             {% if conn.can_edit %}
+            {% if chat_enabled %}
+            <span class="opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
+              <a href="{% url 'chat_with' conn.id m.model_id %}" title="Open a chat with {{ m.display_name|default:m.model_id }}"
+                 aria-label="Chat with {{ m.display_name|default:m.model_id }}"
+                 class="w-7 h-7 inline-flex items-center justify-center rounded text-gray-500 hover:text-accent">
+                <svg class="w-4 h-4" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 1.5A6.5 6.5 0 0 0 1.5 8c0 1.1.27 2.15.75 3.08L1.5 14.5l3.55-.72A6.5 6.5 0 1 0 8 1.5Zm0 1.5a5 5 0 1 1-2.55 9.3l-.34-.18-2.06.42.43-1.98-.22-.34A5 5 0 0 1 8 3Z"/></svg>
+              </a>
+            </span>
+            {% endif %}
             <span data-write class="opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
               <button type="button" data-edit title="Edit name, model ID or description" aria-label="Edit {{ m.display_name|default:m.model_id }}"
                       class="w-7 h-7 rounded text-gray-500 hover:text-accent">✎</button>
@@ -300,6 +313,33 @@
       <button type="submit" id="models-submit" disabled class="px-4 py-2 rounded-lg bg-accent text-white text-sm font-medium hover:bg-accent-hover disabled:opacity-40 disabled:cursor-not-allowed">Add models</button>
     </div>
   </form>
+</dialog>
+
+<!-- OTLP credential (generate + copy env vars) -->
+<dialog id="otlp-dialog" class="sa-dialog w-[min(38rem,calc(100vw-2rem))] rounded-xl border border-gray-700 bg-surface-raised p-0 shadow-2xl">
+  <div class="p-5 space-y-4">
+    <div class="flex items-center justify-between">
+      <h2 class="text-base font-semibold text-gray-100">OTLP credential for <span id="otlp-dialog-conn"></span></h2>
+      <button type="button" data-dialog-close aria-label="Close" title="Close" class="w-7 h-7 rounded text-gray-500 hover:text-gray-200">✕</button>
+    </div>
+    <p class="text-xs text-gray-400">Issue a credential so this target can push OTLP traces to Studio. The secret is shown once — copy it now.</p>
+    <div class="flex items-center gap-2">
+      <label class="text-xs text-gray-300" for="otlp-mode">Auth mode</label>
+      <select id="otlp-mode" class="px-2.5 py-1.5 rounded-lg bg-surface-overlay border border-gray-700 text-xs text-gray-200">
+        <option value="none" selected>None (unauthenticated)</option>
+        <option value="basic">Basic Auth</option>
+        <option value="bearer">Bearer Token</option>
+      </select>
+      <button type="button" id="otlp-issue" class="px-3 py-1.5 rounded-lg bg-accent text-white text-xs font-medium hover:bg-accent-hover">Issue credential</button>
+    </div>
+    <div id="otlp-result" class="hidden space-y-2 text-xs">
+      <p id="otlp-warning" class="hidden text-amber-300 bg-amber-900/20 rounded px-2 py-1.5">Copy the secret now — it won't be shown again.</p>
+      <pre id="otlp-env" class="bg-surface-overlay border border-gray-700 rounded-lg p-3 font-mono text-[11px] text-gray-200 whitespace-pre-wrap break-all"></pre>
+      <div class="flex items-center gap-2">
+        <button type="button" id="otlp-copy" class="px-3 py-1.5 rounded-lg text-xs text-gray-300 bg-surface-overlay hover:text-white">Copy env vars</button>
+      </div>
+    </div>
+  </div>
 </dialog>
 
 {{ provider_presets|json_script:"provider-presets" }}
@@ -495,6 +535,44 @@
     }
   }
   document.addEventListener('click', e => { const b = e.target.closest('[data-discover]'); if (b) openModels(b.dataset.discover); });
+
+  // ---------- OTLP credential ----------
+  const otlpDialog = $('#otlp-dialog'), otlpResult = $('#otlp-result'), otlpEnv = $('#otlp-env');
+  function openOtlp(connId) {
+    $('#otlp-dialog-conn').textContent = CONNS[connId].name;
+    otlpResult.classList.add('hidden');
+    otlpDialog.dataset.connId = connId;
+    otlpDialog.showModal();
+  }
+  function showOtlpResult(env, secret) {
+    otlpEnv.textContent = env;
+    $('#otlp-warning').classList.toggle('hidden', !secret);
+    otlpResult.classList.remove('hidden');
+  }
+  document.addEventListener('click', e => { const b = e.target.closest('[data-otlp]'); if (b) openOtlp(b.dataset.otlp); });
+  $('#otlp-issue').addEventListener('click', async () => {
+    const connId = otlpDialog.dataset.connId, mode = $('#otlp-mode').value;
+    const btn = $('#otlp-issue'); btn.disabled = true; btn.textContent = 'Issuing…';
+    try {
+      const resp = await fetch('{% url "otlp_credential_create" %}', {
+        method: 'POST', headers: { 'X-CSRFToken': csrfToken() },
+        body: new URLSearchParams({ connection_id: connId, auth_mode: mode, origin: location.origin }),
+      });
+      const data = await resp.json();
+      if (!resp.ok) throw new Error(data.error || `HTTP ${resp.status}`);
+      showOtlpResult(Object.entries(data.env_vars).map(([k, v]) => `${k}=${v}`).join('\n'), data.secret);
+    } catch (err) {
+      otlpEnv.textContent = `Error: ${err.message}`;
+      otlpResult.classList.remove('hidden');
+    } finally {
+      btn.disabled = false; btn.textContent = 'Issue credential';
+    }
+  });
+  $('#otlp-copy').addEventListener('click', async () => {
+    try { await navigator.clipboard.writeText(otlpEnv.textContent); $('#otlp-copy').textContent = 'Copied!'; }
+    catch { $('#otlp-copy').textContent = 'Copy failed'; }
+    setTimeout(() => { $('#otlp-copy').textContent = 'Copy env vars'; }, 1500);
+  });
   list.addEventListener('change', refreshSubmit);
   $('#manual-id').addEventListener('input', refreshSubmit);
   $('#discover-filter').addEventListener('input', e => {

@@ -22,6 +22,7 @@ class AuditRunSerializer(serializers.ModelSerializer):
             "judge_version",
             "judge_config_snapshot",
             "generation_parameters_snapshot",
+            "trace_config",
             "simpleaudit_version",
             "git_commit",
             "queued_at",
@@ -50,3 +51,6 @@ class AuditRunCreateSerializer(serializers.Serializer):
     # = SimpleAudit's default judge, as in the library.
     judge_version_id = serializers.IntegerField(required=False)
     judge_id = serializers.IntegerField(required=False)
+    # Optional trace acquisition config (Promptfoo parity). Absent/empty = no
+    # tracing. Shape: {"mode": "builtin"|"tempo", "base_url": ..., ...}.
+    trace_config = serializers.DictField(required=False, default=dict)
