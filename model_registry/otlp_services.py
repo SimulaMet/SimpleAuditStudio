@@ -75,7 +75,11 @@ def create_credential(*, project, connection, auth_mode: str, user=None) -> NewC
     if auth_mode not in valid:
         raise ValueError(f"Unknown OTLP auth mode: {auth_mode!r}")
 
-    target_id = _make_target_id(connection)
+    # Reuse the existing target_id if a credential already exists for this
+    # connection, so the upsert updates in place rather than creating a new
+    # target identity.
+    existing = OTLPCredential.objects.filter(project=project, connection=connection).first()
+    target_id = existing.target_id if existing else _make_target_id(connection)
     if auth_mode == OTLPCredential.AuthMode.NONE:
         username = ""
         secret = ""
@@ -92,16 +96,21 @@ def create_credential(*, project, connection, auth_mode: str, user=None) -> NewC
         salt = _new_salt()
         secret_hash = _hash_secret(secret, salt)
 
-    cred = OTLPCredential.objects.create(
+    # Upsert: if a credential already exists for this connection, update it
+    # in place (change auth mode, regenerate secret) instead of failing on
+    # the unique constraint.
+    cred, _created = OTLPCredential.objects.update_or_create(
         project=project,
-        connection=connection,
-        auth_mode=auth_mode,
-        username=username,
-        secret_hash=secret_hash,
-        salt=salt,
         target_id=target_id,
-        enabled=True,
-        created_by=user,
+        defaults={
+            "connection": connection,
+            "auth_mode": auth_mode,
+            "username": username,
+            "secret_hash": secret_hash,
+            "salt": salt,
+            "enabled": True,
+            "created_by": user,
+        },
     )
     return NewCredential(credential=cred, secret=secret)
 

@@ -527,40 +527,29 @@
 
   // ---------- OTLP credential ----------
   const otlpDialog = $('#otlp-dialog'), otlpResult = $('#otlp-result'), otlpEnv = $('#otlp-env');
-  let otlpCredId = null;
   function openOtlp(connId) {
     $('#otlp-dialog-conn').textContent = CONNS[connId].name;
     otlpResult.classList.add('hidden');
-    otlpCredId = null;
     otlpDialog.dataset.connId = connId;
     otlpDialog.showModal();
   }
-  function showOtlpResult(env, secret, credId) {
+  function showOtlpResult(env, secret) {
     otlpEnv.textContent = env;
     $('#otlp-warning').classList.toggle('hidden', !secret);
-    otlpCredId = credId || null;
     otlpResult.classList.remove('hidden');
   }
   document.addEventListener('click', e => { const b = e.target.closest('[data-otlp]'); if (b) openOtlp(b.dataset.otlp); });
   $('#otlp-issue').addEventListener('click', async () => {
     const connId = otlpDialog.dataset.connId, mode = $('#otlp-mode').value;
-    const btn = $('#otlp-issue'); btn.disabled = true;
+    const btn = $('#otlp-issue'); btn.disabled = true; btn.textContent = 'Issuing…';
     try {
-      let url, body;
-      if (otlpCredId && mode !== 'none') {
-        if (!confirm('A credential already exists for this target.\nIssue a new secret? The current one stops working immediately.')) return;
-        btn.textContent = 'Issuing…';
-        url = '{% url "otlp_credential_rotate" %}';
-        body = new URLSearchParams({ credential_id: otlpCredId, origin: location.origin });
-      } else {
-        btn.textContent = 'Issuing…';
-        url = '{% url "otlp_credential_create" %}';
-        body = new URLSearchParams({ connection_id: connId, auth_mode: mode, origin: location.origin });
-      }
-      const resp = await fetch(url, { method: 'POST', headers: { 'X-CSRFToken': csrfToken() }, body });
+      const resp = await fetch('{% url "otlp_credential_create" %}', {
+        method: 'POST', headers: { 'X-CSRFToken': csrfToken() },
+        body: new URLSearchParams({ connection_id: connId, auth_mode: mode, origin: location.origin }),
+      });
       const data = await resp.json();
       if (!resp.ok) throw new Error(data.error || `HTTP ${resp.status}`);
-      showOtlpResult(Object.entries(data.env_vars).map(([k, v]) => `${k}=${v}`).join('\n'), data.secret, data.credential?.id);
+      showOtlpResult(Object.entries(data.env_vars).map(([k, v]) => `${k}=${v}`).join('\n'), data.secret);
     } catch (err) {
       otlpEnv.textContent = `Error: ${err.message}`;
       otlpResult.classList.remove('hidden');
