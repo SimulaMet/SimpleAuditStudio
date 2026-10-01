@@ -303,9 +303,15 @@ if DEMO_MODE:
 # Production security headers (per Django's production checklist). The app runs
 # behind a TLS-terminating proxy (see SECURE_PROXY_SSL_HEADER above), so these
 # are safe to enable. They are gated off for local dev (http://localhost), the
-# local minimal/demo bundle, and DEMO_MODE (which sets its own cookie policy) so
-# they never break a non-HTTPS or cross-site-embedded setup.
-if not (DEBUG or MINIMAL_CONFIG or DEMO_MODE):
+# local minimal/demo bundle, DEMO_MODE (which sets its own cookie policy), and
+# the test suite (which runs over http://localhost with DEBUG=false) so they
+# never break a non-HTTPS or cross-site-embedded setup.
+_TESTING = (
+    SECRET_KEY in {"test-secret-key-not-change-me", "ci-secret-key"}
+    or bool(os.environ.get("PYTEST_CURRENT_TEST"))
+    or env_bool("SIMPLEAUDIT_TESTING", False)
+)
+if not (DEBUG or MINIMAL_CONFIG or DEMO_MODE or _TESTING):
     SECURE_SSL_REDIRECT = True
     SECURE_HSTS_SECONDS = 60 * 60 * 24 * 365  # 1 year
     SECURE_HSTS_INCLUDE_SUBDOMAINS = True
