@@ -25,13 +25,18 @@ WORKDIR /app
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         curl \
+        git \
     && rm -rf /var/lib/apt/lists/*
 
 # --- Python dependencies -----------------------------------------------------
 # pyproject.toml is the single source of truth; uv.lock pins exact versions.
 # uv sync creates /app/.venv; the PATH update keeps the `python` entrypoint.
+# The core (simpleaudit) is a local path dependency (../SimpleAudit) so the
+# studio can use the tracing layer not yet in the published wheel. Clone it
+# into the build context before uv sync.
 COPY pyproject.toml uv.lock README.md ./
-RUN pip install uv \
+RUN git clone --depth 1 https://github.com/kelkalot/simpleaudit.git /SimpleAudit \
+    && pip install uv \
     && uv sync --frozen --no-install-project --no-dev
 ENV PATH="/app/.venv/bin:$PATH"
 
