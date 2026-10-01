@@ -1,0 +1,333 @@
+{% load static %}
+{% comment %}
+Chat is full screen: Open WebUI has its own sidebar, header and settings, so the
+Studio shell around it would be two navigations fighting for the same edges. The
+only Studio chrome is a slim bar floating over the top: the way back, a model
+picker, and a new-chat button.
+
+Open WebUI runs on its own origin (it cannot be served under a sub-path), so it
+is embedded here. Sign-in is automatic: the proxy in front of it identifies the
+browser through /chat/authz. See chat/config.py.
+
+The model picker and the new-chat button both work by rewriting the iframe's
+?models= query param and reloading it. Open WebUI reads that param on load and
+pre-selects the listed models (comma-separated). The in-frame model selector is
+hidden (chat/embed.css), so this bar is the only way to choose models.
+{% endcomment %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Chat — SimpleAudit</title>
+  <meta name="robots" content="noindex,nofollow">
+  <link rel="icon" type="image/svg+xml" sizes="32x32" href="{% static 'favicon-32x32.svg' %}">
+  <style>
+    :root { --surface: #0f1117; --raised: #1a1d27; --line: #1f2430; --text: #9aa3b2; --text-strong: #e5e7eb; }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; }
+    body {
+      margin: 0; background: var(--surface);
+      color: var(--text);
+      font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    }
+    /* The chat gets the whole viewport; the bar floats over it as a row of
+       pills, so nothing is reserved for a bar. Only the pills take clicks. */
+    header {
+      position: fixed; top: .4rem; left: 50%; transform: translateX(-50%);
+      z-index: 10; pointer-events: none;
+      display: flex; align-items: center; gap: .4rem;
+    }
+    .pill {
+      display: inline-flex; align-items: center; gap: .4rem; padding: .25rem .65rem .25rem .5rem;
+      border: 1px solid var(--line); border-radius: 999px;
+      /* Translucent so it reads as floating over the chat, not pinned to it.
+         The plain colour first, for browsers without color-mix. */
+      background: var(--raised);
+      background: color-mix(in srgb, var(--raised) 82%, transparent);
+      backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
+      font-size: .75rem; font-weight: 500; line-height: 1; opacity: .75;
+      color: var(--text); text-decoration: none; pointer-events: auto;
+      transition: color .15s, border-color .15s, opacity .15s;
+    }
+    .pill:hover, .pill:focus-visible {
+      opacity: 1; color: var(--text-strong); border-color: #394052;
+    }
+    .back img { width: 1rem; height: 1rem; border-radius: .2rem; }
+    .back .arrow { font-size: .8rem; line-height: 1; }
+    /* The model picker: a pill that opens a dropdown of checkboxes. */
+    .picker { position: relative; }
+    .picker button {
+      display: inline-flex; align-items: center; gap: .4rem; padding: .25rem .65rem .25rem .5rem;
+      border: 1px solid var(--line); border-radius: 999px;
+      background: var(--raised);
+      background: color-mix(in srgb, var(--raised) 82%, transparent);
+      backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
+      font-size: .75rem; font-weight: 500; line-height: 1; opacity: .75;
+      color: var(--text); cursor: pointer; pointer-events: auto;
+      transition: color .15s, border-color .15s, opacity .15s;
+    }
+    .picker button:hover, .picker button:focus-visible {
+      opacity: 1; color: var(--text-strong); border-color: #394052;
+    }
+    .picker .caret { font-size: .6rem; line-height: 1; opacity: .7; }
+    .picker .count {
+      display: inline-flex; align-items: center; justify-content: center;
+      min-width: 1.1rem; height: 1.1rem; padding: 0 .3rem;
+      border-radius: 999px; background: #2a2f3d; color: var(--text-strong);
+      font-size: .65rem; font-weight: 600;
+    }
+    .picker .menu {
+      position: fixed;
+      /* Centered horizontally in pure CSS and capped to the window width, so
+         it can never overflow the left or right edge at any window size —
+         no JS timing to get wrong. JS only sets `top` (and flips upward if
+         it would overflow the bottom). */
+      left: 50%; transform: translateX(-50%);
+      top: 3.5rem; /* fallback; JS sets the exact top on open */
+      width: min(22rem, calc(100vw - 1rem));
+      max-height: min(22rem, 60vh); overflow-y: auto;
+      background: var(--raised); border: 1px solid var(--line); border-radius: .6rem;
+      box-shadow: 0 8px 24px rgba(0,0,0,.4);
+      padding: .35rem; display: none; z-index: 20;
+      /* The header is pointer-events:none so the bar doesn't block the chat;
+         the menu must opt back in or its checkboxes click through to the iframe. */
+      pointer-events: auto;
+    }
+    /* Narrow screens: the back pill keeps only its arrow + logo. */
+    @media (max-width: 480px) {
+      .back span { display: none; }
+    }
+    .picker.open .menu { display: block; }
+    .picker .group {
+      padding: .3rem .5rem .1rem; font-size: .6rem; text-transform: uppercase;
+      letter-spacing: .05em; color: var(--text); opacity: .7;
+    }
+    .picker label {
+      display: flex; align-items: center; gap: .5rem; padding: .3rem .5rem;
+      border-radius: .4rem; cursor: pointer; font-size: .75rem; color: var(--text-strong);
+    }
+    .picker label:hover { background: rgba(255,255,255,.05); }
+    .picker label input { accent-color: #6366f1; margin: 0; }
+    .picker label .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .picker label .nokey { font-size: .6rem; color: #eab308; }
+    .picker .empty { padding: .5rem; font-size: .7rem; color: var(--text); }
+    .picker .empty a { color: #818cf8; text-decoration: none; }
+    .picker .empty a:hover { text-decoration: underline; }
+    .picker .search {
+      display: block; width: 100%; margin: 0 .15rem .3rem; padding: .35rem .5rem;
+      border: 1px solid var(--line); border-radius: .4rem;
+      background: var(--surface); color: var(--text-strong);
+      font-size: .75rem; outline: none;
+    }
+    .picker .search:focus { border-color: #394052; }
+    .picker .nomatch { padding: .5rem; font-size: .7rem; color: var(--text); }
+    /* While the picker is open, a transparent layer sits above the iframe and
+       below the bar. Clicks on the chat land here instead of in the iframe —
+       clicks inside the iframe never reach this document, so without it the
+       "click outside to close" handler could never fire. */
+    .backdrop { position: fixed; inset: 0; z-index: 5; background: transparent; }
+    /* The new-chat button: a round "+" pill. */
+    .newchat {
+      display: inline-flex; align-items: center; justify-content: center;
+      width: 1.7rem; height: 1.7rem; padding: 0;
+      border: 1px solid var(--line); border-radius: 999px;
+      background: var(--raised);
+      background: color-mix(in srgb, var(--raised) 82%, transparent);
+      backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
+      font-size: 1rem; font-weight: 500; line-height: 1; opacity: .75;
+      color: var(--text); cursor: pointer; pointer-events: auto;
+      transition: color .15s, border-color .15s, opacity .15s;
+    }
+    .newchat:hover, .newchat:focus-visible {
+      opacity: 1; color: var(--text-strong); border-color: #394052;
+    }
+    iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; display: block; }
+    /* No models to offer: a calm, centered explanation instead of an empty
+       picker and a dead iframe. Reuses the pill for the call to action. */
+    .empty-state {
+      position: absolute; inset: 0;
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      gap: .75rem; text-align: center; padding: 1rem;
+    }
+    .empty-state h1 { margin: 0; font-size: 1.1rem; font-weight: 600; color: var(--text-strong); }
+    .empty-state p { margin: 0; font-size: .85rem; max-width: 26rem; }
+  </style>
+</head>
+<body>
+  <div class="backdrop" id="picker-backdrop" hidden></div>
+  <header>
+    <a class="pill back" href="{% url 'dashboard' %}">
+      <span class="arrow" aria-hidden="true">←</span>
+      <img src="{% static 'logo.svg' %}?v=3" alt="">
+      <span>Back to Studio</span>
+    </a>
+    {% if has_models %}
+    <div class="picker" id="model-picker">
+      <button type="button" id="model-picker-toggle" aria-haspopup="true" aria-expanded="false">
+        <span id="model-picker-label">Model</span>
+        <span class="count" id="model-picker-count" hidden>0</span>
+        <span class="caret" aria-hidden="true">▾</span>
+      </button>
+      <div class="menu" id="model-picker-menu" role="menu">
+        {% if chat_model_data.groups %}
+          <input type="search" class="search" id="model-picker-search" placeholder="Filter models…" autocomplete="off" spellcheck="false">
+          <div id="model-picker-list">
+            {% for group in chat_model_data.groups %}
+            <p class="group">{{ group.connection }}</p>
+            {% for m in group.models %}
+            <label>
+              <input type="checkbox" value="{{ m.id }}"{% if m.id in chat_model_data.defaults %} checked{% endif %}>
+              <span class="name" title="{{ m.name }}">{{ m.name }}</span>
+              {% if not m.has_key %}<span class="nokey">no key</span>{% endif %}
+            </label>
+            {% endfor %}
+            {% endfor %}
+          </div>
+          <p class="nomatch" id="model-picker-nomatch" hidden>No models match.</p>
+        {% else %}
+          <p class="empty">No models yet. <a href="{% url 'connections' %}" target="_blank">Register a connection →</a></p>
+        {% endif %}
+      </div>
+    </div>
+    <button type="button" class="newchat" id="new-chat" title="New chat" aria-label="New chat">＋</button>
+    {% else %}
+    <a class="pill" href="{% url 'connections' %}" target="_blank">
+      <span>No models yet — register a connection →</span>
+    </a>
+    {% endif %}
+  </header>
+  {% if has_models %}
+  <iframe id="chat-frame" src="{{ chat_url }}" title="Chat" allow="clipboard-write; microphone"></iframe>
+  {% else %}
+  <main class="empty-state" id="no-models">
+    <h1>No models available</h1>
+    <p>{{ no_models_message }}</p>
+    <a class="pill" href="{% url 'connections' %}" target="_blank">Go to Connections →</a>
+  </main>
+  {% endif %}
+  <script>
+    (function () {
+      // No models: the picker and iframe aren't rendered, so there is nothing
+      // to wire up.
+      var picker = document.getElementById("model-picker");
+      if (!picker) return;
+      var frame = document.getElementById("chat-frame");
+      var toggle = document.getElementById("model-picker-toggle");
+      var label = document.getElementById("model-picker-label");
+      var count = document.getElementById("model-picker-count");
+      var newChat = document.getElementById("new-chat");
+      var backdrop = document.getElementById("picker-backdrop");
+      var search = document.getElementById("model-picker-search");
+      var list = document.getElementById("model-picker-list");
+      var nomatch = document.getElementById("model-picker-nomatch");
+
+      // Open/close the picker. The backdrop is what actually catches "click
+      // outside": it covers the iframe (which swallows its own clicks) and
+      // sits just below the bar, so a click anywhere but the picker closes it.
+      // Horizontal centering and the width cap are pure CSS (see .menu), so
+      // the menu can never overflow the left or right edge. This only picks
+      // the vertical position: below the toggle, or flipped above it if it
+      // would overflow the bottom. Runs on open and on resize.
+      function positionMenu() {
+        var menu = document.getElementById("model-picker-menu");
+        var t = toggle.getBoundingClientRect();
+        var gap = 6;
+        var top = t.bottom + gap;
+        if (top + menu.offsetHeight > window.innerHeight - 8) {
+          top = Math.max(8, t.top - menu.offsetHeight - gap);
+        }
+        menu.style.top = top + "px";
+      }
+      function setOpen(open) {
+        picker.classList.toggle("open", open);
+        toggle.setAttribute("aria-expanded", open ? "true" : "false");
+        backdrop.hidden = !open;
+        if (open) {
+          positionMenu();
+          if (search) search.focus();
+        }
+      }
+      window.addEventListener("resize", function () {
+        if (picker.classList.contains("open")) positionMenu();
+      });
+
+      // Rewrite the iframe's ?models= and reload it. Open WebUI reads the param
+      // on load and pre-selects the listed models (comma-separated).
+      function load(models) {
+        var p = new URL(frame.src).searchParams;
+        if (models.length) p.set("models", models.join(","));
+        else p.delete("models");
+        p.delete("model");
+        frame.src = frame.src.split("?")[0] + "?" + p.toString();
+      }
+      function selected() {
+        // Dedupe: the same model_id can be registered under more than one
+        // connection, and Open WebUI's ?models= wants each id once.
+        return Array.from(new Set(
+          Array.from(picker.querySelectorAll('input[type="checkbox"]:checked')).map(function (c) { return c.value; })
+        ));
+      }
+      // Remember the selection so the next visit opens on it. The value is the
+      // comma-separated selection ("" clears it back to the first available).
+      function savePreference(models) {
+        var token = (document.cookie.match(/(?:^|;\s*)csrftoken=([^;]+)/) || [])[1] || '';
+        fetch('/me/preferences/', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-CSRFToken': token },
+          body: JSON.stringify({ key: 'chat_model', value: models.length ? models.join(',') : null }),
+        }).catch(function () { /* best-effort; the pin still applies this load */ });
+      }
+      function refresh() {
+        var n = selected().length;
+        count.hidden = n === 0;
+        count.textContent = n;
+        label.textContent = n === 0 ? "Model" : (n === 1 ? "1 model" : n + " models");
+      }
+      toggle.addEventListener("click", function (e) {
+        e.stopPropagation();
+        setOpen(!picker.classList.contains("open"));
+      });
+      backdrop.addEventListener("click", function () { setOpen(false); });
+      document.addEventListener("keydown", function (e) {
+        if (e.key === "Escape") setOpen(false);
+      });
+      // Filter the list as you type. Matching is on the model name or id,
+      // case-insensitive; group headers hide when all their rows are hidden.
+      if (search && list) {
+        search.addEventListener("input", function () {
+          var q = search.value.trim().toLowerCase();
+          var anyVisible = false;
+          list.querySelectorAll("label").forEach(function (row) {
+            var text = (row.querySelector(".name").textContent + " " + row.querySelector("input").value).toLowerCase();
+            var show = !q || text.indexOf(q) !== -1;
+            row.style.display = show ? "" : "none";
+            if (show) anyVisible = true;
+          });
+          list.querySelectorAll(".group").forEach(function (g) {
+            var next = g.nextElementSibling, visible = false;
+            while (next && !next.classList.contains("group")) {
+              if (next.tagName === "LABEL" && next.style.display !== "none") visible = true;
+              next = next.nextElementSibling;
+            }
+            g.style.display = visible ? "" : "none";
+          });
+          if (nomatch) nomatch.hidden = anyVisible;
+        });
+      }
+      picker.addEventListener("change", function () {
+        refresh();
+        var models = selected();
+        load(models);
+        savePreference(models);
+      });
+      newChat.addEventListener("click", function () {
+        picker.querySelectorAll('input[type="checkbox"]').forEach(function (c) { c.checked = false; });
+        refresh();
+        load([]);
+      });
+      refresh();
+    })();
+  </script>
+</body>
+</html>

@@ -79,6 +79,23 @@ def bootstrap_admin_and_default_project(
 DEFAULT_PROJECT_SLUG = "default"
 
 
+def grant_default_project(user) -> Project | None:
+    """Give a new user a viewer membership in the shared 'default' workspace.
+
+    Every user-creation path (admin add-user, self-registration, WorkOS magic
+    auth, demo signup) calls this so a fresh account always has a project to
+    land in — otherwise ``request.project`` resolves to ``None`` and the UI
+    500s. Idempotent: an existing membership is left untouched. Returns the
+    default project, or ``None`` when it does not exist.
+    """
+    project = Project.objects.filter(slug=DEFAULT_PROJECT_SLUG).first()
+    if project:
+        ProjectMembership.objects.get_or_create(
+            project=project, user=user, defaults={"role": ProjectMembership.Role.VIEWER}
+        )
+    return project
+
+
 def ensure_project_access(user, project) -> bool:
     """Return True if the user may view this project's content.
 
@@ -263,13 +280,15 @@ def admin_create_user(*, admin_user, username: str, email: str = "", password: s
     from django.contrib.auth.password_validation import validate_password
 
     validate_password(password)
-    return User.objects.create_user(
+    user = User.objects.create_user(
         username=clean_username,
         email=clean_email,
         password=password,
         first_name=(first_name or "").strip(),
         last_name=(last_name or "").strip(),
     )
+    grant_default_project(user)
+    return user
 
 
 @transaction.atomic

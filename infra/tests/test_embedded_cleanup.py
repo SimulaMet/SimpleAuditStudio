@@ -68,3 +68,44 @@ class StalePostgresTests(SimpleTestCase):
             mc._cleanup_stale_embedded_pg(str(self.dir))
         kill.assert_not_called()
         self.assertTrue(self.lock.exists())
+
+
+class EmbeddedSignalTests(SimpleTestCase):
+    def test_sidecar_has_separate_process_group_and_explicit_stop(self):
+        """Exercise SDK spawning with a real child, without starting Postgres."""
+        import subprocess
+        import sys
+
+        from hatchet_sdk import EmbeddedHatchetConfig, embedded
+
+        child = None
+        real_popen = subprocess.Popen
+
+        def spawn_stub(*args, **kwargs):
+            nonlocal child
+            child = real_popen(
+                [sys.executable, "-c",
+                 "import sys; sys.stdin.buffer.read()"],
+                **kwargs,
+            )
+            return child
+
+        handshake = embedded.Handshake(
+            token="test", tenant_id="test", grpc_address="localhost:1",
+            api_url="http://localhost:1",
+        )
+        try:
+            with mock.patch.object(subprocess, "Popen", side_effect=spawn_stub), \
+                 mock.patch.object(embedded, "_wait_for_handshake", return_value=handshake), \
+                 mc._isolated_embedded_process():
+                sidecar = embedded.start_embedded_sidecar(
+                    EmbeddedHatchetConfig(binary_path=sys.executable)
+                )
+            self.assertNotEqual(os.getpgid(child.pid), os.getpgrp())
+            self.assertIsNone(child.poll())
+            sidecar.stop()
+            self.assertIsNotNone(child.poll())
+        finally:
+            if child is not None and child.poll() is None:
+                child.terminate()
+                child.wait(timeout=5)
