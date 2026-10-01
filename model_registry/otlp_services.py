@@ -1,9 +1,11 @@
 """OTLP credential services for Studio.
 
 Generates and verifies the credentials an external target uses to push OTLP
-traces to Studio. The secret hashing/verification mirrors
-``simpleaudit.tracing.auth`` (salted SHA-256 + constant-time compare) so the
-library and Studio agree on the wire format.
+traces to Studio. The credential *primitive* — salted SHA-256 hashing,
+constant-time verification, header parsing, and secret generation — lives in
+the core (``simpleaudit.tracing.auth``) so the library and Studio share one
+definition. This module adds the Studio persistence layer on top: the
+``OTLPCredential`` table, per-connection lookup, and the "none" fallback.
 
 Two auth modes:
     - ``basic``  — username + password (OpenWebUI's native OTEL_BASIC_AUTH_*).
@@ -14,11 +16,6 @@ creation so the user can copy it into the target's environment.
 """
 from __future__ import annotations
 
-import base64
-import binascii
-import hashlib
-import hmac
-import os
 import secrets
 from dataclasses import dataclass
 
@@ -26,40 +23,20 @@ from django.db import transaction
 
 from model_registry.models import OTLPCredential
 
-_SALT_LEN = 16
-
-
-def _hash_secret(secret: str, salt: bytes) -> bytes:
-    return hashlib.sha256(salt + secret.encode("utf-8")).digest()
-
-
-def _new_salt() -> bytes:
-    return os.urandom(_SALT_LEN)
-
-
-def generate_password() -> str:
-    """A strong, URL-safe password for a Basic-Auth credential."""
-    return secrets.token_urlsafe(32)
-
-
-_BEARER_TOKEN_PREFIX = "sa_otlp_"
-# Length of the non-secret lookup prefix stored on a bearer credential.
-_TOKEN_LOOKUP_PREFIX_LEN = 16
-
-
-def generate_token() -> str:
-    """A strong bearer token (prefixed for easy recognition in logs)."""
-    return _BEARER_TOKEN_PREFIX + secrets.token_urlsafe(32)
-
-
-def token_lookup_prefix(token: str) -> str:
-    """A short, non-secret prefix of a bearer token for indexed lookup.
-
-    This is stored on the credential so ``verify_bearer`` can narrow the
-    candidate set before hashing. It is deliberately short and never used for
-    authentication (only the salted hash is).
-    """
-    return (token or "")[:_TOKEN_LOOKUP_PREFIX_LEN]
+# The credential primitive (salted-hash + constant-time verify + header
+# parsing + secret generation) lives in the core so the library and Studio
+# share one definition. Studio adds the persistence layer on top: the
+# OTLPCredential table, per-connection lookup, and the "none" fallback.
+from simpleaudit.tracing.auth import (
+    generate_password,
+    generate_token,
+    hash_secret,
+    new_salt,
+    parse_basic_header,
+    parse_bearer_header,
+    token_lookup_prefix,
+    verify_secret,
+)
 
 
 def _make_target_id(connection) -> str:
@@ -103,13 +80,13 @@ def create_credential(*, project, connection, auth_mode: str, user=None) -> NewC
     elif auth_mode == OTLPCredential.AuthMode.BASIC:
         username = f"sa_{target_id}"
         secret = generate_password()
-        salt = _new_salt()
-        secret_hash = _hash_secret(secret, salt)
+        salt = new_salt()
+        secret_hash = hash_secret(secret, salt)
     else:  # bearer
         username = ""
         secret = generate_token()
-        salt = _new_salt()
-        secret_hash = _hash_secret(secret, salt)
+        salt = new_salt()
+        secret_hash = hash_secret(secret, salt)
         token_prefix = token_lookup_prefix(secret)
 
     # Upsert: if a credential already exists for this connection, update it
@@ -148,8 +125,8 @@ def rotate_credential(cred: OTLPCredential) -> NewCredential:
     else:  # bearer
         secret = generate_token()
 
-    salt = _new_salt()
-    cred.secret_hash = _hash_secret(secret, salt)
+    salt = new_salt()
+    cred.secret_hash = hash_secret(secret, salt)
     cred.salt = salt
     cred.token_prefix = token_lookup_prefix(secret)
     cred.enabled = True  # rotation re-enables a revoked credential
@@ -164,7 +141,7 @@ def verify_basic(username: str, password: str) -> OTLPCredential | None:
     ).first()
     if cred is None:
         return None
-    if hmac.compare_digest(cred.secret_hash, _hash_secret(password, cred.salt)):
+    if verify_secret(password, cred.salt, cred.secret_hash):
         return cred
     return None
 
@@ -187,40 +164,9 @@ def verify_bearer(token: str) -> OTLPCredential | None:
     if not candidates.exists():
         candidates = qs
     for cred in candidates:
-        if cred.salt and hmac.compare_digest(cred.secret_hash, _hash_secret(token, cred.salt)):
+        if verify_secret(token, cred.salt, cred.secret_hash):
             return cred
     return None
-
-
-def parse_basic_header(authorization: str | None) -> tuple[str, str] | None:
-    """Parse an ``Authorization: Basic ...`` header into (username, password).
-
-    Returns None when the header is missing, not Basic, or not valid base64.
-    """
-    if not authorization:
-        return None
-    parts = authorization.strip().split(" ", 1)
-    if len(parts) != 2 or parts[0].strip().lower() != "basic":
-        return None
-    try:
-        decoded = base64.b64decode(parts[1].strip(), validate=True).decode("utf-8")
-    except (binascii.Error, UnicodeDecodeError, ValueError):
-        return None
-    if ":" not in decoded:
-        return None
-    username, password = decoded.split(":", 1)
-    return username, password
-
-
-def parse_bearer_header(authorization: str | None) -> str | None:
-    """Parse an ``Authorization: Bearer ...`` header into the token, else None."""
-    if not authorization:
-        return None
-    parts = authorization.strip().split(" ", 1)
-    if len(parts) != 2 or parts[0].strip().lower() != "bearer":
-        return None
-    token = parts[1].strip()
-    return token or None
 
 
 def otlp_env_vars(*, endpoint: str, username: str, password: str) -> list[tuple[str, str]]:
