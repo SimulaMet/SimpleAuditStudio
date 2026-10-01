@@ -517,6 +517,16 @@ def _scenario_execute_impl(workflow_input: ScenarioInput, ctx: Context) -> dict:
 
     try:
         if n_reps > 1:
+            # The engine's multi-rep path does not forward trace correlation, so
+            # a trace_config on a repeated run is silently ignored. Warn once so
+            # users aren't misled into thinking trace evidence was collected.
+            if trace_config:
+                logger.warning(
+                    "trace_config is set but n_repetitions=%d; the multi-rep path "
+                    "does not support live tracing, so trace evidence will not be "
+                    "collected for this run.",
+                    n_reps,
+                )
             result_payload = run_scenario_repeated(
                 name=item.scenario.key,
                 description=revision.description,
