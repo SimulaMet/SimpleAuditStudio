@@ -201,6 +201,79 @@ class AuditorKwargsTest(TestCase):
         self.assertEqual(entry["judge_kwargs"], {"timeout": 9, "max_retries": 1})
 
 
+class RepeatedTracingTest(TestCase):
+    """run_scenario_repeated forwards tracing and attaches per-rep evidence."""
+
+    def test_forwards_trace_config_to_engine(self):
+        from infra import engine
+
+        captured = {}
+
+        class FakeExperiment:
+            def __init__(self, models, **kw):
+                pass
+
+            async def run_scenario_reps(self, **kw):
+                captured["audit_run_id"] = kw.get("audit_run_id")
+                captured["corr_fn"] = kw.get("trace_correlation")
+                return [
+                    type("R", (), {"to_dict": lambda self: {"severity": "pass", "judgment": {}}})()
+                    for _ in range(2)
+                ]
+
+        # A fake provider (tempo mode) that yields no spans; fetch returns [].
+        fake_provider = mock.MagicMock()
+        fake_provider.fetch.return_value = []
+        fake_provider._audit_run_id = "audit_x"
+
+        with mock.patch("simpleaudit.experiment.AuditExperiment", FakeExperiment), \
+             mock.patch("infra.tracing.build_trace_provider", return_value=fake_provider):
+            result = engine.run_scenario_repeated(
+                name="s", description="d", expected_behavior=None, test_prompt=None,
+                target=_snap("tgt"), auditor=_snap("aud"), judge=_snap("jdg"),
+                n_repetitions=2,
+                trace_config={"mode": "tempo", "base_url": "http://tempo.local"},
+            )
+
+        # Tracing params were forwarded to the engine (a fresh audit_run_id is
+        # minted for the run).
+        self.assertTrue(str(captured["audit_run_id"]).startswith("audit_"))
+        self.assertTrue(callable(captured["corr_fn"]))
+        # Two reps were executed.
+        self.assertEqual(result["n_repetitions"], 2)
+        self.assertEqual(len(result["reps"]), 2)
+
+    def test_no_trace_config_is_noop(self):
+        from infra import engine
+
+        captured = {}
+
+        class FakeExperiment:
+            def __init__(self, models, **kw):
+                pass
+
+            async def run_scenario_reps(self, **kw):
+                captured["audit_run_id"] = kw.get("audit_run_id")
+                captured["corr_fn"] = kw.get("trace_correlation")
+                return [
+                    type("R", (), {"to_dict": lambda self: {"severity": "pass", "judgment": {}}})()
+                    for _ in range(2)
+                ]
+
+        with mock.patch("simpleaudit.experiment.AuditExperiment", FakeExperiment):
+            result = engine.run_scenario_repeated(
+                name="s", description="d", expected_behavior=None, test_prompt=None,
+                target=_snap("tgt"), auditor=_snap("aud"), judge=_snap("jdg"),
+                n_repetitions=2,
+            )
+
+        self.assertIsNone(captured["audit_run_id"])
+        # The correlation callable is always forwarded; with no trace_config it
+        # resolves to None (no tracing).
+        self.assertIsNone(captured["corr_fn"]())
+        self.assertEqual(result["n_repetitions"], 2)
+
+
 class ProviderNormalizationTest(TestCase):
     def test_known_provider_passthrough(self):
         from infra.engine import _normalize_provider
