@@ -459,8 +459,11 @@ class OtlpEnvTests(SimpleTestCase):
         self.tmp = Path(self._tmp.name)
         self._process = proxy._process
         proxy._process = None
+        self._pid_patcher = patch.object(proxy, "pid_file", lambda: self.tmp / "open-webui.pid")
+        self._pid_patcher.start()
 
     def tearDown(self):
+        self._pid_patcher.stop()
         proxy._process = self._process
         self._tmp.cleanup()
         super().tearDown()
