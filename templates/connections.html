@@ -324,9 +324,9 @@
     <div class="flex items-center gap-2">
       <label class="text-xs text-gray-300" for="otlp-mode">Auth mode</label>
       <select id="otlp-mode" class="px-2.5 py-1.5 rounded-lg bg-surface-overlay border border-gray-700 text-xs text-gray-200">
+        <option value="none" selected>None (unauthenticated)</option>
         <option value="basic">Basic Auth</option>
         <option value="bearer">Bearer Token</option>
-        <option value="none">None (unauthenticated)</option>
       </select>
       <button type="button" id="otlp-issue" class="px-3 py-1.5 rounded-lg bg-accent text-white text-xs font-medium hover:bg-accent-hover">Issue credential</button>
     </div>
