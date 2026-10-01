@@ -21,8 +21,6 @@ from dataclasses import dataclass
 
 from django.db import transaction
 
-from model_registry.models import OTLPCredential
-
 # The credential primitive (salted-hash + constant-time verify + header
 # parsing + secret generation) lives in the core so the library and Studio
 # share one definition. Studio adds the persistence layer on top: the
@@ -32,11 +30,11 @@ from simpleaudit.tracing.auth import (
     generate_token,
     hash_secret,
     new_salt,
-    parse_basic_header,
-    parse_bearer_header,
     token_lookup_prefix,
     verify_secret,
 )
+
+from model_registry.models import OTLPCredential
 
 
 def _make_target_id(connection) -> str:

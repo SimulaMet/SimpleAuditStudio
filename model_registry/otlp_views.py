@@ -19,6 +19,8 @@ from django.views.decorators.csrf import csrf_exempt
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
+from simpleaudit.tracing.auth import parse_basic_header, parse_bearer_header
+from simpleaudit.tracing.store import SpanStore
 
 from infra.exceptions import StableAPIError
 from model_registry import otlp_services as otlp
@@ -29,12 +31,10 @@ from model_registry.models import ModelConnection, OTLPCredential
 # judge's evidence selection use), so spans ingested here are directly
 # consumable by ``select_spans``. (A persistent backend can replace this
 # without changing the endpoint contract.)
-_SPAN_STORE: dict[str, "SpanStore"] = {}
+_SPAN_STORE: dict[str, SpanStore] = {}
 
 
-def _store_for_target(target_id: str) -> "SpanStore":
-    from simpleaudit.tracing.store import SpanStore
-
+def _store_for_target(target_id: str) -> SpanStore:
     store = _SPAN_STORE.get(target_id)
     if store is None:
         store = SpanStore()
@@ -69,11 +69,11 @@ def otlp_traces(request):
     authorization = request.headers.get("Authorization")
     cred = None
     if authorization and authorization.strip().lower().startswith("basic"):
-        parsed = otlp.parse_basic_header(authorization)
+        parsed = parse_basic_header(authorization)
         if parsed:
             cred = otlp.verify_basic(*parsed)
     elif authorization and authorization.strip().lower().startswith("bearer"):
-        token = otlp.parse_bearer_header(authorization)
+        token = parse_bearer_header(authorization)
         if token:
             cred = otlp.verify_bearer(token)
 

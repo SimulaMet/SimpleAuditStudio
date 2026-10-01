@@ -7,6 +7,7 @@ import base64
 import json
 
 from django.test import Client, TestCase
+from simpleaudit.tracing.auth import parse_basic_header, parse_bearer_header
 
 from infra.tests.factories import (
     MembershipFactory,
@@ -31,24 +32,24 @@ def _otlp_body():
 
 class OTLPHeaderParsingTest(TestCase):
     def test_parse_basic(self):
-        self.assertEqual(otlp.parse_basic_header(_basic_header("u", "p")), ("u", "p"))
+        self.assertEqual(parse_basic_header(_basic_header("u", "p")), ("u", "p"))
 
     def test_parse_basic_with_colon_in_password(self):
-        self.assertEqual(otlp.parse_basic_header(_basic_header("u", "a:b:c")), ("u", "a:b:c"))
+        self.assertEqual(parse_basic_header(_basic_header("u", "a:b:c")), ("u", "a:b:c"))
 
     def test_parse_bearer(self):
-        self.assertEqual(otlp.parse_bearer_header("Bearer tok123"), "tok123")
+        self.assertEqual(parse_bearer_header("Bearer tok123"), "tok123")
 
     def test_scheme_mismatch_returns_none(self):
-        self.assertIsNone(otlp.parse_basic_header("Bearer x"))
-        self.assertIsNone(otlp.parse_bearer_header("Basic x"))
+        self.assertIsNone(parse_basic_header("Bearer x"))
+        self.assertIsNone(parse_bearer_header("Basic x"))
 
     def test_missing_header(self):
-        self.assertIsNone(otlp.parse_basic_header(None))
-        self.assertIsNone(otlp.parse_bearer_header(""))
+        self.assertIsNone(parse_basic_header(None))
+        self.assertIsNone(parse_bearer_header(""))
 
     def test_invalid_base64(self):
-        self.assertIsNone(otlp.parse_basic_header("Basic !!!not-base64!!!"))
+        self.assertIsNone(parse_basic_header("Basic !!!not-base64!!!"))
 
 
 class OTLPCredentialServiceTest(TestCase):

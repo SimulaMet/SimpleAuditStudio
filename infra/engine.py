@@ -524,7 +524,7 @@ def run_scenario_repeated(
     provider = None
     rep_correlations: dict[int, Any] = {}
     if trace_config:
-        from simpleaudit.tracing.context import TraceCorrelation, new_trace_id
+        from simpleaudit.tracing.context import new_trace_id
 
         from infra.tracing import build_trace_provider
 
