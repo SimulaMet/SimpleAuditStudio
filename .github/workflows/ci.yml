@@ -32,13 +32,20 @@ jobs:
         run: uv sync --frozen --extra dev
       - name: Lint (ruff)
         run: uv run ruff check .
-      - name: Run tests (parallel)
-        run: uv run python manage.py test infra --parallel auto --exclude-tag embedded_hatchet
+      - name: Cache testmon dependency data
+        uses: actions/cache@v4
+        with:
+          path: .testmondata
+          key: testmon-${{ github.sha }}
+          restore-keys: |
+            testmon-
+      - name: Run tests (parallel, affected-only via testmon)
+        run: uv run pytest --testmon -n auto -m "not embedded_hatchet"
       - name: Check if embedded Hatchet files changed
         id: hatchet-changed
         run: |
           CHANGED=$(git diff --name-only origin/main...HEAD -- infra/minimal_config.py infra/worker.py 2>/dev/null || true)
-          if [ -n "$CHANGED" ]; then echo "changed=true" >> "$GITHUB_OUTPUT"; else echo "changed=false" >> "$GITHUB_OUTPUT"; fi
+          if [ -n "$CHANGED"]; then echo "changed=true" >> "$GITHUB_OUTPUT"; else echo "changed=false" >> "$GITHUB_OUTPUT"; fi
       - name: Run tests (embedded Hatchet, serial)
         if: steps.hatchet-changed.outputs.changed == 'true'
-        run: uv run python manage.py test infra.tests.test_minimal_config.TestEmbeddedHatchetLifecycle
+        run: uv run pytest -m "embedded_hatchet"

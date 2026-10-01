@@ -8,7 +8,12 @@ import json
 
 from django.test import Client, TestCase
 
-from infra.tests.factories import MembershipFactory, ModelConnectionFactory, ProjectFactory, UserFactory
+from infra.tests.factories import (
+    MembershipFactory,
+    ModelConnectionFactory,
+    ProjectFactory,
+    UserFactory,
+)
 from model_registry import otlp_services as otlp
 from model_registry import otlp_views
 from model_registry.models import OTLPCredential
