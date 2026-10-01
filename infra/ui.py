@@ -1928,6 +1928,99 @@ class ConnectionCheckView(ProjectMixin, View):
         return JsonResponse({"ok": True, "count": len(ids), "models": ids[:6]})
 
 
+class OTLPCredentialCreateView(ProjectMixin, View):
+    """Generate an OTLP credential for a connection.
+
+    Returns the one-time secret plus the exact env vars to paste into the
+    target (Basic Auth or Bearer Token). Admin-only.
+    """
+
+    def post(self, request):
+        from model_registry.models import ModelConnection
+        from model_registry import otlp_services as otlp
+        from model_registry.otlp_views import _endpoint_url, _require_admin
+
+        blocked = _require_write_access(request)
+        if blocked:
+            return JsonResponse({"ok": False, "error": "You don't have permission to change connections."}, status=403)
+        post = request.POST
+        conn = ModelConnection.objects.filter(pk=_int(post.get("connection_id")), project=request.project).first()
+        if conn is None:
+            return JsonResponse({"ok": False, "error": "Connection not found in this workspace."}, status=404)
+        try:
+            _require_admin(request, request.project)
+        except Exception as e:  # noqa: BLE001 - surface the permission error
+            return JsonResponse({"ok": False, "error": str(e)}, status=403)
+        auth_mode = (post.get("auth_mode") or "basic").strip().lower()
+        if auth_mode not in ("none", "basic", "bearer"):
+            return JsonResponse({"ok": False, "error": "auth_mode must be 'none', 'basic', or 'bearer'."}, status=400)
+        try:
+            new_cred = otlp.create_credential(project=request.project, connection=conn, auth_mode=auth_mode, user=request.user)
+        except ValueError as e:
+            return JsonResponse({"ok": False, "error": str(e)}, status=400)
+        endpoint = _endpoint_url(request, origin=(post.get("origin") or "").strip())
+        payload = {
+            "ok": True,
+            "credential": {
+                "id": new_cred.credential.id,
+                "auth_mode": new_cred.credential.auth_mode,
+                "username": new_cred.credential.username,
+                "target_id": new_cred.credential.target_id,
+            },
+            "secret": new_cred.secret,
+            "endpoint": endpoint,
+        }
+        if new_cred.credential.auth_mode == "basic":
+            payload["env_vars"] = dict(otlp.otlp_env_vars(endpoint=endpoint, username=new_cred.credential.username, password=new_cred.secret))
+        elif new_cred.credential.auth_mode == "bearer":
+            payload["env_vars"] = dict(otlp.otlp_bearer_env_vars(endpoint=endpoint, token=new_cred.secret))
+        else:  # none
+            payload["env_vars"] = dict(otlp.otlp_open_env_vars(endpoint=endpoint))
+        return JsonResponse(payload)
+
+
+class OTLPCredentialRotateView(ProjectMixin, View):
+    """Re-issue an OTLP credential's secret (old one stops working). Admin-only."""
+
+    def post(self, request):
+        from model_registry.models import OTLPCredential
+        from model_registry import otlp_services as otlp
+        from model_registry.otlp_views import _endpoint_url, _require_admin
+
+        blocked = _require_write_access(request)
+        if blocked:
+            return JsonResponse({"ok": False, "error": "You don't have permission to change connections."}, status=403)
+        post = request.POST
+        cred = OTLPCredential.objects.filter(pk=_int(post.get("credential_id")), project=request.project).first()
+        if cred is None:
+            return JsonResponse({"ok": False, "error": "Credential not found in this workspace."}, status=404)
+        try:
+            _require_admin(request, request.project)
+        except Exception as e:  # noqa: BLE001
+            return JsonResponse({"ok": False, "error": str(e)}, status=403)
+        try:
+            new_cred = otlp.rotate_credential(cred)
+        except ValueError as e:
+            return JsonResponse({"ok": False, "error": str(e)}, status=400)
+        endpoint = _endpoint_url(request, origin=(post.get("origin") or "").strip())
+        payload = {
+            "ok": True,
+            "credential": {
+                "id": new_cred.credential.id,
+                "auth_mode": new_cred.credential.auth_mode,
+                "username": new_cred.credential.username,
+                "target_id": new_cred.credential.target_id,
+            },
+            "secret": new_cred.secret,
+            "endpoint": endpoint,
+        }
+        if new_cred.credential.auth_mode == "basic":
+            payload["env_vars"] = dict(otlp.otlp_env_vars(endpoint=endpoint, username=new_cred.credential.username, password=new_cred.secret))
+        else:  # bearer
+            payload["env_vars"] = dict(otlp.otlp_bearer_env_vars(endpoint=endpoint, token=new_cred.secret))
+        return JsonResponse(payload)
+
+
 class DiscoverModelsView(ProjectMixin, View):
     """List the models a connection's server offers (GET {base_url}/models)."""
 

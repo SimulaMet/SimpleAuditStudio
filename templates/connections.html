@@ -64,6 +64,8 @@
         {% if conn.can_edit %}
         <button type="button" data-write data-discover="{{ conn.id }}" title="List the models this server offers and pick ones to add"
                 class="px-2.5 py-1 rounded-lg text-xs text-gray-300 bg-surface-overlay hover:text-white">+ Models</button>
+        <button type="button" data-write data-otlp="{{ conn.id }}" title="Generate an OTLP credential so this target can push traces to Studio"
+                class="px-2.5 py-1 rounded-lg text-xs text-gray-300 bg-surface-overlay hover:text-white">OTLP</button>
         <button type="button" data-write data-conn-open="{{ conn.id }}" title="Edit connection" aria-label="Edit connection {{ conn.name }}"
                 class="w-7 h-7 rounded-lg text-gray-400 hover:text-accent hover:bg-surface-overlay">✎</button>
         {% if conn.in_use %}
@@ -302,6 +304,34 @@
   </form>
 </dialog>
 
+<!-- OTLP credential (generate + copy env vars) -->
+<dialog id="otlp-dialog" class="sa-dialog w-[min(38rem,calc(100vw-2rem))] rounded-xl border border-gray-700 bg-surface-raised p-0 shadow-2xl">
+  <div class="p-5 space-y-4">
+    <div class="flex items-center justify-between">
+      <h2 class="text-base font-semibold text-gray-100">OTLP credential for <span id="otlp-dialog-conn"></span></h2>
+      <button type="button" data-dialog-close aria-label="Close" title="Close" class="w-7 h-7 rounded text-gray-500 hover:text-gray-200">✕</button>
+    </div>
+    <p class="text-xs text-gray-400">Generate a credential so this target can push OTLP traces to Studio. The secret is shown once — copy it now.</p>
+    <div class="flex items-center gap-2">
+      <label class="text-xs text-gray-300" for="otlp-mode">Auth mode</label>
+      <select id="otlp-mode" class="px-2.5 py-1.5 rounded-lg bg-surface-overlay border border-gray-700 text-xs text-gray-200">
+        <option value="basic">Basic Auth</option>
+        <option value="bearer">Bearer Token</option>
+        <option value="none">None (unauthenticated)</option>
+      </select>
+      <button type="button" id="otlp-generate" class="px-3 py-1.5 rounded-lg bg-accent text-white text-xs font-medium hover:bg-accent-hover">Generate</button>
+    </div>
+    <div id="otlp-result" class="hidden space-y-2 text-xs">
+      <p id="otlp-warning" class="hidden text-amber-300 bg-amber-900/20 rounded px-2 py-1.5">Copy the secret now — it won't be shown again.</p>
+      <pre id="otlp-env" class="bg-surface-overlay border border-gray-700 rounded-lg p-3 font-mono text-[11px] text-gray-200 whitespace-pre-wrap break-all"></pre>
+      <div class="flex items-center gap-2">
+        <button type="button" id="otlp-copy" class="px-3 py-1.5 rounded-lg text-xs text-gray-300 bg-surface-overlay hover:text-white">Copy env vars</button>
+        <button type="button" id="otlp-rotate" class="hidden px-3 py-1.5 rounded-lg text-xs text-gray-300 bg-surface-overlay hover:text-white" title="Issue a new secret; the old one stops working">Rotate secret</button>
+      </div>
+    </div>
+  </div>
+</dialog>
+
 {{ provider_presets|json_script:"provider-presets" }}
 {{ conn_data|json_script:"conn-data" }}
 <script>
@@ -495,6 +525,68 @@
     }
   }
   document.addEventListener('click', e => { const b = e.target.closest('[data-discover]'); if (b) openModels(b.dataset.discover); });
+
+  // ---------- OTLP credential ----------
+  const otlpDialog = $('#otlp-dialog'), otlpResult = $('#otlp-result'), otlpEnv = $('#otlp-env');
+  let otlpCredId = null;
+  function openOtlp(connId) {
+    $('#otlp-dialog-conn').textContent = CONNS[connId].name;
+    otlpResult.classList.add('hidden');
+    otlpCredId = null;
+    $('#otlp-rotate').classList.add('hidden');
+    otlpDialog.dataset.connId = connId;
+    otlpDialog.showModal();
+  }
+  function showOtlpResult(env, secret, credId) {
+    otlpEnv.textContent = env;
+    $('#otlp-warning').classList.toggle('hidden', !secret);
+    otlpCredId = credId || null;
+    $('#otlp-rotate').classList.toggle('hidden', !otlpCredId);
+    otlpResult.classList.remove('hidden');
+  }
+  document.addEventListener('click', e => { const b = e.target.closest('[data-otlp]'); if (b) openOtlp(b.dataset.otlp); });
+  $('#otlp-generate').addEventListener('click', async () => {
+    const connId = otlpDialog.dataset.connId, mode = $('#otlp-mode').value;
+    const btn = $('#otlp-generate'); btn.disabled = true; btn.textContent = 'Generating…';
+    try {
+      const resp = await fetch('{% url "otlp_credential_create" %}', {
+        method: 'POST', headers: { 'X-CSRFToken': csrfToken() },
+        body: new URLSearchParams({ connection_id: connId, auth_mode: mode, origin: location.origin }),
+      });
+      const data = await resp.json();
+      if (!resp.ok) throw new Error(data.error || `HTTP ${resp.status}`);
+      showOtlpResult(Object.entries(data.env_vars).map(([k, v]) => `${k}=${v}`).join('\n'), data.secret, data.credential?.id);
+    } catch (err) {
+      otlpEnv.textContent = `Error: ${err.message}`;
+      otlpResult.classList.remove('hidden');
+    } finally {
+      btn.disabled = false; btn.textContent = 'Generate';
+    }
+  });
+  $('#otlp-rotate').addEventListener('click', async () => {
+    if (!otlpCredId) return;
+    if (!confirm('Issue a new secret? The current one stops working immediately.')) return;
+    const btn = $('#otlp-rotate'); btn.disabled = true; btn.textContent = 'Rotating…';
+    try {
+      const resp = await fetch('{% url "otlp_credential_rotate" %}', {
+        method: 'POST', headers: { 'X-CSRFToken': csrfToken() },
+        body: new URLSearchParams({ credential_id: otlpCredId, origin: location.origin }),
+      });
+      const data = await resp.json();
+      if (!resp.ok) throw new Error(data.error || `HTTP ${resp.status}`);
+      showOtlpResult(Object.entries(data.env_vars).map(([k, v]) => `${k}=${v}`).join('\n'), data.secret, data.credential?.id);
+    } catch (err) {
+      otlpEnv.textContent = `Error: ${err.message}`;
+      otlpResult.classList.remove('hidden');
+    } finally {
+      btn.disabled = false; btn.textContent = 'Rotate secret';
+    }
+  });
+  $('#otlp-copy').addEventListener('click', async () => {
+    try { await navigator.clipboard.writeText(otlpEnv.textContent); $('#otlp-copy').textContent = 'Copied!'; }
+    catch { $('#otlp-copy').textContent = 'Copy failed'; }
+    setTimeout(() => { $('#otlp-copy').textContent = 'Copy env vars'; }, 1500);
+  });
   list.addEventListener('change', refreshSubmit);
   $('#manual-id').addEventListener('input', refreshSubmit);
   $('#discover-filter').addEventListener('input', e => {

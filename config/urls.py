@@ -21,6 +21,8 @@ from infra.ui import (
     ConnectionsView,
     DashboardView,
     DiscoverModelsView,
+    OTLPCredentialCreateView,
+    OTLPCredentialRotateView,
     ExperimentDetailView,
     ExperimentRenameView,
     ExperimentsView,
@@ -59,6 +61,7 @@ from infra.ui import (
     logout_view,
 )
 from judges.views import JudgeDetailView, JudgePreviewView, JudgesView
+from model_registry import otlp_views
 
 # --- Static file serving ---------------------------------------------------
 # For the canonical Docker Compose self-hosted deployment Django serves its
@@ -140,6 +143,11 @@ urlpatterns = [
     path("api/", include("scenarios.urls")),
     path("api/", include("model_registry.urls")),
     path("api/", include("audits.urls")),
+    # Shared OTLP ingestion endpoint (machine-to-machine, Basic/Bearer auth).
+    path("otlp/v1/traces", otlp_views.otlp_traces, name="otlp-traces"),
+    path("api/otlp/credentials/", otlp_views.list_credentials, name="otlp-credentials-list"),
+    path("api/otlp/credentials/create/", otlp_views.create_credential, name="otlp-credentials-create"),
+    path("api/otlp/credentials/<int:cred_id>/revoke/", otlp_views.revoke_credential, name="otlp-credentials-revoke"),
     # Public landing page (indexable, no auth) — the site's SEO surface
     # "/" is the dashboard when signed in and the public landing page otherwise.
     path("", home_view, name="dashboard"),
@@ -183,6 +191,8 @@ urlpatterns = [
     path("connections/discover/", DiscoverModelsView.as_view(), name="models_discover"),
     path("connections/check/", ConnectionCheckView.as_view(), name="connection_check"),
     path("connections/<int:conn_id>/delete/", ConnectionDeleteView.as_view(), name="connection_delete"),
+    path("connections/otlp-credential/", OTLPCredentialCreateView.as_view(), name="otlp_credential_create"),
+    path("connections/otlp-credential/rotate/", OTLPCredentialRotateView.as_view(), name="otlp_credential_rotate"),
     path("judges/", JudgesView.as_view(), name="judges"),
     path("judges/new/", JudgeDetailView.as_view(), name="judge_new"),
     path("judges/preview/", JudgePreviewView.as_view(), name="judge_preview"),
