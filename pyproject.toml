@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "simpleaudit-studio"
-version = "0.5.2"
+version = "0.5.3"
 description = "Production AI model audit platform — one-liner demo mode via uvx"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -26,6 +26,7 @@ dependencies = [
     # 0.2.1 adds the native on_turn per-phase progress callback.
     "simpleaudit==0.2.3",
     "cronsim==2.7",
+    "psutil>=7.2.2",
 ]
 
 [project.optional-dependencies]
@@ -56,6 +57,7 @@ packages = [
     "config",
     "accounts",
     "audits",
+    "chat",
     "infra",
     "scenarios",
     "model_registry",

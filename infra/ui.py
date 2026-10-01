@@ -25,6 +25,7 @@ from audits.comparison import compare_runs
 from audits.events import ScenarioResult
 from audits.models import AuditRun
 from audits.services import create_audit_run, frozen_name, submit_audit_run
+from infra.chat_feature import chat_enabled
 from infra.hashing import scenario_revision_hash
 from scenarios.models import (
     Scenario,
@@ -172,6 +173,9 @@ class RegisterView(TemplateView):
             error = "Username already taken."
         else:
             user = User.objects.create_user(username=username, password=password, email=email)
+            from accounts.services import grant_default_project
+
+            grant_default_project(user)
             login(request, user)
             return redirect("dashboard")
         return self.render_to_response(self.get_context_data(error=error))
@@ -295,16 +299,12 @@ class WorkOSVerifyView(TemplateView):
 def _grant_default_project(user):
     """Give first-time WorkOS users membership in the 'Default' project (viewer).
 
-    The 'Default' workspace is reserved for this purpose — it is created during
-    platform bootstrap and serves as the shared landing space for new users.
+    Thin wrapper over the shared ``grant_default_project`` service so every
+    user-creation path lands new users in the same shared landing space.
     """
-    from accounts.models import Project, ProjectMembership
+    from accounts.services import grant_default_project
 
-    project = Project.objects.filter(slug="default").first()
-    if project:
-        ProjectMembership.objects.get_or_create(
-            project=project, user=user, defaults={"role": ProjectMembership.Role.VIEWER}
-        )
+    grant_default_project(user)
 
 
 # ─── Dashboard ───────────────────────────────────────────────────────────────
@@ -1745,6 +1745,9 @@ class ConnectionsView(ProjectMixin, TemplateView):
             connections=connections,
             conn_data=conn_data,
             model_total=sum(len(c.model_list) for c in connections),
+            # The per-model "open in chat" icon only makes sense when the chat
+            # module is on; otherwise /chat/ 404s.
+            chat_enabled=chat_enabled(),
             provider_presets=PROVIDER_PRESETS,
             # Each provider once: presets share some (OpenAI and "Custom" are
             # both openai), and a connection's own provider must stay pickable.

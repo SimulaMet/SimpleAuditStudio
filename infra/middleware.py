@@ -111,3 +111,10 @@ class ProjectMiddleware(MiddlewareMixin):
             if membership:
                 request.project = membership.project
                 request.session["active_project_id"] = request.project.id
+        if not request.project:
+            # Backstop: a user with no membership (legacy/orphaned account)
+            # still lands in the shared Default workspace rather than crashing
+            # every view that dereferences request.project.
+            from accounts.services import DEFAULT_PROJECT_SLUG
+
+            request.project = Project.objects.filter(slug=DEFAULT_PROJECT_SLUG).first()

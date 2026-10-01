@@ -212,3 +212,9 @@ urlpatterns = [
     path("runs/export.csv", RunsExportView.as_view(), name="runs_export"),
     path("me/preferences/", PreferenceView.as_view(), name="preferences"),
 ]
+
+# Optional Open WebUI module (the `chat` app). The chat UI itself lives on its
+# own origin; these routes are the iframe page and the forward-auth endpoint its
+# proxy calls. Both 404 unless SIMPLEAUDIT_CHAT is set. See chat/config.py.
+urlpatterns += [path("chat/", include("chat.urls"))]
+

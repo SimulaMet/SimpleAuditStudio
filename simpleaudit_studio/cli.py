@@ -12,6 +12,11 @@ Usage:
   uvx simpleaudit-studio              # full stack; models point at OpenAI (add your key in the UI)
   uvx simpleaudit-studio --mock       # use the built-in mock model server (zero-setup demo)
   uvx simpleaudit-studio --port 9000  # custom port
+
+When a needed port is held by another Studio instance or one of its
+derivatives (Open WebUI, the Hatchet sidecar), the CLI offers to stop it and
+spin cleanly. --no-force-kill declines that offer (and exits with a free-port
+suggestion); --yes skips the confirmation.
 """
 
 from __future__ import annotations
@@ -40,13 +45,32 @@ def main() -> None:
         help="Use the built-in mock model server (zero-setup demo; results are simulated)",
     )
     parser.add_argument(
+        "--disable-chat", "--no-chat", dest="disable_chat", action="store_true",
+        help="Do not run the bundled chat (Open WebUI); /chat/ stays unavailable",
+    )
+    parser.add_argument(
         "--no-browser", action="store_true",
         help="Do not auto-open the web UI in the default browser",
+    )
+    parser.add_argument(
+        "--no-force-kill", action="store_true",
+        help="Never stop another Studio instance or its derivatives to free a "
+             "port; exit with a free-port suggestion instead",
+    )
+    parser.add_argument(
+        "--yes", action="store_true",
+        help="Answer yes to the force-kill confirmation without asking",
     )
     args = parser.parse_args()
 
     # Set local mode BEFORE Django reads settings
     os.environ["SIMPLEAUDIT_MINIMAL"] = "1"
+    # Chat is part of the bundle; --disable-chat (or SIMPLEAUDIT_CHAT=disabled)
+    # opts out.
+    if args.disable_chat:
+        os.environ["SIMPLEAUDIT_CHAT"] = "off"
+    else:
+        os.environ.setdefault("SIMPLEAUDIT_CHAT", "embedded")
     os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings")
     os.environ.setdefault("DJANGO_SECRET_KEY", "local-insecure-key-change-for-shared-use")
     os.environ.setdefault("DJANGO_ALLOWED_HOSTS", "localhost,127.0.0.1")
@@ -84,7 +108,7 @@ def main() -> None:
     print("✅ Demo data ready.\n")
 
     # --- Step 3: Pre-check port availability ---
-    _check_port_available(args.port)
+    _ensure_ports_available(args)
 
     # --- Step 4: Start embedded Hatchet ---
     from infra.minimal_config import start_embedded_hatchet, stop_embedded_hatchet
@@ -122,6 +146,29 @@ def main() -> None:
     # Give the web server a moment to bind
     time.sleep(1)
 
+    # --- Chat: Open WebUI + its forward-auth proxy ---
+    chat_process = None
+    from chat import config as chat_config
+
+    if chat_config.ENABLED:
+        from chat import proxy as chat_proxy
+
+        print("💬 Starting chat (Open WebUI)...")
+        if chat_proxy.is_first_run():
+            print("   First start downloads it (~1 GB via uvx) and can take a few minutes.")
+            print("   Studio is usable right away; /chat/ works once the download finishes.")
+        print(f"   Its data: {chat_proxy.home_dir()}")
+        print(f"   Its log:  {chat_proxy.log_path()}")
+        try:
+            chat_process = start_chat(chat_proxy, port)
+        except (OSError, RuntimeError) as exc:
+            # No open-webui to run, a taken port, a failed spawn: chat is one
+            # part of the stack, so the rest still comes up without it.
+            print(f"⚠️  Chat could not start ({exc}); continuing without it.")
+            print("   Skip it with --disable-chat.\n")
+        else:
+            print()
+
     username = os.environ.get("BOOTSTRAP_USERNAME", "studio")
     password = os.environ.get("BOOTSTRAP_PASSWORD", "admin123")
 
@@ -137,6 +184,8 @@ def main() -> None:
     print(f"│   Web UI:     http://localhost:{port}                   │")
     print(f"│   Login:      {username} / {password:<20s}│")
     print(f"│   API Docs:   http://localhost:{port}/api/schema/       │")
+    if chat_process is not None:
+        print(f"│   Chat:       http://localhost:{port}/chat/             │")
     print("│                                                         │")
     if args.mock:
         print("│   Models:     Built-in mock (simulated results)        │")
@@ -178,23 +227,94 @@ def main() -> None:
         try:
             stop_embedded_hatchet()
         finally:
+            if chat_process is not None:
+                from chat.proxy import stop_open_webui
+
+                stop_open_webui()
             if mock_server is not None:
                 mock_server.shutdown()
 
 
-def _check_port_available(port: int) -> None:
-    """Exit early with a clear message if the web port is already in use."""
-    import socket
+def start_chat(chat_proxy, studio_port: int):
+    """Start Open WebUI and its proxy, and report readiness in the background.
 
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        try:
-            s.bind(("0.0.0.0", port))
-        except OSError:
-            print(f"\n✗ Port {port} is already in use.")
-            print("  Is another SimpleAudit Studio instance running?")
-            print(f"  Try a different port: spin --port {port + 1}\n")
-            raise SystemExit(1)
+    Open WebUI takes minutes to be ready on a first run (it is fetched, then it
+    migrates its database), so the wait happens in a thread: Studio and the
+    worker come up meanwhile, and one line says when /chat/ is live.
+    """
+    process = chat_proxy.start_open_webui()
+    chat_proxy.serve(studio_port)
+
+    def report():
+        # flush: this lands minutes later, and stdout is block-buffered when the
+        # CLI's output is a file or a pipe rather than a terminal.
+        if chat_proxy.wait_until_ready(process):
+            print(f"\n✅ Chat is ready — http://localhost:{studio_port}/chat/", flush=True)
+            print(f"   {_sync_chat_models()}\n", flush=True)
+        elif process.poll() is not None:
+            print(f"\n⚠️  Chat stopped (exit {process.returncode}). Studio is unaffected.")
+            print(f"   What happened: {chat_proxy.log_path()}\n", flush=True)
+        else:
+            print("\n⚠️  Chat is still not answering. Studio is unaffected.")
+            print(f"   What it is doing: {chat_proxy.log_path()}\n", flush=True)
+
+    threading.Thread(target=report, daemon=True).start()
+    return process
+
+
+def _sync_chat_models() -> str:
+    """Give the fresh chat Studio's model connections, and say how it went.
+
+    Signals keep it in step afterwards (chat/signals.py); this is the first one,
+    for a chat that has just started or was off while connections changed.
+    """
+    from chat.api import ChatAPIError
+    from chat.sync import push_now
+
+    try:
+        result = push_now()
+    except ChatAPIError as exc:
+        return f"Models not synced to chat: {exc}"
+    kept = f", kept {result['kept']} added in chat" if result["kept"] else ""
+    return f"Synced {result['pushed']} model connection(s) to chat{kept}."
+
+
+def _ensure_ports_available(args) -> None:
+    """Make sure every port the run needs is free, or exit with advice.
+
+    The web port always; with chat, Open WebUI's upstream and the proxy's too.
+    A port held by another Studio instance or one of its derivatives can be
+    stopped (offered, or automatic with --yes); anything else — or a declined
+    offer — ends the run with a free port and the exact flag or environment
+    variable that moves the conflicting one.
+    """
+    from urllib.parse import urlsplit
+
+    from simpleaudit_studio import ports
+
+    force_kill = not args.no_force_kill
+    yes = args.yes
+
+    ports.resolve_port_conflict(
+        args.port, "the web server", f"spin --port <free port>",
+        force_kill=force_kill, yes=yes,
+    )
+
+    from chat import config as chat_config
+
+    if not chat_config.ENABLED:
+        return
+    upstream_port = urlsplit(chat_config.UPSTREAM).port or 8080
+    ports.resolve_port_conflict(
+        upstream_port, "chat's Open WebUI",
+        f"SIMPLEAUDIT_CHAT_UPSTREAM=http://127.0.0.1:<free port>",
+        force_kill=force_kill, yes=yes,
+    )
+    ports.resolve_port_conflict(
+        chat_config.PROXY_PORT, "chat's proxy",
+        f"SIMPLEAUDIT_CHAT_PROXY_PORT=<free port>",
+        force_kill=force_kill, yes=yes,
+    )
 
 
 def _open_browser_when_ready(url: str, port: int, timeout: float = 30.0) -> None:

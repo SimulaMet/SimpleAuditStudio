@@ -33,7 +33,11 @@ class RegisterSerializer(serializers.Serializer):
         return value
 
     def create(self, validated_data):
-        return User.objects.create_user(**validated_data)
+        user = User.objects.create_user(**validated_data)
+        from accounts.services import grant_default_project
+
+        grant_default_project(user)
+        return user
 
 
 class WorkspaceItemSerializer(serializers.ModelSerializer):

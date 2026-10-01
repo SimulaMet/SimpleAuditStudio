@@ -1,0 +1,106 @@
+/* Studio embed stylesheet.
+ *
+ * Served as Open WebUI's /static/custom.css. Open WebUI's app shell loads that
+ * file on every page (see its src/app.html), so Studio can shape the iframe
+ * without forking or rebuilding Open WebUI. The proxy answers the request with
+ * these bytes:
+ *   - embedded (no-Docker) mode: chat/proxy.py serves this file directly
+ *   - Docker mode: Caddy mounts this file and file_server serves it
+ *
+ * Both modes read this one repo file, so the rule survives Open WebUI upgrades
+ * and has a single source of truth.
+ *
+ * Goal: show only the chat, no chat-history sidebar.
+ *
+ * DRIFT RISK: every selector below targets Open WebUI *internals* — element
+ * ids, aria-labels, and ARIA roles that Open WebUI does not treat as a public
+ * API. An upgrade that renames or drops any of them will NOT error; it will
+ * silently re-expose the throwaway-chat UI (the sidebar, model picker, or a
+ * top-bar button reappears in the iframe). Detection is visual: if the
+ * chat-history sidebar or the model picker shows up in the embedded frame,
+ * one of these hooks has drifted — re-check the Open WebUI source for the
+ * current id/label and add it here. Where a stable alternative hook exists,
+ * each rule below carries a redundant fallback so a single rename is not
+ * enough to break the embed.
+ */
+
+/* The chat-history sidebar. Open WebUI renders it two ways on desktop:
+ *   - a collapsed 42px rail, which always carries id="sidebar"
+ *   - an expanded panel, which on desktop has no id (only role="navigation"
+ *     and a data-state attribute)
+ * Both are the "Chat history" navigation, so hide by those hooks rather than a
+ * localized aria-label. The resizer is the drag handle between sidebar and chat.
+ * The toggle button in the top bar opens the sidebar, so it goes too — with the
+ * panel hidden it would only open a blank gap.
+ *
+ * Fallback: role="navigation" + aria-label="Chat history" covers both render
+ * modes even if the data-state attribute is dropped (the only other element
+ * with that aria-label is a <button>, not a nav, so it is not over-hidden). */
+#sidebar,
+[role="navigation"][data-state],
+[role="navigation"][aria-label="Chat history"],
+#sidebar-resizer,
+#sidebar-toggle-button {
+  display: none !important;
+}
+
+/* The model picker in the input bar. The embed shows the active model in
+ * Studio's own banner instead, so the dropdown goes. Hiding the button is
+ * enough: its wrapper is an empty flex box and collapses with it.
+ *
+ * Fallback: aria-haspopup="listbox" is the button's ARIA hook (it opens the
+ * model listbox) and is unique to the model selector, so it survives an id
+ * rename. */
+#model-selector-model-button,
+button[aria-haspopup="listbox"] {
+  display: none !important;
+}
+
+/* The "New Chat" button in the top bar. A fresh chat is started from Studio,
+ * not inside the frame, so it is hidden here. Matched by aria-label (no id);
+ * the embed is English-only, so the label is stable.
+ *
+ * LOCALE-FRAGILE: aria-label="New Chat" is an English string, so a non-English
+ * Open WebUI build (or a label reword) would stop matching. The visible
+ * top-bar button has no id, so there is no same-element fallback; the only
+ * stable New Chat hook is the hidden programmatic trigger #new-chat-button
+ * (already class="hidden"), kept hidden here as a related second hook. */
+button[aria-label="New Chat"],
+#new-chat-button {
+  display: none !important;
+}
+
+/* The "..." (Chat actions) menu button in the top bar. It opens per-chat
+ * actions (rename, delete, share, ...) that don't apply to a temporary,
+ * single-model embed, so it goes. Stable id, so no aria-label matching.
+ *
+ * Fallback: aria-label="Chat actions" is unique to this button, a second hook
+ * beside its id. */
+#chat-context-menu-button,
+button[aria-label="Chat actions"] {
+  display: none !important;
+}
+
+/* The "Temporary Chat" toggle in the top bar. The embed always starts in
+ * temporary mode (via ?temporary-chat=), so the toggle to switch back to a
+ * normal, persisted chat goes too — otherwise a user could opt out of the
+ * throwaway behaviour. Stable id, so no aria-label matching.
+ *
+ * Fallback: aria-label="Temporary Chat" is unique to this button (the
+ * temporary-chat banner is a <div>, not a button), a second hook beside its
+ * id. */
+#temporary-chat-button,
+button[aria-label="Temporary Chat"] {
+  display: none !important;
+}
+
+/* The "Save Chat" button that appears in the top bar once a temporary chat
+ * has messages. It would persist the throwaway chat into history, which
+ * defeats the point of the embed, so it goes as well. Stable id.
+ *
+ * Fallback: aria-label="Save Chat" is unique to this button, a second hook
+ * beside its id. */
+#save-temporary-chat-button,
+button[aria-label="Save Chat"] {
+  display: none !important;
+}

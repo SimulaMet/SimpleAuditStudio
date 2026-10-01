@@ -99,13 +99,34 @@ For teams or multi-user setups, use Docker Compose:
 git clone https://github.com/SushantGautam/SimpleAuditStudio
 cd SimpleAuditStudio
 cp .env.example .env
-# edit POSTGRES_PASSWORD and BOOTSTRAP_PASSWORD at minimum
+# edit DJANGO_SECRET_KEY, POSTGRES_PASSWORD and BOOTSTRAP_PASSWORD at minimum —
+# startup refuses to boot while any of them is empty or still `change-me`
 docker compose up -d
 ```
 
-Services: Web UI (:8000), PostgreSQL, Hatchet queue (:8888), Worker. Optional profile: `--profile mock` (mock model API).
+Services: Web UI (:8000), PostgreSQL, Hatchet queue (:8888), Worker. Chat (Open WebUI) is included via `.env`; optional profile `--profile mock` adds a mock model API.
 
 See [docs/deployment.md](docs/deployment.md) for production hardening, backups, and upgrades.
+
+## 💬 Chat
+
+SimpleAudit Studio embeds [Open WebUI](https://openwebui.com) at `/chat/`, signed
+in as your Studio user — workspace admins become Open WebUI admins.
+
+Chat is opt-in. The local one-liner bundles it by default (pass
+`--disable-chat` to turn it off); Docker Compose leaves it out unless `.env`
+says otherwise — uncomment `SIMPLEAUDIT_CHAT` and `COMPOSE_PROFILES` in
+`.env.example` to include it:
+
+```bash
+uvx simpleaudit-studio                 # chat included
+uvx simpleaudit-studio --disable-chat  # without it
+
+docker compose up -d                   # chat only if enabled in .env
+```
+
+See [docs/chat.md](docs/chat.md) for how single sign-on works and what must stay
+private.
 
 ## ✨ What You Can Do
 
