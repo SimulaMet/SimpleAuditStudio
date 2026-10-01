@@ -21,7 +21,6 @@ import hmac
 import os
 import secrets
 from dataclasses import dataclass
-from typing import Optional
 
 from django.db import transaction
 
@@ -139,7 +138,7 @@ def rotate_credential(cred: OTLPCredential) -> NewCredential:
     return NewCredential(credential=cred, secret=secret)
 
 
-def verify_basic(username: str, password: str) -> Optional[OTLPCredential]:
+def verify_basic(username: str, password: str) -> OTLPCredential | None:
     """Return the enabled credential matching ``username``/``password``, else None."""
     cred = OTLPCredential.objects.filter(
         username=username, auth_mode=OTLPCredential.AuthMode.BASIC, enabled=True
@@ -151,7 +150,7 @@ def verify_basic(username: str, password: str) -> Optional[OTLPCredential]:
     return None
 
 
-def verify_bearer(token: str) -> Optional[OTLPCredential]:
+def verify_bearer(token: str) -> OTLPCredential | None:
     """Return the enabled bearer credential matching ``token``, else None.
 
     Bearer tokens are looked up by hashing the presented token against each
@@ -167,7 +166,7 @@ def verify_bearer(token: str) -> Optional[OTLPCredential]:
     return None
 
 
-def parse_basic_header(authorization: Optional[str]) -> Optional[tuple[str, str]]:
+def parse_basic_header(authorization: str | None) -> tuple[str, str] | None:
     """Parse an ``Authorization: Basic ...`` header into (username, password).
 
     Returns None when the header is missing, not Basic, or not valid base64.
@@ -187,7 +186,7 @@ def parse_basic_header(authorization: Optional[str]) -> Optional[tuple[str, str]
     return username, password
 
 
-def parse_bearer_header(authorization: Optional[str]) -> Optional[str]:
+def parse_bearer_header(authorization: str | None) -> str | None:
     """Parse an ``Authorization: Bearer ...`` header into the token, else None."""
     if not authorization:
         return None

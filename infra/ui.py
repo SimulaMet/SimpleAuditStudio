@@ -1948,8 +1948,8 @@ class OTLPCredentialCreateView(ProjectMixin, View):
     """
 
     def post(self, request):
-        from model_registry.models import ModelConnection
         from model_registry import otlp_services as otlp
+        from model_registry.models import ModelConnection
         from model_registry.otlp_views import _endpoint_url, _require_admin
 
         blocked = _require_write_access(request)
@@ -1995,8 +1995,8 @@ class OTLPCredentialRotateView(ProjectMixin, View):
     """Re-issue an OTLP credential's secret (old one stops working). Admin-only."""
 
     def post(self, request):
-        from model_registry.models import OTLPCredential
         from model_registry import otlp_services as otlp
+        from model_registry.models import OTLPCredential
         from model_registry.otlp_views import _endpoint_url, _require_admin
 
         blocked = _require_write_access(request)

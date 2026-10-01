@@ -218,7 +218,7 @@ def resolve_port_conflict(
             confirmed = True
         else:
             try:
-                answer = input(f"   Stop it and spin cleanly? [Y/n] ").strip().lower()
+                answer = input("   Stop it and spin cleanly? [Y/n] ").strip().lower()
             except EOFError:
                 answer = "y"
             confirmed = answer in ("", "y", "yes")

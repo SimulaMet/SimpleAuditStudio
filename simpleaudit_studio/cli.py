@@ -296,7 +296,7 @@ def _ensure_ports_available(args) -> None:
     yes = args.yes
 
     ports.resolve_port_conflict(
-        args.port, "the web server", f"spin --port <free port>",
+        args.port, "the web server", "spin --port <free port>",
         force_kill=force_kill, yes=yes,
     )
 
@@ -307,12 +307,12 @@ def _ensure_ports_available(args) -> None:
     upstream_port = urlsplit(chat_config.UPSTREAM).port or 8080
     ports.resolve_port_conflict(
         upstream_port, "chat's Open WebUI",
-        f"SIMPLEAUDIT_CHAT_UPSTREAM=http://127.0.0.1:<free port>",
+        "SIMPLEAUDIT_CHAT_UPSTREAM=http://127.0.0.1:<free port>",
         force_kill=force_kill, yes=yes,
     )
     ports.resolve_port_conflict(
         chat_config.PROXY_PORT, "chat's proxy",
-        f"SIMPLEAUDIT_CHAT_PROXY_PORT=<free port>",
+        "SIMPLEAUDIT_CHAT_PROXY_PORT=<free port>",
         force_kill=force_kill, yes=yes,
     )
 

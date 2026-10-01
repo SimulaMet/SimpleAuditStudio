@@ -21,8 +21,8 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 from infra.exceptions import StableAPIError
-from model_registry.models import ModelConnection, OTLPCredential
 from model_registry import otlp_services as otlp
+from model_registry.models import ModelConnection, OTLPCredential
 
 # In-memory span store for the shared receiver. Spans are held per target_id so
 # a run can later fetch its evidence by the trace ids it recorded. (A persistent
@@ -125,7 +125,7 @@ def _endpoint_url(request, origin: str | None = None) -> str:
     127.0.0.1 artifact. Falls back to the request's Host header.
     """
     origin = (origin or "").strip()
-    if origin.startswith("http://") or origin.startswith("https://"):
+    if origin.startswith(("http://", "https://")):
         return f"{origin.rstrip('/')}/otlp/v1/traces"
     host = request.headers.get("Host") or request.get_host()
     scheme = "https" if request.is_secure() else "http"

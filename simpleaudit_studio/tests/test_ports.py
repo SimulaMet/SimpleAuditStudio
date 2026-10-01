@@ -118,13 +118,13 @@ class KillPortOwnerTests(SimpleTestCase):
         # the shape of a Studio run (its Open WebUI / sidecar children).
         proc = subprocess.Popen(
             [sys.executable, "-c",
-             "import socket, subprocess, sys, time\n"
-             "s = socket.socket()\n"
-             "s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)\n"
-             "s.bind(('127.0.0.1', %d)); s.listen(1)\n"
-             "c = subprocess.Popen([sys.executable, '-c', "
-             "'import time; time.sleep(60)'], start_new_session=True)\n"
-             "time.sleep(60)" % port],
+             ("import socket, subprocess, sys, time\n"
+              "s = socket.socket()\n"
+              "s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)\n"
+              f"s.bind(('127.0.0.1', {port})); s.listen(1)\n"
+              "c = subprocess.Popen([sys.executable, '-c', "
+              "'import time; time.sleep(60)'], start_new_session=True)\n"
+              "time.sleep(60)")],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         )
         try:
@@ -187,12 +187,11 @@ class ResolvePortConflictTests(SimpleTestCase):
         proc = self._studio_occupant(port)
         try:
             _wait_port_owned(port)
-            with self._patched_input("n"):
-                with self.assertRaises(SystemExit) as ctx:
-                    ports.resolve_port_conflict(
-                        port, "the web server", "spin --port N",
-                        force_kill=True, yes=False,
-                    )
+            with self._patched_input("n"), self.assertRaises(SystemExit) as ctx:
+                ports.resolve_port_conflict(
+                    port, "the web server", "spin --port N",
+                    force_kill=True, yes=False,
+                )
             self.assertEqual(ctx.exception.code, 1)
             self.assertTrue(ports._pid_alive(proc.pid))
         finally:
