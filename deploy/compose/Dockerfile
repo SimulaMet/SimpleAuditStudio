@@ -23,18 +23,22 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-# curl: healthchecks
+# curl: healthchecks; git: clone the core (local path dependency)
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         curl \
+        git \
     && rm -rf /var/lib/apt/lists/*
 
 # pyproject.toml is the single source of truth; uv.lock pins exact versions.
 # The compose stack runs against external Postgres (postgres extra) and serves
 # via gunicorn (server extra). uv sync creates /app/.venv; the PATH update
 # keeps the `python`/`gunicorn` entrypoints working.
+# The core (simpleaudit) is a local path dependency (../SimpleAudit) so the
+# studio can use the tracing layer not yet in the published wheel.
 COPY pyproject.toml uv.lock README.md ./
-RUN pip install uv \
+RUN git clone --depth 1 https://github.com/kelkalot/simpleaudit.git /SimpleAudit \
+    && pip install uv \
     && uv sync --frozen --no-install-project --no-dev --extra postgres --extra server
 ENV PATH="/app/.venv/bin:$PATH"
 
