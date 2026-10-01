@@ -77,10 +77,46 @@ Every start applies migrations and makes sure the admin (a superuser) and defaul
 
 ### Tests and lint
 
+Tests are layered. Run the **fast** set while coding (skips the slow integration
+modules tagged `slow`), and the **full** set before you commit or open a PR.
+
 ```bash
-SIMPLEAUDIT_LOCAL_SQLITE=1 uv run manage.py test infra --exclude-tag embedded_hatchet
+# Fast — unit + light integration, for the dev loop (~50s, skips the slow modules)
+SIMPLEAUDIT_LOCAL_SQLITE=1 uv run manage.py test infra --parallel auto --keepdb --exclude-tag slow --exclude-tag embedded_hatchet
+
+# Full — everything, for before commit / PR
+SIMPLEAUDIT_LOCAL_SQLITE=1 uv run manage.py test infra --parallel auto --exclude-tag embedded_hatchet
+
+# Lint
 uv run ruff check .
 ```
+
+**Speed tips**
+
+- `--keepdb` reuses the test database between runs instead of recreating +
+  migrating it every time. Big local win; drop it if you change migrations.
+- `--parallel auto` fans tests out across cores (already the default here).
+- Target a single app, module, class, or test to iterate faster:
+  ```bash
+  uv run manage.py test infra.tests.test_workspaces              # one module
+  uv run manage.py test infra.tests.test_workspaces.<ClassName>  # one class
+  uv run manage.py test infra.tests.test_workspaces.<ClassName>.<test_method>  # one test
+  ```
+
+**Tagging**
+
+- `slow` — heavy integration modules (experiments, monitors, judges, engine
+  integration, full API lifecycle). Skipped by the fast command, always run in
+  CI. Add `@tag("slow")` to a class to move a slow test out of the fast loop.
+- `embedded_hatchet` — starts a real embedded Hatchet worker; runs serially in
+  CI only when the relevant files change.
+
+**Scaling up (later)**
+
+When the suite outgrows the Django runner, migrate to
+`pytest` + `pytest-django` + `pytest-xdist` + `pytest-testmon`. Your existing
+`django.test.TestCase` classes run under pytest unchanged; `--testmon` then
+selects only the tests affected by your changed code.
 
 ### Other setups
 

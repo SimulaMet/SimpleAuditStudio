@@ -9,7 +9,7 @@ The real engine is not installed in the test environment, so these tests cover:
 """
 from unittest import mock
 
-from django.test import TestCase
+from django.test import TestCase, tag
 from django.utils import timezone
 
 from accounts.models import Project, ProjectMembership, User
@@ -70,6 +70,7 @@ def _build_run(user, project):
     return run, item
 
 
+@tag("slow")
 class SecretValidationTest(TestCase):
     """Fail-fast secret resolution: a missing env var must raise a clean EngineError
     naming the role + reference, not an opaque any_llm MissingApiKeyError."""
