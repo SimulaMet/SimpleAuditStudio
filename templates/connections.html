@@ -64,8 +64,10 @@
         {% if conn.can_edit %}
         <button type="button" data-write data-discover="{{ conn.id }}" title="List the models this server offers and pick ones to add"
                 class="px-2.5 py-1 rounded-lg text-xs text-gray-300 bg-surface-overlay hover:text-white">+ Models</button>
+        {% if otlp_enabled %}
         <button type="button" data-write data-otlp="{{ conn.id }}" title="Generate an OTLP credential so this target can push traces to Studio"
                 class="px-2.5 py-1 rounded-lg text-xs text-gray-300 bg-surface-overlay hover:text-white">OTLP</button>
+        {% endif %}
         <button type="button" data-write data-conn-open="{{ conn.id }}" title="Edit connection" aria-label="Edit connection {{ conn.name }}"
                 class="w-7 h-7 rounded-lg text-gray-400 hover:text-accent hover:bg-surface-overlay">✎</button>
         {% if conn.in_use %}

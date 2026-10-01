@@ -61,7 +61,7 @@ from infra.ui import (
     logout_view,
 )
 from judges.views import JudgeDetailView, JudgePreviewView, JudgesView
-from model_registry import otlp_views
+from model_registry import otlp_config, otlp_views
 
 # --- Static file serving ---------------------------------------------------
 # For the canonical Docker Compose self-hosted deployment Django serves its
@@ -143,11 +143,10 @@ urlpatterns = [
     path("api/", include("scenarios.urls")),
     path("api/", include("model_registry.urls")),
     path("api/", include("audits.urls")),
-    # Shared OTLP ingestion endpoint (machine-to-machine, Basic/Bearer auth).
-    path("otlp/v1/traces", otlp_views.otlp_traces, name="otlp-traces"),
-    path("api/otlp/credentials/", otlp_views.list_credentials, name="otlp-credentials-list"),
-    path("api/otlp/credentials/create/", otlp_views.create_credential, name="otlp-credentials-create"),
-    path("api/otlp/credentials/<int:cred_id>/revoke/", otlp_views.revoke_credential, name="otlp-credentials-revoke"),
+    # Shared OTLP ingestion endpoint (machine-to-machine, Basic/******
+    # Only wired while the OTLP listener is on (SIMPLEAUDIT_OTLP); otherwise
+    # these paths 404 so a deployment that doesn't want the listener exposes
+    # no OTLP surface at all. See model_registry/otlp_config.py.
     # Public landing page (indexable, no auth) — the site's SEO surface
     # "/" is the dashboard when signed in and the public landing page otherwise.
     path("", home_view, name="dashboard"),
@@ -217,4 +216,15 @@ urlpatterns = [
 # own origin; these routes are the iframe page and the forward-auth endpoint its
 # proxy calls. Both 404 unless SIMPLEAUDIT_CHAT is set. See chat/config.py.
 urlpatterns += [path("chat/", include("chat.urls"))]
+
+# OTLP listener (machine-to-machine span ingestion + credential management).
+# Wired only while SIMPLEAUDIT_OTLP is on (the default); otherwise the
+# /otlp/* and /api/otlp/* paths 404. See model_registry/otlp_config.py.
+if otlp_config.ENABLED:
+    urlpatterns += [
+        path("otlp/v1/traces", otlp_views.otlp_traces, name="otlp-traces"),
+        path("api/otlp/credentials/", otlp_views.list_credentials, name="otlp-credentials-list"),
+        path("api/otlp/credentials/create/", otlp_views.create_credential, name="otlp-credentials-create"),
+        path("api/otlp/credentials/<int:cred_id>/revoke/", otlp_views.revoke_credential, name="otlp-credentials-revoke"),
+    ]
 

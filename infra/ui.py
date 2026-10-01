@@ -1696,6 +1696,7 @@ class ConnectionsView(ProjectMixin, TemplateView):
     template_name = "connections.html"
 
     def get_context_data(self, **kw):
+        from model_registry import otlp_config
         from model_registry.models import ModelConnection
         from model_registry.services import (
             PROVIDER_PRESETS,
@@ -1748,6 +1749,9 @@ class ConnectionsView(ProjectMixin, TemplateView):
             # The per-model "open in chat" icon only makes sense when the chat
             # module is on; otherwise /chat/ 404s.
             chat_enabled=chat_enabled(),
+            # The OTLP credential button only makes sense while the OTLP
+            # listener is on; otherwise the issue/rotate endpoints 404.
+            otlp_enabled=otlp_config.ENABLED,
             provider_presets=PROVIDER_PRESETS,
             # Each provider once: presets share some (OpenAI and "Custom" are
             # both openai), and a connection's own provider must stay pickable.
@@ -1948,6 +1952,9 @@ class OTLPCredentialCreateView(ProjectMixin, View):
     """
 
     def post(self, request):
+        from model_registry import otlp_config
+        if not otlp_config.ENABLED:
+            return JsonResponse({"ok": False, "error": "OTLP is disabled on this deployment."}, status=404)
         from model_registry import otlp_services as otlp
         from model_registry.models import ModelConnection
         from model_registry.otlp_views import _endpoint_url, _require_admin
@@ -1995,6 +2002,9 @@ class OTLPCredentialRotateView(ProjectMixin, View):
     """Re-issue an OTLP credential's secret (old one stops working). Admin-only."""
 
     def post(self, request):
+        from model_registry import otlp_config
+        if not otlp_config.ENABLED:
+            return JsonResponse({"ok": False, "error": "OTLP is disabled on this deployment."}, status=404)
         from model_registry import otlp_services as otlp
         from model_registry.models import OTLPCredential
         from model_registry.otlp_views import _endpoint_url, _require_admin
