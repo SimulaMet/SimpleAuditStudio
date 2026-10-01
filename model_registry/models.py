@@ -98,3 +98,50 @@ class RegisteredModel(models.Model):
         """Whether the parent connection has an API key configured."""
         return self.connection.has_key
 
+
+class OTLPCredential(models.Model):
+    """A credential that lets an external target push OTLP traces to Studio.
+
+    One credential per target. The target is configured with either a Basic
+    username+password (standard ``OTEL_BASIC_AUTH_*``) or a Bearer
+    token (generic OTel exporters). The receiver authenticates the request and
+    tags every ingested span with ``target_id`` so spans are attributable.
+
+    Only a salted hash of the secret is stored — the plaintext password/token
+    is shown once at creation and cannot be read back.
+    """
+
+    class AuthMode(models.TextChoices):
+        NONE = "none", "None (open)"
+        BASIC = "basic", "Basic Auth"
+        BEARER = "bearer", "Bearer Token"
+
+    project = models.ForeignKey("accounts.Project", on_delete=models.CASCADE, related_name="otlp_credentials")
+    connection = models.ForeignKey(ModelConnection, on_delete=models.CASCADE, related_name="otlp_credentials")
+    auth_mode = models.CharField(max_length=10, choices=AuthMode.choices, default=AuthMode.BASIC)
+    # For basic: the username the target sends. For bearer: a stable label.
+    username = models.CharField(max_length=250, blank=True, default="")
+    # Salted SHA-256 of the secret (password for basic, token for bearer).
+    secret_hash = models.BinaryField(null=True, blank=True)
+    salt = models.BinaryField(null=True, blank=True)
+    # Stable identifier stamped onto every span this credential authenticates.
+    target_id = models.CharField(max_length=250)
+    enabled = models.BooleanField(default=True)
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "core_otlp_credential"
+        constraints = [
+            models.UniqueConstraint(fields=["project", "target_id"], name="unique_target_id_per_project"),
+        ]
+        ordering = ["project__name", "target_id"]
+
+    def __str__(self) -> str:
+        return f"OTLP {self.auth_mode}:{self.target_id}"
+
+    @property
+    def display_name(self) -> str:
+        return self.username or self.target_id
+
