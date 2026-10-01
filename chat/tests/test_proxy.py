@@ -449,3 +449,58 @@ class PidFileTests(SimpleTestCase):
             proxy._stop_stale()
         terminate.assert_not_called()
         self.assertTrue(file.exists())
+
+
+class OtlpEnvTests(SimpleTestCase):
+    """When OTLP is enabled, Open WebUI is pointed at Studio's listener."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.tmp = Path(self._tmp.name)
+        self._process = proxy._process
+        proxy._process = None
+
+    def tearDown(self):
+        proxy._process = self._process
+        self._tmp.cleanup()
+        super().tearDown()
+
+    def _spawn_env(self, endpoint=""):
+        """Run _spawn with OTLP enabled and return the env it was given."""
+        fake = MagicMock()
+        fake.pid = 1234
+        with patch.object(proxy.subprocess, "Popen", return_value=fake) as popen, \
+             patch.object(proxy, "log_path", lambda: self.tmp / "server.log"), \
+             patch("infra.minimal_config._pid_alive", return_value=False), \
+             patch.object(config, "OTLP_ENABLED", True), \
+             patch.object(config, "OTLP_ENDPOINT", endpoint), \
+             patch.object(config, "OTLP_SERVICE_NAME", "open-webui"):
+            proxy._spawn(self.tmp, 8000)
+        proxy._process = None
+        return popen.call_args.kwargs["env"]
+
+    def test_disabled_by_default_adds_no_otel_vars(self):
+        fake = MagicMock()
+        fake.pid = 1234
+        with patch.object(proxy.subprocess, "Popen", return_value=fake) as popen, \
+             patch.object(proxy, "log_path", lambda: self.tmp / "server.log"), \
+             patch("infra.minimal_config._pid_alive", return_value=False), \
+             patch.object(config, "OTLP_ENABLED", False):
+            proxy._spawn(self.tmp, 8000)
+        proxy._process = None
+        env = popen.call_args.kwargs["env"]
+        self.assertNotIn("ENABLE_OTEL", env)
+        self.assertNotIn("OTEL_EXPORTER_OTLP_ENDPOINT", env)
+
+    def test_enabled_points_at_studios_listener(self):
+        env = self._spawn_env()
+        self.assertEqual(env["ENABLE_OTEL"], "true")
+        self.assertEqual(env["ENABLE_OTEL_TRACES"], "true")
+        self.assertEqual(env["OTEL_OTLP_SPAN_EXPORTER"], "http")
+        # Base URL only — Open WebUI's exporter appends /v1/traces itself.
+        self.assertEqual(env["OTEL_EXPORTER_OTLP_ENDPOINT"], "http://127.0.0.1:8000")
+        self.assertEqual(env["OTEL_SERVICE_NAME"], "open-webui")
+
+    def test_explicit_endpoint_wins(self):
+        env = self._spawn_env(endpoint="http://collector:4318")
+        self.assertEqual(env["OTEL_EXPORTER_OTLP_ENDPOINT"], "http://collector:4318")

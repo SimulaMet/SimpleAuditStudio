@@ -242,7 +242,7 @@ def start_chat(chat_proxy, studio_port: int):
     migrates its database), so the wait happens in a thread: Studio and the
     worker come up meanwhile, and one line says when /chat/ is live.
     """
-    process = chat_proxy.start_open_webui()
+    process = chat_proxy.start_open_webui(studio_port)
     chat_proxy.serve(studio_port)
 
     def report():

@@ -540,11 +540,14 @@ def wait_until_ready(process: subprocess.Popen, timeout: float = 900.0) -> bool:
     return False
 
 
-def start_open_webui() -> subprocess.Popen:
+def start_open_webui(studio_port: int | None = None) -> subprocess.Popen:
     """Start Open WebUI bound to loopback, in trusted-header mode.
 
     Uses the ``open-webui`` command when it is installed, otherwise ``uvx``
     fetches it on first run. SIMPLEAUDIT_CHAT_CMD overrides both.
+
+    ``studio_port`` is where Studio's own web server listens; it is only used to
+    point Open WebUI's OTLP exporter at Studio's listener when OTLP is enabled.
 
     One instance per process: a second call returns the running one. Leftovers
     from a hard-killed previous run are stopped first.
@@ -556,10 +559,10 @@ def start_open_webui() -> subprocess.Popen:
         home = home_dir()
         home.mkdir(parents=True, exist_ok=True)
         _stop_stale()
-        return _spawn(home)
+        return _spawn(home, studio_port)
 
 
-def _spawn(home: Path) -> subprocess.Popen:
+def _spawn(home: Path, studio_port: int | None = None) -> subprocess.Popen:
     """Build the command and environment, and start the server."""
     global _process, _log_file
 
@@ -598,6 +601,21 @@ def _spawn(home: Path) -> subprocess.Popen:
         "ENABLE_OLLAMA_API": "false",
         "WEBUI_URL": chat.public_url(),
     }
+    if chat.OTLP_ENABLED:
+        # Export Open WebUI's spans to Studio's own OTLP listener. Open WebUI
+        # picks the HTTP exporter from OTEL_OTLP_SPAN_EXPORTER (not the standard
+        # OTEL_EXPORTER_OTLP_PROTOCOL) and appends /v1/traces to the endpoint, so
+        # this is the base URL, not the full path. Exports unauthenticated by
+        # default (matches the listener's "none" credential fallback); for a
+        # basic/bearer credential, set OTEL_BASIC_AUTH_USERNAME / _PASSWORD in the
+        # environment, which is inherited here.
+        env.update(
+            ENABLE_OTEL="true",
+            ENABLE_OTEL_TRACES="true",
+            OTEL_OTLP_SPAN_EXPORTER="http",
+            OTEL_EXPORTER_OTLP_ENDPOINT=chat.otlp_endpoint_url(studio_port),
+            OTEL_SERVICE_NAME=chat.OTLP_SERVICE_NAME,
+        )
     # Open WebUI keeps its signing key in ``.webui_secret_key`` in the working
     # directory, with no setting for it: running it from its own data folder
     # keeps that out of wherever Studio was started and stable across restarts

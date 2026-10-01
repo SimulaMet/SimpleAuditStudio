@@ -61,6 +61,36 @@ ROLE_HEADER = "X-Studio-Role"
 #: request before adding its own, or a client could forge them.
 TRUSTED_HEADERS = (EMAIL_HEADER, NAME_HEADER, ROLE_HEADER)
 
+# --- OTLP: Open WebUI exporting its spans to Studio --------------------------
+#: When true, Open WebUI is started with OpenTelemetry tracing enabled and
+#: pointed at Studio's own OTLP listener (``POST /otlp/v1/traces``), so the
+#: spans it emits land in the same place as any other target's. Off by default:
+#: the listener is a Studio feature that is only useful once an OTLP credential
+#: (or an enabled "none" credential) exists to receive the spans.
+OTLP_ENABLED = (os.environ.get("SIMPLEAUDIT_CHAT_OTLP") or "").strip().lower() in {
+    "1", "true", "yes", "on",
+}
+#: Where the OTLP listener lives. Defaults to Studio's own web origin on
+#: loopback; override for a non-default port or a separate collector. The
+#: ``/otlp/v1/traces`` path is appended by Open WebUI's exporter, not here.
+OTLP_ENDPOINT = (os.environ.get("SIMPLEAUDIT_CHAT_OTLP_ENDPOINT") or "").rstrip("/")
+#: The service name Open WebUI tags its spans with.
+OTLP_SERVICE_NAME = os.environ.get("SIMPLEAUDIT_CHAT_OTLP_SERVICE_NAME", "open-webui")
+
+
+def otlp_endpoint_url(studio_port: int | None = None) -> str:
+    """The base URL Open WebUI's OTLP exporter should send spans to.
+
+    ``OTLP_ENDPOINT`` wins when set. Otherwise it is Studio's own web origin on
+    loopback — the same host the proxy and the browser use — so the spans reach
+    the ``/otlp/v1/traces`` listener on this Studio instance. Open WebUI's
+    exporter appends ``/v1/traces`` itself, so this returns the base only.
+    """
+    if OTLP_ENDPOINT:
+        return OTLP_ENDPOINT
+    port = studio_port or int(os.environ.get("PORT", "8000"))
+    return f"http://127.0.0.1:{port}"
+
 
 def public_url(request=None) -> str:
     """The origin the browser should load the chat from.
