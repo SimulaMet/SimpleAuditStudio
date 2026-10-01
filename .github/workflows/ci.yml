@@ -28,14 +28,10 @@ jobs:
         with:
           python-version: "3.12"
       - uses: astral-sh/setup-uv@v7
-      - name: Checkout core (local-dev path dependency)
+      - name: Clone core (local-dev path dependency)
         # pyproject.toml points simpleaudit at ../SimpleAudit (editable) so the
         # studio can use the tracing layer not yet in the published wheel.
-        uses: actions/checkout@v4
-        with:
-          repository: kelkalot/simpleaudit
-          ref: main
-          path: ../SimpleAudit
+        run: git clone --depth 1 https://github.com/kelkalot/simpleaudit.git ../SimpleAudit
       - name: Install dependencies
         run: uv sync --frozen --extra dev
       - name: Lint (ruff)
