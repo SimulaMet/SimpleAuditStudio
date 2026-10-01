@@ -24,20 +24,28 @@ from infra.exceptions import StableAPIError
 from model_registry import otlp_services as otlp
 from model_registry.models import ModelConnection, OTLPCredential
 
-# In-memory span store for the shared receiver. Spans are held per target_id so
-# a run can later fetch its evidence by the trace ids it recorded. (A persistent
-# backend can replace this without changing the endpoint contract.)
-_SPAN_STORE: dict[str, list[dict]] = {}
+# In-memory span store for the shared receiver, keyed by target_id. Each bucket
+# is an engine ``SpanStore`` (the same normalized schema the run path and the
+# judge's evidence selection use), so spans ingested here are directly
+# consumable by ``select_spans``. (A persistent backend can replace this
+# without changing the endpoint contract.)
+_SPAN_STORE: dict[str, "SpanStore"] = {}
 
 
-def _store_spans(target_id: str, spans: list[dict]) -> None:
-    bucket = _SPAN_STORE.setdefault(target_id, [])
-    bucket.extend(spans)
+def _store_for_target(target_id: str) -> "SpanStore":
+    from simpleaudit.tracing.store import SpanStore
+
+    store = _SPAN_STORE.get(target_id)
+    if store is None:
+        store = SpanStore()
+        _SPAN_STORE[target_id] = store
+    return store
 
 
 def get_spans_for_target(target_id: str) -> list[dict]:
-    """All spans ingested for ``target_id`` (for a run to fetch evidence)."""
-    return list(_SPAN_STORE.get(target_id, []))
+    """All normalized spans ingested for ``target_id`` (for a run to fetch evidence)."""
+    store = _SPAN_STORE.get(target_id)
+    return store.all() if store else []
 
 
 def clear_target_spans(target_id: str) -> None:
@@ -84,21 +92,23 @@ def otlp_traces(request):
         )
 
     try:
-        from simpleaudit.tracing import parse_otlp_json
+        from simpleaudit.tracing.otlp import parse_otlp_json
 
+        # Parse the export, tag each span with the authenticated target so it's
+        # attributable, then normalize into the shared SpanStore (the same
+        # schema the run path and the judge's evidence selection use).
         raw_spans = parse_otlp_json(request.body)
+        for span in raw_spans:
+            attrs = span.get("attributes")
+            if attrs is None:
+                span["attributes"] = attrs = {}
+            attrs.setdefault("simpleaudit.target_id", cred.target_id)
+        _store_for_target(cred.target_id).add_many(raw_spans)
+        return JsonResponse(
+            {"partialSuccess": {"rejectedSpans": 0}, "authenticated": True}, status=200
+        )
     except Exception:  # noqa: BLE001 - never fail the export; ack a rejection
         return JsonResponse({"partialSuccess": {"rejectedSpans": 1}}, status=200)
-
-    # Tag every span with the authenticated target so it's attributable.
-    for span in raw_spans:
-        attrs = span.get("attributes")
-        if attrs is None:
-            span["attributes"] = attrs = {}
-        attrs.setdefault("simpleaudit.target_id", cred.target_id)
-    _store_spans(cred.target_id, raw_spans)
-
-    return JsonResponse({"partialSuccess": {"rejectedSpans": 0}, "authenticated": True}, status=200)
 
 
 # ─── Credential management (session-authenticated) ──────────────────────────
