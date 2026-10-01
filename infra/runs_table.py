@@ -37,8 +37,22 @@ SORT_FIELDS = {
     "created_by": "created_by__username",
 }
 
-# Preference keys the UI may store (value size is capped).
+# Preference keys the UI may store (value size is capped). Optional apps
+# (e.g. chat) contribute their own keys via EXTRA_PREFERENCE_KEY_PROVIDERS.
 PREFERENCE_KEYS = {"dashboard_columns"}
+EXTRA_PREFERENCE_KEY_PROVIDERS: list = []
+
+
+def allowed_preference_keys() -> set:
+    """Core keys plus whatever the optional apps currently allow.
+
+    Providers are called at request time, so an app's keys follow its own
+    switch (e.g. chat's key is only accepted while chat is on).
+    """
+    keys = set(PREFERENCE_KEYS)
+    for provider in EXTRA_PREFERENCE_KEY_PROVIDERS:
+        keys.update(provider())
+    return keys
 MAX_PREFERENCE_BYTES = 20_000
 
 
@@ -200,7 +214,7 @@ class PreferenceView(ProjectMixin, View):
         except ValueError:
             return JsonResponse({"error": "Invalid JSON."}, status=400)
         key = body.get("key")
-        if key not in PREFERENCE_KEYS:
+        if key not in allowed_preference_keys():
             return JsonResponse({"error": "Unknown preference."}, status=400)
         value = body.get("value")
         if len(json.dumps(value)) > MAX_PREFERENCE_BYTES:

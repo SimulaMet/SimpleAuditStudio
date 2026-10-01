@@ -10,7 +10,6 @@ a downed job system must not roll back a frozen experiment record).
 from __future__ import annotations
 
 import logging
-import math
 from datetime import UTC, timedelta
 
 from django.db import transaction
@@ -348,6 +347,27 @@ def create_monitor(*, project, user, name: str, run: dict, repeat: dict, experim
     return monitor
 
 
+def due_monitors(now):
+    """Claim every enabled monitor that is due, locking only the monitor rows.
+
+    ``of=("self",)`` is required, not a refinement. ``last_run`` and ``created_by``
+    are both nullable, so ``select_related`` joins them with a LEFT OUTER JOIN, and
+    PostgreSQL rejects ``FOR UPDATE`` against the nullable side of an outer join:
+
+        FOR UPDATE cannot be applied to the nullable side of an outer join
+
+    Without ``of``, every tick raises that on PostgreSQL -- so no monitor ever runs
+    on a production database, while the sweeper logs the failure and carries on.
+    SQLite omits ``FOR UPDATE`` entirely, which is why the test suite stayed green.
+    """
+    return (
+        Monitor.objects.select_for_update(of=("self",), skip_locked=True)
+        .filter(enabled=True, next_run_at__lte=now)
+        .select_related("last_run", "project", "created_by")
+        .order_by("next_run_at")
+    )
+
+
 def run_due_monitors(now=None) -> list[int]:
     """Launch every enabled monitor whose ``next_run_at`` has passed.
 
@@ -362,12 +382,7 @@ def run_due_monitors(now=None) -> list[int]:
     now = now or timezone.now()
     created: list[AuditRun] = []
     with transaction.atomic():
-        due = (
-            Monitor.objects.select_for_update(skip_locked=True)
-            .filter(enabled=True, next_run_at__lte=now)
-            .select_related("last_run", "project", "created_by")
-            .order_by("next_run_at")
-        )
+        due = due_monitors(now)
         for monitor in due:
             monitor.next_run_at = next_after(monitor, now)
             monitor.last_tick_at = now
@@ -449,25 +464,17 @@ def pass_counts(run_ids: list[int]) -> dict[int, dict]:
 
 
 def wilson(k: int, n: int, z: float = Z_CRIT) -> tuple[float, float]:
-    """Wilson score interval for a binomial proportion."""
-    if n == 0:
-        return 0.0, 1.0
-    p = k / n
-    denom = 1 + z * z / n
-    centre = (p + z * z / (2 * n)) / denom
-    half = z * math.sqrt(p * (1 - p) / n + z * z / (4 * n * n)) / denom
-    return max(0.0, centre - half), min(1.0, centre + half)
+    """Wilson score interval for a binomial proportion (delegates to the engine)."""
+    from simpleaudit.stats import wilson_interval
+
+    return wilson_interval(k, n, z=z)
 
 
 def two_proportion_z(k1: int, n1: int, k2: int, n2: int) -> float | None:
-    """z statistic for p2 - p1 (pooled); None when undefined."""
-    if n1 == 0 or n2 == 0:
-        return None
-    pooled = (k1 + k2) / (n1 + n2)
-    se = math.sqrt(pooled * (1 - pooled) * (1 / n1 + 1 / n2))
-    if se == 0:
-        return None
-    return (k2 / n2 - k1 / n1) / se
+    """z statistic for p2 - p1 (pooled); None when undefined (delegates to the engine)."""
+    from simpleaudit.stats import two_proportion_z as _core_two_proportion_z
+
+    return _core_two_proportion_z(k1, n1, k2, n2)
 
 
 def drift_series(monitor: Monitor) -> list[dict]:

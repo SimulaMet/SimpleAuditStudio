@@ -31,6 +31,8 @@ from infra.ui import (
     MonitorDetailView,
     MonitorsView,
     NewExperimentView,
+    OTLPCredentialCreateView,
+    OTLPCredentialRotateView,
     ProfileView,
     RegisterView,
     RunArchiveView,
@@ -59,6 +61,7 @@ from infra.ui import (
     logout_view,
 )
 from judges.views import JudgeDetailView, JudgePreviewView, JudgesView
+from model_registry import otlp_config, otlp_views
 
 # --- Static file serving ---------------------------------------------------
 # For the canonical Docker Compose self-hosted deployment Django serves its
@@ -140,6 +143,10 @@ urlpatterns = [
     path("api/", include("scenarios.urls")),
     path("api/", include("model_registry.urls")),
     path("api/", include("audits.urls")),
+    # Shared OTLP ingestion endpoint (machine-to-machine, Basic/******
+    # Only wired while the OTLP listener is on (SIMPLEAUDIT_OTLP); otherwise
+    # these paths 404 so a deployment that doesn't want the listener exposes
+    # no OTLP surface at all. See model_registry/otlp_config.py.
     # Public landing page (indexable, no auth) — the site's SEO surface
     # "/" is the dashboard when signed in and the public landing page otherwise.
     path("", home_view, name="dashboard"),
@@ -147,7 +154,7 @@ urlpatterns = [
     # UI (server-rendered CBVs)
     path("login/", LoginView.as_view(), name="login"),
     # Local one-liner demo only (404 unless MINIMAL_CONFIG): the CLI opens this
-    # in the default browser to land the user signed-in on the dashboard.
+    # in the default browser with a single-use ?token=... to sign the user in.
     path("auto-login/", auto_login_view, name="auto_login"),
     path("register/", RegisterView.as_view(), name="register"),
     path("logout/", logout_view, name="logout"),
@@ -183,6 +190,8 @@ urlpatterns = [
     path("connections/discover/", DiscoverModelsView.as_view(), name="models_discover"),
     path("connections/check/", ConnectionCheckView.as_view(), name="connection_check"),
     path("connections/<int:conn_id>/delete/", ConnectionDeleteView.as_view(), name="connection_delete"),
+    path("connections/otlp-credential/", OTLPCredentialCreateView.as_view(), name="otlp_credential_create"),
+    path("connections/otlp-credential/rotate/", OTLPCredentialRotateView.as_view(), name="otlp_credential_rotate"),
     path("judges/", JudgesView.as_view(), name="judges"),
     path("judges/new/", JudgeDetailView.as_view(), name="judge_new"),
     path("judges/preview/", JudgePreviewView.as_view(), name="judge_preview"),
@@ -202,3 +211,20 @@ urlpatterns = [
     path("runs/export.csv", RunsExportView.as_view(), name="runs_export"),
     path("me/preferences/", PreferenceView.as_view(), name="preferences"),
 ]
+
+# Optional Open WebUI module (the `chat` app). The chat UI itself lives on its
+# own origin; these routes are the iframe page and the forward-auth endpoint its
+# proxy calls. Both 404 unless SIMPLEAUDIT_CHAT is set. See chat/config.py.
+urlpatterns += [path("chat/", include("chat.urls"))]
+
+# OTLP listener (machine-to-machine span ingestion + credential management).
+# Wired only while SIMPLEAUDIT_OTLP is on (the default); otherwise the
+# /otlp/* and /api/otlp/* paths 404. See model_registry/otlp_config.py.
+if otlp_config.ENABLED:
+    urlpatterns += [
+        path("otlp/v1/traces", otlp_views.otlp_traces, name="otlp-traces"),
+        path("api/otlp/credentials/", otlp_views.list_credentials, name="otlp-credentials-list"),
+        path("api/otlp/credentials/create/", otlp_views.create_credential, name="otlp-credentials-create"),
+        path("api/otlp/credentials/<int:cred_id>/revoke/", otlp_views.revoke_credential, name="otlp-credentials-revoke"),
+    ]
+

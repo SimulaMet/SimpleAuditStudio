@@ -7,7 +7,7 @@ import json
 from datetime import timedelta
 from unittest import mock
 
-from django.test import Client, TestCase
+from django.test import Client, TestCase, tag
 from django.utils import timezone
 
 from audits.models import AuditRun, Experiment
@@ -26,6 +26,7 @@ from infra.tests.factories import (
 _PROVENANCE = mock.Mock(version="0.2.1", commit="", source="metadata")
 
 
+@tag("slow")
 class _ExperimentBase(TestCase):
     def setUp(self):
         self.user = UserFactory()

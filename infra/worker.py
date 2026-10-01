@@ -364,6 +364,10 @@ def _scenario_execute_impl(workflow_input: ScenarioInput, ctx: Context) -> dict:
     gen_params = run.generation_parameters_snapshot or {}
     n_reps = int(gen_params.get("n_repetitions") or 1)
     max_turns = int(gen_params.get("max_turns") or 5)
+    # Trace acquisition config (Promptfoo parity). Empty = no tracing. Only the
+    # single-rep path forwards it: the engine's multi-rep path does not yet
+    # propagate trace correlation (see infra.engine.run_scenario_repeated).
+    trace_config = run.trace_config or None
 
     # Granular stage detail for the frontend: which phase of the scenario is
     # starting (target execution begins with the auditor generating a probe).
@@ -532,6 +536,7 @@ def _scenario_execute_impl(workflow_input: ScenarioInput, ctx: Context) -> dict:
                 file_uri=revision.file_uri,
                 category=item.scenario.category or "",
                 metadata=revision.metadata or {},
+                trace_config=trace_config,
             )
             # Use aggregated severity for the run-level counter
             severity = result_payload.get("aggregated_severity", "")
@@ -551,6 +556,7 @@ def _scenario_execute_impl(workflow_input: ScenarioInput, ctx: Context) -> dict:
                 file_uri=revision.file_uri,
                 category=item.scenario.category or "",
                 metadata=revision.metadata or {},
+                trace_config=trace_config,
             )
             severity = result_payload.get("severity", "")
         # Stop the live flusher: drains any remaining turn events and joins the

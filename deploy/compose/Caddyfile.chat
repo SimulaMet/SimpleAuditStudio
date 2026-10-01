@@ -1,0 +1,53 @@
+# Forward-auth proxy in front of Open WebUI (docker mode of the optional chat
+# module; see infra/chat.py). Caddy asks Studio who the browser is and injects
+# the answer as the trusted headers Open WebUI reads.
+#
+# Open WebUI has no published port in docker-compose.yml, so this proxy is the
+# only way to reach it. Keep it that way: a client that can talk to it directly
+# can set X-Studio-Role: admin and take over the instance.
+{
+	auto_https off
+	admin off
+}
+
+:{$SIMPLEAUDIT_CHAT_PROXY_PORT:8801} {
+	# Never let a client supply its own identity.
+	request_header -X-Studio-Email
+	request_header -X-Studio-Name
+	request_header -X-Studio-Role
+
+	forward_auth {$STUDIO_UPSTREAM:web:8000} {
+		uri /chat/authz
+		copy_headers X-Studio-Email X-Studio-Name X-Studio-Role
+
+		# Signed out: send the browser to Studio rather than showing a bare 401.
+		@signedout status 401
+		handle_response @signedout {
+			redir {$STUDIO_URL:http://localhost:8000}/chat/ 302
+		}
+	}
+
+	# Studio embeds this origin in an iframe.
+	header -X-Frame-Options
+
+	# Open WebUI requests favicon files from absolute /static paths. Serve the
+	# Studio logo mounted at /etc/caddy/branding so Docker and embedded mode share
+	# the same browser tab branding.
+	@studio_favicon path /favicon* /static/favicon*
+	handle @studio_favicon {
+		root * /etc/caddy/branding
+		rewrite * /logo.svg
+		file_server
+	}
+
+	# Studio's embed stylesheet: Open WebUI loads /static/custom.css on every
+	# page. Serve it from the repo (mounted read-only) so the iframe renders
+	# without the chat-history sidebar and the rule survives Open WebUI upgrades.
+	# Same file the no-Docker proxy serves, so both modes share one source.
+	handle /static/custom.css {
+		root * /etc/caddy/embed
+		file_server
+	}
+
+	reverse_proxy open-webui:{$SIMPLEAUDIT_CHAT_UPSTREAM_PORT:8080}
+}

@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+from contextlib import nullcontext
 from typing import Any
 
 
@@ -314,6 +315,47 @@ def scenario_dict(
     return scenario
 
 
+def _collect_evidence_spans(
+    correlation: Any, provider: Any, *, token_budget: int | None = None
+) -> list[dict[str, Any]] | None:
+    """Collect + select evidence spans for the traces a run recorded.
+
+    The engine records ``turn_id -> trace_id`` in ``correlation`` as it
+    propagates the W3C ``traceparent``. After the run we fetch the spans for
+    every recorded trace id from ``provider`` (the provider owns its backend's
+    eventual consistency — it retries until the trace is available or its
+    timeout elapses), de-duplicate, and select the evidence-relevant kinds via
+    the engine's ``select_spans``.
+
+    Returns ``None`` when there is no trace evidence — the caller then judges
+    on the conversation alone (the normal black-box path). A fetch failure is
+    logged, never raised: tracing is best-effort evidence and must not fail an
+    audit run.
+    """
+    if correlation is None or provider is None:
+        return None
+    from simpleaudit.tracing.selection import select_spans
+
+    all_spans: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for tid in correlation.all_trace_ids():
+        try:
+            spans = provider.fetch(tid)
+        except Exception as exc:  # noqa: BLE001 - tracing must not break the run
+            logger = __import__("logging").getLogger("simpleaudit.engine")
+            logger.warning("Trace fetch failed for %s: %s", tid, exc)
+            continue
+        for span in spans or []:
+            sid = span.get("span_id")
+            if sid in seen:
+                continue
+            seen.add(sid)
+            all_spans.append(span)
+    if not all_spans:
+        return None
+    return select_spans(all_spans, token_budget=token_budget).selected or None
+
+
 def run_scenario(
     *,
     name: str,
@@ -330,19 +372,30 @@ def run_scenario(
     file_uri=None,
     category: str = "",
     metadata: dict | None = None,
+    trace_config: dict | None = None,
 ) -> dict[str, Any]:
     """Execute one scenario through the real engine and return a serializable result.
 
-    Runs the async ``ModelAuditor.run_scenario`` to completion and returns
-    ``AuditResult.to_dict()`` plus the language used. Raises ``EngineError`` on
-    load failure; a mid-conversation/judging failure is captured by the engine
-    itself as a severity of ``ERROR`` in the returned dict (not raised), matching
-    the engine's own error-handling contract.
+    Runs the async ``ModelAuditor.run_async`` (single scenario) to completion
+    and returns ``AuditResult.to_dict()`` plus the language used. Raises
+    ``EngineError`` on load failure; a mid-conversation/judging failure is
+    captured by the engine itself as a severity of ``ERROR`` in the returned
+    dict (not raised), matching the engine's own error-handling contract.
 
     If ``on_turn`` is provided, it is called at each phase boundary with
-    ``(turn_index, max_turns, role)`` where role is "auditor", "target", or "judge".
-    NOTE: on_turn is called from within the asyncio event loop — do NOT perform
-    blocking I/O (e.g. Django ORM) inside it.
+    ``(turn_index, max_turns, role)`` where role is "auditor", "target", or
+    "judge". NOTE: on_turn is called from within the asyncio event loop — do
+    NOT perform blocking I/O (e.g. Django ORM) inside it.
+
+    Tracing (best-effort, Promptfoo parity): when ``trace_config`` is given, a
+    provider is built from it (``builtin`` OTLP receiver or ``tempo`` fetch) and
+    a fresh ``TraceCorrelation`` is passed to the engine, which propagates a W3C
+    ``traceparent`` per turn and records ``turn_id -> trace_id``. After the run
+    the spans for the recorded trace ids are fetched from the provider,
+    selected, and attached to the result under ``judgment["evidence_spans"]``.
+    The engine judges on the conversation (trace evidence is attached post-run
+    for findings / a trace-aware judge, not re-injected into the judge prompt
+    here).
     """
     auditor_instance, language = build_model_auditor(
         target=target, auditor=auditor, judge=judge, generation=generation
@@ -352,20 +405,49 @@ def run_scenario(
         severity_ceiling=severity_ceiling, documents=documents, file_uri=file_uri, category=category,
         metadata=metadata,
     )
+
+    provider = None
+    correlation = None
+    audit_run_id = None
+    if trace_config:
+        from simpleaudit.tracing.context import TraceCorrelation, new_trace_id
+
+        from infra.tracing import build_trace_provider
+
+        provider = build_trace_provider(trace_config)
+        if provider is not None:
+            audit_run_id = f"audit_{new_trace_id()[:12]}"
+            correlation = TraceCorrelation(audit_run_id=audit_run_id)
+
     try:
-        # run_async maps the scenario dict onto run_scenario (file_uri,
-        # documents, judge notes, the scenario facts a judge's post-processor
-        # reads), the same way AuditExperiment does for repetitions.
-        results = asyncio.run(auditor_instance.run_async([scenario], language=language, on_turn=on_turn))
+        with (provider or nullcontext()):
+            # run_async maps the scenario dict onto run_scenario (file_uri,
+            # documents, judge notes, the scenario facts a judge's
+            # post-processor reads). When tracing, the engine propagates the
+            # traceparent per turn and records the trace ids in correlation.
+            results = asyncio.run(
+                auditor_instance.run_async(
+                    [scenario],
+                    language=language,
+                    on_turn=on_turn,
+                    audit_run_id=audit_run_id,
+                    trace_correlation=correlation,
+                )
+            )
+            # Collect evidence spans while the provider is still alive.
+            evidence_spans = _collect_evidence_spans(correlation, provider)
     except Exception as exc:
         raise EngineError(f"Scenario execution crashed: {type(exc).__name__}: {exc}") from exc
 
     payload = results[0].to_dict()
+    if evidence_spans:
+        judgment = payload.get("judgment")
+        if not isinstance(judgment, dict):
+            judgment = {}
+        judgment["evidence_spans"] = evidence_spans
+        payload["judgment"] = judgment
     payload["_language"] = language
     return payload
-
-
-_SEV_RANK = {"ERROR": 6, "critical": 5, "high": 4, "medium": 3, "low": 2, "pass": 1}
 
 
 def run_scenario_repeated(
@@ -388,6 +470,7 @@ def run_scenario_repeated(
     file_uri=None,
     category: str = "",
     metadata: dict | None = None,
+    trace_config: dict | None = None,
 ) -> dict[str, Any]:
     """Execute one scenario N times using AuditExperiment.run_scenario_reps().
 
@@ -406,6 +489,14 @@ def run_scenario_repeated(
     If ``on_rep_done`` is provided it is called after each rep with
     ``(rep_index, rep_result_dict)`` — useful for emitting progress events.
     If ``cancel_event`` is set, remaining reps are skipped.
+
+    Tracing (best-effort, Promptfoo parity): when ``trace_config`` is given, a
+    provider is built from it and a fresh ``TraceCorrelation`` is shared across
+    all reps. Each rep records its ``turn_id -> trace_id`` links, and after the
+    run the spans for every recorded trace id are fetched, selected, and
+    attached to each rep's result under ``judgment["evidence_spans"]`` (de-
+    duplicated per rep). The engine judges on the conversation; trace evidence
+    is attached post-run, matching the single-rep path.
     """
     _ensure_engine_available()
     try:
@@ -427,6 +518,23 @@ def run_scenario_repeated(
     model_entry = {k: v for k, v in kwargs.items() if v is not None}
     model_entry["label"] = f"{kwargs['model']} (platform)"
 
+    # Tracing: build a provider + a per-rep TraceCorrelation. Each rep gets its
+    # own correlation (assigned at the rep boundary) so its turn->trace links
+    # are attributable to that rep; evidence is fetched per rep after the run.
+    provider = None
+    rep_correlations: dict[int, Any] = {}
+    if trace_config:
+        from simpleaudit.tracing.context import new_trace_id
+
+        from infra.tracing import build_trace_provider
+
+        provider = build_trace_provider(trace_config)
+        if provider is not None:
+            audit_run_id = f"audit_{new_trace_id()[:12]}"
+            # Stash on the provider so the rep-boundary callback can mint a
+            # fresh correlation per rep without extra plumbing.
+            provider._audit_run_id = audit_run_id
+
     # The engine's on_rep_done receives an AuditResults collection with one
     # result (single scenario). Collect here and emit AFTER asyncio.run()
     # returns: the outer callback does Django ORM calls, which cannot run
@@ -442,8 +550,15 @@ def run_scenario_repeated(
 
     # ``rep_is_done(label, i)`` is consulted right before rep ``i`` starts —
     # the only hook that fires at every rep boundary. Use it to signal rep
-    # starts; never skip. on_rep_started must be async-safe (no ORM calls).
+    # starts and (when tracing) mint a fresh per-rep TraceCorrelation. Must be
+    # async-safe (no ORM calls).
     def _rep_is_done(label: str, rep_index: int) -> bool:
+        if provider is not None:
+            from simpleaudit.tracing.context import TraceCorrelation
+
+            rep_correlations[rep_index] = TraceCorrelation(
+                audit_run_id=getattr(provider, "_audit_run_id", None)
+            )
         if on_rep_started:
             on_rep_started(rep_index)
         return False
@@ -463,12 +578,35 @@ def run_scenario_repeated(
     except Exception as exc:
         raise EngineError(f"Failed to construct AuditExperiment: {type(exc).__name__}: {exc}") from exc
 
+    # Mutable holder the engine reads each rep: the per-rep correlation
+    # assigned at the rep boundary. A single shared object can't attribute
+    # spans to individual reps, so we swap it in per rep.
+    current_correlation: dict[str, Any] = {"corr": None}
+
+    def _tracing_correlation() -> Any:
+        return current_correlation["corr"]
+
     try:
-        results = asyncio.run(
-            experiment.run_scenario_reps(
-                model_index=0, scenario=scenario, max_turns=max_turns, language=language, on_turn=on_turn,
+        with (provider or nullcontext()):
+            results = asyncio.run(
+                experiment.run_scenario_reps(
+                    model_index=0, scenario=scenario, max_turns=max_turns, language=language,
+                    on_turn=on_turn,
+                    audit_run_id=getattr(provider, "_audit_run_id", None) if provider else None,
+                    trace_correlation=_tracing_correlation,
+                )
             )
-        )
+            # Collect per-rep evidence spans while the provider is still alive.
+            if provider is not None:
+                for rep in reps:
+                    corr = rep_correlations.get(rep.get("_rep_index"))
+                    evidence = _collect_evidence_spans(corr, provider)
+                    if evidence:
+                        judgment = rep.get("judgment")
+                        if not isinstance(judgment, dict):
+                            judgment = {}
+                        judgment["evidence_spans"] = evidence
+                        rep["judgment"] = judgment
     except Exception as exc:
         raise EngineError(f"Scenario execution crashed: {type(exc).__name__}: {exc}") from exc
 
@@ -483,18 +621,18 @@ def run_scenario_repeated(
         for rep in reps:
             on_rep_done(rep.get("_rep_index", 0), rep)
 
-    sev_counts: dict[str, int] = {}
-    for rep in reps:
-        sev = rep.get("severity", "")
-        sev_counts[sev] = sev_counts.get(sev, 0) + 1
-    modal_severity = max(sev_counts, key=lambda s: (sev_counts[s], _SEV_RANK.get(s, 0))) if sev_counts else "ERROR"
-    agreement_rate = sev_counts[modal_severity] / len(reps) if reps else 0.0
+    # Delegate the modal/agreement aggregation to the engine so the studio
+    # and the library share one definition (worst-severity tie-break, ERROR
+    # handling) instead of each hand-rolling it.
+    from simpleaudit.repeated_results import aggregate_severities
+
+    agg = aggregate_severities([rep.get("severity", "") for rep in reps])
 
     return {
         "reps": reps,
-        "aggregated_severity": modal_severity,
-        "agreement_rate": round(agreement_rate, 4),
-        "severity_distribution": sev_counts,
+        "aggregated_severity": agg["most_common_severity"],
+        "agreement_rate": round(agg["agreement_rate"], 4),
+        "severity_distribution": agg["severity_distribution"],
         "n_repetitions": len(reps),
         "_language": language,
     }

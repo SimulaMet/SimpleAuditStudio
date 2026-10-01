@@ -77,10 +77,42 @@ Every start applies migrations and makes sure the admin (a superuser) and defaul
 
 ### Tests and lint
 
+Tests run under **pytest** (via `pytest-django`). Your existing
+`django.test.TestCase` classes run unchanged. Tests are layered: run the
+**fast** set while coding (skips the slow integration modules tagged `slow`),
+and the **full** set before you commit or open a PR.
+
 ```bash
-SIMPLEAUDIT_LOCAL_SQLITE=1 uv run manage.py test infra --exclude-tag embedded_hatchet
+# Fast — unit + light integration, for the dev loop (~50s, skips the slow modules)
+uv run pytest -n auto -m "not slow and not embedded_hatchet"
+
+# Full — everything, for before commit / PR
+uv run pytest -n auto -m "not embedded_hatchet"
+
+# Affected-only — run just the tests touched by your changed code (needs a
+# prior run to build .testmondata; CI caches it)
+uv run pytest --testmon -n auto -m "not slow and not embedded_hatchet"
+
+# Lint
 uv run ruff check .
+
+# Target a single module, class, or test to iterate faster
+uv run pytest infra/tests/test_workspaces.py              # one module
+uv run pytest infra/tests/test_workspaces.py::WorkspaceTests  # one class
+uv run pytest infra/tests/test_workspaces.py::WorkspaceTests::test_create  # one test
 ```
+
+**Tagging**
+
+- `slow` — heavy integration modules (experiments, monitors, judges, engine
+  integration, full API lifecycle). Skipped by the fast command, always run in
+  CI. Add `@tag("slow")` to a class to move a slow test out of the fast loop.
+- `embedded_hatchet` — starts a real embedded Hatchet worker; runs serially in
+  CI only when the relevant files change.
+
+The Django `@tag("...")` values are mirrored onto pytest markers by
+`conftest.py`, so `-m "not slow"` works the same as
+`manage.py test --exclude-tag slow`.
 
 ### Other setups
 
@@ -99,13 +131,34 @@ For teams or multi-user setups, use Docker Compose:
 git clone https://github.com/SushantGautam/SimpleAuditStudio
 cd SimpleAuditStudio
 cp .env.example .env
-# edit POSTGRES_PASSWORD and BOOTSTRAP_PASSWORD at minimum
+# edit DJANGO_SECRET_KEY, POSTGRES_PASSWORD and BOOTSTRAP_PASSWORD at minimum —
+# startup refuses to boot while any of them is empty or still `change-me`
 docker compose up -d
 ```
 
-Services: Web UI (:8000), PostgreSQL, Hatchet queue (:8888), Worker. Optional profile: `--profile mock` (mock model API).
+Services: Web UI (:8000), PostgreSQL, Hatchet queue (:8888), Worker. Chat (Open WebUI) is included via `.env`; optional profile `--profile mock` adds a mock model API.
 
 See [docs/deployment.md](docs/deployment.md) for production hardening, backups, and upgrades.
+
+## 💬 Chat
+
+SimpleAudit Studio embeds [Open WebUI](https://openwebui.com) at `/chat/`, signed
+in as your Studio user — workspace admins become Open WebUI admins.
+
+Chat is opt-in. The local one-liner bundles it by default (pass
+`--disable-chat` to turn it off); Docker Compose leaves it out unless `.env`
+says otherwise — uncomment `SIMPLEAUDIT_CHAT` and `COMPOSE_PROFILES` in
+`.env.example` to include it:
+
+```bash
+uvx simpleaudit-studio                 # chat included
+uvx simpleaudit-studio --disable-chat  # without it
+
+docker compose up -d                   # chat only if enabled in .env
+```
+
+See [docs/chat.md](docs/chat.md) for how single sign-on works and what must stay
+private.
 
 ## ✨ What You Can Do
 

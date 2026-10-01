@@ -1,6 +1,7 @@
 """Server-rendered UI — Django CBVs + Forms + HTMX."""
 import csv
 import hashlib
+import hmac
 import io
 import itertools
 import json
@@ -24,6 +25,7 @@ from audits.comparison import compare_runs
 from audits.events import ScenarioResult
 from audits.models import AuditRun
 from audits.services import create_audit_run, frozen_name, submit_audit_run
+from infra.chat_feature import chat_enabled
 from infra.hashing import scenario_revision_hash
 from scenarios.models import (
     Scenario,
@@ -171,6 +173,9 @@ class RegisterView(TemplateView):
             error = "Username already taken."
         else:
             user = User.objects.create_user(username=username, password=password, email=email)
+            from accounts.services import grant_default_project
+
+            grant_default_project(user)
             login(request, user)
             return redirect("dashboard")
         return self.render_to_response(self.get_context_data(error=error))
@@ -182,10 +187,12 @@ def logout_view(request):
 
 
 def auto_login_view(request):
-    """One-click sign-in for the local one-liner demo (`uvx simpleaudit-studio`).
+    """One-click, one-time sign-in for the local one-liner demo.
 
-    The CLI opens this URL in the default browser after startup; it logs the
-    visitor in as the shared bootstrap user and lands them on the dashboard.
+    The CLI generates a single-use token at startup, prints it, and opens
+    ``/auto-login/?token=...`` in the default browser. The token is checked in
+    constant time and consumed on first use, so the URL cannot be replayed by
+    another machine on the LAN (the demo server binds 0.0.0.0).
     Only enabled in MINIMAL_CONFIG (local demo) mode — 404 everywhere else.
     """
     from django.conf import settings
@@ -193,6 +200,12 @@ def auto_login_view(request):
 
     if not getattr(settings, "MINIMAL_CONFIG", False):
         raise Http404
+    token = request.GET.get("token", "")
+    expected = os.environ.get("SIMPLEAUDIT_AUTO_LOGIN_TOKEN", "")
+    if not expected or not hmac.compare_digest(token, expected):
+        raise Http404
+    # Single use: clear it so the URL stops working after this request.
+    os.environ.pop("SIMPLEAUDIT_AUTO_LOGIN_TOKEN", None)
     username = os.environ.get("BOOTSTRAP_USERNAME", "studio")
     user = User.objects.filter(username=username).first()
     if user is None:
@@ -286,16 +299,12 @@ class WorkOSVerifyView(TemplateView):
 def _grant_default_project(user):
     """Give first-time WorkOS users membership in the 'Default' project (viewer).
 
-    The 'Default' workspace is reserved for this purpose — it is created during
-    platform bootstrap and serves as the shared landing space for new users.
+    Thin wrapper over the shared ``grant_default_project`` service so every
+    user-creation path lands new users in the same shared landing space.
     """
-    from accounts.models import Project, ProjectMembership
+    from accounts.services import grant_default_project
 
-    project = Project.objects.filter(slug="default").first()
-    if project:
-        ProjectMembership.objects.get_or_create(
-            project=project, user=user, defaults={"role": ProjectMembership.Role.VIEWER}
-        )
+    grant_default_project(user)
 
 
 # ─── Dashboard ───────────────────────────────────────────────────────────────
@@ -1687,6 +1696,7 @@ class ConnectionsView(ProjectMixin, TemplateView):
     template_name = "connections.html"
 
     def get_context_data(self, **kw):
+        from model_registry import otlp_config
         from model_registry.models import ModelConnection
         from model_registry.services import (
             PROVIDER_PRESETS,
@@ -1736,6 +1746,12 @@ class ConnectionsView(ProjectMixin, TemplateView):
             connections=connections,
             conn_data=conn_data,
             model_total=sum(len(c.model_list) for c in connections),
+            # The per-model "open in chat" icon only makes sense when the chat
+            # module is on; otherwise /chat/ 404s.
+            chat_enabled=chat_enabled(),
+            # The OTLP credential button only makes sense while the OTLP
+            # listener is on; otherwise the issue/rotate endpoints 404.
+            otlp_enabled=otlp_config.ENABLED,
             provider_presets=PROVIDER_PRESETS,
             # Each provider once: presets share some (OpenAI and "Custom" are
             # both openai), and a connection's own provider must stay pickable.
@@ -1926,6 +1942,105 @@ class ConnectionCheckView(ProjectMixin, View):
         except Exception as e:  # noqa: BLE001 - any failure is the answer the user asked for
             return JsonResponse({"ok": False, "error": http_error_detail(e)})
         return JsonResponse({"ok": True, "count": len(ids), "models": ids[:6]})
+
+
+class OTLPCredentialCreateView(ProjectMixin, View):
+    """Generate an OTLP credential for a connection.
+
+    Returns the one-time secret plus the exact env vars to paste into the
+    target (Basic Auth or Bearer Token). Admin-only.
+    """
+
+    def post(self, request):
+        from model_registry import otlp_config
+        if not otlp_config.ENABLED:
+            return JsonResponse({"ok": False, "error": "OTLP is disabled on this deployment."}, status=404)
+        from model_registry import otlp_services as otlp
+        from model_registry.models import ModelConnection
+        from model_registry.otlp_views import _endpoint_url, _require_admin
+
+        blocked = _require_write_access(request)
+        if blocked:
+            return JsonResponse({"ok": False, "error": "You don't have permission to change connections."}, status=403)
+        post = request.POST
+        conn = ModelConnection.objects.filter(pk=_int(post.get("connection_id")), project=request.project).first()
+        if conn is None:
+            return JsonResponse({"ok": False, "error": "Connection not found in this workspace."}, status=404)
+        try:
+            _require_admin(request, request.project)
+        except Exception as e:  # noqa: BLE001 - surface the permission error
+            return JsonResponse({"ok": False, "error": str(e)}, status=403)
+        auth_mode = (post.get("auth_mode") or "basic").strip().lower()
+        if auth_mode not in ("none", "basic", "bearer"):
+            return JsonResponse({"ok": False, "error": "auth_mode must be 'none', 'basic', or 'bearer'."}, status=400)
+        try:
+            new_cred = otlp.create_credential(project=request.project, connection=conn, auth_mode=auth_mode, user=request.user)
+        except ValueError as e:
+            return JsonResponse({"ok": False, "error": str(e)}, status=400)
+        endpoint = _endpoint_url(request, origin=(post.get("origin") or "").strip())
+        payload = {
+            "ok": True,
+            "credential": {
+                "id": new_cred.credential.id,
+                "auth_mode": new_cred.credential.auth_mode,
+                "username": new_cred.credential.username,
+                "target_id": new_cred.credential.target_id,
+            },
+            "secret": new_cred.secret,
+            "endpoint": endpoint,
+        }
+        if new_cred.credential.auth_mode == "basic":
+            payload["env_vars"] = dict(otlp.otlp_env_vars(endpoint=endpoint, username=new_cred.credential.username, password=new_cred.secret))
+        elif new_cred.credential.auth_mode == "bearer":
+            payload["env_vars"] = dict(otlp.otlp_bearer_env_vars(endpoint=endpoint, token=new_cred.secret))
+        else:  # none
+            payload["env_vars"] = dict(otlp.otlp_open_env_vars(endpoint=endpoint))
+        return JsonResponse(payload)
+
+
+class OTLPCredentialRotateView(ProjectMixin, View):
+    """Re-issue an OTLP credential's secret (old one stops working). Admin-only."""
+
+    def post(self, request):
+        from model_registry import otlp_config
+        if not otlp_config.ENABLED:
+            return JsonResponse({"ok": False, "error": "OTLP is disabled on this deployment."}, status=404)
+        from model_registry import otlp_services as otlp
+        from model_registry.models import OTLPCredential
+        from model_registry.otlp_views import _endpoint_url, _require_admin
+
+        blocked = _require_write_access(request)
+        if blocked:
+            return JsonResponse({"ok": False, "error": "You don't have permission to change connections."}, status=403)
+        post = request.POST
+        cred = OTLPCredential.objects.filter(pk=_int(post.get("credential_id")), project=request.project).first()
+        if cred is None:
+            return JsonResponse({"ok": False, "error": "Credential not found in this workspace."}, status=404)
+        try:
+            _require_admin(request, request.project)
+        except Exception as e:  # noqa: BLE001
+            return JsonResponse({"ok": False, "error": str(e)}, status=403)
+        try:
+            new_cred = otlp.rotate_credential(cred)
+        except ValueError as e:
+            return JsonResponse({"ok": False, "error": str(e)}, status=400)
+        endpoint = _endpoint_url(request, origin=(post.get("origin") or "").strip())
+        payload = {
+            "ok": True,
+            "credential": {
+                "id": new_cred.credential.id,
+                "auth_mode": new_cred.credential.auth_mode,
+                "username": new_cred.credential.username,
+                "target_id": new_cred.credential.target_id,
+            },
+            "secret": new_cred.secret,
+            "endpoint": endpoint,
+        }
+        if new_cred.credential.auth_mode == "basic":
+            payload["env_vars"] = dict(otlp.otlp_env_vars(endpoint=endpoint, username=new_cred.credential.username, password=new_cred.secret))
+        else:  # bearer
+            payload["env_vars"] = dict(otlp.otlp_bearer_env_vars(endpoint=endpoint, token=new_cred.secret))
+        return JsonResponse(payload)
 
 
 class DiscoverModelsView(ProjectMixin, View):
