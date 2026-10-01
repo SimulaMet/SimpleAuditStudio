@@ -177,6 +177,7 @@ def create_audit_run(
     language_override: str | None = None,
     n_repetitions_override: int | None = None,
     gen_config_override: dict | None = None,
+    trace_config: dict | None = None,
     monitor=None,
     experiment=None,
 ) -> AuditRun:
@@ -227,6 +228,7 @@ def create_audit_run(
         ),
         simpleaudit_version=resolved_version,
         git_commit=resolved_commit,
+        trace_config=trace_config or {},
         runtime_metadata={"created_by_username": user.username},
         queued_at=now,
         total_scenarios=scenario_set_version.scenario_count,

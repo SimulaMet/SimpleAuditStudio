@@ -38,6 +38,10 @@ class AuditRun(models.Model):
     auditor_config_snapshot = models.JSONField()
     judge_config_snapshot = models.JSONField()
     generation_parameters_snapshot = models.JSONField()
+    # Optional trace acquisition config (Promptfoo parity): {"mode": "builtin"|"tempo", ...}.
+    # Empty/absent = no tracing (the normal black-box path). Frozen at run creation
+    # like the other snapshots; the worker hands it to the engine's tracing layer.
+    trace_config = models.JSONField(default=dict, blank=True)
     simpleaudit_version = models.CharField(max_length=120)
     git_commit = models.CharField(max_length=120)
     runtime_metadata = models.JSONField(default=dict, blank=True)
