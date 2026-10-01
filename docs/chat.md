@@ -165,6 +165,45 @@ cookie. Different registrable domains will not work.
 | `SIMPLEAUDIT_CHAT_CMD`          | auto                     | command that starts Open WebUI             |
 | `SIMPLEAUDIT_CHAT_IDENTITY_TTL` | `5`                      | seconds the proxy caches who a cookie is   |
 | `SIMPLEAUDIT_CHAT_SYNC_DELAY`   | `2`                      | seconds a model-connection push waits      |
+| `SIMPLEAUDIT_CHAT_OTLP`         | `false`                  | export Open WebUI's spans to Studio's OTLP listener |
+| `SIMPLEAUDIT_CHAT_OTLP_ENDPOINT`| Studio's web origin      | base URL of the OTLP listener (embedded: `http://127.0.0.1:<port>`, docker: `http://web:8000`) |
+| `SIMPLEAUDIT_CHAT_OTLP_SERVICE_NAME` | `open-webui`         | the service name Open WebUI tags its spans with |
+
+## Exporting Open WebUI's spans to Studio (OTLP)
+
+Open WebUI can emit OpenTelemetry traces. When `SIMPLEAUDIT_CHAT_OTLP` is set
+to `true`, Studio starts it with tracing enabled and pointed at Studio's own
+OTLP listener (`POST /otlp/v1/traces`), so the spans it emits land in the same
+place as any other target's — no separate collector needed.
+
+It is off by default. When enabled it exports **unauthenticated** by default —
+no credentials are sent — which matches the listener's default fallback to an
+enabled `none` credential. The exporter is the standard OTel one, so the
+environment variables are the standard ones, with two Open WebUI specifics:
+
+- Open WebUI selects the HTTP exporter from `OTEL_OTLP_SPAN_EXPORTER`
+  (`http`), **not** the standard `OTEL_EXPORTER_OTLP_PROTOCOL`.
+- The exporter appends `/v1/traces` to `OTEL_EXPORTER_OTLP_ENDPOINT`, so the
+  endpoint is the **base** URL, not the full path.
+
+So enabling it is one line:
+
+```bash
+# .env (docker) — or the equivalent environment in embedded mode
+SIMPLEAUDIT_CHAT_OTLP=true
+```
+
+For an authenticated target (a `basic` or `bearer` OTLP credential instead of a
+`none` one), set the matching variables — embedded mode reads them from the
+environment it starts Open WebUI with, docker mode passes them straight through:
+
+```bash
+OTEL_BASIC_AUTH_USERNAME=sa_<target_id>     # from the credential
+OTEL_BASIC_AUTH_PASSWORD=<password>          # shown once at creation
+```
+
+If no enabled `none` credential exists and no auth is set, the listener answers
+401 and Open WebUI drops the spans.
 
 ## Syncing with Studio (scaffolding)
 
