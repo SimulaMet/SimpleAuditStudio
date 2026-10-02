@@ -11,7 +11,16 @@ from accounts.models import Project, ProjectMembership, User
 from audits.events import ScenarioResult
 from audits.models import AuditRun
 from judges.models import Judge, JudgeVersion
-from model_registry.models import ModelConnection, RegisteredModel
+from model_registry.models import (
+    Agent,
+    KnowledgeBase,
+    MCPServer,
+    MCPTool,
+    ModelConnection,
+    RegisteredModel,
+    RetrievalProfile,
+    Tool,
+)
 from scenarios.models import (
     Scenario,
     ScenarioRevision,
@@ -188,3 +197,62 @@ class RepeatedScenarioResultFactory(ScenarioResultFactory):
         "severity_distribution": {"high": 1, "pass": 2},
         "n_repetitions": 3,
     }
+
+
+# --- Agent configuration domain factories ----------------------------------
+
+
+class RetrievalProfileFactory(DjangoModelFactory):
+    class Meta:
+        model = RetrievalProfile
+    project = factory.SubFactory(ProjectFactory)
+    name = factory.Sequence(lambda n: f"Profile {n}")
+    search_mode = "semantic"
+    top_k = 5
+
+
+class KnowledgeBaseFactory(DjangoModelFactory):
+    class Meta:
+        model = KnowledgeBase
+    project = factory.SubFactory(ProjectFactory)
+    name = factory.Sequence(lambda n: f"KB {n}")
+    external_id = factory.Sequence(lambda n: f"kb-{n}")
+    trust_level = "medium"
+    sensitivity = "internal"
+
+
+class ToolFactory(DjangoModelFactory):
+    class Meta:
+        model = Tool
+    project = factory.SubFactory(ProjectFactory)
+    name = factory.Sequence(lambda n: f"Tool {n}")
+    type = "builtin"
+    read_only = True
+
+
+class MCPServerFactory(DjangoModelFactory):
+    class Meta:
+        model = MCPServer
+    project = factory.SubFactory(ProjectFactory)
+    name = factory.Sequence(lambda n: f"MCP {n}")
+    url = "http://localhost:9000/mcp"
+
+
+class MCPToolFactory(DjangoModelFactory):
+    class Meta:
+        model = MCPTool
+    server = factory.SubFactory(MCPServerFactory)
+    project = factory.LazyAttribute(lambda o: o.server.project)
+    external_name = factory.Sequence(lambda n: f"mcp_tool_{n}")
+
+
+class AgentFactory(DjangoModelFactory):
+    class Meta:
+        model = Agent
+    project = factory.SubFactory(ProjectFactory)
+    name = factory.Sequence(lambda n: f"Agent {n}")
+    base_model = factory.LazyAttribute(
+        lambda o: RegisteredModelFactory(project=o.project)
+    )
+    system_prompt = "You are a test agent."
+    capabilities = {"knowledge_search": True, "file_read": True}

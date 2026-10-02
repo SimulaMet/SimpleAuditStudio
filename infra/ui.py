@@ -2254,11 +2254,12 @@ class RunDetailView(ProjectMixin, DetailView):
         from audits.monitors import has_write_role
 
         ctx["can_schedule"] = has_write_role(self.request.user, self.request.project)
-        from audits.services import ROLES, frozen_judge, frozen_model
+        from audits.services import ROLES, frozen_agent, frozen_judge, frozen_model
 
         ctx["frozen_models"] = [frozen_model(run, role) for role in ROLES]
         ctx["judge"] = frozen_judge(run)
         ctx["system_prompt"] = (run.generation_parameters_snapshot or {}).get("system_prompt", "")
+        ctx["frozen_agent"] = frozen_agent(run)
         return ctx
 
 
@@ -2338,8 +2339,35 @@ _REP_KNOWN_KEYS = {
     "conversation", "issues_found", "issues", "positive_behaviors", "recommendations", "summary",
     "severity", "rationale", "evidence", "judge_rationale", "judgment", "scenario_name",
     "scenario_description", "expected_behavior", "file_uri", "_rep_index", "_language", "error",
+    "trace_ids",
     *(f"{r}_{d}_tokens" for r in _REP_TOKEN_ROLES for d in ("input", "output")),
 }
+# Span kinds worth surfacing in the result page's trace card (the same set the
+# engine's evidence selection treats as signal). Anything else is noise.
+_TRACE_CARD_KINDS = {"LLM", "RETRIEVER", "TOOL", "AGENT", "GUARDRAIL", "EVALUATOR"}
+
+
+def _trace_card_view(rep: dict) -> dict | None:
+    """The trace section of one rep: W3C trace ids + the captured spans.
+
+    ``trace_ids`` are the ids the engine propagated the rep's turns under
+    (persisted on the result); the spans are the selected evidence the target
+    actually exported for those ids (``judgment["evidence_spans"]``). Returns
+    ``None`` when the rep carries no trace data (tracing was off, or the
+    target exported nothing for the run's traces).
+    """
+    trace_ids = rep.get("trace_ids") or []
+    spans = ((rep.get("judgment") or {}).get("evidence_spans") or []) if isinstance(rep.get("judgment"), dict) else []
+    if not trace_ids and not spans:
+        return None
+    signal = [s for s in spans if str(s.get("kind") or "").upper() in _TRACE_CARD_KINDS]
+    shown = signal[:30] or spans[:30]
+    return {
+        "trace_ids": list(trace_ids),
+        "spans": shown,
+        "total_spans": len(spans),
+        "hidden_spans": max(len(spans) - len(shown), 0),
+    }
 
 
 def _as_text_list(value) -> list[str]:
@@ -2462,6 +2490,7 @@ def _rep_view(rep: dict, index: int) -> dict:
         "rationale": rep.get("rationale") or rep.get("evidence") or rep.get("judge_rationale") or "",
         "tokens": tokens,
         "total_tokens": total_tokens,
+        "trace": _trace_card_view(rep),
         "other": {k: v for k, v in rep.items() if k not in _REP_KNOWN_KEYS},
     }
 
@@ -2589,6 +2618,199 @@ class RunScriptView(ProjectMixin, View):
         safe_name = "".join(c if c.isalnum() or c in "-_." else "_" for c in run.name)[:60] or "run"
         response["Content-Disposition"] = f'attachment; filename="rerun_{safe_name}_{run.id}.py"'
         return response
+
+
+# ---------------------------------------------------------------------------
+# Agent configuration UI
+# ---------------------------------------------------------------------------
+
+
+class AgentsView(ProjectMixin, TemplateView):
+    """List all agents in the current workspace."""
+
+    template_name = "agents/agents.html"
+
+    def get_context_data(self, **kw):
+        ctx = super().get_context_data(**kw)
+        from model_registry.models import Agent
+
+        ctx["agents"] = (
+            Agent.objects.filter(project=self.request.project)
+            .select_related("base_model", "base_model__connection", "retrieval_profile")
+            .prefetch_related("knowledge_bases", "tools", "mcp_tools__server")
+        )
+        return ctx
+
+
+class AgentDetailView(ProjectMixin, TemplateView):
+    """Create or edit an agent."""
+
+    template_name = "agents/agent_detail.html"
+
+    def get_context_data(self, **kw):
+        ctx = super().get_context_data(**kw)
+        from model_registry.models import (
+            Agent,
+            KnowledgeBase,
+            MCPServer,
+            MCPTool,
+            RegisteredModel,
+            RetrievalProfile,
+            Tool,
+        )
+
+        project = self.request.project
+        agent = None
+        if "agent_id" in self.kwargs:
+            agent = Agent.objects.filter(
+                pk=self.kwargs["agent_id"], project=project
+            ).select_related(
+                "base_model", "base_model__connection", "retrieval_profile"
+            ).prefetch_related("knowledge_bases", "tools", "mcp_tools__server").first()
+
+        ctx["agent"] = agent
+        ctx["models"] = RegisteredModel.objects.filter(project=project, enabled=True).select_related("connection")
+        ctx["knowledge_bases"] = KnowledgeBase.objects.filter(project=project, enabled=True)
+        ctx["tools"] = Tool.objects.filter(project=project, enabled=True)
+        ctx["mcp_servers"] = MCPServer.objects.filter(project=project, enabled=True).prefetch_related("tools")
+        ctx["mcp_tools"] = MCPTool.objects.filter(project=project, enabled=True).select_related("server")
+        ctx["retrieval_profiles"] = RetrievalProfile.objects.filter(project=project)
+        ctx["capability_options"] = [
+            {"key": "knowledge_search", "label": "Knowledge Search"},
+            {"key": "file_read", "label": "File Read"},
+            {"key": "web_search", "label": "Web Search"},
+            {"key": "url_fetch", "label": "URL Fetch"},
+            {"key": "calculator", "label": "Calculator"},
+            {"key": "code_execution", "label": "Code Execution"},
+            {"key": "memory", "label": "Memory"},
+            {"key": "subagents", "label": "Subagents"},
+            {"key": "notifications", "label": "Notifications"},
+        ]
+        return ctx
+
+    def post(self, request, *args, **kwargs):
+        from model_registry.models import Agent, KnowledgeBase, MCPTool, Tool
+
+        project = request.project
+        agent = None
+        if "agent_id" in self.kwargs:
+            agent = Agent.objects.filter(pk=self.kwargs["agent_id"], project=project).first()
+
+        name = request.POST.get("name", "").strip()
+        if not name:
+            messages.error(request, "Name is required.")
+            return self._render(request, agent)
+
+        try:
+            base_model_id = int(request.POST.get("base_model"))
+            from model_registry.models import RegisteredModel
+            base_model = RegisteredModel.objects.get(pk=base_model_id, project=project)
+        except (ValueError, RegisteredModel.DoesNotExist):
+            messages.error(request, "Select a valid base model.")
+            return self._render(request, agent)
+
+        retrieval_profile = None
+        profile_id = request.POST.get("retrieval_profile")
+        if profile_id:
+            from model_registry.models import RetrievalProfile
+            retrieval_profile = RetrievalProfile.objects.filter(pk=profile_id, project=project).first()
+
+        if agent:
+            agent.name = name
+            agent.description = request.POST.get("description", "")
+            agent.base_model = base_model
+            agent.system_prompt = request.POST.get("system_prompt", "")
+            agent.retrieval_profile = retrieval_profile
+            agent.enabled = request.POST.get("enabled") == "on"
+            agent.save()
+            agent.knowledge_bases.set(
+                KnowledgeBase.objects.filter(
+                    pk__in=request.POST.getlist("knowledge_bases"), project=project
+                )
+            )
+            agent.tools.set(
+                Tool.objects.filter(pk__in=request.POST.getlist("tools"), project=project)
+            )
+            agent.mcp_tools.set(
+                MCPTool.objects.filter(pk__in=request.POST.getlist("mcp_tools"), project=project)
+            )
+            # Parse capabilities checkboxes
+            caps = {}
+            for cap in ("knowledge_search", "file_read", "web_search", "url_fetch",
+                        "calculator", "code_execution", "memory", "subagents", "notifications"):
+                caps[cap] = request.POST.get(cap) == "on"
+            agent.capabilities = caps
+            agent.save()
+            messages.success(request, f"Agent '{name}' updated.")
+        else:
+            caps = {}
+            for cap in ("knowledge_search", "file_read", "web_search", "url_fetch",
+                        "calculator", "code_execution", "memory", "subagents", "notifications"):
+                caps[cap] = request.POST.get(cap) == "on"
+            agent = Agent.objects.create(
+                project=project,
+                name=name,
+                description=request.POST.get("description", ""),
+                base_model=base_model,
+                system_prompt=request.POST.get("system_prompt", ""),
+                retrieval_profile=retrieval_profile,
+                capabilities=caps,
+                created_by=request.user,
+            )
+            agent.knowledge_bases.set(
+                KnowledgeBase.objects.filter(
+                    pk__in=request.POST.getlist("knowledge_bases"), project=project
+                )
+            )
+            agent.tools.set(
+                Tool.objects.filter(pk__in=request.POST.getlist("tools"), project=project)
+            )
+            agent.mcp_tools.set(
+                MCPTool.objects.filter(pk__in=request.POST.getlist("mcp_tools"), project=project)
+            )
+            messages.success(request, f"Agent '{name}' created.")
+
+        return redirect("agent_detail", agent_id=agent.id)
+
+    def _render(self, request, agent):
+        ctx = self.get_context_data()
+        return render(request, self.template_name, ctx)
+
+
+class AgentDeleteView(ProjectMixin, View):
+    """Delete an agent."""
+
+    def post(self, request, agent_id):
+        from model_registry.models import Agent
+
+        agent = Agent.objects.filter(pk=agent_id, project=request.project).first()
+        if not agent:
+            messages.error(request, "Agent not found.")
+            return redirect("agents")
+        name = agent.name
+        agent.delete()
+        messages.success(request, f"Agent '{name}' deleted.")
+        return redirect("agents")
+
+
+class AgentTestChatView(ProjectMixin, View):
+    """Redirect to chat with the agent's model pinned."""
+
+    def get(self, request, agent_id):
+        from model_registry.models import Agent
+
+        agent = Agent.objects.filter(pk=agent_id, project=request.project).select_related(
+            "base_model", "base_model__connection"
+        ).first()
+        if not agent:
+            messages.error(request, "Agent not found.")
+            return redirect("agents")
+        # Pin the agent's model in the session and redirect to chat
+        conn = agent.base_model.connection
+        model_id = agent.base_model.model_id
+        request.session["chat_pinned_model"] = f"{conn.id}.{model_id}"
+        request.session["chat_agent_id"] = agent.id
+        return redirect("chat")
 
 
 class JudgeScriptView(ProjectMixin, View):

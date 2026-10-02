@@ -361,13 +361,26 @@ def _scenario_execute_impl(workflow_input: ScenarioInput, ctx: Context) -> dict:
     from infra.engine import EngineError, run_scenario_repeated
     from infra.engine import run_scenario as engine_run_scenario
 
+    # Stamp agent correlation ID on the log context when the run targets an Agent.
+    if run.agent_config_snapshot:
+        from infra.middleware import set_correlation_context
+
+        set_correlation_context(
+            audit_run_id=str(run.pk),
+            agent_id=str(run.agent_config_snapshot.get("agent_id", "")),
+        )
+
     gen_params = run.generation_parameters_snapshot or {}
     n_reps = int(gen_params.get("n_repetitions") or 1)
     max_turns = int(gen_params.get("max_turns") or 5)
-    # Trace acquisition config (Promptfoo parity). Empty = no tracing. Only the
-    # single-rep path forwards it: the engine's multi-rep path does not yet
-    # propagate trace correlation (see infra.engine.run_scenario_repeated).
-    trace_config = run.trace_config or None
+    # Trace acquisition config (Promptfoo parity). Empty = no tracing. studio
+    # mode fetches the run's spans from Studio's own OTLP listener by
+    # (target_id, trace_id); the worker resolves the run's frozen target
+    # credential id here, at execution time, so the frozen run needs no UI
+    # knowledge (and picks up credentials created after the run was queued).
+    from infra.tracing import enrich_trace_config
+
+    trace_config = enrich_trace_config(run.trace_config or None, run.target_config_snapshot)
 
     # Granular stage detail for the frontend: which phase of the scenario is
     # starting (target execution begins with the auditor generating a probe).

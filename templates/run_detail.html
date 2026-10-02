@@ -827,6 +827,28 @@ function openScriptModal() {
         </span>
       </div>
       {% endfor %}
+      {% if frozen_agent %}
+      <div class="mt-3 pt-3 border-t border-gray-800">
+        <p class="text-[10px] uppercase tracking-wide text-gray-500 mb-2">Agent</p>
+        <div class="flex justify-between gap-2"><span class="text-gray-500 shrink-0">Name</span><span class="min-w-0 text-gray-300 text-right">{{ frozen_agent.name }}</span></div>
+        <div class="flex justify-between gap-2"><span class="text-gray-500 shrink-0">Base Model</span><span class="min-w-0 text-gray-300 text-right">{{ frozen_agent.base_model.display_name|default:frozen_agent.base_model.model_id }} <span class="text-gray-500 font-mono">({{ frozen_agent.base_model.model_id }})</span></span></div>
+        {% if frozen_agent.system_prompt %}
+        <div class="flex justify-between gap-2"><span class="text-gray-500 shrink-0">System Prompt</span><span class="min-w-0 text-gray-300 text-right truncate max-w-[180px]" title="{{ frozen_agent.system_prompt }}">{{ frozen_agent.system_prompt|truncatechars:50 }}</span></div>
+        {% endif %}
+        {% if frozen_agent.knowledge_bases %}
+        <div class="flex justify-between gap-2"><span class="text-gray-500 shrink-0">Knowledge</span><span class="min-w-0 text-gray-300 text-right">{{ frozen_agent.knowledge_bases|length }} KB(s)</span></div>
+        {% endif %}
+        {% if frozen_agent.tools %}
+        <div class="flex justify-between gap-2"><span class="text-gray-500 shrink-0">Tools</span><span class="min-w-0 text-gray-300 text-right">{{ frozen_agent.tools|length }} tool(s)</span></div>
+        {% endif %}
+        {% if frozen_agent.mcp_tools %}
+        <div class="flex justify-between gap-2"><span class="text-gray-500 shrink-0">MCP</span><span class="min-w-0 text-gray-300 text-right">{{ frozen_agent.mcp_tools|length }} tool(s)</span></div>
+        {% endif %}
+        {% if frozen_agent.retrieval_profile %}
+        <div class="flex justify-between gap-2"><span class="text-gray-500 shrink-0">Retrieval</span><span class="min-w-0 text-gray-300 text-right">{{ frozen_agent.retrieval_profile.mode|default:"hybrid" }} · top {{ frozen_agent.retrieval_profile.top_k|default:"5" }}</span></div>
+        {% endif %}
+      </div>
+      {% endif %}
       <div class="flex justify-between gap-2"><span class="text-gray-500 shrink-0">Judge</span>
         <span class="min-w-0 text-right">
           {% if judge.judge_id %}<a href="{% url 'judge_detail' judge.judge_id %}?v={{ judge.version }}" class="text-gray-300 hover:text-accent transition-colors" title="Open this judge version">{{ judge.label }}</a>{% else %}<span class="text-gray-300">{{ judge.label }}</span>{% endif %}
