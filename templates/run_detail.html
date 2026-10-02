@@ -16,9 +16,6 @@
       <span aria-hidden="true">⊞</span><span>Experiment</span>
     </a>
     {% endif %}
-    <a href="{% url 'visualizer' %}" title="Open the result visualizer (browse a folder of results, or drag-drop a file)" class="inline-flex items-center gap-1.5 h-8 px-2.5 rounded-lg bg-surface-overlay text-gray-300 text-xs font-medium hover:text-accent transition-colors">
-      <span aria-hidden="true">👁</span><span>Visualizer</span>
-    </a>
     {% if run.monitor %}
     <a href="{% url 'monitor_detail' run.monitor.id %}" title="Repeats as monitor “{{ run.monitor.name }}” ({{ run.monitor.interval_display }}) — open its drift chart" class="inline-flex items-center gap-1.5 h-8 px-2.5 rounded-lg bg-accent/15 text-accent text-xs font-medium hover:bg-accent/25 transition-colors">
       <span aria-hidden="true">↻</span><span>Monitor</span>
