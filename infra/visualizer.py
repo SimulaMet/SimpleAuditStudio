@@ -187,6 +187,86 @@ def _read_asset(name: str) -> str:
     raise Http404(f"Static asset not found: {name}")
 
 
+def _inject_footer(html: str) -> str:
+    """Replace the ``<!-- VISUALIZER_FOOTER -->`` placeholder with the Studio footer.
+
+    The visualizer pages are standalone static assets (not Django templates), so
+    they can't ``{% include %}`` the shared footer. We render ``partials/footer.html``
+    here and splice it in at serve time, keeping the footer in one place so the
+    visualizer stays in sync with the rest of the Studio.
+    """
+    if "<!-- VISUALIZER_FOOTER -->" not in html:
+        return html
+    from django.template.loader import render_to_string
+
+    footer = render_to_string("partials/footer.html", {"footer_class": "py-2 px-2"})
+    return html.replace("<!-- VISUALIZER_FOOTER -->", footer)
+
+
+def _sidebar_assets() -> tuple[str, str]:
+    """Return ``(css, js)`` for the Studio app-shell sidebar, extracted from
+    ``templates/base.html`` so the visualizer stays in sync with the Studio.
+
+    The CSS is the ``<style>`` block that styles ``#sidebar``; the JS is the IIFE
+    that powers the collapse-to-rail / mobile-drawer behaviour.
+    """
+    from pathlib import Path
+
+    base = (Path(__file__).resolve().parent.parent / "templates" / "base.html").read_text(encoding="utf-8")
+
+    # CSS: the <style> block that begins with the app-shell sidebar rules.
+    css_start = base.index("/* ── App shell sidebar")
+    css_end = base.index("</style>", css_start)
+    css = base[css_start:css_end]
+
+    # JS: the sidebar-collapse IIFE (in its own <script> block, anchored by a
+    # unique comment). Strip the <script> tags so the caller can wrap it.
+    anchor = "// Sidebar: collapse to an icon rail"
+    i = base.index(anchor)
+    js_start = base.rindex("<script>", 0, i) + len("<script>")
+    js_end = base.index("</script>", i)
+    js = base[js_start:js_end]
+    return css, js
+
+
+def _inject_sidebar(html: str, request) -> str:
+    """Replace the ``<!-- VISUALIZER_SIDEBAR -->`` / ``_CSS`` / ``_JS`` placeholders
+    with the Studio app-shell sidebar so the visualizer reads as part of the Studio.
+
+    The sidebar is ``partials/visualizer_sidebar.html`` — the same frame as the
+    Studio sidebar (logo header + user footer, inherited markup) but with the JSON
+    file tree as its body instead of the nav menu. It's rendered with the request
+    in context so the ``gravatar_url`` / ``auth`` context processors populate the
+    user footer. The collapse/drawer CSS + JS are extracted from ``base.html``.
+    """
+    if "<!-- VISUALIZER_SIDEBAR -->" not in html:
+        return html
+    from django.template.loader import render_to_string
+
+    # render_to_string with a plain context does not run context processors, so
+    # pass the values the partial needs explicitly (user, gravatar).
+    user = getattr(request, "user", None)
+    gravatar = None
+    if user is not None and user.is_authenticated and user.email:
+        import hashlib
+
+        gravatar = (
+            "https://www.gravatar.com/avatar/"
+            + hashlib.md5(user.email.strip().lower().encode("utf-8")).hexdigest()
+            + "?d=identicon&s=128"
+        )
+    sidebar = render_to_string(
+        "partials/visualizer_sidebar.html",
+        {"request": request, "user": user, "gravatar_url": gravatar},
+    )
+    css, js = _sidebar_assets()
+
+    html = html.replace("<!-- VISUALIZER_SIDEBAR_CSS -->", f"<style>\n{css}\n</style>")
+    html = html.replace("<!-- VISUALIZER_SIDEBAR -->", sidebar)
+    html = html.replace("<!-- VISUALIZER_SIDEBAR_JS -->", f"<script>\n{js}\n</script>")
+    return html
+
+
 def build_standalone_html(data, name: str) -> str:
     """Inline audit data into the visualizer template as a standalone HTML file.
 
@@ -212,7 +292,8 @@ def build_standalone_html(data, name: str) -> str:
         f"window.__inlinedName = {name_json}; "
         f"window.__standaloneMode = {mode_json};</script>\n"
     )
-    return html.replace("</head>", f"{inline}</head>", 1)
+    html = html.replace("</head>", f"{inline}</head>", 1)
+    return _inject_footer(html)
 
 
 # --- views -------------------------------------------------------------------
@@ -231,6 +312,8 @@ class VisualizerView(LoginRequiredMixin, View):
             "window.__VISUALIZER_API_BASE = '{{ visualizer_api_base|default:\"\" }}';",
             "window.__VISUALIZER_API_BASE = '/api/visualizer';",
         )
+        html = _inject_sidebar(html, request)
+        html = _inject_footer(html)
         return HttpResponse(html, content_type="text/html; charset=utf-8")
 
 
@@ -243,6 +326,8 @@ class ScenarioViewerView(LoginRequiredMixin, View):
 
     def get(self, request):
         html = _read_asset("scenario_viewer.html")
+        html = _inject_sidebar(html, request)
+        html = _inject_footer(html)
         return HttpResponse(html, content_type="text/html; charset=utf-8")
 
 
