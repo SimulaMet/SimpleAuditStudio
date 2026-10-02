@@ -23,6 +23,10 @@ def main() -> None:
     # make settings import the Postgres driver first.
     if sys.argv[1:2] == ["dev_server"] and "--embedded" in sys.argv:
         os.environ.setdefault("SIMPLEAUDIT_LOCAL_SQLITE", "1")
+    # `dev_server` is a local dev command — it implies DEBUG so the production
+    # hardening block (SECURE_SSL_REDIRECT, HSTS, secure cookies) stays off.
+    if sys.argv[1:2] == ["dev_server"]:
+        os.environ.setdefault("DJANGO_DEBUG", "1")
     try:
         from django.core.management import execute_from_command_line
     except ImportError as exc:
