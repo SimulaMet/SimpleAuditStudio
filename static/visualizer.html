@@ -233,8 +233,12 @@
             .resizer-inner {
                 display: none;
             }
-            /* Mobile view: Stack scenario list on top of detail */
+            /* Mobile view: Hide detail view by default, show as overlay when selected */
+            #detail-view {
+                display: none;
+            }
             #detail-view.has-selection {
+                display: block;
                 position: fixed;
                 inset: 0;
                 top: 73px; /* Below header */
