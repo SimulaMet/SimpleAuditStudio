@@ -396,18 +396,31 @@
         </div>
         <div class="flex items-center gap-2">
             <input type="file" id="upload-json-input" accept=".json" class="hidden" onchange="handleUploadedFile(event)">
-            <button onclick="document.getElementById('upload-json-input').click()" class="bg-green-600 hover:bg-green-700 text-white font-medium py-2 px-4 rounded-lg transition-colors flex items-center gap-2">
-                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
-                </svg>
-                <span class="hidden md:inline">Upload JSON</span>
-            </button>
-            <button id="browse-folder-btn" onclick="browseLocalFolder()" class="bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-4 rounded-lg transition-colors flex items-center gap-2" title="Browse a local folder of SimpleAudit results (Chromium browsers)">
-                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
-                </svg>
-                <span class="hidden md:inline">Browse Folder</span>
-            </button>
+            <div class="relative">
+                <button onclick="toggleOpenMenu()" class="bg-green-600 hover:bg-green-700 text-white font-medium py-2 px-4 rounded-lg transition-colors flex items-center gap-2">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
+                    </svg>
+                    <span class="hidden md:inline">Open</span>
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+                    </svg>
+                </button>
+                <div id="open-menu" class="hidden absolute right-0 top-full mt-1 w-44 bg-white border border-gray-200 rounded-lg shadow-lg z-50 py-1">
+                    <button onclick="closeOpenMenu(); document.getElementById('upload-json-input').click()" class="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 flex items-center gap-2">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+                        </svg>
+                        Upload JSON file
+                    </button>
+                    <button id="open-menu-folder" onclick="closeOpenMenu(); browseLocalFolder()" class="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 flex items-center gap-2">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
+                        </svg>
+                        Browse local folder
+                    </button>
+                </div>
+            </div>
             <button id="logout-button" onclick="logout()" class="bg-red-500 hover:bg-red-600 text-white font-medium py-2 px-4 rounded-lg transition-colors hidden">
                 Logout
             </button>
@@ -1309,11 +1322,27 @@
             event.target.value = '';
         }
 
+        // --- Open menu (Upload JSON / Browse Folder) ---
+        function toggleOpenMenu() {
+            const menu = document.getElementById('open-menu');
+            menu.classList.toggle('hidden');
+        }
+        function closeOpenMenu() {
+            document.getElementById('open-menu').classList.add('hidden');
+        }
+        // Close the menu when clicking outside
+        document.addEventListener('click', (e) => {
+            const menu = document.getElementById('open-menu');
+            if (menu && !menu.classList.contains('hidden') && !e.target.closest('.relative')) {
+                closeOpenMenu();
+            }
+        });
+
         // --- Browse local folder (File System Access API) ---
-        // Hide the button in browsers that don't support showDirectoryPicker.
+        // Hide the "Browse local folder" option in browsers without showDirectoryPicker.
         (function hideBrowseIfUnsupported() {
             if (!window.showDirectoryPicker) {
-                const btn = document.getElementById('browse-folder-btn');
+                const btn = document.getElementById('open-menu-folder');
                 if (btn) btn.style.display = 'none';
             }
         })();
