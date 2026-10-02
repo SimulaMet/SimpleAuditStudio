@@ -402,6 +402,12 @@
                 </svg>
                 <span class="hidden md:inline">Upload JSON</span>
             </button>
+            <button id="browse-folder-btn" onclick="browseLocalFolder()" class="bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-4 rounded-lg transition-colors flex items-center gap-2" title="Browse a local folder of SimpleAudit results (Chromium browsers)">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
+                </svg>
+                <span class="hidden md:inline">Browse Folder</span>
+            </button>
             <button id="logout-button" onclick="logout()" class="bg-red-500 hover:bg-red-600 text-white font-medium py-2 px-4 rounded-lg transition-colors hidden">
                 Logout
             </button>
@@ -557,6 +563,8 @@
         let currentExperimentRuns = null; // { model, runs: [...] } for run switching
         let currentRunIndex = 0; // Index of the currently selected run
         let currentFragility = null; // { scenarioName: { agreement, entropy, spread, mode } }
+        let localDirHandle = null; // FileSystemDirectoryHandle from Browse Folder
+        let localDirTree = []; // File tree built from the local folder
 
         // On page load, check for file and scenario in URL
         window.addEventListener('DOMContentLoaded', () => {
@@ -983,18 +991,23 @@
                     const fileDiv = document.createElement('div');
                     const isSelected = currentFilePath === item.path;
                     fileDiv.className = `tree-item group flex items-center py-1 px-2 rounded hover:bg-indigo-50 text-sm transition-colors ${isSelected ? 'bg-indigo-100 ring-1 ring-indigo-500' : ''}`;
+                    if (item.local) fileDiv.setAttribute('data-local-path', item.path);
                     fileDiv.innerHTML = `
                         <span class="file-icon text-base shrink-0"></span>
                         <span class="marquee-wrap text-gray-700 ${isSelected ? 'font-semibold' : ''}" title="${escapeHtml(item.name)}"><span class="marquee-text">${escapeHtml(item.name)}</span></span>
-                        <button onclick="event.stopPropagation(); downloadFileHtml('${escapeHtml(item.path)}')" class="shrink-0 opacity-0 group-hover:opacity-100 text-gray-400 hover:text-indigo-600 transition-all p-1" title="Download as standalone HTML">
+                        ${item.local ? '' : `<button onclick="event.stopPropagation(); downloadFileHtml('${escapeHtml(item.path)}')" class="shrink-0 opacity-0 group-hover:opacity-100 text-gray-400 hover:text-indigo-600 transition-all p-1" title="Download as standalone HTML">
                             <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
                             </svg>
-                        </button>
+                        </button>`}
                     `;
                     fileDiv.onclick = () => {
                         currentExperimentSelection = null;
-                        loadJsonFile(item.path, item.name);
+                        if (item.local) {
+                            loadLocalFile(item.path);
+                        } else {
+                            loadJsonFile(item.path, item.name);
+                        }
                     };
                     li.appendChild(fileDiv);
                 }
@@ -1279,6 +1292,96 @@
             
             // Reset input so the same file can be uploaded again
             event.target.value = '';
+        }
+
+        // --- Browse local folder (File System Access API) ---
+        // Hide the button in browsers that don't support showDirectoryPicker.
+        (function hideBrowseIfUnsupported() {
+            if (!window.showDirectoryPicker) {
+                const btn = document.getElementById('browse-folder-btn');
+                if (btn) btn.style.display = 'none';
+            }
+        })();
+
+        async function browseLocalFolder() {
+            try {
+                localDirHandle = await window.showDirectoryPicker({ mode: 'read' });
+            } catch (e) {
+                if (e.name === 'AbortError') return; // user cancelled
+                alert('Could not open folder: ' + e.message);
+                return;
+            }
+            // Build the tree and render it
+            localDirTree = [];
+            try {
+                localDirTree = await buildLocalDirTree(localDirHandle, '');
+            } catch (e) {
+                alert('Error reading folder: ' + e.message);
+                return;
+            }
+            if (localDirTree.length === 0) {
+                alert('No .json files found in the selected folder.');
+                return;
+            }
+            // Clear server-side selection and render the local tree
+            currentFilePath = null;
+            currentExperimentSelection = null;
+            uploadedExperiment = null;
+            window.__customUpload = true;
+            renderLocalDirTree();
+            // Close mobile sidebar
+            if (window.innerWidth < 768) closeMobileSidebar();
+        }
+
+        async function buildLocalDirTree(dirHandle, prefix) {
+            const items = [];
+            for await (const entry of dirHandle.values()) {
+                const path = prefix ? prefix + '/' + entry.name : entry.name;
+                if (entry.kind === 'directory') {
+                    const children = await buildLocalDirTree(entry, path);
+                    if (children.length > 0) items.push({ name: entry.name, path: path, type: 'folder', children: children });
+                } else if (entry.name.endsWith('.json')) {
+                    items.push({ name: entry.name, path: path, type: 'file', local: true });
+                }
+            }
+            // Sort: dirs first, then files, alphabetically
+            items.sort((a, b) => {
+                if (a.type !== b.type) return a.type === 'dir' ? -1 : 1;
+                return a.name.localeCompare(b.name);
+            });
+            return items;
+        }
+
+        function renderLocalDirTree() {
+            const container = document.getElementById('file-tree');
+            container.innerHTML = '<div class="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2 px-2">Local: ' + escapeHtml(localDirHandle.name) + '</div>';
+            renderFileTree(localDirTree, container);
+        }
+
+        async function loadLocalFile(path) {
+            // Walk the directory handle to find the file
+            const parts = path.split('/');
+            let handle = localDirHandle;
+            for (let i = 0; i < parts.length - 1; i++) {
+                handle = await handle.getDirectoryHandle(parts[i]);
+            }
+            const file = await handle.getFile(parts[parts.length - 1]);
+            const text = await file.text();
+            try {
+                const data = JSON.parse(text);
+                currentFilePath = null;
+                currentExperimentSelection = null;
+                uploadedExperiment = null;
+                window.__customUpload = true;
+                resetMultiRunState();
+                processData(data, file.name + ' (local)', true);
+                // Highlight in tree
+                document.querySelectorAll('.tree-item.bg-indigo-100').forEach(el => el.classList.remove('bg-indigo-100', 'ring-1', 'ring-indigo-500'));
+                const el = document.querySelector('[data-local-path="' + CSS.escape(path) + '"]');
+                if (el) el.classList.add('bg-indigo-100', 'ring-1', 'ring-indigo-500');
+            } catch (e) {
+                alert('Error parsing JSON: ' + e.message);
+            }
         }
 
         async function loadJsonFile(path, filename) {
