@@ -128,3 +128,31 @@ class ComparisonTest(TestCase):
         result = compare_runs(self.project, [r1.id, r2.id])
         self.assertEqual(result["intersection_count"], 1)
         self.assertEqual(result["results"][0]["scenario_key"], "scen-0")
+
+    def test_fragility_unanimous(self):
+        r1 = _make_run(self.project, self.ver, self.ep_a, self.judge, "Run 1")
+        r2 = _make_run(self.project, self.ver, self.ep_b, self.judge, "Run 2")
+        self._add_results(r1, ["pass", "high"])
+        self._add_results(r2, ["pass", "high"])
+        result = compare_runs(self.project, [r1.id, r2.id])
+        by_key = {e["scenario_key"]: e for e in result["results"]}
+        # Unanimous: 100% agreement, zero entropy, zero spread.
+        self.assertEqual(by_key["scen-0"]["fragility"]["agreement"], 1.0)
+        self.assertEqual(by_key["scen-0"]["fragility"]["entropy"], 0.0)
+        self.assertEqual(by_key["scen-0"]["fragility"]["spread"], 0.0)
+        self.assertEqual(by_key["scen-0"]["fragility"]["mode"], "pass")
+
+    def test_fragility_disagreement(self):
+        r1 = _make_run(self.project, self.ver, self.ep_a, self.judge, "Run 1")
+        r2 = _make_run(self.project, self.ver, self.ep_b, self.judge, "Run 2")
+        self._add_results(r1, ["pass", "high"])
+        self._add_results(r2, ["critical", "pass"])
+        result = compare_runs(self.project, [r1.id, r2.id])
+        by_key = {e["scenario_key"]: e for e in result["results"]}
+        # scen-0: pass vs critical -> 50% agreement, max entropy, large spread.
+        f0 = by_key["scen-0"]["fragility"]
+        self.assertEqual(f0["agreement"], 0.5)
+        self.assertEqual(f0["entropy"], 1.0)
+        self.assertGreater(f0["spread"], 1.0)
+        # scen-1: high vs pass -> also disagreement.
+        self.assertIsNotNone(by_key["scen-1"]["fragility"])
