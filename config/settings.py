@@ -313,7 +313,11 @@ _TESTING = (
     or env_bool("SIMPLEAUDIT_TESTING", False)
 )
 if not (DEBUG or MINIMAL_CONFIG or DEMO_MODE or _TESTING):
-    SECURE_SSL_REDIRECT = True
+    # TLS termination and the HTTP→HTTPS redirect are owned by the reverse
+    # proxy (Cloudflare / nginx / Caddy).  Django trusts the proxy via
+    # SECURE_PROXY_SSL_HEADER (set above) and does NOT issue its own redirect —
+    # doing so would break local dev and any deployment where the proxy already
+    # handles the redirect.
     SECURE_HSTS_SECONDS = 60 * 60 * 24 * 365  # 1 year
     SECURE_HSTS_INCLUDE_SUBDOMAINS = True
     SECURE_HSTS_PRELOAD = True
