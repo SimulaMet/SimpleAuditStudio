@@ -17,7 +17,7 @@ pinned: false
 [![Python](https://img.shields.io/badge/Python-3.11%2B-blue.svg)](https://www.python.org/)
 [![PyPI](https://img.shields.io/pypi/v/simpleaudit-studio)](https://pypi.org/project/simpleaudit-studio/)
 
-A self-hostable platform for running reproducible AI model audits using the [SimpleAudit](https://github.com/kelkalot/simpleaudit) engine (Target → Auditor → Judge). Every audit captures frozen, versioned inputs so historical results stay interpretable years later.
+A self-hostable platform for running reproducible AI model audits using the [SimpleAudit](https://github.com/SimulaMet/simpleaudit) engine (Target → Auditor → Judge). Every audit captures frozen, versioned inputs so historical results stay interpretable years later.
 
 ## 🚀 Quick Start
 

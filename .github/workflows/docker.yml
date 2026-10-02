@@ -38,10 +38,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Clone core (local-dev path dependency)
-        # pyproject.toml points simpleaudit at ../SimpleAudit (editable) so the
-        # studio can use the tracing layer not yet in the published wheel.
-        run: git clone --depth 1 https://github.com/kelkalot/simpleaudit.git ../SimpleAudit
       - name: Build HF Space / demo image
         run: docker build -t simpleaudit-studio:ci .
       - name: Build Compose image

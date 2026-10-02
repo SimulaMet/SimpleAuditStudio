@@ -34,11 +34,10 @@ RUN apt-get update \
 # The compose stack runs against external Postgres (postgres extra) and serves
 # via gunicorn (server extra). uv sync creates /app/.venv; the PATH update
 # keeps the `python`/`gunicorn` entrypoints working.
-# The core (simpleaudit) is a local path dependency (../SimpleAudit) so the
-# studio can use the tracing layer not yet in the published wheel.
+# The core (simpleaudit) is a PyPI dependency; uv sync pulls it from the
+# registry (no local checkout needed).
 COPY pyproject.toml uv.lock README.md ./
-RUN git clone --depth 1 https://github.com/kelkalot/simpleaudit.git /SimpleAudit \
-    && pip install uv \
+RUN pip install uv \
     && uv sync --frozen --no-install-project --no-dev --extra postgres --extra server
 ENV PATH="/app/.venv/bin:$PATH"
 
