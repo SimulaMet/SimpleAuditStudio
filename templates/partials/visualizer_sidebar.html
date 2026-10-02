@@ -1,0 +1,56 @@
+{% load static %}
+<aside id="sidebar" aria-label="Files" class="flex flex-col bg-surface-raised border-r border-gray-800">
+  <div class="sb-head h-14 shrink-0 flex items-center gap-2 px-4 border-b border-gray-800">
+    <a href="/" class="flex items-center min-w-0 group" title="SimpleAudit Studio">
+      <img src="{% static 'logo.svg' %}?v=3" alt="SimpleAudit" class="h-8 w-8 object-contain rounded-lg shrink-0">
+      <span class="sidebar-label ml-2 text-sm font-semibold text-gray-300 whitespace-nowrap group-hover:text-gray-100 transition-colors">SimpleAudit Studio</span>
+    </a>
+    <button type="button" data-sidebar-close class="md:hidden ml-auto w-8 h-8 rounded-lg text-gray-400 hover:text-gray-100 hover:bg-surface-overlay" aria-label="Close menu" title="Close menu">✕</button>
+  </div>
+
+  <!-- File tree (rendered by the visualizer SPA) -->
+  <div class="flex-1 flex flex-col overflow-hidden">
+    <div class="ft-header p-3 border-b border-gray-800 flex justify-between items-center">
+      <h2 class="font-semibold text-gray-300 flex items-center gap-2 text-sm">
+        <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 text-gray-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
+        </svg>
+        <span class="sidebar-label">JSON Files</span>
+        <span id="local-folder-badge" class="hidden text-[10px] font-semibold uppercase tracking-wide bg-accent/20 text-accent px-1.5 py-0.5 rounded-full cursor-default" title="">Local</span>
+      </h2>
+      <button onclick="loadFileTree()" class="text-gray-400 hover:text-accent transition-colors p-1 shrink-0" title="Refresh">
+        <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+        </svg>
+      </button>
+    </div>
+    <div id="file-tree" class="flex-1 overflow-y-auto p-3">
+      <div class="text-center text-gray-400 mt-10">
+        <div class="animate-spin h-8 w-8 border-4 border-accent/40 border-t-transparent rounded-full mx-auto mb-2"></div>
+        Loading files...
+      </div>
+    </div>
+  </div>
+
+  <!-- User footer (same as the Studio sidebar) -->
+  <div class="shrink-0 p-2 border-t border-gray-800">
+    <div class="sb-user flex items-center gap-1">
+      <a href="{% url 'profile' %}" aria-label="Profile ({{ user.username }})"
+         class="sb-item flex items-center gap-2 flex-1 min-w-0 rounded-lg px-2 py-1.5 hover:bg-surface-overlay transition-colors">
+        {% if gravatar_url %}
+        <img src="{{ gravatar_url }}" alt="" class="w-7 h-7 rounded-full shrink-0" referrerpolicy="no-referrer">
+        {% else %}
+        <span class="w-7 h-7 rounded-full bg-accent/20 flex items-center justify-center text-xs font-bold text-accent shrink-0" aria-hidden="true">{{ user.username|first|upper }}</span>
+        {% endif %}
+        <span class="sidebar-label text-xs text-gray-400 truncate flex-1">{{ user.username }}</span>
+      </a>
+      <a href="{% url 'logout' %}" aria-label="Sign out" title="Sign out"
+         class="w-8 h-8 shrink-0 inline-flex items-center justify-center rounded-lg text-gray-500 hover:text-red-400 hover:bg-surface-overlay">⏻</a>
+    </div>
+    <button type="button" id="sidebar-collapse" aria-label="Collapse sidebar"
+            class="sb-item hidden md:flex w-full items-center gap-3 px-3 py-2 rounded-lg text-xs text-gray-500 hover:text-gray-200 hover:bg-surface-overlay">
+      <span class="sb-icon text-base w-5 text-center shrink-0" aria-hidden="true"><span class="sb-collapse-icon inline-block transition-transform">⟨</span></span><span class="sidebar-label">Collapse</span>
+    </button>
+  </div>
+</aside>
+<div id="sidebar-backdrop" class="md:hidden fixed inset-0 z-40 bg-black/60" data-sidebar-close hidden></div>

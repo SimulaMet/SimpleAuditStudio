@@ -48,6 +48,15 @@
       html[data-sidebar="collapsed"] #sidebar .sb-collapse-icon { transform: rotate(180deg); }
       /* The workspace menu opens beside the rail instead of under it. */
       html[data-sidebar="collapsed"] #workspace-dropdown { left: 100%; top: 0; margin: 0 0 0 .5rem; }
+      /* File tree section (visualizer pages) */
+      html[data-sidebar="collapsed"] #sidebar .ft-header { justify-content: center; padding-left: 0; padding-right: 0; }
+      html[data-sidebar="collapsed"] #sidebar .ft-header h2 { gap: 0; }
+      html[data-sidebar="collapsed"] #sidebar #file-tree { padding: 0.5rem; }
+      html[data-sidebar="collapsed"] #sidebar #file-tree .text-center { font-size: 0.625rem; }
+      html[data-sidebar="collapsed"] #sidebar .tree-item { justify-content: center; padding-left: 0; padding-right: 0; }
+      html[data-sidebar="collapsed"] #sidebar .tree-item .marquee-wrap { display: none; }
+      html[data-sidebar="collapsed"] #sidebar .tree-item .file-icon,
+      html[data-sidebar="collapsed"] #sidebar .tree-item .folder-icon { font-size: 1.125rem; }
     }
     @media (max-width: 767.98px) {
       #sidebar { position: fixed; inset: 0 auto 0 0; z-index: 50; width: min(16rem, 85vw); transform: translateX(-100%); box-shadow: none; }
@@ -63,14 +72,34 @@
   {% include "partials/sidebar.html" %}
   <!-- Main column: scrollable content + footer pinned to bottom -->
   <div class="flex-1 flex flex-col min-w-0">
-    <!-- Mobile top bar -->
-    <header class="md:hidden h-12 shrink-0 flex items-center gap-2 px-3 border-b border-gray-800 bg-surface-raised">
-      <button type="button" id="sidebar-open" aria-label="Open menu" title="Open menu" aria-controls="sidebar" aria-expanded="false"
-              class="w-9 h-9 -ml-1 rounded-lg text-gray-300 hover:bg-surface-overlay text-lg leading-none">☰</button>
-      <a href="/" class="flex items-center gap-2 min-w-0">
-        <img src="{% static 'logo.svg' %}?v=3" alt="" class="h-6 w-6 rounded shrink-0">
-        <span class="text-sm font-semibold text-gray-200 truncate">{% for item in nav_items %}{% if item.active %}{{ item.label }}{% endif %}{% empty %}SimpleAudit{% endfor %}</span>
-      </a>
+    <!-- Top bar (visualizer style) -->
+    <header class="h-12 shrink-0 flex items-center gap-2 px-3 border-b border-gray-800 bg-surface-raised z-10">
+      <div class="flex items-center gap-2.5 flex-1 min-w-0">
+        <button type="button" id="sidebar-open" aria-label="Open menu" title="Open menu" aria-controls="sidebar" aria-expanded="false"
+                class="w-9 h-9 -ml-1 rounded-lg text-gray-300 hover:bg-surface-overlay flex items-center justify-center shrink-0">
+          <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16" />
+          </svg>
+        </button>
+        <div class="min-w-0">
+          <h1 class="text-sm font-semibold text-gray-200 leading-tight truncate">
+            <a href="/" class="hover:text-accent transition-colors">{% for item in nav_items %}{% if item.active %}{{ item.label }}{% endif %}{% empty %}SimpleAudit{% endfor %}</a>
+          </h1>
+          <nav class="text-xs text-gray-500 leading-tight hidden sm:flex items-center gap-1 truncate" aria-label="Breadcrumb">
+            <a href="/" class="hover:text-gray-300 transition-colors">Studio</a>
+            {% for item in nav_items %}
+              {% if item.active and item.url != '/' %}
+                <span class="text-gray-600">/</span>
+                <span class="text-gray-400">{{ item.label }}</span>
+              {% endif %}
+            {% endfor %}
+            {% block breadcrumb_extra %}{% endblock %}
+          </nav>
+        </div>
+      </div>
+      <div class="flex items-center gap-2">
+        {% block header_actions %}{% endblock %}
+      </div>
     </header>
     <main class="relative flex-1 overflow-y-auto px-4 pt-4 pb-0 md:px-6 md:pt-6 md:pb-0 flex flex-col min-h-full">
       <div class="flex-1">
@@ -136,24 +165,33 @@
   const root = document.documentElement;
   const openBtn = document.getElementById('sidebar-open');
   const backdrop = document.getElementById('sidebar-backdrop');
-  document.getElementById('sidebar-collapse')?.addEventListener('click', e => {
+  const isDesktop = () => window.innerWidth >= 768;
+
+  function toggleCollapse() {
     const collapsed = root.dataset.sidebar !== 'collapsed';
     if (collapsed) root.dataset.sidebar = 'collapsed'; else delete root.dataset.sidebar;
-    e.currentTarget.setAttribute('aria-label', collapsed ? 'Expand sidebar' : 'Collapse sidebar');
     try { localStorage.setItem('sa-sidebar-collapsed', collapsed ? '1' : '0'); } catch (err) { /* private mode */ }
-  });
+  }
+
   function setDrawer(open) {
     root.classList.toggle('sidebar-open', open);
     if (backdrop) backdrop.hidden = !open;
     openBtn?.setAttribute('aria-expanded', open);
     if (open) document.querySelector('#sidebar a, #sidebar button')?.focus();
   }
-  openBtn?.addEventListener('click', () => setDrawer(true));
+
+  // Header hamburger: collapse on desktop, open drawer on mobile.
+  openBtn?.addEventListener('click', () => {
+    if (isDesktop()) toggleCollapse();
+    else setDrawer(true);
+  });
+
+  // Sidebar collapse button (bottom of sidebar).
+  document.getElementById('sidebar-collapse')?.addEventListener('click', toggleCollapse);
+
   document.addEventListener('click', e => { if (e.target.closest('[data-sidebar-close]')) setDrawer(false); });
   document.addEventListener('keydown', e => { if (e.key === 'Escape' && root.classList.contains('sidebar-open')) setDrawer(false); });
   matchMedia('(min-width: 768px)').addEventListener('change', e => { if (e.matches) setDrawer(false); });
-  const collapseBtn = document.getElementById('sidebar-collapse');
-  if (collapseBtn && root.dataset.sidebar === 'collapsed') collapseBtn.setAttribute('aria-label', 'Expand sidebar');
 })();
 </script>
 </body>
