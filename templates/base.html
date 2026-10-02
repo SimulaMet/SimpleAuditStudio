@@ -188,10 +188,14 @@
 
   document.addEventListener('click', e => { if (e.target.closest('[data-sidebar-close]')) setDrawer(false); });
   
-  // Auto-close mobile drawer when clicking on main content
+  // Auto-close mobile drawer when clicking on main content (but not on the toggle button)
   const mainContent = document.querySelector('main, [role="main"], #main-content');
   if (mainContent) {
-    mainContent.addEventListener('click', () => {
+    mainContent.addEventListener('click', (e) => {
+      // Don't auto-close if the click was on the sidebar toggle button
+      if (e.target.closest('#toggle-sidebar-btn, #sidebar-open')) {
+        return;
+      }
       if (!isDesktop() && root.classList.contains('sidebar-open')) {
         setDrawer(false);
       }
