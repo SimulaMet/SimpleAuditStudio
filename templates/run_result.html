@@ -1,12 +1,12 @@
 {% extends "base.html" %}
 {% block title %}{{ scenario_name }} — {{ run.name }} (Run #{{ run.id }}){% endblock %}
 {% block content %}
-<div class="mb-4">
+<div class="mb-4 no-print">
   <a href="{% url 'run_detail' run.id %}" class="text-xs text-gray-500 hover:text-accent">← Back to {{ run.name }} (Run #{{ run.id }})</a>
 </div>
 
 <!-- Header -->
-<div class="flex flex-wrap items-center justify-between gap-3 mb-4">
+<div class="flex flex-wrap items-center justify-between gap-3 mb-4 no-print">
   <div class="flex flex-wrap items-center gap-2 min-w-0">
     <h1 class="text-lg font-semibold text-gray-100 break-words">{{ scenario_name }}</h1>
     {% include "partials/severity_badge.html" with sev=severity %}
@@ -14,6 +14,7 @@
   </div>
   <a href="{% url 'run_export' run.id %}?format=json" class="px-3 py-1.5 rounded-lg bg-surface-overlay text-gray-400 text-xs font-medium hover:text-gray-200 transition-colors">Export JSON</a>
   <a href="{% url 'run_export_html' run.id %}" class="px-3 py-1.5 rounded-lg bg-surface-overlay text-gray-400 text-xs font-medium hover:text-gray-200 transition-colors" title="Download a self-contained HTML file you can open in any browser (no server needed)">Export HTML</a>
+  <button type="button" onclick="exportPdf()" class="px-3 py-1.5 rounded-lg bg-surface-overlay text-gray-400 text-xs font-medium hover:text-gray-200 transition-colors" title="Print this result to PDF (choose “Save as PDF” in the print dialog)">Export PDF</button>
 </div>
 
 {% if error %}
@@ -133,4 +134,80 @@
   <p class="text-sm text-gray-500">No result data available for this scenario.</p>
 </div>
 {% endif %}
+
+<!-- Print/PDF export: hide the app chrome, show only the result, light theme. -->
+<style>
+  @media print {
+    body { background: #fff !important; }
+    #sidebar, header, footer, .no-print { display: none !important; }
+    main { overflow: visible !important; padding: 0 !important; }
+    /* Repetition tabs: show every panel, drop the tab buttons. */
+    .rep-tab { display: none !important; }
+    .rep-panel { display: block !important; page-break-inside: avoid; margin-bottom: 1rem; }
+    /* Force a light, high-contrast theme for paper. */
+    .bg-surface-raised, .bg-surface-overlay, .bg-surface-overlay\/50, .bg-surface-overlay\/70 { background: #fff !important; }
+    .border-gray-800, .border-red-900\/40, .border-accent\/30 { border-color: #d1d5db !important; }
+    .text-gray-100, .text-gray-200, .text-gray-300, .text-gray-400, .text-gray-500 { color: #111 !important; }
+    .text-red-300, .text-red-400 { color: #b91c1c !important; }
+    .text-emerald-300, .text-emerald-400 { color: #047857 !important; }
+    .text-amber-300, .text-amber-400 { color: #b45309 !important; }
+    .text-accent { color: #1d4ed8 !important; }
+    .bg-blue-950\/40 { background: #eff6ff !important; }
+    .bg-amber-900\/20 { background: #fef3c7 !important; }
+    .bg-red-900\/30 { background: #fee2e2 !important; }
+  }
+</style>
+<script>
+function exportPdf() {
+  const origTitle = document.title;
+  document.title = '{{ scenario_name|escapejs }} — {{ run.name }} (Run #{{ run.id }})';
+  // Expand <details> (e.g. Raw JSON) so the print captures everything.
+  document.querySelectorAll('details').forEach(d => d.open = true);
+  setTimeout(() => {
+    window.print();
+    document.title = origTitle;
+  }, 50);
+}
+
+// Image lightbox: load thumbnails (remote directly, local via the backend)
+// and enlarge on click. Mirrors the SimpleAudit visualizer's lightbox.
+(function() {
+  const isRemote = (u) => /^https?:\/\//i.test(u);
+  const imgs = document.querySelectorAll('img.file-preview-img[data-img-uri]');
+  imgs.forEach(img => {
+    const uri = img.getAttribute('data-img-uri');
+    img.addEventListener('click', () => openLightbox(img.src || uri));
+    if (isRemote(uri)) { img.src = uri; }
+    else {
+      fetch('/api/visualizer/api/image/?uri=' + encodeURIComponent(uri), { credentials: 'same-origin' })
+        .then(r => r.ok ? r.json() : Promise.reject())
+        .then(d => { img.src = d.data_uri; })
+        .catch(() => { img.style.display = 'none'; });
+    }
+  });
+  function openLightbox(src) {
+    if (!src) return;
+    const ov = document.getElementById('image-lightbox');
+    if (!ov) return;
+    ov.querySelector('img').src = src;
+    ov.classList.remove('hidden');
+    ov.classList.add('flex');
+  }
+  function closeLightbox() {
+    const ov = document.getElementById('image-lightbox');
+    if (!ov) return;
+    ov.classList.add('hidden');
+    ov.classList.remove('flex');
+    ov.querySelector('img').src = '';
+  }
+  document.getElementById('image-lightbox')?.addEventListener('click', e => { if (e.target.id === 'image-lightbox') closeLightbox(); });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') closeLightbox(); });
+})();
+</script>
+
+<!-- Image lightbox (click a thumbnail to enlarge) -->
+<div id="image-lightbox" class="hidden fixed inset-0 z-50 bg-black/80 items-center justify-center p-4 cursor-zoom-out no-print">
+  <img src="" alt="attached image" class="max-w-full max-h-full rounded shadow-2xl" onclick="event.stopPropagation()" />
+  <button type="button" onclick="this.closest('#image-lightbox').classList.add('hidden');this.closest('#image-lightbox').classList.remove('flex')" class="absolute top-4 right-4 text-white/90 hover:text-white text-3xl leading-none" aria-label="Close">&times;</button>
+</div>
 {% endblock %}

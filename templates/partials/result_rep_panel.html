@@ -102,4 +102,20 @@ whole result of a single-rep run. Context: rep (see infra.ui._rep_view).
     {% endif %}
   </div>
   {% endif %}
+
+  {% if rep.images %}
+  <div class="bg-surface-raised rounded-xl border border-gray-800 p-4">
+    <h3 class="text-sm font-semibold text-gray-300 mb-3">Attached image{{ rep.images|length|pluralize }}</h3>
+    <div class="flex flex-wrap gap-3">
+      {% for uri in rep.images %}
+      <div class="max-w-[16rem]">
+        <img data-img-uri="{{ uri }}" alt="attached image"
+             class="file-preview-img max-h-40 rounded border border-gray-800 cursor-pointer bg-surface-overlay"
+             onerror="this.style.display='none'">
+        <div class="text-[10px] text-gray-500 font-mono truncate mt-1" title="{{ uri }}">{{ uri }}</div>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
 </div>

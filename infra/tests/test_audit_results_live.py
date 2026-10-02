@@ -128,3 +128,23 @@ class ScenarioResultPageTests(_ResultPagesBase):
         resp = self.client.get(f"/runs/{self.run.id}/results/{sr.pk}/")
         self.assertContains(resp, "Answer solo")
         self.assertNotContains(resp, "data-rep-tab")
+
+    def test_attached_image_shown_with_lightbox(self):
+        rep = self._rep("pass", "img")
+        rep["conversation"][0]["file_uri"] = "http://example.com/shot.png"
+        sr = ScenarioResultFactory(run_id=self.run.id, result=rep)
+        resp = self.client.get(f"/runs/{self.run.id}/results/{sr.pk}/")
+        # The image URI is rendered as a thumbnail and the lightbox is present.
+        self.assertContains(resp, "http://example.com/shot.png")
+        self.assertContains(resp, 'id="image-lightbox"')
+        self.assertEqual(resp.context["reps"][0]["images"], ["http://example.com/shot.png"])
+
+    def test_non_image_attachment_not_shown(self):
+        rep = self._rep("pass", "doc")
+        rep["conversation"][0]["file_uri"] = "http://example.com/doc.pdf"
+        sr = ScenarioResultFactory(run_id=self.run.id, result=rep)
+        resp = self.client.get(f"/runs/{self.run.id}/results/{sr.pk}/")
+        # Non-image attachments are not rendered as thumbnails (the URI still
+        # appears in the Raw JSON dump, which is expected).
+        self.assertNotContains(resp, 'data-img-uri="http://example.com/doc.pdf"')
+        self.assertEqual(resp.context["reps"][0]["images"], [])

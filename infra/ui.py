@@ -7,6 +7,7 @@ import itertools
 import json
 import logging
 import os
+import re
 
 from django.contrib import messages
 from django.contrib.auth import login, logout
@@ -2336,7 +2337,7 @@ _REP_TOKEN_ROLES = ("target", "auditor", "judge")
 _REP_KNOWN_KEYS = {
     "conversation", "issues_found", "issues", "positive_behaviors", "recommendations", "summary",
     "severity", "rationale", "evidence", "judge_rationale", "judgment", "scenario_name",
-    "scenario_description", "expected_behavior", "_rep_index", "_language", "error",
+    "scenario_description", "expected_behavior", "file_uri", "_rep_index", "_language", "error",
     *(f"{r}_{d}_tokens" for r in _REP_TOKEN_ROLES for d in ("input", "output")),
 }
 
@@ -2392,6 +2393,34 @@ def _judge_grade(judgment: dict) -> dict:
     }
 
 
+_IMAGE_EXT = re.compile(r"\.(png|jpe?g|gif|webp|bmp|svg|avif)$", re.IGNORECASE)
+
+
+def _image_uris(rep: dict) -> list[str]:
+    """Image file URIs attached to a result (from the conversation or top level).
+
+    SimpleAudit records the attached file path on a conversation entry
+    (``file_uri``); it may be a single string or a list. Only image URIs are
+    returned — the result page renders them as thumbnails with a lightbox.
+    """
+    uris: list[str] = []
+    for msg in rep.get("conversation") or []:
+        raw = (msg or {}).get("file_uri")
+        if raw:
+            uris.extend(raw if isinstance(raw, list) else [raw])
+    raw = rep.get("file_uri")
+    if raw:
+        uris.extend(raw if isinstance(raw, list) else [raw])
+    seen: set[str] = set()
+    out: list[str] = []
+    for u in uris:
+        path = str(u).split("?")[0].split("#")[0]
+        if _IMAGE_EXT.search(path) and u not in seen:
+            seen.add(u)
+            out.append(u)
+    return out
+
+
 def _rep_view(rep: dict, index: int) -> dict:
     """One judged conversation (a repetition, or the whole single-rep result)."""
     conversation = []
@@ -2426,6 +2455,7 @@ def _rep_view(rep: dict, index: int) -> dict:
         "has_grade": bool(grade["score"] or grade["abstained"] is not None or grade["fields"] or grade["notes"]),
         "conversation": conversation,
         "turns": turn,
+        "images": _image_uris(rep),
         "issues": _as_text_list(rep.get("issues_found", rep.get("issues"))),
         "positives": _as_text_list(rep.get("positive_behaviors")),
         "recommendations": _as_text_list(rep.get("recommendations")),
