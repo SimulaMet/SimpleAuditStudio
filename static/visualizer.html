@@ -972,15 +972,26 @@
                     // Multi-model experiment file — render as folder with model children
                     li.appendChild(renderExperimentFolder(item.name, item.path, item.models, async (model) => {
                         try {
-                            const resp = await apiFetch(`/api/json/${encodeURIComponent(item.path)}`);
-                            if (!resp.ok) throw new Error('Failed to load');
-                            const data = await resp.json();
+                            let data;
+                            if (item.local) {
+                                // Read from local file handle
+                                const parts = item.path.split('/');
+                                let h = localDirHandle;
+                                for (let i = 0; i < parts.length - 1; i++) h = await h.getDirectoryHandle(parts[i]);
+                                const f = await h.getFile(parts[parts.length - 1]);
+                                data = JSON.parse(await f.text());
+                            } else {
+                                const resp = await apiFetch(`/api/json/${encodeURIComponent(item.path)}`);
+                                if (!resp.ok) throw new Error('Failed to load');
+                                data = await resp.json();
+                            }
                             const runs = data.runs[model];
                             const runLabel = Array.isArray(runs) && runs.length > 1 ? ` \u2014 run 1 of ${runs.length}` : '';
                             currentExperimentRuns = Array.isArray(runs) ? { model, runs } : null;
                             currentRunIndex = 0;
                             currentFragility = Array.isArray(runs) ? computeFragility(runs) : null;
-                            processData(Array.isArray(runs) ? runs[0] : runs, `${item.name} \u2014 ${model}${runLabel}`, false);
+                            window.__customUpload = !!item.local;
+                            processData(Array.isArray(runs) ? runs[0] : runs, `${item.name} \u2014 ${model}${runLabel}`, !!item.local);
                         } catch (e) {
                             document.getElementById('file-info').textContent = `Error: ${e.message}`;
                         }
@@ -1333,6 +1344,41 @@
             if (window.innerWidth < 768) closeMobileSidebar();
         }
 
+        // --- SimpleAudit result detection (mirrors server-side is_valid_audit_data) ---
+        function looksLikeAuditResult(obj) {
+            return obj && typeof obj === 'object' && !Array.isArray(obj)
+                && ('scenario_name' in obj || 'name' in obj)
+                && 'severity' in obj;
+        }
+        function localExperimentModels(data) {
+            if (!data || typeof data !== 'object' || Array.isArray(data) || !('runs' in data)) return [];
+            const models = [];
+            for (const [model, runs] of Object.entries(data.runs)) {
+                if (!Array.isArray(runs) || runs.length === 0) continue;
+                const first = runs[0];
+                if (first && typeof first === 'object' && Array.isArray(first.results) && first.results.length > 0
+                    && first.results.every(looksLikeAuditResult)) {
+                    models.push(model);
+                }
+            }
+            return models;
+        }
+        function isValidAuditData(data) {
+            if (Array.isArray(data)) {
+                return data.length > 0 && data.every(looksLikeAuditResult);
+            }
+            if (data && typeof data === 'object') {
+                if ('results' in data) {
+                    const r = data.results;
+                    return Array.isArray(r) && r.length > 0 && r.every(looksLikeAuditResult);
+                }
+                if ('runs' in data) {
+                    return localExperimentModels(data).length > 0;
+                }
+            }
+            return false;
+        }
+
         async function buildLocalDirTree(dirHandle, prefix) {
             const items = [];
             for await (const entry of dirHandle.values()) {
@@ -1341,12 +1387,24 @@
                     const children = await buildLocalDirTree(entry, path);
                     if (children.length > 0) items.push({ name: entry.name, path: path, type: 'folder', children: children });
                 } else if (entry.name.endsWith('.json')) {
-                    items.push({ name: entry.name, path: path, type: 'file', local: true });
+                    // Only include files that look like SimpleAudit results
+                    try {
+                        const file = await entry.getFile();
+                        const data = JSON.parse(await file.text());
+                        const models = localExperimentModels(data);
+                        if (models.length > 0) {
+                            items.push({ name: entry.name, path: path, type: 'experiment', models: models, local: true });
+                        } else if (isValidAuditData(data)) {
+                            items.push({ name: entry.name, path: path, type: 'file', local: true });
+                        }
+                    } catch (e) {
+                        // Not valid JSON or not audit data — skip
+                    }
                 }
             }
             // Sort: dirs first, then files, alphabetically
             items.sort((a, b) => {
-                if (a.type !== b.type) return a.type === 'dir' ? -1 : 1;
+                if (a.type !== b.type) return a.type === 'folder' ? -1 : 1;
                 return a.name.localeCompare(b.name);
             });
             return items;
@@ -1374,7 +1432,19 @@
                 uploadedExperiment = null;
                 window.__customUpload = true;
                 resetMultiRunState();
-                processData(data, file.name + ' (local)', true);
+                // Experiment file: show model picker
+                const models = localExperimentModels(data);
+                if (models.length > 0) {
+                    const runLabel = models.length > 1 ? '' : '';
+                    const runs = data.runs[models[0]];
+                    const runCount = Array.isArray(runs) ? runs.length : 1;
+                    currentExperimentRuns = Array.isArray(runs) ? { model: models[0], runs } : null;
+                    currentRunIndex = 0;
+                    currentFragility = Array.isArray(runs) ? computeFragility(runs) : null;
+                    processData(Array.isArray(runs) ? runs[0] : runs, file.name + ' — ' + models[0] + (runCount > 1 ? ' — run 1 of ' + runCount : ''), true);
+                } else {
+                    processData(data, file.name + ' (local)', true);
+                }
                 // Highlight in tree
                 document.querySelectorAll('.tree-item.bg-indigo-100').forEach(el => el.classList.remove('bg-indigo-100', 'ring-1', 'ring-indigo-500'));
                 const el = document.querySelector('[data-local-path="' + CSS.escape(path) + '"]');
