@@ -739,8 +739,6 @@
             const root = document.documentElement;
             if (window.innerWidth >= 768 && root.dataset.sidebar === 'collapsed') {
                 delete root.dataset.sidebar;
-                const btn = document.getElementById('sidebar-collapse');
-                if (btn) btn.setAttribute('aria-label', 'Collapse sidebar');
             }
         }
         function toggleSidebar() {

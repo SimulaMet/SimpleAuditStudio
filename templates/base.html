@@ -186,10 +186,18 @@
     else setDrawer(true);
   });
 
-  // Sidebar collapse button (bottom of sidebar).
-  document.getElementById('sidebar-collapse')?.addEventListener('click', toggleCollapse);
-
   document.addEventListener('click', e => { if (e.target.closest('[data-sidebar-close]')) setDrawer(false); });
+  
+  // Auto-close mobile drawer when clicking on main content
+  const mainContent = document.querySelector('main, [role="main"], #main-content');
+  if (mainContent) {
+    mainContent.addEventListener('click', () => {
+      if (!isDesktop() && root.classList.contains('sidebar-open')) {
+        setDrawer(false);
+      }
+    });
+  }
+  
   document.addEventListener('keydown', e => { if (e.key === 'Escape' && root.classList.contains('sidebar-open')) setDrawer(false); });
   matchMedia('(min-width: 768px)').addEventListener('change', e => { if (e.matches) setDrawer(false); });
 })();
