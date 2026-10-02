@@ -1403,7 +1403,8 @@
             // Update URL with ?case=... so Copy URL works immediately
             if (history.replaceState) {
                 const url = new URL(window.location);
-                url.searchParams.set('case', encodeURIComponent(path));
+                // URLSearchParams.set() handles encoding automatically
+                url.searchParams.set('case', path);
                 url.hash = '';
                 history.replaceState({case: path}, '', url);
             }
@@ -1812,7 +1813,8 @@
             if (history.pushState) {
                 const url = new URL(window.location);
                 if (currentFilePath) {
-                    url.searchParams.set('case', encodeURIComponent(currentFilePath));
+                    // URLSearchParams.set() handles encoding automatically
+                    url.searchParams.set('case', currentFilePath);
                 } else {
                     // No file path (experiment model view or upload) — drop any
                     // stale reference to a previously viewed file so the URL
