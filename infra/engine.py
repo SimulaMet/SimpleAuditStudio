@@ -446,6 +446,12 @@ def run_scenario(
             judgment = {}
         judgment["evidence_spans"] = evidence_spans
         payload["judgment"] = judgment
+    if correlation is not None:
+        # The W3C trace ids the engine propagated this scenario's turns under;
+        # persisted on the ScenarioResult so the UI can re-fetch the spans by
+        # id (and show which traces the run covered) even after the evidence
+        # selection has narrowed them.
+        payload["trace_ids"] = correlation.all_trace_ids()
     payload["_language"] = language
     return payload
 
@@ -607,6 +613,8 @@ def run_scenario_repeated(
                             judgment = {}
                         judgment["evidence_spans"] = evidence
                         rep["judgment"] = judgment
+                    if corr is not None:
+                        rep["trace_ids"] = corr.all_trace_ids()
     except Exception as exc:
         raise EngineError(f"Scenario execution crashed: {type(exc).__name__}: {exc}") from exc
 

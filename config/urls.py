@@ -15,6 +15,10 @@ from infra.runs_table import PreferenceView, RunsBulkView, RunsDataView, RunsExp
 from infra.seo import LandingView, llms_txt, robots_txt, sitemap_xml
 from infra.ui import (
     AdminView,
+    AgentDeleteView,
+    AgentDetailView,
+    AgentsView,
+    AgentTestChatView,
     CompareView,
     ConnectionCheckView,
     ConnectionDeleteView,
@@ -195,6 +199,11 @@ urlpatterns = [
     path("scenarios/diff/<int:set_id>/", ScenarioDiffView.as_view(), name="scenario_diff"),
     path("scenarios/<int:set_id>/export/", ScenarioExportView.as_view(), name="scenario_export"),
     path("scenarios/<int:set_id>/import/", ScenarioImportView.as_view(), name="scenario_import"),
+    path("agents/", AgentsView.as_view(), name="agents"),
+    path("agents/new/", AgentDetailView.as_view(), name="agent_new"),
+    path("agents/<int:agent_id>/", AgentDetailView.as_view(), name="agent_detail"),
+    path("agents/<int:agent_id>/delete/", AgentDeleteView.as_view(), name="agent_delete"),
+    path("agents/<int:agent_id>/test-chat/", AgentTestChatView.as_view(), name="agent_test_chat"),
     path("connections/", ConnectionsView.as_view(), name="connections"),
     path("connections/discover/", DiscoverModelsView.as_view(), name="models_discover"),
     path("connections/check/", ConnectionCheckView.as_view(), name="connection_check"),

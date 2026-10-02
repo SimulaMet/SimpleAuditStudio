@@ -20,11 +20,11 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from simpleaudit.tracing.auth import parse_basic_header, parse_bearer_header
-from simpleaudit.tracing.store import SpanStore
+from simpleaudit.tracing.store import SpanStore, normalize_span
 
 from infra.exceptions import StableAPIError
 from model_registry import otlp_services as otlp
-from model_registry.models import ModelConnection, OTLPCredential
+from model_registry.models import ModelConnection, OTLPCredential, OtlpSpan
 
 # In-memory span store for the shared receiver, keyed by target_id. Each bucket
 # is an engine ``SpanStore`` (the same normalized schema the run path and the
@@ -46,6 +46,74 @@ def get_spans_for_target(target_id: str) -> list[dict]:
     """All normalized spans ingested for ``target_id`` (for a run to fetch evidence)."""
     store = _SPAN_STORE.get(target_id)
     return store.all() if store else []
+
+
+def get_spans_for_trace(target_id: str, trace_id: str) -> list[dict]:
+    """Spans ingested for ``target_id`` belonging to ``trace_id``.
+
+    This is the cross-process join the studio trace mode uses: the target
+    already exports to this listener at boot, and a run's W3C ``traceparent``
+    ties its turns' spans to the run's trace ids, so a worker (even a separate
+    one) can fetch exactly this run's spans by id.
+    """
+    store = _SPAN_STORE.get(target_id)
+    if store is None or not trace_id:
+        return []
+    return store.by_trace(trace_id)
+
+
+def get_spans_for_trace_db(target_id: str, trace_id: str) -> list[dict]:
+    """Spans persisted for ``target_id`` + ``trace_id`` (cross-process read).
+
+    The in-memory store above is per-process: the web/API process ingests spans
+    while a *separate* Hatchet worker runs the audit. The DB row is what lets
+    the worker read what the target exported, so this is the source the studio
+    trace mode's provider actually fetches from in production.
+    """
+    if not trace_id:
+        return []
+    rows = OtlpSpan.objects.filter(target_id=target_id, trace_id=trace_id).order_by("start_time", "span_id")
+    return [
+        {
+            "span_id": r.span_id,
+            "trace_id": r.trace_id,
+            "name": r.name,
+            "kind": r.kind,
+            "parent_span_id": r.parent_span_id,
+            "start_time": r.start_time,
+            "end_time": r.end_time,
+            "status": r.status,
+            "attributes": r.attributes,
+        }
+        for r in rows
+    ]
+
+
+def _persist_spans(target_id: str, raw_spans: list[dict]) -> None:
+    """Idempotently persist normalized spans to the DB for cross-process reads.
+
+    A persistence failure must never fail the OTLP export (the target's exporter
+    would retry and flood); we log and keep the in-memory copy authoritative.
+    """
+    for raw in raw_spans:
+        span = normalize_span(raw)
+        span_id = span.get("span_id") or ""
+        if not span_id:
+            continue
+        OtlpSpan.objects.update_or_create(
+            target_id=target_id,
+            trace_id=span.get("trace_id") or "",
+            span_id=span_id,
+            defaults={
+                "name": (span.get("name") or "span")[:500],
+                "kind": (span.get("kind") or "CHAIN")[:50],
+                "parent_span_id": span.get("parent_span_id"),
+                "start_time": span.get("start_time"),
+                "end_time": span.get("end_time"),
+                "status": (span.get("status") or "OK")[:20],
+                "attributes": span.get("attributes") or {},
+            },
+        )
 
 
 def clear_target_spans(target_id: str) -> None:
@@ -104,6 +172,12 @@ def otlp_traces(request):
                 span["attributes"] = attrs = {}
             attrs.setdefault("simpleaudit.target_id", cred.target_id)
         _store_for_target(cred.target_id).add_many(raw_spans)
+        try:
+            _persist_spans(cred.target_id, raw_spans)
+        except Exception:
+            import logging
+
+            logging.getLogger(__name__).exception("OTLP span persistence failed")
         return JsonResponse(
             {"partialSuccess": {"rejectedSpans": 0}, "authenticated": True}, status=200
         )
