@@ -717,7 +717,9 @@ class NewExperimentView(ProjectMixin, TemplateView):
         # Connections the picker offers: this workspace's own plus any shared
         # into it (public / admin-shared / explicitly shared). Each carries a
         # sharing label so users can tell at a glance where a model comes from.
-        connections = visible_connections_for(self.request.user, p)
+        # Disabled connections are hidden entirely — their models can't be
+        # picked for new runs (the /connections/ page still lists them, badged).
+        connections = [c for c in visible_connections_for(self.request.user, p) if c.enabled]
         for conn in connections:
             conn.share_label = connection_share_label(conn)
             conn.is_shared = conn.project_id != p.id

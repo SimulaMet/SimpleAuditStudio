@@ -2384,7 +2384,7 @@ wheels = [
 
 [[package]]
 name = "simpleaudit"
-version = "0.2.3"
+version = "0.3.0"
 source = { editable = "../SimpleAudit" }
 dependencies = [
     { name = "any-llm-sdk" },
@@ -2402,9 +2402,11 @@ requires-dist = [
     { name = "grpcio", marker = "extra == 'tracing'", specifier = ">=1.60" },
     { name = "matplotlib", marker = "extra == 'plot'", specifier = ">=3.5.0" },
     { name = "opentelemetry-proto", marker = "extra == 'tracing'", specifier = ">=1.20" },
-    { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.0.0" },
+    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8,<9" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.21.0" },
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=4.0.0" },
+    { name = "pytest-testmon", marker = "extra == 'dev'", specifier = ">=2,<3" },
+    { name = "pytest-xdist", marker = "extra == 'dev'", specifier = ">=3.6,<3.8" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.1.0" },
     { name = "simpleaudit", extras = ["plot", "visualize", "dev"], marker = "extra == 'all'" },
     { name = "tqdm", specifier = ">=4.66.0" },
