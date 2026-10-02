@@ -60,6 +60,15 @@ from infra.ui import (
     auto_login_view,
     logout_view,
 )
+from infra.visualizer import (
+    RunExportHtmlView,
+    ScenarioViewerView,
+    VisualizerAuthView,
+    VisualizerFilesView,
+    VisualizerImageView,
+    VisualizerJsonView,
+    VisualizerView,
+)
 from judges.views import JudgeDetailView, JudgePreviewView, JudgesView
 from model_registry import otlp_config, otlp_views
 
@@ -203,6 +212,7 @@ urlpatterns = [
     path("runs/<int:run_id>/rename/", RunRenameView.as_view(), name="run_rename"),
     path("runs/<int:run_id>/results/<int:result_id>/", RunResultView.as_view(), name="run_result"),
     path("runs/<int:run_id>/export/", RunExportView.as_view(), name="run_export"),
+    path("runs/<int:run_id>/export-html/", RunExportHtmlView.as_view(), name="run_export_html"),
     path("runs/<int:run_id>/script/", RunScriptView.as_view(), name="run_script"),
     path("judges/<int:judge_id>/script/", JudgeScriptView.as_view(), name="judge_script"),
     path("runs/<int:run_id>/results-fragment/", RunResultsFragmentView.as_view(), name="run_results_fragment"),
@@ -210,6 +220,18 @@ urlpatterns = [
     path("runs/bulk/", RunsBulkView.as_view(), name="runs_bulk"),
     path("runs/export.csv", RunsExportView.as_view(), name="runs_export"),
     path("me/preferences/", PreferenceView.as_view(), name="preferences"),
+    # Result visualizer — the absorbed SimpleAudit single-file HTML viewer.
+    # The SPA pages and their file-tree/image APIs read a local results dir
+    # (set via --results_dir); the drag-drop page is fully client-side.
+    path("visualizer/", VisualizerView.as_view(), name="visualizer"),
+    path("visualizer/upload/", ScenarioViewerView.as_view(), name="visualizer_upload"),
+    # The visualizer SPA hardcodes "/api/*" in its fetch paths and prefixes them
+    # with window.__VISUALIZER_API_BASE (set to "/api/visualizer"), so the full
+    # URL is /api/visualizer/api/<endpoint>. Keep the routes in that shape.
+    path("api/visualizer/api/auth/", VisualizerAuthView.as_view(), name="visualizer_auth"),
+    path("api/visualizer/api/files/", VisualizerFilesView.as_view(), name="visualizer_files"),
+    path("api/visualizer/api/json/<path:file_path>", VisualizerJsonView.as_view(), name="visualizer_json"),
+    path("api/visualizer/api/image/", VisualizerImageView.as_view(), name="visualizer_image"),
 ]
 
 # Optional Open WebUI module (the `chat` app). The chat UI itself lives on its

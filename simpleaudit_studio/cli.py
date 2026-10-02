@@ -12,6 +12,9 @@ Usage:
   uvx simpleaudit-studio              # full stack; models point at OpenAI (add your key in the UI)
   uvx simpleaudit-studio --mock       # use the built-in mock model server (zero-setup demo)
   uvx simpleaudit-studio --port 9000  # custom port
+  uvx simpleaudit-studio --visualize-only --results_dir ./results
+                                       # web server only (no worker/hatchet/chat),
+                                       # browsing a folder of simpleaudit results
 
 When a needed port is held by another Studio instance or one of its
 derivatives (Open WebUI, the Hatchet sidecar), the CLI offers to stop it and
@@ -61,6 +64,18 @@ def main() -> None:
         "--yes", action="store_true",
         help="Answer yes to the force-kill confirmation without asking",
     )
+    parser.add_argument(
+        "--visualize-only", action="store_true",
+        help="Run only the web server for the result visualizer: skip the audit "
+             "worker, embedded Hatchet, chat, and model-endpoint setup. Pair with "
+             "--results_dir to browse a folder of simpleaudit results.",
+    )
+    parser.add_argument(
+        "--results_dir", default=None,
+        help="Directory of JSON result files for the visualizer's file tree "
+             "(replaces `simpleaudit serve`). Point it at a folder where you "
+             "dumped simpleaudit results.",
+    )
     args = parser.parse_args()
 
     # Set local mode BEFORE Django reads settings
@@ -106,9 +121,33 @@ def main() -> None:
     print("✅ Migrations complete.")
 
     # --- Step 2: Bootstrap admin + seed data ---
-    print("🌱 Seeding demo data...")
-    _seed_demo_data()
-    print("✅ Demo data ready.\n")
+    # In visualize-only mode we still need a signed-in user to reach the
+    # visualizer pages, so we bootstrap the admin (idempotent) but skip the
+    # heavier demo seeding.
+    if args.visualize_only:
+        print("🌱 Bootstrapping admin user (visualize-only)...")
+        _seed_admin_only()
+        print("✅ Admin ready.\n")
+    else:
+        print("🌱 Seeding demo data...")
+        _seed_demo_data()
+        print("✅ Demo data ready.\n")
+
+    # --- Results dir for the visualizer (replaces `simpleaudit serve`) ---
+    if args.results_dir:
+        from infra.visualizer import set_results_dir
+
+        resolved = os.path.abspath(os.path.expanduser(args.results_dir))
+        if not os.path.isdir(resolved):
+            print(f"⚠️  --results_dir '{resolved}' is not a directory; the visualizer file tree will be empty.")
+        else:
+            set_results_dir(resolved)
+            print(f"📂 Visualizer results dir: {resolved}\n")
+
+    # --- Visualize-only: just run the web server, no worker/hatchet/chat ---
+    if args.visualize_only:
+        _run_visualize_only(args)
+        return
 
     # --- Step 3: Pre-check port availability ---
     _ensure_ports_available(args)
@@ -342,6 +381,83 @@ def _open_browser_when_ready(url: str, port: int, timeout: float = 30.0) -> None
         return
     if not webbrowser.open(url):
         print(f"⚠️  Could not open a browser automatically — visit {url} manually.")
+
+
+def _seed_admin_only() -> None:
+    """Bootstrap the admin user + default project only (no demo seeding).
+
+    The visualizer pages sit behind login, so visualize-only mode needs a
+    signed-in user; this is the lightweight, idempotent subset of
+    ``_seed_demo_data``.
+    """
+    from accounts.services import bootstrap_admin_and_default_project
+
+    username = os.environ.get("BOOTSTRAP_USERNAME", "studio")
+    email = os.environ.get("BOOTSTRAP_EMAIL", "admin@localhost")
+    password = os.environ.get("BOOTSTRAP_PASSWORD", "admin123")
+    project_name = os.environ.get("BOOTSTRAP_PROJECT_NAME", "Demo Project")
+
+    bootstrap_admin_and_default_project(
+        username=username,
+        email=email,
+        password=password,
+        project_name=project_name,
+    )
+
+
+def _run_visualize_only(args) -> None:
+    """Run just the Django web server (no worker, Hatchet, or chat).
+
+    This is the client use case: point Studio at a folder of dumped
+    ``simpleaudit`` results and browse them in the visualizer. The web server
+    runs in the main thread so Ctrl+C stops it cleanly.
+    """
+    from django.core.management import call_command
+
+    port = args.port
+
+    # Only the web port matters here (no chat/hatchet ports to reserve).
+    from simpleaudit_studio import ports
+
+    ports.resolve_port_conflict(
+        port, "the web server", "spin --port <free port>",
+        force_kill=not args.no_force_kill, yes=args.yes,
+    )
+
+    username = os.environ.get("BOOTSTRAP_USERNAME", "studio")
+    password = os.environ.get("BOOTSTRAP_PASSWORD", "admin123")
+
+    auto_login_token = secrets.token_urlsafe(32)
+    os.environ["SIMPLEAUDIT_AUTO_LOGIN_TOKEN"] = auto_login_token
+    auto_login_url = f"http://localhost:{port}/auto-login/?token={auto_login_token}"
+
+    print("┌─────────────────────────────────────────────────────────┐")
+    print("│   👁️  SimpleAudit Studio — Visualize-only mode          │")
+    print("└─────────────────────────────────────────────────────────┘")
+    print()
+    print(f"   Web UI:        http://localhost:{port}")
+    print(f"   Visualizer:    http://localhost:{port}/visualizer/")
+    print(f"   Drag-drop:     http://localhost:{port}/visualizer/upload/")
+    print(f"   Login:         {username} / {password}")
+    if args.results_dir:
+        print(f"   Results dir:   {os.path.abspath(os.path.expanduser(args.results_dir))}")
+    print()
+    print(f"🔑 One-time sign-in link: {auto_login_url}")
+    print()
+    print("   Press Ctrl+C to stop.")
+    print()
+
+    if not args.no_browser:
+        threading.Thread(
+            target=_open_browser_when_ready,
+            args=(auto_login_url, port),
+            daemon=True,
+        ).start()
+
+    try:
+        call_command("runserver", f"0.0.0.0:{port}", use_reloader=False)
+    except KeyboardInterrupt:
+        print("\n👋 Shutting down.")
 
 
 def _seed_demo_data() -> None:
