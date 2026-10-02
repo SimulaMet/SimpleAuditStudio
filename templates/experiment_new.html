@@ -16,7 +16,7 @@
 </div>
 {% endif %}
 
-<form method="post" id="design-form" class="space-y-4 max-w-7xl">
+<form method="post" id="design-form" class="space-y-4 max-w-7xl min-h-full flex flex-col">
   {% csrf_token %}
   <input type="hidden" name="action" value="design">
 
