@@ -22,8 +22,10 @@ def ping_connection(request, conn_pk):
     if conn is None:
         raise StableAPIError(detail="Connection not found.", code="conn_not_found", http_status=404)
     # The caller must be working in a workspace that can see this connection.
-    active_project = getattr(request, "project", None)
-    if active_project is None or conn.id not in visible_connection_ids_for(active_project):
+    # Fall back to the connection's own project when no active project is set
+    # (e.g. API token auth without a session).
+    active_project = getattr(request, "project", None) or conn.project
+    if conn.id not in visible_connection_ids_for(active_project):
         raise StableAPIError(detail="Connection not found.", code="conn_not_found", http_status=404)
     try:
         server_ids = set(fetch_remote_model_ids(conn))

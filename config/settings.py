@@ -133,6 +133,7 @@ MIDDLEWARE = [
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
+    "infra.middleware.TokenSessionBridgeMiddleware",
     "infra.middleware.CsrfCookieMiddleware",
     "infra.middleware.ProjectMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
