@@ -22,6 +22,7 @@ into the visualizer template so the output opens in any browser with no server.
 import json
 import logging
 import os
+import time
 
 from django.conf import settings
 from django.contrib.auth.mixins import LoginRequiredMixin
@@ -32,6 +33,14 @@ from django.views.generic import View
 from infra.ui import ProjectMixin
 
 logger = logging.getLogger(__name__)
+
+# Simple in-memory cache for file tree (TTL: 60 seconds)
+_file_tree_cache = {
+    "data": None,
+    "timestamp": 0,
+    "dir": None,
+}
+_CACHE_TTL = 60  # seconds
 
 
 # --- results directory (set by the CLI from --results_dir) ------------------
@@ -111,6 +120,9 @@ def get_file_tree(directory: str, base_path: str = "") -> list[dict]:
     Folders are included only when they contain at least one loadable JSON
     file (directly or in a subdirectory); experiment files are tagged with
     their model labels so the UI can render a model picker.
+    
+    Note: For performance, we only check if files end with .json and don't
+    parse them here. Validation happens when the file is actually loaded.
     """
     items = []
     try:
@@ -129,24 +141,9 @@ def get_file_tree(directory: str, base_path: str = "") -> list[dict]:
                     {"name": entry, "type": "folder", "path": rel_path, "children": children}
                 )
         elif os.path.isfile(full_path) and entry.endswith(".json"):
-            try:
-                with open(full_path, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-            except (OSError, json.JSONDecodeError):
-                logger.debug("Skipping unreadable/invalid JSON in results dir: %s", full_path)
-                continue
-            experiment_models = _experiment_models(data)
-            if experiment_models:
-                items.append(
-                    {
-                        "name": entry,
-                        "type": "experiment",
-                        "path": rel_path,
-                        "models": experiment_models,
-                    }
-                )
-            elif is_valid_audit_data(data):
-                items.append({"name": entry, "type": "file", "path": rel_path})
+            # Fast path: just include the file without parsing it
+            # Validation happens in VisualizerJsonView when actually loading
+            items.append({"name": entry, "type": "file", "path": rel_path})
 
     return items
 
@@ -343,7 +340,23 @@ class VisualizerFilesView(View):
             )
         if not os.path.isdir(root_dir):
             return JsonResponse({"error": "Results directory not found"}, status=404)
-        return JsonResponse({"tree": get_file_tree(root_dir)})
+        
+        # Check cache
+        now = time.time()
+        if (_file_tree_cache["data"] is not None and 
+            _file_tree_cache["dir"] == root_dir and
+            now - _file_tree_cache["timestamp"] < _CACHE_TTL):
+            return JsonResponse({"tree": _file_tree_cache["data"]})
+        
+        # Cache miss - build the tree
+        tree = get_file_tree(root_dir)
+        
+        # Update cache
+        _file_tree_cache["data"] = tree
+        _file_tree_cache["timestamp"] = now
+        _file_tree_cache["dir"] = root_dir
+        
+        return JsonResponse({"tree": tree})
 
 
 class VisualizerJsonView(View):
