@@ -94,6 +94,38 @@ class CsrfCookieMiddleware(MiddlewareMixin):
                 get_token(request)
 
 
+class TokenSessionBridgeMiddleware(MiddlewareMixin):
+    """Bridge DRF token auth into the Django session so UI views work.
+
+    When a request carries an ``Authorization: Token <key>`` header but the
+    session user is anonymous, resolve the token to a user and store it in
+    the session. This lets UI views (which use ``LoginRequiredMixin`` and
+    ``ProjectMiddleware``) work with API token auth, not just session
+    cookies. The session is only written when the user is anonymous, so
+    existing session logins are never overwritten.
+    """
+
+    def process_request(self, request):
+        if hasattr(request, "user") and request.user.is_authenticated:
+            return
+        auth = request.META.get("HTTP_AUTHORIZATION", "")
+        if not auth.startswith("Token "):
+            return
+        from rest_framework.authtoken.models import Token
+
+        key = auth[6:].strip()
+        try:
+            token = Token.objects.select_related("user").get(key=key)
+        except Token.DoesNotExist:
+            return
+        if not token.user.is_active:
+            return
+        request.user = token.user
+        request.session["user_id"] = token.user.id
+        request.session["auth_backend"] = "django.contrib.auth.backends.ModelBackend"
+        request.session.cycle_key()
+
+
 class ProjectMiddleware(MiddlewareMixin):
     """Attaches the user's active project to the request.
 

@@ -7,6 +7,7 @@ AuditRun is the scientific experiment record. It must reference immutable inputs
 """
 from django.conf import settings
 from django.db import models
+from django.utils import timezone as django_timezone
 
 
 class AuditRun(models.Model):
@@ -133,7 +134,7 @@ class Monitor(models.Model):
     # (e.g. "Europe/Oslo"); daylight-saving changes are followed. Stored
     # datetimes (next_run_at, ...) are always UTC.
     timezone = models.CharField(max_length=64, default="UTC")
-    next_run_at = models.DateTimeField(db_index=True)
+    next_run_at = models.DateTimeField(db_index=True, default=django_timezone.now)
     last_run = models.ForeignKey("audits.AuditRun", on_delete=models.SET_NULL, null=True, blank=True, related_name="+")
     # Set when the monitor repeats one run setup of an Experiment; its runs then
     # also join that experiment, so the experiment page can chart them over time.

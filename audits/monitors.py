@@ -191,7 +191,10 @@ def launch_monitor(monitor: Monitor, *, now=None) -> AuditRun:
     now = now or timezone.now()
     plan = monitor_plan(monitor)
     if monitor.created_by is None:
-        raise ValueError("Monitor owner no longer exists; recreate the monitor.")
+        raise ValueError(
+            f"Monitor #{monitor.pk} has no owner (created_by is null). "
+            "Set created_by to a valid user or recreate the monitor."
+        )
     return create_audit_run(
         project=monitor.project,
         user=monitor.created_by,
