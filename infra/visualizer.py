@@ -120,9 +120,10 @@ def get_file_tree(directory: str, base_path: str = "") -> list[dict]:
     Folders are included only when they contain at least one loadable JSON
     file (directly or in a subdirectory); experiment files are tagged with
     their model labels so the UI can render a model picker.
-    
-    Note: For performance, we only check if files end with .json and don't
-    parse them here. Validation happens when the file is actually loaded.
+
+    Each JSON file is parsed here (not just name-checked) because that is what
+    lets us drop non-audit files and classify experiments. The view wraps this
+    in a short-lived cache, so the tree is only rebuilt on a cache miss.
     """
     items = []
     try:
@@ -141,9 +142,24 @@ def get_file_tree(directory: str, base_path: str = "") -> list[dict]:
                     {"name": entry, "type": "folder", "path": rel_path, "children": children}
                 )
         elif os.path.isfile(full_path) and entry.endswith(".json"):
-            # Fast path: just include the file without parsing it
-            # Validation happens in VisualizerJsonView when actually loading
-            items.append({"name": entry, "type": "file", "path": rel_path})
+            try:
+                with open(full_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+            except (OSError, json.JSONDecodeError):
+                logger.debug("Skipping unreadable/invalid JSON in results dir: %s", full_path)
+                continue
+            experiment_models = _experiment_models(data)
+            if experiment_models:
+                items.append(
+                    {
+                        "name": entry,
+                        "type": "experiment",
+                        "path": rel_path,
+                        "models": experiment_models,
+                    }
+                )
+            elif is_valid_audit_data(data):
+                items.append({"name": entry, "type": "file", "path": rel_path})
 
     return items
 
