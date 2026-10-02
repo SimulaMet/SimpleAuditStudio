@@ -83,7 +83,7 @@
         </button>
         <div class="min-w-0">
           <h1 class="text-sm font-semibold text-gray-200 leading-tight truncate flex items-center gap-2">
-            <a href="/" class="hover:opacity-80 transition-opacity" title="Go to homepage">
+            <a href="/" class="hover:opacity-80 transition-opacity md:hidden" title="Go to homepage">
               <img src="{% static 'logo.svg' %}?v=3" alt="SimpleAudit" class="h-4 w-4 object-contain rounded shrink-0">
             </a>
             <a href="/" class="hover:text-accent transition-colors">{% for item in nav_items %}{% if item.active %}{{ item.label }}{% endif %}{% empty %}SimpleAudit{% endfor %}</a>
