@@ -13,6 +13,7 @@
     {% if is_repeated %}<span class="text-xs text-gray-500">{{ n_reps }}× · {{ agreement_rate|floatformat:0 }}% agree</span>{% endif %}
   </div>
   <a href="{% url 'run_export' run.id %}?format=json" class="px-3 py-1.5 rounded-lg bg-surface-overlay text-gray-400 text-xs font-medium hover:text-gray-200 transition-colors">Export JSON</a>
+  <a href="{% url 'run_export_html' run.id %}" class="px-3 py-1.5 rounded-lg bg-surface-overlay text-gray-400 text-xs font-medium hover:text-gray-200 transition-colors" title="Download a self-contained HTML file you can open in any browser (no server needed)">Export HTML</a>
 </div>
 
 {% if error %}

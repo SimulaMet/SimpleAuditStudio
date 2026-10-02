@@ -2082,7 +2082,13 @@ class CompareView(ProjectMixin, TemplateView):
             for col_run_id in [str(r["id"]) for r in raw["runs"]]:
                 rdata = entry["runs"].get(col_run_id, {})
                 values.append(rdata.get("severity") or rdata.get("status") or "—")
-            rows.append({"scenario": entry["scenario_key"], "values": values})
+            rows.append(
+                {
+                    "scenario": entry["scenario_key"],
+                    "values": values,
+                    "fragility": entry.get("fragility"),
+                }
+            )
         # Per-run header metadata (one query for all runs)
         run_objs = AuditRun.objects.select_related("target_model").in_bulk([r["id"] for r in raw["runs"]])
         run_meta = []

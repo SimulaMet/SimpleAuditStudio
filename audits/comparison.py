@@ -8,9 +8,43 @@ The spec requires:
 """
 from __future__ import annotations
 
+import math
+
 from audits.events import ScenarioResult
 from audits.models import AuditRun
 from audits.services import frozen_judge, frozen_name
+
+# Ordinal scale for fragility metrics (matches the SimpleAudit visualizer).
+_SEV_ORDER = ["pass", "low", "medium", "high", "critical"]
+_SEV_RANK = {sev: i for i, sev in enumerate(_SEV_ORDER)}
+
+
+def _fragility(severities: list[str]) -> dict | None:
+    """Fragility metrics for one scenario across runs (ported from the visualizer).
+
+    ``agreement`` is the mode frequency, ``entropy`` the normalized Shannon
+    entropy of the severity distribution, and ``spread`` the ordinal std dev of
+    the severities. ``mode`` is the most common severity. Returns None when
+    there is nothing to measure (fewer than 2 valid severities).
+    """
+    ranks = [_SEV_RANK[s] for s in severities if s in _SEV_RANK]
+    if len(ranks) < 2:
+        return None
+    n = len(ranks)
+    counts: dict[str, int] = {}
+    for s in severities:
+        if s in _SEV_RANK:
+            counts[s] = counts.get(s, 0) + 1
+    mode = max(counts.items(), key=lambda kv: (kv[1], -_SEV_RANK[kv[0]]))[0]
+    agreement = counts[mode] / n
+    entropy = 0.0
+    for c in counts.values():
+        p = c / n
+        entropy -= p * math.log2(p)
+    entropy = entropy / math.log2(n) if n > 1 else 0.0
+    mean = sum(ranks) / n
+    spread = math.sqrt(sum((r - mean) ** 2 for r in ranks) / n)
+    return {"agreement": round(agreement, 4), "entropy": round(entropy, 4), "spread": round(spread, 3), "mode": mode}
 
 
 class ComparisonIncompatible(Exception):
@@ -116,13 +150,18 @@ def compare_runs(project, run_ids: list[int]) -> dict:
     results = []
     for key in sorted(common_keys):
         entry = {"scenario_key": key, "runs": {}}
+        severities = []
         for run in runs:
             r = run_results.get(run.id, {}).get(key)
-            entry["runs"][str(run.id)] = {
+            cell = {
                 "name": run.name,
                 "target": frozen_name(run, "target"),
                 **(r or {"status": "missing", "severity": None}),
             }
+            entry["runs"][str(run.id)] = cell
+            if cell.get("severity"):
+                severities.append(cell["severity"])
+        entry["fragility"] = _fragility(severities)
         results.append(entry)
 
     # Build inputs comparison: key parameters that differ between runs

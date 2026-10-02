@@ -169,6 +169,7 @@ private.
 - Watch runs live, including per-repetition results
 - Monitor models for drift on a schedule (interval or cron)
 - Filter, customise and compare runs on an interactive dashboard
+- Visualize results: browse a folder of `simpleaudit` JSON results in a file-tree viewer, drag-drop a file offline, export a self-contained HTML file, and compare runs with fragility metrics. Run Studio as a visualization-only server with `spin --visualize-only --results_dir ./results`
 
 ## 🏗️ Architecture
 
