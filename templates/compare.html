@@ -81,6 +81,7 @@
     <thead><tr class="border-b border-gray-800">
       <th class="text-left px-3 py-2 text-xs text-gray-500 uppercase">Scenario</th>
       {% for meta in result.run_meta %}{% include "partials/compare_run_header.html" %}{% endfor %}
+      <th class="text-left px-3 py-2 text-xs text-gray-500 uppercase" title="How much the runs disagree on this scenario: agreement (mode frequency), entropy (normalized), spread (ordinal std dev), and the most common severity">Fragility</th>
     </tr></thead>
     <tbody>
       {% for row in result.rows %}
@@ -94,6 +95,17 @@
           {% else %}<span class="text-gray-500">{{ val|default:"—" }}</span>{% endif %}
         </td>
         {% endfor %}
+        <td class="px-3 py-2 text-xs text-gray-400">
+          {% if row.fragility %}
+            <span title="Mode frequency across runs">{{ row.fragility.agreement|floatformat:0 }}% agree</span>
+            <span class="text-gray-600">·</span>
+            <span title="Normalized Shannon entropy (0 = unanimous, 1 = maximally mixed)">H {{ row.fragility.entropy|floatformat:2 }}</span>
+            <span class="text-gray-600">·</span>
+            <span title="Ordinal std dev of severities">σ {{ row.fragility.spread|floatformat:2 }}</span>
+            <span class="text-gray-600">·</span>
+            <span title="Most common severity">{{ row.fragility.mode }}</span>
+          {% else %}<span class="text-gray-600">—</span>{% endif %}
+        </td>
       </tr>
       {% endfor %}
     </tbody>
