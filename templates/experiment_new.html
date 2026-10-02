@@ -187,7 +187,12 @@
     const missing = [];
     const compared = [];
     AXES.forEach(([name, label]) => {
-      const n = form.querySelectorAll(`input[name="${name}"]:checked`).length;
+      let n = form.querySelectorAll(`input[name="${name}"]:checked`).length;
+      // Agent checkbox satisfies the "target" axis (agent IS the target).
+      if (name === 'target_model' && !n) {
+        const agentCb = form.querySelector('input[name="agent_id"]:checked');
+        if (agentCb) n = 1;
+      }
       const counter = form.querySelector(`[data-axis="${name}"] [data-axis-count]`);
       if (counter) counter.textContent = n > 1 ? n + ' selected' : '';
       if (!n) missing.push(label);

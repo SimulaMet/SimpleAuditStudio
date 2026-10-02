@@ -586,6 +586,7 @@ def _clone_from_run(source: AuditRun) -> dict:
         "auditor_model_id": source.auditor_model_id,
         "judge_model_id": source.judge_model_id,
         "judge_version_id": source.judge_version_id,
+        "agent_id": source.agent_id,
         "max_turns": params.get("max_turns", ""),
         "language": params.get("language", ""),
         "n_repetitions": params.get("n_repetitions", ""),
@@ -601,6 +602,7 @@ def _design_selection(post=None, clone=None) -> dict:
     "its latest version" (the default tick).
     """
     if post is not None:
+        agent_id = (post.get("agent_id") or "").strip()
         return {
             "sets": post.getlist("scenario_set"),
             "versions": post.getlist("scenario_version"),
@@ -608,9 +610,12 @@ def _design_selection(post=None, clone=None) -> dict:
             "auditor": post.getlist("auditor_model"),
             "judge_model": post.getlist("judge_model"),
             "judge": post.getlist("judge"),
+            "agent_id": agent_id,
+            "agent_trace": (post.get(f"agent_trace_{agent_id}") or "").strip() == "1" if agent_id else True,
         }
     if clone:
         # Clone pins the cloned run's exact version.
+        agent_id = str(clone["agent_id"]) if clone.get("agent_id") else ""
         return {
             "sets": [],
             "versions": [str(clone["scenario_set_version_id"])],
@@ -618,8 +623,10 @@ def _design_selection(post=None, clone=None) -> dict:
             "auditor": [str(clone["auditor_model_id"])],
             "judge_model": [str(clone["judge_model_id"])],
             "judge": [str(clone["judge_version_id"])],
+            "agent_id": agent_id,
+            "agent_trace": True,
         }
-    return {"sets": [], "versions": [], "target": [], "auditor": [], "judge_model": [], "judge": []}
+    return {"sets": [], "versions": [], "target": [], "auditor": [], "judge_model": [], "judge": [], "agent_id": "", "agent_trace": True}
 
 
 def ex_repeat(repeat: dict) -> str:
@@ -724,9 +731,16 @@ class NewExperimentView(ProjectMixin, TemplateView):
         for conn in connections:
             conn.share_label = connection_share_label(conn)
             conn.is_shared = conn.project_id != p.id
+        # Enabled agents in this workspace, offered as an alternative target.
+        from model_registry.models import Agent
+
+        agents = list(
+            Agent.objects.filter(project=p, enabled=True).select_related("base_model", "base_model__connection")
+        )
         kw.update(
             sets=sets,
             connections=connections,
+            agents=agents,
             model_roles=[
                 ("target", "Target", "The model under test.", sel["target"]),
                 ("auditor", "Auditor", "Plays the user and probes the target.", sel["auditor"]),
@@ -807,6 +821,8 @@ class NewExperimentView(ProjectMixin, TemplateView):
                         language_override=run_spec["language"],
                         n_repetitions_override=run_spec["n_repetitions"],
                         gen_config_override=run_spec["gen_config"],
+                        agent=run_spec.get("agent"),
+                        trace_config=None if run_spec.get("target_trace", True) else {},
                     )
                 if repeat:
                     first_point = run
@@ -1037,10 +1053,17 @@ class NewExperimentView(ProjectMixin, TemplateView):
         post = request.POST
         design_post = [(k[len("design__"):], v) for k, vs in post.lists() if k.startswith("design__") for v in vs]
         design = _design_from_review(post)
+        # Per-agent trace: read from design__agent_trace_<id>
+        agent_id = (design.get("agent_id") or "").strip()
+        target_trace = True
+        if agent_id:
+            target_trace = (design.get(f"agent_trace_{agent_id}") or "").strip() == "1"
         try:
             rows, runs, errors = self._rows_from_post(post, p)
         except Exception as e:  # noqa: BLE001 - tampered or stale form: start again from the design
             return self._redesign(design, f"Could not read the review: {e}")
+        for r in runs:
+            r["target_trace"] = target_trace
         try:
             repeat = parse_repeat(design)
         except ValueError as e:
@@ -2343,30 +2366,64 @@ _REP_KNOWN_KEYS = {
     *(f"{r}_{d}_tokens" for r in _REP_TOKEN_ROLES for d in ("input", "output")),
 }
 # Span kinds worth surfacing in the result page's trace card (the same set the
-# engine's evidence selection treats as signal). Anything else is noise.
+# engine's evidence selection treats as signal).
 _TRACE_CARD_KINDS = {"LLM", "RETRIEVER", "TOOL", "AGENT", "GUARDRAIL", "EVALUATOR"}
+# Sub-millisecond connection-level spans that HTTP instrumentation adds around
+# every request (TCP connects, pool lookups) — not useful in the trace card.
+_TRACE_CARD_NOISE_NAMES = {"connect", "dns lookup", "tls handshake"}
+_TRACE_CARD_MAX_SPANS = 15
+
+
+def _trace_span_duration_ms(span: dict) -> float:
+    start, end = span.get("start_time"), span.get("end_time")
+    if isinstance(start, (int, float)) and isinstance(end, (int, float)):
+        return max(0.0, (end - start) * 1000.0)
+    return 0.0
+
+
+def _trace_is_noise(span: dict) -> bool:
+    name = str(span.get("name") or "").strip().lower()
+    if name in _TRACE_CARD_NOISE_NAMES:
+        return True
+    # A GET with sub-millisecond duration is an instrumentation artifact
+    # (connection-pool housekeeping), not a user-visible operation.
+    return name == "get" and _trace_span_duration_ms(span) < 1.0
 
 
 def _trace_card_view(rep: dict) -> dict | None:
     """The trace section of one rep: W3C trace ids + the captured spans.
 
     ``trace_ids`` are the ids the engine propagated the rep's turns under
-    (persisted on the result); the spans are the selected evidence the target
-    actually exported for those ids (``judgment["evidence_spans"]``). Returns
-    ``None`` when the rep carries no trace data (tracing was off, or the
-    target exported nothing for the run's traces).
+    (persisted on the result); the spans are the ones the target exported for
+    those ids (``judgment["evidence_spans"]``). Returns ``None`` when the rep
+    carries no trace data (tracing was off, or the target exported nothing).
+
+    Spans are shown longest-first with connection noise dropped: targets with
+    OpenInference semantic kinds surface their signal spans first, targets with
+    plain OTel auto-instrumentation (raw SPAN_KIND_*, http.* attributes) are
+    still readable because the meaningful operations are the long ones (the
+    model call, the request root).
     """
     trace_ids = rep.get("trace_ids") or []
     spans = ((rep.get("judgment") or {}).get("evidence_spans") or []) if isinstance(rep.get("judgment"), dict) else []
     if not trace_ids and not spans:
         return None
-    signal = [s for s in spans if str(s.get("kind") or "").upper() in _TRACE_CARD_KINDS]
-    shown = signal[:30] or spans[:30]
+    ranked = [
+        dict(s, dur_ms=round(_trace_span_duration_ms(s), 1))
+        for s in spans
+        if not _trace_is_noise(s)
+    ]
+    signal = [s for s in ranked if str(s.get("kind") or "").upper() in _TRACE_CARD_KINDS]
+    rest = [s for s in ranked if str(s.get("kind") or "").upper() not in _TRACE_CARD_KINDS]
+    ranked = sorted(signal, key=_trace_span_duration_ms, reverse=True) + sorted(rest, key=_trace_span_duration_ms, reverse=True)
+    shown = ranked[:_TRACE_CARD_MAX_SPANS]
+    import json as _json
     return {
         "trace_ids": list(trace_ids),
         "spans": shown,
+        "spans_json": _json.dumps(shown, indent=2, default=str),
         "total_spans": len(spans),
-        "hidden_spans": max(len(spans) - len(shown), 0),
+        "hidden_spans": max(len(ranked) - len(shown), 0),
     }
 
 
@@ -2397,7 +2454,7 @@ def _judge_grade(judgment: dict) -> dict:
     checklist gives per-item results.
     """
     judgment = judgment if isinstance(judgment, dict) else {}
-    fields, notes = [], []
+    fields, notes, json_notes = [], [], []
     for key, value in judgment.items():
         if key in _JUDGMENT_SHOWN or key.startswith("_") or value in (None, "", [], {}):
             continue
@@ -2411,13 +2468,15 @@ def _judge_grade(judgment: dict) -> dict:
         elif isinstance(value, str):
             notes.append((label, value))
         else:
-            notes.append((label, json.dumps(value, indent=2, ensure_ascii=False)))
+            count = f" ({len(value)})" if isinstance(value, list) else ""
+            json_notes.append((label + count, json.dumps(value, indent=2, ensure_ascii=False, default=str)))
     score = judgment.get("score")
     return {
         "score": f"{score:g}" if isinstance(score, (int, float)) else None,
         "abstained": judgment.get("abstained") if isinstance(judgment.get("abstained"), bool) else None,
         "fields": fields,
         "notes": notes,
+        "json_notes": json_notes,
     }
 
 
@@ -2480,7 +2539,7 @@ def _rep_view(rep: dict, index: int) -> dict:
         "severity": rep.get("severity", ""),
         "summary": rep.get("summary", ""),
         "grade": grade,
-        "has_grade": bool(grade["score"] or grade["abstained"] is not None or grade["fields"] or grade["notes"]),
+        "has_grade": bool(grade["score"] or grade["abstained"] is not None or grade["fields"] or grade["notes"] or grade["json_notes"]),
         "conversation": conversation,
         "turns": turn,
         "images": _image_uris(rep),
