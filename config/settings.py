@@ -385,3 +385,6 @@ LOGGING = {
         "level": os.environ.get("LOG_LEVEL", "INFO"),
     },
 }
+
+# Visualizer: results directory for JSON files (set via env var or CLI)
+VISUALIZER_RESULTS_DIR = os.environ.get("VISUALIZER_RESULTS_DIR")
