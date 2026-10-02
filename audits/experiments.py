@@ -75,7 +75,7 @@ def parse_design(post, project) -> dict:
     Raises DesignError with a user-facing message.
     """
     from judges.models import Judge, JudgeVersion
-    from model_registry.models import RegisteredModel
+    from model_registry.models import Agent, RegisteredModel
     from scenarios.models import ScenarioSet, ScenarioSetVersion
 
     # Scenario versions: explicit version ids ("scenario_version", several may
@@ -114,10 +114,22 @@ def parse_design(post, project) -> dict:
         key=lambda v: (v.scenario_set.name, is_follow(v), v.version),
     )
 
+    # Optional agent target: the agent IS the target (its base_model is fixed
+    # at creation). When set, no bare target model is required.
+    agent = None
+    agent_raw = (post.get("agent_id") or "").strip()
+    if agent_raw:
+        try:
+            agent = Agent.objects.select_related("base_model").get(
+                pk=int(agent_raw), project=project, enabled=True
+            )
+        except (ValueError, Agent.DoesNotExist):
+            raise DesignError("The selected agent is not available in this workspace.")
+
     models = {}
     for axis, (field, label) in _MODEL_AXES.items():
         ids = [m for m in post.getlist(field) if m]
-        if not ids:
+        if not ids and axis == "target" and agent is None:
             raise DesignError(f"Pick at least one {label} model.")
         # A model is usable when it belongs to this workspace OR its connection
         # is shared into this workspace (public / admin-shared / explicit).
@@ -155,6 +167,10 @@ def parse_design(post, project) -> dict:
         judges.append(latest)
     judges.sort(key=lambda v: (v.judge.name, is_follow(v), v.version))
 
+    # When an agent is the target, its base_model IS the target model.
+    if agent is not None and not models.get("target"):
+        models["target"] = [agent.base_model]
+
     n_reps_raw = (post.get("n_repetitions") or "").strip()
     try:
         n_reps = int(n_reps_raw) if n_reps_raw else None
@@ -185,16 +201,25 @@ def parse_design(post, project) -> dict:
     if system_prompt:
         gen_config = {**(gen_config or {}), "system_prompt": system_prompt}
 
+    # Per-agent trace flag: "agent_trace_<id>" = "1" means collect OTLP spans.
+    # Absent (unchecked) = no trace. Default (no agent) = True (auto-detect).
+    if agent is not None:
+        target_trace = (post.get(f"agent_trace_{agent.id}") or "").strip() == "1"
+    else:
+        target_trace = True
+
     return {
         "scenario_set": versions,
         "target": models["target"],
         "auditor": models["auditor"],
         "judge_model": models["judge_model"],
         "judge": judges,
+        "agent": agent,
         "max_turns": max_turns,
         "language": languages,
         "n_repetitions": n_reps if n_reps and n_reps > 1 else None,
         "gen_config": gen_config or None,
+        "target_trace": target_trace,
     }
 
 
@@ -226,6 +251,8 @@ def expand(design: dict) -> list[dict]:
         spec = dict(zip(DESIGN_AXES, combo, strict=True))
         spec["n_repetitions"] = design["n_repetitions"]
         spec["gen_config"] = design["gen_config"]
+        spec["agent"] = design.get("agent")
+        spec["target_trace"] = design.get("target_trace", True)
         specs.append(spec)
     return specs
 
@@ -240,10 +267,12 @@ def spec_to_run(spec: dict, name: str) -> dict:
         "auditor": spec["auditor"],
         "judge_model": spec["judge_model"],
         "judge": spec["judge"],
+        "agent": spec.get("agent"),
         "max_turns": spec["max_turns"],
         "language": spec["language"],
         "n_repetitions": spec["n_repetitions"],
         "gen_config": spec["gen_config"],
+        "target_trace": spec.get("target_trace", True),
     }
 
 
@@ -392,6 +421,8 @@ def launch_experiment(*, project, user, name: str, runs: list[dict], repeat: dic
                 n_repetitions_override=r["n_repetitions"],
                 gen_config_override=r["gen_config"],
                 experiment=experiment,
+                agent=r.get("agent"),
+                trace_config=None if r.get("target_trace", True) else {},
             )
             for r in runs
         ] if run_now else []
