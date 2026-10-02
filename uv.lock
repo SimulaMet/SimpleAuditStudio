@@ -2385,32 +2385,16 @@ wheels = [
 [[package]]
 name = "simpleaudit"
 version = "0.3.0"
-source = { editable = "../SimpleAudit" }
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "any-llm-sdk" },
     { name = "fsspec" },
     { name = "tqdm" },
 ]
-
-[package.metadata]
-requires-dist = [
-    { name = "aiohttp", marker = "extra == 'tracing'", specifier = ">=3.9" },
-    { name = "any-llm-sdk", specifier = ">=1.14.0" },
-    { name = "black", marker = "extra == 'dev'", specifier = ">=23.0.0" },
-    { name = "fsspec", specifier = ">=2023.1.0" },
-    { name = "grpcio", marker = "extra == 'tracing'", specifier = ">=1.60" },
-    { name = "matplotlib", marker = "extra == 'plot'", specifier = ">=3.5.0" },
-    { name = "opentelemetry-proto", marker = "extra == 'tracing'", specifier = ">=1.20" },
-    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8,<9" },
-    { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.21.0" },
-    { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=4.0.0" },
-    { name = "pytest-testmon", marker = "extra == 'dev'", specifier = ">=2,<3" },
-    { name = "pytest-xdist", marker = "extra == 'dev'", specifier = ">=3.6,<3.8" },
-    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.1.0" },
-    { name = "simpleaudit", extras = ["plot", "dev"], marker = "extra == 'all'" },
-    { name = "tqdm", specifier = ">=4.66.0" },
+sdist = { url = "https://files.pythonhosted.org/packages/db/48/fb7a0c1d8e1da2d6b373368e206a4896f46a922e234dfa81d01cca57095d/simpleaudit-0.3.0.tar.gz", hash = "sha256:7d9e3eac601c3b7b269722e8fd5220bbdfb05926aedddbd298ac4b3cc3eec272", size = 1478360, upload-time = "2026-10-01T22:20:09.744Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/7f/f8/ab4719d9689f87b1c926a2884e65b3c6784292ffa14c0388c63e331f4071/simpleaudit-0.3.0-py3-none-any.whl", hash = "sha256:b6f2495797c19bb18aebedb006dcfe7283ac154737406aaca5fc025559aa9557", size = 1361595, upload-time = "2026-10-01T22:20:08.092Z" },
 ]
-provides-extras = ["tracing", "plot", "dev", "all"]
 
 [[package]]
 name = "simpleaudit-studio"
@@ -2475,7 +2459,7 @@ requires-dist = [
     { name = "requests", specifier = "==2.32.5" },
     { name = "ruff", marker = "extra == 'dev'" },
     { name = "sentry-sdk", extras = ["django"], specifier = ">=2.0" },
-    { name = "simpleaudit", editable = "../SimpleAudit" },
+    { name = "simpleaudit", specifier = "==0.3.0" },
     { name = "workos", specifier = "==10.4.0" },
 ]
 provides-extras = ["postgres", "server", "dev", "e2e"]

@@ -45,14 +45,6 @@ dev = [
 ]
 e2e = ["playwright>=1.45"]
 
-# Local-dev override: point the engine at the in-repo SimpleAudit checkout so
-# the studio can use the tracing layer (simpleaudit.tracing) that is not yet in
-# the published 0.2.3 wheel. The published build still resolves simpleaudit
-# from PyPI (see the registry-dependency note above); uv.sources only affects
-# local `uv` resolution.
-[tool.uv.sources]
-simpleaudit = { path = "../SimpleAudit", editable = true }
-
 [project.scripts]
 simpleaudit-studio = "simpleaudit_studio.cli:main"
 spin = "simpleaudit_studio.cli:main"
