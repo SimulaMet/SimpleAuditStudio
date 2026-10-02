@@ -361,7 +361,7 @@
     <!-- Slim in-content header (Studio style) -->
     <header class="h-12 shrink-0 flex items-center gap-2 px-3 border-b border-gray-800 bg-surface-raised z-10">
         <div class="flex items-center gap-2.5 flex-1 min-w-0">
-            <button onclick="toggleSidebar()" class="w-9 h-9 -ml-1 rounded-lg text-gray-300 hover:bg-surface-overlay flex items-center justify-center shrink-0" title="Toggle file tree">
+            <button id="toggle-sidebar-btn" class="w-9 h-9 -ml-1 rounded-lg text-gray-300 hover:bg-surface-overlay flex items-center justify-center shrink-0" title="Toggle file tree">
                 <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16" />
                 </svg>
@@ -529,6 +529,11 @@
 
         // On page load, check for file and scenario in URL
         window.addEventListener('DOMContentLoaded', () => {
+            // Toggle sidebar button
+            document.getElementById('toggle-sidebar-btn')?.addEventListener('click', () => {
+                toggleSidebar();
+            });
+            
             // Clicking anywhere in the file tree while collapsed just expands the sidebar.
             document.getElementById('file-tree')?.addEventListener('click', (e) => {
                 if (document.documentElement.dataset.sidebar === 'collapsed') {
