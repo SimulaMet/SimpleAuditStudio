@@ -32,7 +32,7 @@ uvx simpleaudit-studio@latest
 Want the **latest unreleased code** from this repo instead of the PyPI release? Same one-liner, pointed at git:
 
 ```bash
-uvx --from "git+https://github.com/SushantGautam/SimpleAuditStudio@main" spin
+uvx --from "git+https://github.com/SimulaMet/SimpleAuditStudio@main" spin
 ```
 
 
@@ -57,7 +57,7 @@ Needs Python 3.11+ and [uv](https://docs.astral.sh/uv/). No Docker, no Makefile.
 ### Setup (once)
 
 ```bash
-git clone https://github.com/SushantGautam/SimpleAuditStudio
+git clone https://github.com/SimulaMet/SimpleAuditStudio
 cd SimpleAuditStudio
 cp .env.local.example .env        # SQLite + embedded queue; admin is studio / BOOTSTRAP_PASSWORD
 uv sync --extra dev               # create .venv with app + dev tools
@@ -128,7 +128,7 @@ See [docs/deployment.md](docs/deployment.md) for every environment variable and 
 For teams or multi-user setups, use Docker Compose:
 
 ```bash
-git clone https://github.com/SushantGautam/SimpleAuditStudio
+git clone https://github.com/SimulaMet/SimpleAuditStudio
 cd SimpleAuditStudio
 cp .env.example .env
 # edit DJANGO_SECRET_KEY, POSTGRES_PASSWORD and BOOTSTRAP_PASSWORD at minimum —

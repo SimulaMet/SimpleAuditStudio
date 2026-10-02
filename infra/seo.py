@@ -18,7 +18,7 @@ from django.views.generic import TemplateView
 
 SITE_NAME = "SimpleAudit Studio"
 SITE_TAGLINE = "Reproducible AI Model Auditing Platform"
-GITHUB_URL = "https://github.com/SushantGautam/SimpleAuditStudio"
+GITHUB_URL = "https://github.com/SimulaMet/SimpleAuditStudio"
 PYPI_URL = "https://pypi.org/project/simpleaudit-studio/"
 ENGINE_URL = "https://github.com/kelkalot/simpleaudit"
 LICENSE = "MIT"
