@@ -47,7 +47,7 @@ class AuditRun(models.Model):
     auditor_config_snapshot = models.JSONField()
     judge_config_snapshot = models.JSONField()
     generation_parameters_snapshot = models.JSONField()
-    # Frozen Agent configuration (model, KBs, tools, MCP, retrieval, capabilities).
+    # Frozen Agent configuration (model, KBs, tools, retrieval, capabilities).
     # Present only when ``agent`` is set. Lets a historical run be reproduced
     # even if the live Agent record is later edited or deleted.
     agent_config_snapshot = models.JSONField(null=True, blank=True)

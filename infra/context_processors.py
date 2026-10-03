@@ -93,9 +93,9 @@ _NAV = (
     ("experiments", "Experiments", "⊞", ("/experiments/",), False, ()),
     ("monitors", "Monitors", "↻", ("/monitors/",), False, ()),
     ("scenarios", "Scenarios", "▤", ("/scenarios/",), False, ()),
-    ("agents", "Agents", "🤖", ("/agents/",), False, (
-        ("agents_resources", "Resources", "📚"),
-    )),
+    ("agents", "Agents", "🤖", ("/agents/",), False, ()),
+    ("agents_knowledge", "Knowledge", "📚", ("/agents/knowledge/",), False, ()),
+    ("agents_tools", "Tools", "🔧", ("/agents/tools/",), False, ()),
     ("connections", "Connections", "⬡", ("/connections/",), False, ()),
     ("judges", "Judges", "⚖", ("/judges/",), False, ()),
     ("compare", "Compare", "⇄", ("/compare/",), False, ()),

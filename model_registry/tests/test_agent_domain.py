@@ -7,8 +7,6 @@ from django.test import Client, TestCase
 from infra.tests.factories import (
     AgentFactory,
     KnowledgeBaseFactory,
-    MCPServerFactory,
-    MCPToolFactory,
     MembershipFactory,
     ModelConnectionFactory,
     ProjectFactory,
@@ -20,8 +18,6 @@ from infra.tests.factories import (
 from model_registry.models import (
     Agent,
     KnowledgeBase,
-    MCPServer,
-    MCPTool,
     RetrievalProfile,
     Tool,
 )
@@ -96,25 +92,6 @@ class ToolModelTest(TestCase):
         self.assertTrue(tool.external_network)
 
 
-class MCPServerModelTest(TestCase):
-    def test_create_server_and_tool(self):
-        project = ProjectFactory()
-        server = MCPServer.objects.create(
-            project=project, name="GitHub MCP", url="http://localhost:9000/mcp"
-        )
-        tool = MCPTool.objects.create(
-            server=server, project=project, external_name="search_repository"
-        )
-        self.assertEqual(str(tool), "GitHub MCP/search_repository")
-        self.assertEqual(server.tools.count(), 1)
-
-    def test_unique_tool_per_server(self):
-        server = MCPServerFactory()
-        MCPTool.objects.create(server=server, project=server.project, external_name="dup")
-        with self.assertRaises(IntegrityError):
-            MCPTool.objects.create(server=server, project=server.project, external_name="dup")
-
-
 class AgentModelTest(TestCase):
     def test_create_agent(self):
         agent = AgentFactory()
@@ -139,13 +116,6 @@ class AgentModelTest(TestCase):
         tool = ToolFactory(project=agent.project)
         agent.tools.add(tool)
         self.assertEqual(agent.tools.count(), 1)
-
-    def test_agent_attach_mcp_tool(self):
-        agent = AgentFactory()
-        server = MCPServerFactory(project=agent.project)
-        mcp_tool = MCPToolFactory(server=server, project=agent.project)
-        agent.mcp_tools.add(mcp_tool)
-        self.assertEqual(agent.mcp_tools.count(), 1)
 
     def test_agent_retrieval_profile(self):
         agent = AgentFactory()
@@ -174,13 +144,10 @@ class AgentModelTest(TestCase):
         )
         kb = KnowledgeBaseFactory(project=agent.project, name="KB1", external_id="owui-1", version="v1")
         tool = ToolFactory(project=agent.project, name="Calc", type="builtin")
-        server = MCPServerFactory(project=agent.project, name="GH")
-        mcp_tool = MCPToolFactory(server=server, project=agent.project, external_name="search")
         profile = RetrievalProfileFactory(project=agent.project, name="Hybrid", search_mode="hybrid", top_k=8)
 
         agent.knowledge_bases.add(kb)
         agent.tools.add(tool)
-        agent.mcp_tools.add(mcp_tool)
         agent.retrieval_profile = profile
         agent.save()
 
@@ -192,9 +159,6 @@ class AgentModelTest(TestCase):
         self.assertEqual(snap["knowledge_bases"][0][1], "KB1")
         self.assertEqual(len(snap["tools"]), 1)
         self.assertEqual(snap["tools"][0][1], "Calc")
-        self.assertEqual(len(snap["mcp_tools"]), 1)
-        self.assertEqual(snap["mcp_tools"][0][1], "GH")
-        self.assertEqual(snap["mcp_tools"][0][2], "search")
         self.assertEqual(snap["retrieval_profile"]["name"], "Hybrid")
         self.assertEqual(snap["retrieval_profile"]["top_k"], 8)
         self.assertTrue(snap["capabilities"]["knowledge_search"])
@@ -333,20 +297,6 @@ class AgentAPITest(TestCase):
         agent = Agent.objects.get(name="Tool Agent")
         self.assertIn(tool, agent.tools.all())
 
-    def test_agent_with_mcp_tools(self):
-        model = RegisteredModelFactory(project=self.project)
-        server = MCPServerFactory(project=self.project)
-        mcp_tool = MCPToolFactory(server=server, project=self.project)
-        resp = self._api("/api/agents/", "post", {
-            "name": "MCP Agent",
-            "base_model": model.id,
-            "mcp_tools": [mcp_tool.id],
-        })
-        self.assertEqual(resp.status_code, 201)
-        agent = Agent.objects.get(name="MCP Agent")
-        self.assertIn(mcp_tool, agent.mcp_tools.all())
-
-
 class RetrievalProfileAPITest(TestCase):
     def setUp(self):
         self.user = UserFactory()
@@ -441,40 +391,6 @@ class ToolAPITest(TestCase):
         resp = self.client.get("/api/tools/")
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(len(resp.json()), 1)
-
-
-class MCPServerAPITest(TestCase):
-    def setUp(self):
-        self.user = UserFactory()
-        self.project = ProjectFactory()
-        MembershipFactory(user=self.user, project=self.project, role="admin")
-        self.client = Client()
-        self.client.force_login(self.user)
-        self.client.session["active_project_id"] = self.project.id
-        self.session = self.client.session
-        self.session.save()
-
-    def test_create_mcp_server(self):
-        resp = self.client.post(
-            "/api/mcp-servers/",
-            data=json.dumps({
-                "name": "GitHub MCP",
-                "url": "http://localhost:9000/mcp",
-            }),
-            content_type="application/json",
-        )
-        self.assertEqual(resp.status_code, 201)
-        self.assertEqual(resp.json()["name"], "GitHub MCP")
-
-    def test_create_mcp_tool_under_server(self):
-        server = MCPServerFactory(project=self.project)
-        resp = self.client.post(
-            f"/api/mcp-servers/{server.id}/tools/",
-            data=json.dumps({"external_name": "search_repository"}),
-            content_type="application/json",
-        )
-        self.assertEqual(resp.status_code, 201)
-        self.assertEqual(resp.json()["external_name"], "search_repository")
 
 
 class AgentUITest(TestCase):

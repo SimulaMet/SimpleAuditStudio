@@ -14,8 +14,4 @@ urlpatterns = [
     path("knowledge-bases/<int:pk>/", agent_views.knowledge_base_detail, name="knowledge-base-detail"),
     path("tools/", agent_views.tools, name="tool-list"),
     path("tools/<int:pk>/", agent_views.tool_detail, name="tool-detail"),
-    path("mcp-servers/", agent_views.mcp_servers, name="mcp-server-list"),
-    path("mcp-servers/<int:pk>/", agent_views.mcp_server_detail, name="mcp-server-detail"),
-    path("mcp-servers/<int:server_pk>/tools/", agent_views.mcp_tools, name="mcp-tool-list"),
-    path("mcp-tools/<int:pk>/", agent_views.mcp_tool_detail, name="mcp-tool-detail"),
 ]
