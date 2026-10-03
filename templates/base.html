@@ -213,5 +213,35 @@
   matchMedia('(min-width: 768px)').addEventListener('change', e => { if (e.matches) setDrawer(false); });
 })();
 </script>
+<script>
+// Keep scroll position across same-page reloads (e.g. the ⟳ Sync buttons).
+// The app scrolls inside <main>, not the document, so the browser's native
+// scroll restoration can't help; remember it in localStorage instead.
+(function () {
+  const main = document.querySelector('main');
+  if (!main) return;
+  try {
+    const key = 'sa-scroll:' + location.pathname + location.search;
+    main.addEventListener('scroll', () => {
+      localStorage.setItem(key, String(main.scrollTop));
+    }, { passive: true });
+    window.addEventListener('beforeunload', () => {
+      localStorage.setItem(key, String(main.scrollTop));
+    });
+    if (history.scrollRestoration) history.scrollRestoration = 'manual';
+    const y = Number(localStorage.getItem(key)) || 0;
+    if (y > 0) {
+      // Retry across a few frames: the page may not be laid out on the first
+      // frame after a reload, so the scrollTop assignment would clamp to 0.
+      let tries = 0;
+      const step = () => {
+        main.scrollTop = y;
+        if (main.scrollTop < 1 && ++tries < 10) requestAnimationFrame(step);
+      };
+      requestAnimationFrame(step);
+    }
+  } catch (e) {}
+})();
+</script>
 </body>
 </html>
