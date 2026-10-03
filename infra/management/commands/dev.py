@@ -10,7 +10,9 @@ repo's ``.env``. It exists so the four run modes each have one command, and so
 
 ``dev`` is a thin alias of ``dev_server --embedded`` with the mode pinned. It
 accepts ``--disable-chat`` so chat (on by default in dev) can always be turned
-off — as can be done by ``SIMPLEAUDIT_CHAT=off`` in the environment.
+off — as can be done by ``SIMPLEAUDIT_CHAT=off`` in the environment. On start
+it prints a one-time sign-in link and opens the browser signed in (skip the
+pop-up with ``--no-browser``).
 """
 from __future__ import annotations
 
@@ -41,6 +43,11 @@ class Command(BaseCommand):
             "--no-reload", action="store_true",
             help="Disable the web server's auto-reloader (enabled by default).",
         )
+        parser.add_argument(
+            "--no-browser", action="store_true",
+            help="Do not open the default browser signed in; the one-time "
+                 "sign-in link is still printed.",
+        )
 
     def handle(self, *args, **options):
         # Chat on/off (flag > env > default) is decided in manage.py before
@@ -57,4 +64,5 @@ class Command(BaseCommand):
             no_worker=options["no_worker"],
             embedded=True,
             no_reload=options["no_reload"],
+            no_browser=options["no_browser"],
         )

@@ -73,7 +73,9 @@ uv run manage.py dev                 # web UI + API + worker + embedded queue + 
 `dev` is the named entry point for local development: single-process, SQLite,
 embedded Hatchet, hot-reloading web server, DEBUG on, reading `.env`. Every
 start applies migrations and makes sure the admin (a superuser) and default
-workspace exist, so pulling new code needs no extra steps. Keep in mind:
+workspace exist, so pulling new code needs no extra steps. On start it prints a
+**one-time sign-in link** and opens your browser signed in as the admin
+(`--no-browser` skips the pop-up; the link still works once). Keep in mind:
 
 - Only one `dev` / `dev_server --embedded` / `uvx simpleaudit-studio` can run at
   a time: they share the embedded queue database.
