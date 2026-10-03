@@ -111,7 +111,8 @@ class ResolveModeTests(unittest.TestCase):
         self.assertEqual(p.process, "multi-container")
         self.assertEqual(p.database, "postgres")
         self.assertEqual(p.queue, "external")
-        self.assertEqual(p.chat, "opt-in")
+        self.assertEqual(p.chat, "on")
+        self.assertEqual(p.chat_mode, "docker")
         self.assertFalse(p.debug)
 
     def test_as_dict(self):
@@ -186,8 +187,10 @@ class ChatPrecedenceTests(unittest.TestCase):
         self.assertEqual(runtime.effective_chat_mode("embedded"), "embedded")
         self.assertEqual(runtime.effective_chat_mode("single-docker"), "embedded")
 
-    def test_mode_default_off_for_compose(self):
-        self.assertEqual(runtime.effective_chat_mode("compose"), "off")
+    def test_mode_default_on_for_compose(self):
+        # Compose chat runs as the `docker` chat mode (web serves /chat/,
+        # open-webui + chat-proxy containers behind it).
+        self.assertEqual(runtime.effective_chat_mode("compose"), "docker")
 
     def test_disable_flag_beats_env_and_default(self):
         # The flag is an explicit opt-out and wins over a .env that pins chat
@@ -198,8 +201,8 @@ class ChatPrecedenceTests(unittest.TestCase):
         finally:
             os.environ.pop("SIMPLEAUDIT_CHAT", None)
 
-    def test_disable_flag_on_compose_default_off(self):
-        # Flag and compose default agree: off.
+    def test_disable_flag_beats_compose_default_on(self):
+        # The flag wins over compose's on-default: off.
         self.assertEqual(runtime.effective_chat_mode("compose", disable_flag=True), "off")
 
     def test_explicit_env_wins_over_default_without_flag(self):

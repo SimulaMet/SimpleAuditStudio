@@ -47,8 +47,10 @@ class ModeProfile:
     process: str       # "single" | "multi-container"
     database: str      # "sqlite" | "postgres"
     queue: str         # "embedded" | "external"
-    chat: str          # "on" | "opt-in" (per-mode default; the effective value
+    chat: str          # "on" | "off" (per-mode default; the effective value
                        # still honors SIMPLEAUDIT_CHAT / --disable-chat)
+    chat_mode: str     # the SIMPLEAUDIT_CHAT value the on-default uses:
+                       # "embedded" | "docker"
     debug: bool
 
     def as_dict(self) -> dict:
@@ -65,19 +67,23 @@ class ModeProfile:
 _PROFILES: dict[str, ModeProfile] = {
     "single-docker": ModeProfile(
         id="single-docker", process="single",
-        database="sqlite", queue="embedded", chat="on", debug=False,
+        database="sqlite", queue="embedded", chat="on",
+        chat_mode="embedded", debug=False,
     ),
     "compose": ModeProfile(
         id="compose", process="multi-container",
-        database="postgres", queue="external", chat="opt-in", debug=False,
+        database="postgres", queue="external", chat="on",
+        chat_mode="docker", debug=False,
     ),
     "embedded": ModeProfile(
         id="embedded", process="single",
-        database="sqlite", queue="embedded", chat="on", debug=False,
+        database="sqlite", queue="embedded", chat="on",
+        chat_mode="embedded", debug=False,
     ),
     "dev": ModeProfile(
         id="dev", process="single",
-        database="sqlite", queue="embedded", chat="on", debug=True,
+        database="sqlite", queue="embedded", chat="on",
+        chat_mode="embedded", debug=True,
     ),
 }
 
@@ -168,19 +174,20 @@ def effective_chat_mode(mode_id: str, disable_flag: bool = False) -> str:
     """The ``SIMPLEAUDIT_CHAT`` value an entry point should run with.
 
     Precedence (highest first): the ``--disable-chat`` flag, then an explicit
-    ``SIMPLEAUDIT_CHAT`` env value, then the mode default (on for the
-    single-process modes, off for compose). The flag wins over the environment
-    on purpose: a disable flag is an explicit, in-the-moment opt-out, so chat
-    stays *always* disableable even if a ``.env`` pins it on.
+    ``SIMPLEAUDIT_CHAT`` env value, then the mode default (on in every mode).
+    The flag wins over the environment on purpose: a disable flag is an
+    explicit, in-the-moment opt-out, so chat stays *always* disableable even
+    if a ``.env`` pins it on.
 
     Returns ``"off"`` or a chat mode (``"embedded"`` / ``"docker"``). The chat
     module still does the final interpretation of the value.
     """
+    profile = profile_for(mode_id)
     if disable_flag:
         return "off"
     env = (os.environ.get("SIMPLEAUDIT_CHAT") or "").strip().lower()
     if env:  # explicit env wins over the mode default
         return env
-    if profile_for(mode_id).chat != "on":
+    if profile.chat != "on":
         return "off"
-    return "embedded"
+    return profile.chat_mode

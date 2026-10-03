@@ -131,14 +131,15 @@ prints the one that is currently active.
 | `dev` | `uv run manage.py dev` | SQLite | embedded | on |
 | `embedded` | `uvx simpleaudit-studio` | SQLite | embedded | on |
 | `single-docker` | `docker run -p 8000:8000 -v sa-data:/data <image>` | SQLite | embedded | on |
-| `compose` | `docker compose up -d` | PostgreSQL 16 | hatchet container | opt-in |
+| `compose` | `docker compose up -d` | PostgreSQL 16 | hatchet container | on |
 
-Chat is **on by default** in the single-process modes (`dev`, `embedded`,
-`single-docker`) and can always be turned off — by env (`SIMPLEAUDIT_CHAT=off`)
-or CLI flag (`--disable-chat` / `--no-chat`). Precedence: the flag > the env
-value > the mode default — so `--disable-chat` wins even if a `.env` pins chat
-on. In `compose` it is opt-in (a separate container, gated by
-`COMPOSE_PROFILES=chat` in `.env`).
+Chat is **on by default in every mode** and can always be turned off — by env
+(`SIMPLEAUDIT_CHAT=off`) or CLI flag (`--disable-chat` / `--no-chat`).
+Precedence: the flag > the env value > the mode default — so `--disable-chat`
+wins even if a `.env` pins chat on. In `compose` it runs as two extra
+containers (`open-webui`, `chat-proxy`), enabled by `SIMPLEAUDIT_CHAT=docker`
+and `COMPOSE_PROFILES=chat` in `.env` (both on by default there); to run
+Compose without chat, comment both out or set `SIMPLEAUDIT_CHAT=off`.
 
 ```bash
 uv run manage.py dev --disable-chat       # dev without Open WebUI
@@ -161,7 +162,7 @@ cp .env.example .env
 docker compose up -d
 ```
 
-Services: Web UI (:8000), PostgreSQL, Hatchet queue (:8888), Worker. Chat (Open WebUI) is included via `.env`; optional profile `--profile mock` adds a mock model API.
+Services: Web UI (:8000), PostgreSQL, Hatchet queue (:8888), Worker, and Chat (Open WebUI + proxy, on by default — see below). Optional profile `--profile mock` adds a mock model API.
 
 See [docs/deployment.md](docs/deployment.md) for production hardening, backups, and upgrades.
 
@@ -170,13 +171,13 @@ See [docs/deployment.md](docs/deployment.md) for production hardening, backups, 
 SimpleAudit Studio embeds [Open WebUI](https://openwebui.com) at `/chat/`, signed
 in as your Studio user — workspace admins become Open WebUI admins.
 
-Chat is on by default in the single-process modes (`dev`, `embedded`,
-`single-docker`) and can always be turned off — by env (`SIMPLEAUDIT_CHAT=off`)
-or the `--disable-chat` / `--no-chat` flag. Precedence: the flag > the env
-value > the mode default, so `--disable-chat` wins even if a `.env` pins chat
-on. Docker Compose leaves chat out
-unless `.env` says otherwise — uncomment `SIMPLEAUDIT_CHAT` and
-`COMPOSE_PROFILES` in `.env.example` to include it:
+Chat is **on by default in every mode** and can always be turned off — by env
+(`SIMPLEAUDIT_CHAT=off`) or the `--disable-chat` / `--no-chat` flag. Precedence:
+the flag > the env value > the mode default, so `--disable-chat` wins even if
+a `.env` pins chat on. In Docker Compose chat runs as two extra containers
+(`open-webui`, `chat-proxy`), enabled by `SIMPLEAUDIT_CHAT=docker` and
+`COMPOSE_PROFILES=chat` in `.env` (both on by default there); to run Compose
+without chat, comment both out (or set `SIMPLEAUDIT_CHAT=off`):
 
 ```bash
 uv run manage.py dev                 # chat included
@@ -185,7 +186,7 @@ uv run manage.py dev --disable-chat  # without it
 uvx simpleaudit-studio               # chat included
 uvx simpleaudit-studio --disable-chat # without it
 
-docker compose up -d                 # chat only if enabled in .env
+docker compose up -d                 # chat included (on by default in .env)
 ```
 
 See [docs/chat.md](docs/chat.md) for how single sign-on works and what must stay

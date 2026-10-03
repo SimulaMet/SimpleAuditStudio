@@ -167,10 +167,10 @@ services:
     # instead of being printed once into a container nobody looks at.
     restart: unless-stopped
 
-  # Optional chat module. .env carries both switches (SIMPLEAUDIT_CHAT=docker so
-  # the web service serves /chat/, COMPOSE_PROFILES=chat so these two containers
-  # are part of a plain `docker compose up -d`); comment them out to leave chat
-  # out entirely. See infra/chat.py.
+  # Chat module — ON by default. .env carries both switches (SIMPLEAUDIT_CHAT=docker
+  # so the web service serves /chat/, COMPOSE_PROFILES=chat so these two
+  # containers are part of a plain `docker compose up -d`); comment them out to
+  # leave chat out entirely. See infra/chat.py.
   #
   # Open WebUI deliberately publishes NO port: chat-proxy is the only route to
   # it, because it trusts the identity headers on any request it receives.

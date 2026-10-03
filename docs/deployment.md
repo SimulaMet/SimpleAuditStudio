@@ -14,7 +14,7 @@ settings.
 | Process | single (hot-reload) | single | one container | multi-container |
 | Database | SQLite | SQLite | SQLite | PostgreSQL 16 |
 | Queue | embedded Hatchet | embedded Hatchet | embedded Hatchet | `hatchet-server` container |
-| Chat | on | on | on | opt-in (profile) |
+| Chat | on | on | on | on (profile) |
 | Web server | `runserver` :8000 | `runserver` :8000 | `runserver` :8000 | gunicorn :8000 |
 | Data | repo files + `.env` | `~/.simpleaudit-studio` | `/data` volume | Docker volumes |
 | DEBUG | on | off | off | off |
@@ -104,9 +104,17 @@ Services (`docker-compose.yml`):
 - `hatchet-server`: durable workflow engine (HTTP :8888, gRPC :7077).
 - `worker`: `manage.py run_worker`; runs audits, the stuck-run sweeper and monitor ticks.
 - `web`: migrate, `bootstrap_platform`, `seed_platform` (skip with `SEED_ON_BOOT=false`, or only the demo runs with `SEED_DEMO_AUDITS=false`), `collectstatic`, gunicorn.
+- `open-webui`, `chat-proxy` (profile `chat`, **on by default**): Open WebUI and its auth/LLM proxy, embedded at `/chat/` on the web service.
 - `mock-model` (profile `mock`): OpenAI-compatible mock server (`deploy/mock_openai_server.py`).
 
 `web` and `worker` build from `deploy/compose/Dockerfile`.
+
+Chat is on by default in Compose: `.env` ships with `SIMPLEAUDIT_CHAT=docker`
+(web serves `/chat/`) and `COMPOSE_PROFILES=chat` (starts the two chat
+containers). To run Compose without chat, comment out `COMPOSE_PROFILES=chat`
+and set `SIMPLEAUDIT_CHAT=off` in `.env`, then `docker compose up -d` again.
+(If your `.env` predates this change, add those two lines — compose chat used
+to be opt-in.)
 
 ## 5. Environment variables
 
@@ -128,7 +136,7 @@ override them when you deliberately need to.
 | `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_HOST`, `POSTGRES_PORT`, `POSTGRES_CONN_MAX_AGE` | PostgreSQL connection (`compose` mode). |
 | `SIMPLEAUDIT_LOCAL_SQLITE` **internal** | `1` = local SQLite database (`local_test.sqlite3`). Set by the single-process modes. |
 | `SIMPLEAUDIT_MINIMAL` **internal** | `1` = single-process demo mode. Set by the CLI. |
-| `SIMPLEAUDIT_CHAT` | Chat mode: `embedded` / `docker`, or `off` (and `disabled`, `false`, `no`, `0`, unset). On by default in single-process modes. Turn off with this var or the `--disable-chat` flag; the flag beats the env value (flag > env > mode default). |
+| `SIMPLEAUDIT_CHAT` | Chat mode: `embedded` / `docker`, or `off` (and `disabled`, `false`, `no`, `0`, unset). On by default in every mode (`embedded` in the single-process modes, `docker` in compose — set in `.env`). Turn off with this var or the `--disable-chat` flag; the flag beats the env value (flag > env > mode default). |
 | `SIMPLEAUDIT_DATA_DIR` | Where single-process mode keeps its data (default `~/.simpleaudit-studio`): the SQLite database and embedded Hatchet's PostgreSQL. |
 | `SIMPLEAUDIT_EMBEDDED_PG_DIR` | Override just embedded Hatchet's PostgreSQL directory (default `<data dir>/embedded-pg`). |
 | `HATCHET_SERVER_URL`, `HATCHET_GRPC_URL`, `HATCHET_API_KEY`, `HATCHET_TOKEN_FILE`, `HATCHET_TLS_STRATEGY` | External Hatchet connection (`compose` mode). |
