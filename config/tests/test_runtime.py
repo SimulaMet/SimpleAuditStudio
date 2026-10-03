@@ -83,7 +83,7 @@ class ResolveModeTests(unittest.TestCase):
         self.assertEqual(resolve_mode().id, "compose")
 
     def test_compose_not_inferred_when_sqlite(self):
-        # .env.local.example carries POSTGRES_* + HATCHET_* but SQLite wins.
+        # .env.dev.example carries POSTGRES_* + HATCHET_* but SQLite wins.
         os.environ["SIMPLEAUDIT_LOCAL_SQLITE"] = "1"
         os.environ["POSTGRES_HOST"] = "localhost"
         os.environ["POSTGRES_PORT"] = "5432"

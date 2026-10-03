@@ -110,7 +110,7 @@ chat being on by default, add those two lines to get it.)
 The one standard way to run the app while working on this repository:
 
 ```bash
-cp .env.local.example .env      # local settings (SQLite, local admin)
+cp .env.dev.example .env        # local settings (SQLite, local admin)
 uv sync --extra dev             # install the app + dev tools, once
 uv run manage.py setup_local    # first time only: create database + admin + sample data
 uv run manage.py dev            # start: web + worker + queue + chat → http://localhost:8000
