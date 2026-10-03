@@ -103,7 +103,7 @@ def _truthy(value: str | None) -> bool:
 def _compose_active() -> bool:
     """Heuristic: is this a Compose service? Compose runs Postgres + an external
     Hatchet. It is only inferred when we are clearly *not* in a SQLite /
-    single-process setup (which the ``.env.local.example`` otherwise mimics,
+    single-process setup (which the ``.env.dev.example`` otherwise mimics,
     since it carries POSTGRES_* and HATCHET_* values for later switching)."""
     if _truthy(os.environ.get("SIMPLEAUDIT_LOCAL_SQLITE")):
         return False
