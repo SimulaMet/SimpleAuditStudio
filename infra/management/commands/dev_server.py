@@ -1,26 +1,25 @@
 """Run the local dev web server + Hatchet worker together in one process.
 
-Combines the two daily-dev commands into one so you can start everything with a
-single line:
+This is the zero-Docker development stack: SQLite + an embedded Hatchet engine
++ (by default) the bundled chat, all in one process with a hot-reloading web
+server. The named entry point for it is ``manage.py dev``; ``dev_server
+--embedded`` is the same thing spelled out.
 
-    uv run manage.py dev_server
+    uv run manage.py dev                 # web + worker + embedded queue + chat
+    uv run manage.py dev --disable-chat  # same, without Open WebUI
 
-Equivalent to running, in parallel:
-    uv run manage.py runserver                 # web/API server
-    uv run manage.py run_worker --pool cpu     # audit execution worker
+On start it applies migrations and bootstraps the admin user (a superuser) and
+default workspace from BOOTSTRAP_* in `.env`, like the Compose web service and
+the uvx CLI do, so a local database never lags behind the code.
 
 The web server runs in a child process (with auto-reload on by default, like
 `manage.py runserver`); the worker runs in the main thread (required so its
 signal handlers receive Ctrl+C). Press Ctrl+C once to stop both cleanly.
 Pass --no-reload to disable auto-reload (web server then runs in a thread).
 
-On start it applies migrations and bootstraps the admin user (a superuser) and
-default workspace from BOOTSTRAP_* in `.env`, like the Compose web service and
-the uvx CLI do, so a local database never lags behind the code.
-
-With --embedded it starts its own Hatchet engine (zero-Docker). Without it, it
-uses the Postgres + Hatchet configured in `.env`; if Hatchet isn't reachable the
-worker retries on startup (see infra.worker.start_worker).
+`dev_server` used to also connect to external Postgres + Hatchet from `.env`
+when `--embedded` was omitted; that legacy path is removed. `--embedded` (or an
+explicit SIMPLEAUDIT_MODE) is required.
 """
 from __future__ import annotations
 
@@ -30,7 +29,7 @@ import threading
 import time
 
 from django.core.management import call_command
-from django.core.management.base import BaseCommand
+from django.core.management.base import BaseCommand, CommandError
 
 
 def _sync_chat_models() -> str:
@@ -82,10 +81,36 @@ class Command(BaseCommand):
         )
 
     def handle(self, *args, **options):
+        # The legacy non-embedded path (connect to external Postgres + Hatchet
+        # from .env) is removed: dev_server is a single-process, zero-Docker
+        # command. It needs --embedded, or an explicit single-process mode.
+        explicit_mode = (os.environ.get("SIMPLEAUDIT_MODE") or "").strip().lower()
+        if not options["embedded"] and not explicit_mode:
+            from config.runtime import VALID_MODES
+
+            raise CommandError(
+                "dev_server now requires zero-Docker mode. Use:\n"
+                "    manage.py dev                 (embedded, hot-reload, chat)\n"
+                "or set SIMPLEAUDIT_MODE to one of: "
+                + ", ".join(VALID_MODES)
+                + "."
+            )
+        if explicit_mode and explicit_mode not in {"dev", "embedded"}:
+            raise CommandError(
+                f"SIMPLEAUDIT_MODE={explicit_mode!r} is a container mode; "
+                "dev_server is single-process. Use `docker compose up` / `docker run` "
+                "for it, or run `manage.py dev` for local development."
+            )
+        os.environ.setdefault("SIMPLEAUDIT_MODE", "dev")
+
+        # Whether the embedded Hatchet engine runs (a single-process embedded
+        # mode with a worker): --embedded, or SIMPLEAUDIT_MODE in {dev, embedded}.
+        use_embedded = options["embedded"] or explicit_mode in {"dev", "embedded"}
+
         # Zero-Docker mode implies SQLite for the domain DB too. manage.py sets
         # SIMPLEAUDIT_LOCAL_SQLITE before settings load; if the command was
         # started another way without it, re-exec once with it set.
-        if options["embedded"] and not os.environ.get("SIMPLEAUDIT_LOCAL_SQLITE"):
+        if not os.environ.get("SIMPLEAUDIT_LOCAL_SQLITE"):
             os.environ["SIMPLEAUDIT_LOCAL_SQLITE"] = "1"
             os.execv(sys.executable, [sys.executable] + sys.argv)
 
@@ -96,6 +121,17 @@ class Command(BaseCommand):
         if options["pool"]:
             settings.WORKER_POOL = options["pool"]
 
+        # Chat is on by default in the single-process modes. manage.py has
+        # already frozen SIMPLEAUDIT_CHAT (flag > env > default) before
+        # django.setup(); this setdefault is a belt-and-braces fallback for
+        # any path that reached here without it set.
+        from config import runtime
+
+        os.environ.setdefault(
+            "SIMPLEAUDIT_CHAT",
+            runtime.effective_chat_mode(os.environ.get("SIMPLEAUDIT_MODE", "dev")),
+        )
+
         # Optional chat (Open WebUI + its forward-auth proxy). Only starts when
         # SIMPLEAUDIT_CHAT is enabled; a failed start never blocks the rest of
         # the stack, mirroring the uvx CLI.
@@ -105,7 +141,7 @@ class Command(BaseCommand):
         # and point the worker's shared client at it. Setting _CLIENT directly
         # avoids touching infra.worker.get_client() (which is gated on
         # SIMPLEAUDIT_MINIMAL, a settings-load-time flag we can't flip here).
-        if options["embedded"] and not options["no_worker"]:
+        if use_embedded and not options["no_worker"]:
             from infra import worker as _worker_mod
             from infra.minimal_config import start_embedded_hatchet
 

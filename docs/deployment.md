@@ -1,18 +1,28 @@
 # SimpleAudit Studio — Deployment
 
 Status: current (matches the code)  
-Date: 2026-09-28
+Date: 2026-10-03
 
-Three ways to run it. All of them run `migrate` on start and create the admin
-user and default workspace if missing.
+Four ways to run it. All of them run `migrate` on start and create the admin
+user and default workspace if missing. Each mode is one command;
+`uv run manage.py mode` prints the mode that is currently active and its
+settings.
 
-| | Demo / HF Space | Local development | Docker Compose |
-|---|---|---|---|
-| Start | `uvx simpleaudit-studio` or the root `Dockerfile` | `uv run manage.py dev_server --embedded` | `docker compose up -d` |
-| Database | SQLite | SQLite | PostgreSQL 16 |
-| Queue | embedded Hatchet (in-process) | embedded Hatchet | `hatchet-server` container |
-| Web server | `runserver` (port 7860 in the image, 8000 with uvx) | `runserver` :8000 | gunicorn :8000 |
-| Persistent data | no (HF Space storage is ephemeral) | local files | Docker volumes |
+| | `dev` | `embedded` | `single-docker` | `compose` |
+|---|---|---|---|---|
+| Start | `uv run manage.py dev` | `uvx simpleaudit-studio` | `docker run -p 8000:8000 -v sa-data:/data <image>` | `docker compose up -d` |
+| Process | single (hot-reload) | single | one container | multi-container |
+| Database | SQLite | SQLite | SQLite | PostgreSQL 16 |
+| Queue | embedded Hatchet | embedded Hatchet | embedded Hatchet | `hatchet-server` container |
+| Chat | on | on | on | opt-in (profile) |
+| Web server | `runserver` :8000 | `runserver` :8000 | `runserver` :8000 | gunicorn :8000 |
+| Data | repo files + `.env` | `~/.simpleaudit-studio` | `/data` volume | Docker volumes |
+| DEBUG | on | off | off | off |
+
+The local modes (`dev`, `embedded`) share mechanics — SQLite + embedded
+Hatchet + chat — and differ only in intent: `dev` runs your **source checkout**
+with auto-reload and DEBUG; `embedded` runs the **installed artifact**
+(`uvx`) with no reload.
 
 ## 1. Demo: uvx and the HF Space
 
@@ -38,24 +48,47 @@ The root `Dockerfile` builds the same thing for the Hugging Face Space
 (`DEMO_MODE=true`, user `studio` / `admin123`); override secrets in the Space
 settings. Data is lost when the Space restarts.
 
-## 2. Local development
+## 2. Local development (`dev`)
 
 ```bash
 cp .env.local.example .env
 uv sync --extra dev
 uv run manage.py setup_local            # migrate + admin (BOOTSTRAP_PASSWORD from .env) + seed
-uv run manage.py dev_server --embedded  # web + worker + embedded Hatchet → http://localhost:8000
+uv run manage.py dev                    # web + worker + embedded queue + chat → http://localhost:8000
 SIMPLEAUDIT_LOCAL_SQLITE=1 uv run manage.py test infra
 ```
 
-`dev_server` applies migrations and bootstraps the admin (a superuser) and the
-default workspace from `BOOTSTRAP_*` in `.env` every time it starts, like the
-Compose `web` service and the uvx CLI. Only one `dev_server --embedded` can run at a time: they share the embedded
-PostgreSQL directory (`~/.simpleaudit-studio/embedded-pg`, or
-`SIMPLEAUDIT_EMBEDDED_PG_DIR`). The worker does not auto-reload; restart
-`dev_server` after changing worker code.
+`dev` is the named entry point for local development (single-process, SQLite,
+embedded Hatchet, hot-reload, DEBUG, `.env`). It is a thin alias of
+`dev_server --embedded`; the mode is pinned to `dev` automatically.
 
-## 3. Docker Compose (production)
+`dev` applies migrations and bootstraps the admin (a superuser) and the default
+workspace from `BOOTSTRAP_*` in `.env` every time it starts, like the Compose
+`web` service and the uvx CLI. Only one `dev` / `dev_server --embedded` /
+`uvx` can run at a time: they share the embedded queue directory
+(`~/.simpleaudit-studio/embedded-pg`, or `SIMPLEAUDIT_EMBEDDED_PG_DIR`). The
+worker does not auto-reload; restart the dev server after changing worker code.
+
+Chat is on by default; `uv run manage.py dev --disable-chat` (or
+`SIMPLEAUDIT_CHAT=off`) turns it off. `uv run manage.py mode` prints the active
+mode and its settings.
+
+## 3. Single Docker (`single-docker`)
+
+The root `Dockerfile` builds the `embedded`/HF-Space bundle into one container
+(SQLite + embedded Hatchet + chat, single process). Point a named volume at
+`/data` to persist it:
+
+```bash
+docker build -t simpleaudit-studio .
+docker run -p 8000:8000 -v sa-data:/data simpleaudit-studio   # web → http://localhost:8000
+```
+
+(On Hugging Face Spaces the same image runs with `DEMO_MODE=true`, user
+`studio` / `admin123`; override secrets in the Space settings. Without a
+volume, data is lost when the container restarts.)
+
+## 4. Docker Compose (production)
 
 ```bash
 cp .env.example .env    # set POSTGRES_PASSWORD, BOOTSTRAP_PASSWORD, DJANGO_SECRET_KEY
@@ -73,23 +106,31 @@ Services (`docker-compose.yml`):
 
 `web` and `worker` build from `deploy/compose/Dockerfile`.
 
-## 4. Environment variables
+## 5. Environment variables
 
 Only these are read by the code.
 
+`SIMPLEAUDIT_MODE` is the single knob you set to pin the mode
+(`single-docker`, `compose`, `embedded`, `dev`); the entry points set it for
+you, and `manage.py mode` shows the resolved result. The flags marked
+**internal** are set by the entry points / `SIMPLEAUDIT_MODE` — you only
+override them when you deliberately need to.
+
 | Variable | Purpose |
 |---|---|
+| `SIMPLEAUDIT_MODE` | Pin the run mode: `single-docker`, `compose`, `embedded`, `dev`. See `manage.py mode`. |
 | `DJANGO_SECRET_KEY` | Required outside local SQLite mode. |
-| `DJANGO_DEBUG` | `true` for debugging only. |
+| `DJANGO_DEBUG` | `true` for debugging only. `dev` sets it; the others leave it off. |
 | `DJANGO_ALLOWED_HOSTS` | Comma-separated; default `*` (see security notes). |
 | `DJANGO_CSRF_TRUSTED_ORIGINS` | Extra trusted origins (full URLs). |
-| `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_HOST`, `POSTGRES_PORT`, `POSTGRES_CONN_MAX_AGE` | PostgreSQL connection. |
-| `SIMPLEAUDIT_LOCAL_SQLITE` | `1` = local SQLite database (`local_test.sqlite3`). |
-| `SIMPLEAUDIT_MINIMAL` | `1` = single-process demo mode (set by the CLI). |
+| `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_HOST`, `POSTGRES_PORT`, `POSTGRES_CONN_MAX_AGE` | PostgreSQL connection (`compose` mode). |
+| `SIMPLEAUDIT_LOCAL_SQLITE` **internal** | `1` = local SQLite database (`local_test.sqlite3`). Set by the single-process modes. |
+| `SIMPLEAUDIT_MINIMAL` **internal** | `1` = single-process demo mode. Set by the CLI. |
+| `SIMPLEAUDIT_CHAT` | Chat mode: `embedded` / `docker`, or `off` (and `disabled`, `false`, `no`, `0`, unset). On by default in single-process modes. Turn off with this var or the `--disable-chat` flag; the flag beats the env value (flag > env > mode default). |
 | `SIMPLEAUDIT_DATA_DIR` | Where single-process mode keeps its data (default `~/.simpleaudit-studio`): the SQLite database and embedded Hatchet's PostgreSQL. |
 | `SIMPLEAUDIT_EMBEDDED_PG_DIR` | Override just embedded Hatchet's PostgreSQL directory (default `<data dir>/embedded-pg`). |
-| `HATCHET_SERVER_URL`, `HATCHET_GRPC_URL`, `HATCHET_API_KEY`, `HATCHET_TOKEN_FILE`, `HATCHET_TLS_STRATEGY` | External Hatchet connection. |
-| `HATCHET_EMBEDDED_HANDSHAKE` | Set internally by `dev_server --embedded` so web and worker find the embedded engine; don't set it yourself. |
+| `HATCHET_SERVER_URL`, `HATCHET_GRPC_URL`, `HATCHET_API_KEY`, `HATCHET_TOKEN_FILE`, `HATCHET_TLS_STRATEGY` | External Hatchet connection (`compose` mode). |
+| `HATCHET_EMBEDDED_HANDSHAKE` **internal** | Set by `dev` / `dev_server --embedded` so web and worker find the embedded engine; don't set it yourself. |
 | `WORKER_POOL` | Worker label (`cpu` by default). |
 | `BOOTSTRAP_USERNAME`, `BOOTSTRAP_EMAIL`, `BOOTSTRAP_PASSWORD`, `BOOTSTRAP_PROJECT_NAME` | First admin user and workspace. |
 | `DEMO_MODE`, `DEMO_USERNAME`, `DEMO_PASSWORD` | Prefilled demo login and the HF iframe cookie/CSRF policy. |
@@ -98,25 +139,27 @@ Only these are read by the code.
 | `LOG_LEVEL`, `PORT` | Logging level; web port for the CLI. |
 | any name in a connection's `secret_reference` | Model API key read at execution time. |
 
-## 5. Management commands
+## 6. Management commands
 
 | Command | Does |
 |---|---|
-| `setup_local` | migrate + bootstrap + seed (local dev). |
+| `setup_local` | migrate + bootstrap + seed (local dev, one-shot). |
 | `bootstrap_platform` | Create the admin user and default workspace (idempotent). |
 | `seed_platform` | Import scenario packs and model connections, plus demo runs (`seed_demo_audits`). |
-| `dev_server [--embedded]` | Web + worker for development. |
+| `dev` | Local dev stack (embedded, hot-reload, chat). `--disable-chat`, `--no-worker`, `--no-reload`. |
+| `dev_server [--embedded]` | Same stack, spelled out. Requires `--embedded` or `SIMPLEAUDIT_MODE`; the legacy external-Postgres path is removed. |
+| `mode` | Print the resolved run mode and its settings. |
 | `run_worker` | Hatchet worker (Compose `worker`). |
 | `run_monitors` | One monitor pass, for an external cron if you don't run the worker sweeper. |
 | `purge_test_data` | Delete runs, scenario sets and models left by smoke tests (`--dry-run` first). |
 
-## 6. Operations
+## 7. Operations
 
 - **Health:** `/healthz` (liveness), `/readyz` (readiness), `/health/` (admin panel).
 - **Backups:** `docker compose exec postgres pg_dump -U simpleaudit simpleaudit > backup.sql`. Restore with `psql` into an empty database before starting `web`.
 - **Upgrades:** pull, `docker compose build`, `docker compose up -d`. Migrations run when `web` starts; take a backup first.
 
-## 7. Security notes
+## 8. Security notes
 
 - Set a strong `DJANGO_SECRET_KEY` and change `BOOTSTRAP_PASSWORD` (start-up
   checks reject empty values and `change-me`).

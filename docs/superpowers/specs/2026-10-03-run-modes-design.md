@@ -124,15 +124,15 @@ It can be turned **off in every mode**, independently, two ways:
   `SIMPLEAUDIT_CHAT=off` when given; `manage.py dev` gains the same flag and
   the same behavior.
 
-The flag takes precedence over the env default (an explicit opt-out beats the
-mode's on-by-default), but a user who explicitly sets `SIMPLEAUDIT_CHAT=embedded`
-in `.env` to force it on wins over a bare flag — the rule is: explicit env
-value > CLI flag > mode default. This keeps "always an option to disable chat"
-true without surprising anyone who pins chat on in `.env`.
+The **flag wins over the environment**, which wins over the mode default:
+`--disable-chat` > `SIMPLEAUDIT_CHAT` env value > mode default. A disable flag
+is an explicit, in-the-moment opt-out, so it must work even when a `.env` pins
+chat on. This keeps "always an option to disable chat" true in every mode.
 
-Implementation: `manage.py dev_server` / `manage.py dev` set
-`os.environ.setdefault("SIMPLEAUDIT_CHAT", "embedded")` only when it is unset
-and no disable flag was given. This is the direct fix for the motivating
+Implementation: `manage.py` resolves `SIMPLEAUDIT_CHAT` **before**
+`django.setup()` (where `chat.config.ENABLED` freezes at import time) for the
+single-process modes: `--disable-chat`/`--no-chat` → `off`; otherwise
+`setdefault("SIMPLEAUDIT_CHAT", "embedded")`. This is the direct fix for the motivating
 symptom (chat off by default on the dev path).
 
 ### 4. `manage.py dev` — the missing honest name
@@ -211,7 +211,7 @@ single-process modes.
 - `dev_server` legacy removal: assert `dev_server` with no `--embedded` and no
   `SIMPLEAUDIT_MODE` errors out and lists the four modes; assert
   `dev_server --embedded` still works and resolves to `dev`.
-- Chat disable in every mode: unit-test the precedence (explicit env value >
+- Chat disable in every mode: unit-test the precedence (flag > explicit env value >
   CLI flag > mode default) for `embedded` and `dev`.
 - `manage.py mode`: assert it renders the profile and exits 0 for each of the
   four modes (fixture env vars).

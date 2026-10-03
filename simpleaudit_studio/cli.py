@@ -80,6 +80,8 @@ def main() -> None:
 
     # Set local mode BEFORE Django reads settings
     os.environ["SIMPLEAUDIT_MINIMAL"] = "1"
+    # Pin the explicit mode so `manage.py mode` / resolve_mode() report "embedded".
+    os.environ.setdefault("SIMPLEAUDIT_MODE", "embedded")
     # Chat is part of the bundle; --disable-chat (or SIMPLEAUDIT_CHAT=disabled)
     # opts out.
     if args.disable_chat:
