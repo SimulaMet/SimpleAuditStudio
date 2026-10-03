@@ -13,15 +13,14 @@
 
 {% if chat_enabled %}
 {% if section == 'knowledge' and directory_url_enabled %}
-<div class="mb-2 flex items-start gap-2 text-xs text-gray-500">
+<div class="mb-2 flex items-center gap-3 text-xs text-gray-500">
   <span class="leading-relaxed">
-    <strong class="text-gray-400">Uploading a whole folder?</strong>
-    Chrome blocks the folder picker inside embedded pages, so use the full page
-    (opens in a new tab) — the rest works fine right here.
+    Folders, directory sync, and bulk upload live in the full workspace.
   </span>
   <a href="{{ directory_url }}" target="_blank" rel="noopener"
+     title="Opens the full Knowledge workspace in a new tab"
      class="shrink-0 rounded-md border border-gray-700 bg-gray-800 px-2 py-1 text-gray-200 hover:bg-gray-700">
-    Open to upload a folder &nearr;
+    Open full workspace &nearr;
   </a>
 </div>
 {% endif %}
