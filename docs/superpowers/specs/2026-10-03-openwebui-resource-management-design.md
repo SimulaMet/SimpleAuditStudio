@@ -19,20 +19,28 @@ chat/agent runtime that Open WebUI serves).
 ## 2. Goals
 
 - Let a signed-in Studio user **create, edit, and delete** Knowledge Bases, Tools, and
-  MCP Servers/Tools from within Studio.
-- Changes made in Studio are **pushed to Open WebUI** so the runtime sees them.
-- The existing **pull-sync** (Open WebUI → Studio models) continues to keep Studio's
-  local models fresh and is the source of truth for what an agent *can* reference.
+  MCP Servers/Tools **from within Studio** — by embedding Open WebUI's native admin UI,
+  scoped down to the relevant section.
+- **Delegate the heavy lifting to Open WebUI:** document upload, chunking, and MCP
+  configuration are handled by Open WebUI's own (polished) UI, not re-implemented in
+  Studio.
+- The existing **pull-sync** (Open WebUI → Studio models) keeps Studio's local models
+  fresh so the resources appear in the agent pickers.
 - Reuse the existing Open WebUI infrastructure (forward-auth proxy, `ChatAPI`, embedded
   process) — no new external services.
-- Stay robust across Open WebUI upgrades.
+- Surface the resource manager as a **submenu under "Agents"** in the sidebar, at
+  `/agents/resources/`.
 
 ## 3. Non-Goals (v1)
 
-- Replacing Open WebUI's own admin UI. Open WebUI remains the authoritative store.
+- Re-implementing Open WebUI's forms in Studio (that was Approach B; rejected in favor of
+  delegating to the iframe).
+- Studio **pushing** writes to Open WebUI — the iframe *is* the editor; Studio only reads
+  (pull-sync).
 - Fine-grained per-resource permissions beyond the existing project/workspace model.
 - Managing models/providers (already handled by the Models page + `push_connections`).
-- Managing chat settings, users, or other Open WebUI admin surfaces.
+- Managing chat settings, users, or other Open WebUI admin surfaces beyond the three
+  resource types.
 
 ## 4. Background: what already exists
 
@@ -45,54 +53,49 @@ chat/agent runtime that Open WebUI serves).
 | Local models | `model_registry/models.py` | `KnowledgeBase`, `Tool`, `MCPServer`, `MCPTool`, `RetrievalProfile`, `Agent` |
 | Agent UI | `infra/ui.py:AgentDetailView`, `agents/agent_detail.html` | Create/edit agent with pickers for KBs/tools/MCP |
 
-## 5. Design decision: native Studio forms (Approach B)
+## 5. Design decision: restricted iframe (Approach A) — delegate to Open WebUI
 
-> **Note on the original proposal.** The initial idea was to embed Open WebUI's admin
-> pages in an iframe and mask everything except the target section (Approach A). That is
-> technically feasible — the proxy already serves Studio's `embed.css` as Open WebUI's
-> `/static/custom.css`, which is how the chat page hides the sidebar. But the existing
-> `embed.css` comments document that this CSS-masking is fragile across Open WebUI
-> upgrades, and the admin pages have *more* chrome to hide than the chat page. This spec
-> therefore recommends native Studio forms (Approach B) as the primary path, and keeps the
-> iframe only as an "Open in Open WebUI" escape hatch. **If the native Open WebUI admin UI
-> is a hard requirement** (e.g. its file-upload UX), flip to Approach A — the push/pull API
-> layer in §7.1 is shared by both, so only the front-end changes.
+**Decision (confirmed with user):** use the **restricted iframe**. Studio embeds Open
+WebUI's native admin pages and masks everything except the target section. We do **not**
+re-implement Open WebUI's forms in Studio.
 
-### Options considered
+### Why A (per user direction)
 
-- **A. Restricted iframe** — embed Open WebUI's admin pages in an iframe and use a second
-  `embed.css` variant to mask all chrome except the target section.
-- **B. Native Studio forms** — Studio builds its own create/edit forms that call Open
-  WebUI's REST API via `ChatAPI` under the hood. *(chosen)*
-- **C. Hybrid** — native forms for create/edit, iframe only for a "preview in Open WebUI"
-  escape hatch.
+1. **Don't re-implement what Open WebUI already does well.** Open WebUI has polished,
+   battle-tested UIs for exactly these resources — most importantly **document upload and
+   chunking** for knowledge bases, and **MCP server configuration**. Rebuilding that in
+   Studio forms (Approach B) would be a large effort to replicate functionality we'd
+   rather inherit.
+2. **Delegate, don't duplicate.** The iframe *is* Open WebUI's UI, so it stays in sync
+   with Open WebUI's features for free. Studio's job is just to surface the right page,
+   scoped down, and keep its local models in step (the pull-sync already does this).
+3. **The masking mechanism already exists.** The proxy serves Studio's `embed.css` as
+   Open WebUI's `/static/custom.css` on every page — that's how the chat page hides the
+   sidebar. We extend this with a second, admin-oriented stylesheet.
 
-### Why B
+### The known trade-off (accepted)
 
-1. **Robustness.** The existing `embed.css` comments explicitly warn that CSS masking is
-   fragile: Open WebUI's DOM ids/classes change on upgrades, and a renamed id silently
-   re-exposes hidden UI. A second, more aggressive mask for the admin pages would be even
-   more fragile (admin pages have more chrome to hide). Native forms have no such coupling.
-2. **Consistency.** The `/agents/` pages already use Studio's design language. Native
-   forms match it; an embedded Open WebUI admin panel would look like a different app.
-3. **The hard part already exists.** `ChatAPI.request()` can POST/PUT/DELETE to any
-   `/api/v1/*` endpoint, and the pull-sync already maps Open WebUI items to local models.
-   We are adding the *push* direction and the forms on top of proven plumbing.
-4. **Scope control.** Native forms let us show exactly the fields we want and validate
-   them server-side, rather than trusting whatever Open WebUI's form accepts.
+CSS masking is **fragile across Open WebUI upgrades**: if Open WebUI renames a DOM id or
+class, a hidden element can silently reappear (the existing `embed.css` comments document
+this exact risk). We accept this trade-off in exchange for not re-implementing the forms.
+Mitigations:
+- Keep the admin mask **additive and targeted** (hide known chrome, don't try to allowlist
+  every pixel), so a missed element degrades gracefully rather than breaking the page.
+- Add a **visual-regression note** in the chat/Open WebUI upgrade checklist: after bumping
+  Open WebUI, load `/agents/resources/` and confirm the mask still hides the chrome.
+- The mask lives in one file (`chat/embed_admin.css`) so it's a single place to fix.
 
-### The iframe, kept as an escape hatch
+### What Studio still does (the thin part)
 
-We do **not** drop the iframe entirely. We keep a small **"Open in Open WebUI"** link on
-each resource (and a page-level link) that deep-links to the relevant Open WebUI admin
-page through the existing proxy. This covers the cases where Open WebUI's native UI offers
-something Studio's form doesn't (e.g. dragging files into a knowledge base), without making
-the fragile mask the primary path.
-
-> **Assumption (reversible):** if the user specifically wants Open WebUI's *native* admin
-> UI as the primary surface (e.g. because file-upload UX matters more than robustness),
-> this flips to Approach A. The spec is written so the push/pull API layer is shared by
-> both — only the front-end differs.
+- Serve the `/agents/resources/` page with the iframe + a slim Studio top bar (back link,
+  section tabs, a "Sync to Studio" button).
+- Point the iframe at the right Open WebUI admin page per section (knowledge / functions /
+  MCP).
+- Run the existing **pull-sync** so Studio's local `KnowledgeBase` / `Tool` / `MCPServer` /
+  `MCPTool` models reflect what the user created in Open WebUI — this is what makes the
+  resources appear in the agent pickers.
+- Keep an **"Open in Open WebUI"** full-window link (same deep-link, no iframe) as a
+  fallback if the mask ever breaks.
 
 ## 6. Architecture
 
@@ -100,17 +103,20 @@ the fragile mask the primary path.
 Browser
   │  (signed in to Studio)
   ▼
-Studio Django  ── new views: ResourceCreateView / ResourceEditView / ResourceDeleteView
-  │                    (one set per resource type, or a generic CRUD + serializer)
+Studio Django  ── new view: AgentResourcesView (serves /agents/resources/)
+  │                    renders the iframe page + slim top bar + section tabs
   │
-  │  ChatAPI.as_user(request.user)
+  │  iframe src = proxy origin + Open WebUI admin path (per section)
   ▼
-Forward-auth proxy (8801)  ── injects X-Studio-* identity headers
-  │
+Forward-auth proxy (8801)  ── identifies browser via /chat/authz, injects X-Studio-*
+  │                            headers, and serves chat/embed_admin.css as
+  │                            Open WebUI's /static/custom.css (the mask)
   ▼
-Open WebUI (8080)  ── /api/v1/knowledge/, /api/v1/functions/, /api/v1/mcp/
+Open WebUI (8080)  ── native admin pages: /knowledge, /functions, /mcp
+  │   (user creates/edits/deletes resources HERE, in Open WebUI's own UI)
   │
-  ▼  (pull-sync, existing)
+  │  pull-sync (existing, ChatAPI.as_user)
+  ▼
 Studio local models  (KnowledgeBase / Tool / MCPServer / MCPTool)
   │
   ▼
@@ -118,111 +124,144 @@ AgentDetailView pickers  (unchanged — they already list these models)
 ```
 
 Data flow:
-- **Create/edit in Studio** → view calls `ChatAPI` (push) → Open WebUI stores it → view
-  also `update_or_create`s the local model (or re-runs pull-sync) → agent pickers see it.
-- **Created directly in Open WebUI** → existing pull-sync picks it up on next agent-page
-  load (or a manual "Sync" button, which already exists at `/agents/sync/`).
+- **User creates/edits a resource** *inside the embedded Open WebUI* (its native UI —
+  upload, chunking, MCP config all handled by Open WebUI).
+- **Studio picks it up** via the existing pull-sync (`_sync_openwebui_resources`), which
+  runs on agent-page load and on the "Sync to Studio" button. This `update_or_create`s
+  the local models so the resource appears in the agent pickers.
+- **No push from Studio.** Studio never writes to Open WebUI for these resources — the
+  iframe *is* the editor. This is the core simplification vs. Approach B.
 
 ## 7. Components
 
-### 7.1 `ChatAPI` push methods (new, in `chat/api.py`)
+### 7.1 New view: `AgentResourcesView` (in `infra/ui.py`, next to the other agent views)
 
-Add thin wrappers over `request()` for the write operations, mirroring the existing
-read methods:
+A `ProjectMixin, TemplateView` that serves `/agents/resources/`. It:
+- 404s (or shows a "Chat is not enabled" state) when `chat_enabled()` is false — same
+  guard the chat views use.
+- Requires an authenticated user with an active project (the `ProjectMixin` already does
+  this).
+- Renders `agents/resources.html` with:
+  - the **section** (default `knowledge`; also `functions`, `mcp`) — from `?section=` or
+    the URL.
+  - the **iframe src**: `config.public_url(request)` + the Open WebUI admin path for that
+    section (see §7.4 for the paths).
+  - the **local model counts** for the section (so the top bar can show "3 knowledge
+    bases synced"), by querying the project's local models.
+- Runs `_sync_openwebui_resources(project, user)` on GET (same as `AgentDetailView`
+  already does), so the counts and agent pickers are fresh.
 
-- `create_knowledge(name, description, ...)` → `POST /api/v1/knowledge/`
-- `update_knowledge(kb_id, ...)` → `PUT /api/v1/knowledge/{id}/`
-- `delete_knowledge(kb_id)` → `DELETE /api/v1/knowledge/{id}/`
-- `create_function(name, description, parameters, code)` → `POST /api/v1/functions/`
-- `update_function(fn_id, ...)` / `delete_function(fn_id)`
-- `create_mcp_server(...)` / `update_mcp_server(...)` / `delete_mcp_server(...)`
-  (exact Open WebUI MCP endpoints to be confirmed against the running instance — see
-  Open Questions)
+### 7.2 The admin mask: `chat/embed_admin.css` (new file)
 
-Each returns the Open WebUI item dict; the view maps it to the local model. Errors raise
-`ChatAPIError`, which the view turns into a user-facing message (the resource was *not*
-created/changed in Open WebUI).
+A second stylesheet, served by the proxy **in place of** Open WebUI's `/static/custom.css`
+*when the request is for the admin embed*. It hides Open WebUI's app chrome (top nav,
+settings sidebar, model picker, etc.) and leaves only the target section's content area.
 
-> **Note:** the exact Open WebUI REST paths and payload shapes for functions and MCP
-> servers must be verified against the live instance (port 8080) before implementation.
-> Knowledge-base paths are already known (`/api/v1/knowledge/`). This is the main
-> implementation-time unknown and is isolated to `chat/api.py`.
+**How the proxy picks which CSS to serve.** Today `_serve_embed_css` always returns
+`chat/embed.css`. We extend it to choose based on the request: if the upstream request is
+for an admin path (or carries a marker Studio adds to the iframe URL, e.g.
+`?__studio_admin=1`), serve `embed_admin.css`; otherwise serve `embed.css` (chat). The
+marker-query approach is more robust than path-matching because it doesn't depend on
+Open WebUI's route strings. The proxy strips the marker before forwarding to upstream.
 
-### 7.2 Local model changes (likely none or minimal)
+> **Implementation note:** the exact selectors to hide depend on Open WebUI's current DOM.
+> This must be built and verified against the live instance (port 8080) — it is the main
+> implementation-time work item, and the part most likely to need re-tuning after an
+> Open WebUI upgrade.
 
-The local models already have `external_id` (used by pull-sync as the join key to Open
-WebUI). Push operations should set `external_id` to the id Open WebUI returns, so the
-next pull-sync reconciles correctly. If a model is missing a field the form needs (e.g. a
-tool's `code`/`parameters`), add it — but prefer reusing existing fields.
+### 7.3 Local model changes (none expected)
 
-### 7.3 New views (in `model_registry/agent_views.py` or a new `resource_views.py`)
+The local models already have `external_id` (the pull-sync join key). Since Studio no
+longer pushes, no new fields are needed. If the pull-sync doesn't yet cover MCP servers
+or tools fully, extend `_sync_openwebui_resources` to map them — but that's a sync
+completeness fix, not a model change.
 
-A small set of DRF API endpoints (matching the existing `retrieval_profiles` style) plus
-the HTML views/templates for the forms. Two sub-options:
+### 7.4 Open WebUI admin paths per section
 
-- **B1 (recommended): API + thin HTML forms.** Add DRF endpoints
-  (`POST/PUT/DELETE /api/resources/knowledge/`, etc.) that do the push + local
-  `update_or_create`. The HTML page calls them via `fetch`, exactly like the existing
-  `/agents/sync/` button. Keeps the push logic testable and reusable.
-- **B2: Server-rendered forms.** Classic Django form POSTs. Simpler, less JS, but the
-  push logic lives in the view.
+The iframe points at Open WebUI's native admin routes. Exact paths to be confirmed against
+the live instance; expected to be of the form:
+- Knowledge: `/settings/knowledge` (or `/knowledge`)
+- Functions/Tools: `/settings/functions` (or `/functions`)
+- MCP: `/settings/mcp` (or `/mcp`)
 
-B1 is preferred for consistency with the existing `/agents/sync/` JSON pattern.
+These are confirmed during implementation by loading the running Open WebUI and reading
+its routes. The view centralizes them in one dict so they're trivial to adjust.
 
-### 7.4 New UI surface
+### 7.5 "Open in Open WebUI" full-window fallback
 
-A **"Resources"** section under `/agents/` (e.g. `/agents/resources/`) with three tabs or
-sub-sections: Knowledge Bases, Tools, MCP Servers. Each lists the local models (already
-queryable by project) with Create / Edit / Delete / "Open in Open WebUI" actions. This
-reuses the `agents/` templates and the `ProjectMixin` pattern.
+A top-bar link that opens the same deep-link **without** the iframe (a normal navigation
+to the proxy origin). If the mask ever breaks on an upgrade, the user still has full
+access to Open WebUI's native UI. No new infra.
 
-### 7.5 "Open in Open WebUI" escape hatch
+### 7.6 Navigation: "Resources" as a submenu under Agents
 
-A link per resource that points at the proxy origin (via `config.public_url(request)`)
-deep-linked to the relevant Open WebUI admin page. No new infra — the proxy already
-handles auth and CSS.
+The sidebar (`templates/partials/sidebar.html` + `_NAV` in `infra/context_processors.py`)
+is currently a flat list. To nest "Resources" under "Agents":
+- Add a `resources` entry to `_NAV` with prefix `("/agents/resources/",)`.
+- In `sidebar.html`, render items whose prefix starts with `/agents/` (other than the
+  base `/agents/`) as an indented sub-item under the active "Agents" entry.
+- Active-state: the existing longest-prefix `score()` already handles highlighting the
+  right item; the sub-item highlights when on `/agents/resources/`.
+
+This keeps all agent-related surfaces (list, detail, resources) grouped under one
+"Agents" nav entry, as requested.
 
 ## 8. Error handling
 
-- **Open WebUI unreachable / chat disabled:** the resource page shows a clear "Chat is not
-  enabled — resources can't be managed" state (mirrors the existing `_sync_openwebui_resources`
-  `None` return and the `/agents/sync/` 400).
-- **Push fails (4xx/5xx from Open WebUI):** surface the `ChatAPIError` message; do **not**
-  update the local model (so Studio doesn't claim a resource exists that Open WebUI
-  rejected).
-- **Identity:** all calls go through `ChatAPI.as_user(request.user)`, so the user's own
-  Open WebUI permissions apply. A user without permission to create a KB in Open WebUI
-  gets the same 403 they'd get in the native UI.
+- **Chat disabled / Open WebUI unreachable:** the resource page shows a clear "Chat is not
+  enabled — resources can't be managed here" state (mirrors the existing
+  `_sync_openwebui_resources` `None` return and the `/agents/sync/` 400). The iframe is
+  not rendered.
+- **Mask breaks on an Open WebUI upgrade:** the page still loads (the iframe shows the
+  full Open WebUI admin page, just with some chrome visible). The "Open in Open WebUI"
+  full-window link is always available as a fallback. This is a graceful degradation, not
+  a failure — the user can still manage resources.
+- **Identity:** the iframe request goes through the forward-auth proxy, which identifies
+  the browser via `/chat/authz` and injects `X-Studio-*` headers. Open WebUI applies the
+  user's own permissions — a user who can't create a KB in Open WebUI sees the same
+  restriction inside the iframe as in the native UI.
+- **Pull-sync failure:** if `_sync_openwebui_resources` can't reach Open WebUI, the local
+  counts are stale but the page still renders (the iframe is independent of the sync).
 
 ## 9. Testing
 
-- **Unit (`chat/tests/`):** mock `ChatAPI.request` and assert the push methods hit the
-  right path/verb/payload and map the response to the local model.
-- **View tests (`model_registry/tests/` or `infra/tests/`):** create/edit/delete a
-  resource via the API endpoint with a mocked `ChatAPI`; assert the local model is
-  `update_or_create`d with the returned `external_id`, and that a failed push leaves the
-  local model unchanged.
-- **Disabled-chat path:** assert the resource endpoints return the "chat not enabled"
-  state when `SIMPLEAUDIT_CHAT` is off.
-- **Existing pull-sync tests** remain green (no behavior change).
+- **View test (`infra/tests/`):** `AgentResourcesView` returns 200 with the iframe for an
+  authenticated user with a project; returns the "chat not enabled" state when
+  `SIMPLEAUDIT_CHAT` is off; 404/redirects for an unauthenticated user.
+- **Proxy CSS-selection test (`chat/tests/`):** assert `_serve_embed_css` returns
+  `embed_admin.css` for a request carrying the admin marker and `embed.css` otherwise,
+  and that the marker is stripped before forwarding upstream.
+- **Pull-sync tests** remain green (no behavior change to `_sync_openwebui_resources`).
+- **Manual verification (documented, not automated):** after implementation, load
+  `/agents/resources/` in a browser and confirm (a) the mask hides Open WebUI's chrome,
+  (b) creating a KB/tool/MCP in the iframe appears in the agent pickers after sync, and
+  (c) the "Open in Open WebUI" link works. This manual step is the practical check for
+  the CSS mask, which is hard to unit-test.
 
-## 10. Open Questions (to resolve during/after review)
+## 10. Open Questions (to resolve during implementation)
 
-1. **Exact Open WebUI REST endpoints + payload shapes** for functions and MCP servers
-   (knowledge bases are known). Verify against the live instance on port 8080.
-2. **MCP scope:** does v1 need full MCP server *and* tool management, or just listing +
-   linking? (MCP is the least certain of the three.)
-3. **File upload for knowledge bases:** Open WebUI's KB creation involves uploading
-   documents. Does v1 support upload from Studio's form, or only create an empty KB +
-   "Open in Open WebUI" to add files?
-4. **Naming/URL:** confirm `/agents/resources/` vs. a top-level `/resources/`.
+1. **Exact Open WebUI admin routes** for knowledge / functions / MCP (expected
+   `/settings/knowledge`, `/settings/functions`, `/settings/mcp` — confirm against the
+   live instance on port 8080).
+2. **Exact DOM selectors** for the admin mask (`embed_admin.css`) — build and verify
+   against the live instance; this is the main work item.
+3. **MCP route availability:** confirm the running Open WebUI version exposes an MCP
+   admin page. If it doesn't, the MCP section links out full-window instead of embedding.
+4. **Marker mechanism:** confirm the `?__studio_admin=1` query marker is the cleanest way
+   to tell the proxy which CSS to serve (vs. path-matching), and that Open WebUI ignores
+   unknown query params on its admin routes.
 
 ## 11. Phasing
 
-- **Phase 1:** `ChatAPI` push methods + Knowledge Base create/edit/delete (end-to-end,
-  since KB paths are already known). Resource page shell with the KB tab.
-- **Phase 2:** Tools (functions) create/edit/delete.
-- **Phase 3:** MCP Servers/Tools (after endpoint shapes are confirmed).
-- **Phase 4:** "Open in Open WebUI" escape-hatch links + polish.
+- **Phase 1 — Page + Knowledge section:** `AgentResourcesView` + `agents/resources.html`
+  (iframe + top bar + tabs) + `embed_admin.css` mask for the knowledge page + nav
+  submenu. End-to-end: create a KB in the iframe → sync → see it in agent pickers.
+- **Phase 2 — Tools section:** point the iframe at the functions route; extend the mask;
+  verify tool sync.
+- **Phase 3 — MCP section:** point the iframe at the MCP route; extend the mask; verify
+  MCP sync (or full-window link if no embeddable MCP page).
+- **Phase 4 — Polish:** "Open in Open WebUI" fallback link, stale-count handling,
+  upgrade-checklist note for the mask.
 
-Each phase is independently shippable and testable.
+Each phase is independently shippable. Phase 1 is the critical path and proves the whole
+iframe + mask + sync loop before the other sections are added.
