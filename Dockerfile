@@ -1,14 +1,18 @@
 # =============================================================================
-# SimpleAudit Studio — Minimal Config (Hugging Face Space + local docker run)
+# SimpleAudit Studio — single-container image (local `docker run` + HF Space)
 #
 # Single-process image: Django web + embedded Hatchet + worker in one Python
 # process. No Postgres, no supervisord, no external services. SQLite for the
 # domain DB, embedded Postgres (sidecar binary) for Hatchet's queue.
 #
-# HF Spaces only build the root Dockerfile (no compose), so this IS the Space.
+# The container listens on 7860 (Hugging Face Spaces expect that port).
 #
 # Build:  docker build -t simpleaudit-studio .
-# Run:    docker run -p 7860:7860 simpleaudit-studio
+# Run:    docker run -d -p 8000:7860 -v sa-data:/data --name simpleaudit-studio simpleaudit-studio
+#         (web → http://localhost:8000, login studio / admin123 — override with
+#          -e BOOTSTRAP_PASSWORD=<strong> for anything shared)
+# All data (SQLite database, embedded queue, chat) lives in /data: mount a
+# named volume there to keep it across restarts and image updates.
 # =============================================================================
 
 FROM python:3.12-slim AS base
@@ -38,13 +42,17 @@ RUN pip install uv \
     && uv sync --frozen --no-install-project --no-dev
 ENV PATH="/app/.venv/bin:$PATH"
 
-# --- Environment defaults for the Space --------------------------------------
-# SIMPLEAUDIT_MINIMAL=1 enables the minimal config path (SQLite + embedded Hatchet).
-# Override via HF Space Secrets for anything sensitive.
-# Must be set BEFORE collectstatic: Django settings select the DB engine from it,
-# and the postgres driver is an optional extra not installed in this image.
+# --- Environment defaults -----------------------------------------------------
+# SIMPLEAUDIT_MINIMAL=1 enables the single-process path (SQLite + embedded
+# Hatchet); SIMPLEAUDIT_DATA_DIR points everything (database, embedded queue,
+# chat) at /data so a mounted volume persists it. PORT=7860 is what Hugging
+# Face Spaces expect. Override via `docker run -e ...` or HF Space environment
+# variables for anything sensitive.
+# Must be set BEFORE collectstatic: Django settings select the DB engine from
+# it, and the postgres driver is an optional extra not installed in this image.
 ENV SIMPLEAUDIT_MINIMAL=1 \
     PORT=7860 \
+    SIMPLEAUDIT_DATA_DIR=/data \
     DJANGO_SECRET_KEY=hf-space-demo-secret-key-change-in-production \
     DJANGO_DEBUG=false \
     DJANGO_ALLOWED_HOSTS=* \
@@ -63,9 +71,11 @@ COPY . .
 RUN python manage.py collectstatic --noinput
 
 # --- Non-root user ------------------------------------------------------------
+# /data is where a mounted named volume persists all app data; it must exist
+# and be writable by appuser before the user switch.
 RUN useradd --create-home appuser \
-    && mkdir -p /app/staticfiles \
-    && chown -R appuser:appuser /app
+    && mkdir -p /app/staticfiles /data \
+    && chown -R appuser:appuser /app /data
 USER appuser
 
 EXPOSE 7860
