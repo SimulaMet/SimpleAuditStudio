@@ -50,6 +50,26 @@ class AgentResourcesViewTest(TestCase):
         self.assertIn("__studio_admin=1", resp.content.decode())
         self.assertIn("Tools", resp.content.decode())
 
+    def test_knowledge_offers_top_level_directory_upload_link(self):
+        # showDirectoryPicker is blocked in the cross-origin embed, so the
+        # knowledge page must offer a top-level tab (no admin marker, no nonce)
+        # where the folder picker is permitted.
+        user = _member(self.project)
+        self._login(user)
+        resp = self.client.get("/agents/knowledge/")
+        html = resp.content.decode()
+        self.assertIn("Open to upload a folder", html)
+        self.assertIn('target="_blank"', html)
+        # The link points at the full page: no __studio_admin=1, opens Create.
+        self.assertIn('/workspace/knowledge?create=1"', html)
+
+    def test_tools_does_not_offer_directory_upload_link(self):
+        # Tools has no folder-upload flow, so no top-level escape hatch.
+        user = _member(self.project)
+        self._login(user)
+        resp = self.client.get("/agents/tools/")
+        self.assertNotIn("Open to upload a folder", resp.content.decode())
+
     def test_view_is_login_protected(self):
         resp = self.client.get("/agents/tools/")
         self.assertEqual(resp.status_code, 302)

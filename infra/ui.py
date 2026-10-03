@@ -2740,11 +2740,24 @@ class AgentResourcesView(ProjectMixin, TemplateView):
             # render guarantees the marker request actually goes to the proxy.
             # The SPA ignores unknown query params (path-based routing).
             import time
-            extra = "&create=1" if self.request.GET.get("create") == "1" else ""
+            create = self.request.GET.get("create") == "1"
+            extra = "&create=1" if create else ""
             ctx["iframe_src"] = (
                 f"{base}{self.SECTIONS[section]}"
                 f"?__studio_admin=1&t={int(time.time() * 1000)}{extra}"
             )
+            # "Upload directory" in the Knowledge create/edit modal uses the
+            # File System Access API (showDirectoryPicker), which browsers only
+            # allow in a top-level or same-origin frame. The embed is a
+            # cross-origin subframe, so that one button throws a SecurityError
+            # here. Offer a top-level tab on the same origin (the shared Studio
+            # cookie authenticates it), where the picker is permitted.
+            if section == "knowledge":
+                ctx["directory_url"] = f"{base}{self.SECTIONS[section]}?create=1"
+                ctx["directory_url_enabled"] = True
+            else:
+                ctx["directory_url"] = None
+                ctx["directory_url_enabled"] = False
             ctx["chat_enabled"] = True
         else:
             ctx["iframe_src"] = None
