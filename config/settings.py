@@ -31,6 +31,20 @@ def env_list(name: str, default: str = "") -> list[str]:
     return [item.strip() for item in raw.split(",") if item.strip()]
 
 
+def local_sqlite_path() -> Path:
+    """Domain-DB file for the local dev (SQLite) branch.
+
+    Defaults to ``<repo>/dev.sqlite3``. ``SIMPLEAUDIT_SQLITE_PATH``
+    overrides it: relative paths resolve from the repo root, absolute paths are
+    used as-is.
+    """
+    raw = os.environ.get("SIMPLEAUDIT_SQLITE_PATH", "").strip()
+    if not raw:
+        return BASE_DIR / "dev.sqlite3"
+    candidate = Path(raw)
+    return candidate if candidate.is_absolute() else BASE_DIR / candidate
+
+
 SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY", "change-me")
 DEBUG = env_bool("DJANGO_DEBUG", False)
 ALLOWED_HOSTS = env_list("DJANGO_ALLOWED_HOSTS", "*")
@@ -197,10 +211,15 @@ if MINIMAL_CONFIG:
         }
     }
 elif env_bool("SIMPLEAUDIT_LOCAL_SQLITE", False):
+    # Postgres is not selectable here — it is the Compose/deployment engine (see
+    # infra/minimal_config.py); the dev server is SQLite-first. The file location
+    # can be moved with SIMPLEAUDIT_SQLITE_PATH (see local_sqlite_path()).
+    _local_db = local_sqlite_path()
+    _local_db.parent.mkdir(parents=True, exist_ok=True)
     DATABASES = {
         "default": {
             "ENGINE": "django.db.backends.sqlite3",
-            "NAME": BASE_DIR / "local_test.sqlite3",
+            "NAME": _local_db,
             "OPTIONS": SQLITE_OPTIONS,
         }
     }
