@@ -23,6 +23,7 @@ explicit SIMPLEAUDIT_MODE) is required.
 """
 from __future__ import annotations
 
+import logging
 import os
 import sys
 import threading
@@ -30,6 +31,8 @@ import time
 
 from django.core.management import call_command
 from django.core.management.base import BaseCommand, CommandError
+
+logger = logging.getLogger(__name__)
 
 
 def _open_browser_when_ready(url: str, port: int, timeout: float = 30.0) -> None:
@@ -332,7 +335,7 @@ class Command(BaseCommand):
 
             stop_open_webui()
         except Exception:  # chat teardown must never block shutdown
-            pass
+            logger.exception("Chat teardown skipped")
 
     def prepare_database(self):
         """Apply migrations and make sure the bootstrap admin (a superuser) exists."""
