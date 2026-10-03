@@ -1,0 +1,49 @@
+/* Studio admin embed stylesheet.
+ *
+ * Served as Open WebUI's /static/custom.css *for workspace/admin requests*
+ * (the proxy picks this file over chat/embed.css when the request carries the
+ * ?__studio_admin=1 marker). Goal: show only the target workspace section
+ * (Knowledge, Tools, ...) with no Open WebUI tab nav or chrome, so the iframe
+ * reads as a Studio page.
+ *
+ * This file is served INSTEAD of chat/embed.css for admin requests, so it must
+ * carry every hook that still applies in the workspace context. The workspace
+ * pages have no chat sidebar, but the "Open Sidebar" toggle button is present
+ * and must stay hidden (same hook as embed.css).
+ *
+ * DRIFT RISK: the tab-nav selector below is structural (main#main-content >
+ * div > nav) because Open WebUI gives that <nav> no id or aria-label, only
+ * Tailwind classes. An upgrade that changes the DOM depth or adds a sibling
+ * nav will silently re-expose the tab bar. Detection is visual: if the
+ * Models/Knowledge/Prompts/Skills/Tools tab bar reappears at the top of the
+ * embedded frame, re-check the workspace DOM and update the selector. The
+ * #workspace-container id is the stable "keep" hook — if it is renamed, the
+ * whole section disappears, which is loud and easy to spot.
+ */
+
+/* The workspace tab nav (Models / Knowledge / Prompts / Skills / Tools).
+ * Structural: it is the first <nav> inside the first child of
+ * main#main-content. Hiding it leaves only the section content. */
+main#main-content > div > nav {
+  display: none !important;
+}
+
+/* Redundant fallback: the tab nav is the only element with this class combo,
+ * so a DOM-depth change is not enough to re-expose it. */
+nav.backdrop-blur-xl.drag-region {
+  display: none !important;
+}
+
+/* The "Open Sidebar" toggle in the workspace top bar. Same stable id as in
+ * chat/embed.css; the workspace has no chat sidebar, but the button is present
+ * and would open a blank gap, so it goes. */
+#sidebar-toggle-button {
+  display: none !important;
+}
+
+/* Keep the section content filling the frame. The workspace container is the
+ * stable "keep" hook; give it the full height so the masked frame has no dead
+ * space where the tab bar was. */
+#workspace-container {
+  height: 100% !important;
+}
