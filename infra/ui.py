@@ -2740,9 +2740,10 @@ class AgentResourcesView(ProjectMixin, TemplateView):
             # render guarantees the marker request actually goes to the proxy.
             # The SPA ignores unknown query params (path-based routing).
             import time
+            extra = "&create=1" if self.request.GET.get("create") == "1" else ""
             ctx["iframe_src"] = (
                 f"{base}{self.SECTIONS[section]}"
-                f"?__studio_admin=1&t={int(time.time() * 1000)}"
+                f"?__studio_admin=1&t={int(time.time() * 1000)}{extra}"
             )
             ctx["chat_enabled"] = True
         else:
@@ -2860,6 +2861,9 @@ class AgentDetailView(ProjectMixin, TemplateView):
         ctx["models"] = RegisteredModel.objects.filter(project=project, enabled=True).select_related("connection")
         ctx["knowledge_bases"] = KnowledgeBase.objects.filter(project=project, enabled=True)
         ctx["tools"] = Tool.objects.filter(project=project, enabled=True)
+        # Gate the "+ New" deep links: without the chat proxy there is no
+        # embedded workspace to create in.
+        ctx["chat_enabled"] = chat_enabled()
         ctx["retrieval_profiles"] = RetrievalProfile.objects.filter(project=project)
         ctx["capability_options"] = [
             {"key": "knowledge_search", "label": "Knowledge Search"},
