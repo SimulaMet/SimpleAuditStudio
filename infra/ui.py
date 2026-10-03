@@ -2701,6 +2701,48 @@ class AgentsView(ProjectMixin, TemplateView):
         return ctx
 
 
+class AgentResourcesView(ProjectMixin, TemplateView):
+    """Restricted-iframe resource manager.
+
+    Embeds Open WebUI's workspace admin (Knowledge / Tools) in an iframe,
+    masked to the target section by chat/embed_admin.css. The iframe points at
+    the chat proxy with the ?__studio_admin=1 marker so the proxy serves the
+    admin sheet. Studio never writes here; the pull-sync keeps local models
+    fresh.
+    """
+
+    template_name = "agents/resources.html"
+
+    # section -> Open WebUI workspace route (verified against the live instance)
+    SECTIONS = {
+        "knowledge": "/workspace/knowledge",
+        "tools": "/workspace/tools",
+    }
+    DEFAULT_SECTION = "knowledge"
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        section = self.request.GET.get("section", self.DEFAULT_SECTION)
+        if section not in self.SECTIONS:
+            section = self.DEFAULT_SECTION
+        ctx["section"] = section
+        ctx["sections"] = [
+            {"key": "knowledge", "label": "Knowledge"},
+            {"key": "tools", "label": "Tools"},
+        ]
+        from chat import config as chat_config
+        if getattr(chat_config, "ENABLED", False):
+            base = chat_config.public_url(self.request)
+            ctx["iframe_src"] = f"{base}{self.SECTIONS[section]}?__studio_admin=1"
+            ctx["open_webui_url"] = f"{base}{self.SECTIONS[section]}"
+            ctx["chat_enabled"] = True
+        else:
+            ctx["iframe_src"] = None
+            ctx["open_webui_url"] = None
+            ctx["chat_enabled"] = False
+        return ctx
+
+
 def _sync_openwebui_resources(project, user):
     """Pull knowledge bases and tools from OpenWebUI into local models.
 
