@@ -1576,6 +1576,18 @@ wheels = [
 ]
 
 [[package]]
+name = "opentelemetry-proto"
+version = "1.45.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "protobuf" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/72/28/67c38cfb7e2bdfdd0cde7dcdd0424aed0291fbd64aa4ea3e7e913734711a/opentelemetry_proto-1.45.0.tar.gz", hash = "sha256:96ee414f24bc3f61ea8e17dc56b4348d4049d73db3eb17c6b3edf75b5b403300", size = 46489, upload-time = "2026-09-25T12:32:41.409Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/6b/45/814d55714507c7ce9c9cd86a4f83ceb5a74ab0bffcc63ff493943f138de2/opentelemetry_proto-1.45.0-py3-none-any.whl", hash = "sha256:9731566359d7b8e1ee1e149d8e4ad6865bab965e657ad3387ec2784d16927666", size = 72486, upload-time = "2026-09-25T12:32:23.36Z" },
+]
+
+[[package]]
 name = "packaging"
 version = "26.3"
 source = { registry = "https://pypi.org/simple" }
@@ -2385,21 +2397,39 @@ wheels = [
 [[package]]
 name = "simpleaudit"
 version = "0.3.0"
-source = { registry = "https://pypi.org/simple" }
+source = { editable = "/Users/sushantgautam/Documents/SimpleAudit" }
 dependencies = [
     { name = "any-llm-sdk" },
     { name = "fsspec" },
     { name = "tqdm" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/db/48/fb7a0c1d8e1da2d6b373368e206a4896f46a922e234dfa81d01cca57095d/simpleaudit-0.3.0.tar.gz", hash = "sha256:7d9e3eac601c3b7b269722e8fd5220bbdfb05926aedddbd298ac4b3cc3eec272", size = 1478360, upload-time = "2026-10-01T22:20:09.744Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/7f/f8/ab4719d9689f87b1c926a2884e65b3c6784292ffa14c0388c63e331f4071/simpleaudit-0.3.0-py3-none-any.whl", hash = "sha256:b6f2495797c19bb18aebedb006dcfe7283ac154737406aaca5fc025559aa9557", size = 1361595, upload-time = "2026-10-01T22:20:08.092Z" },
+
+[package.metadata]
+requires-dist = [
+    { name = "aiohttp", marker = "extra == 'tracing'", specifier = ">=3.9" },
+    { name = "any-llm-sdk", specifier = ">=1.14.0" },
+    { name = "black", marker = "extra == 'dev'", specifier = ">=23.0.0" },
+    { name = "fastapi", marker = "extra == 'visualize'", specifier = ">=0.104.0" },
+    { name = "fsspec", specifier = ">=2023.1.0" },
+    { name = "grpcio", marker = "extra == 'tracing'", specifier = ">=1.60" },
+    { name = "matplotlib", marker = "extra == 'plot'", specifier = ">=3.5.0" },
+    { name = "opentelemetry-proto", marker = "extra == 'tracing'", specifier = ">=1.20" },
+    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8,<9" },
+    { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.21.0" },
+    { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=4.0.0" },
+    { name = "pytest-testmon", marker = "extra == 'dev'", specifier = ">=2,<3" },
+    { name = "pytest-xdist", marker = "extra == 'dev'", specifier = ">=3.6,<3.8" },
+    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.1.0" },
+    { name = "simpleaudit", extras = ["plot", "visualize", "dev"], marker = "extra == 'all'" },
+    { name = "tqdm", specifier = ">=4.66.0" },
+    { name = "uvicorn", extras = ["standard"], marker = "extra == 'visualize'", specifier = ">=0.24.0" },
 ]
+provides-extras = ["tracing", "plot", "visualize", "dev", "all"]
 
 [[package]]
 name = "simpleaudit-studio"
 version = "0.5.3"
-source = { editable = "." }
+source = { virtual = "." }
 dependencies = [
     { name = "cronsim" },
     { name = "django" },
@@ -2407,6 +2437,7 @@ dependencies = [
     { name = "drf-spectacular" },
     { name = "hatchet-sdk" },
     { name = "httpx" },
+    { name = "opentelemetry-proto" },
     { name = "psutil" },
     { name = "pydantic" },
     { name = "python-dotenv" },
@@ -2446,6 +2477,7 @@ requires-dist = [
     { name = "gunicorn", marker = "extra == 'server'", specifier = "==23.0.0" },
     { name = "hatchet-sdk", specifier = "==1.41.0" },
     { name = "httpx", specifier = ">=0.27" },
+    { name = "opentelemetry-proto", specifier = ">=1.45.0" },
     { name = "playwright", marker = "extra == 'e2e'", specifier = ">=1.45" },
     { name = "psutil", specifier = ">=7.2.2" },
     { name = "psycopg", extras = ["binary"], marker = "extra == 'postgres'", specifier = "==3.2.13" },
@@ -2459,7 +2491,7 @@ requires-dist = [
     { name = "requests", specifier = "==2.32.5" },
     { name = "ruff", marker = "extra == 'dev'" },
     { name = "sentry-sdk", extras = ["django"], specifier = ">=2.0" },
-    { name = "simpleaudit", specifier = "==0.3.0" },
+    { name = "simpleaudit", editable = "/Users/sushantgautam/Documents/SimpleAudit" },
     { name = "workos", specifier = "==10.4.0" },
 ]
 provides-extras = ["postgres", "server", "dev", "e2e"]

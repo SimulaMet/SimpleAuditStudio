@@ -307,6 +307,119 @@ class RunScenarioTracingWiringTest(TestCase):
 
         self.assertIsNone(_collect_evidence_spans(_NoTraces(), object()))
 
+    def test_collect_evidence_spans_settles_late_arriving_spans(self):
+        from infra.engine import _collect_evidence_spans
+
+        class _DelayedProvider:
+            """First fetch returns one span; the next returns a second one —
+            the remote exporter's batched flush."""
+
+            def __init__(self):
+                self.calls = 0
+
+            def fetch(self, trace_id):
+                self.calls += 1
+                spans = [{"span_id": "a", "name": "POST /x", "kind": "SPAN_KIND_SERVER",
+                          "start_time": 1.0, "end_time": 2.0}]
+                if self.calls > 1:
+                    spans.append({"span_id": "b", "name": "model call", "kind": "SPAN_KIND_CLIENT",
+                                  "start_time": 1.1, "end_time": 2.5})
+                return spans
+
+        class _Corr:
+            def all_trace_ids(self):
+                return ["t1"]
+
+        spans = _collect_evidence_spans(_Corr(), _DelayedProvider(), settle_timeout=5.0)
+        self.assertIsNotNone(spans)
+        self.assertEqual({s["span_id"] for s in spans}, {"a", "b"})
+
+    def test_collect_evidence_spans_settles_from_empty(self):
+        """Remote exporters can flush the whole batch only after the model
+        call returns: the first fetches are empty, then all spans appear."""
+        from infra.engine import _collect_evidence_spans
+
+        class _EmptyThenBurstProvider:
+            def __init__(self):
+                self.calls = 0
+
+            def fetch(self, trace_id):
+                self.calls += 1
+                if self.calls <= 3:
+                    return []
+                return [{"span_id": "a", "name": "POST /x", "kind": "SPAN_KIND_SERVER",
+                         "start_time": 1.0, "end_time": 2.0}]
+
+        class _Corr:
+            def all_trace_ids(self):
+                return ["t1"]
+
+        spans = _collect_evidence_spans(_Corr(), _EmptyThenBurstProvider(), settle_timeout=5.0)
+        self.assertIsNotNone(spans)
+        self.assertEqual({s["span_id"] for s in spans}, {"a"})
+
+    def test_collect_evidence_spans_settle_verification_catches_final_batch(self):
+        """Observed live (run 21): the first batch arrives, the span set goes
+        quiet, and the final batch of a ~5s-interval exporter lands ~2s
+        later. The delayed verification pass must catch it."""
+        import time as _t
+
+        from infra.engine import _collect_evidence_spans
+
+        class _FinalBatchLateProvider:
+            """Two early fetches return only span a; the batch with span b
+            lands ~2s after the first fetch (between the settle's quiet
+            check and the delayed verification pass)."""
+
+            def __init__(self):
+                self.t0 = _t.monotonic()
+                self.calls = 0
+
+            def fetch(self, trace_id):
+                self.calls += 1
+                spans = [{"span_id": "a", "name": "POST /x", "kind": "SPAN_KIND_SERVER",
+                          "start_time": 1.0, "end_time": 2.0}]
+                if _t.monotonic() - self.t0 >= 2.5:
+                    spans.append({"span_id": "b", "name": "model call",
+                                  "kind": "SPAN_KIND_CLIENT",
+                                  "start_time": 1.1, "end_time": 2.5})
+                return spans
+
+        class _Corr:
+            def all_trace_ids(self):
+                return ["t1"]
+
+        spans = _collect_evidence_spans(_Corr(), _FinalBatchLateProvider(), settle_timeout=5.0)
+        self.assertIsNotNone(spans)
+        self.assertEqual({s["span_id"] for s in spans}, {"a", "b"})
+
+    def test_connection_noise_is_dropped_from_evidence(self):
+        from infra.engine import _drop_connection_noise
+
+        spans = [
+            {"span_id": "1", "name": "connect", "kind": "SPAN_KIND_CLIENT",
+             "start_time": 1.0, "end_time": 1.0},
+            {"span_id": "2", "name": "DNS Lookup", "kind": "SPAN_KIND_CLIENT",
+             "start_time": 1.0, "end_time": 1.0},
+            {"span_id": "3", "name": "GET", "kind": "SPAN_KIND_CLIENT",
+             "start_time": 1.0, "end_time": 1.0004},
+            {"span_id": "4", "name": "GET /favicon.ico", "kind": "SPAN_KIND_CLIENT",
+             "start_time": 1.0, "end_time": 1.0004},  # named GET survives
+            {"span_id": "5", "name": "POST /api/v1/chat/completions", "kind": "SPAN_KIND_SERVER",
+             "start_time": 1.0, "end_time": 5.9},
+            {"span_id": "6", "name": "POST https://gateway/v1/chat/completions", "kind": "SPAN_KIND_CLIENT",
+             "start_time": 1.1, "end_time": 5.9},
+        ]
+        kept = _drop_connection_noise(spans)
+        self.assertEqual([s["span_id"] for s in kept], ["4", "5", "6"])
+
+    def test_connection_noise_kept_when_everything_is_noise(self):
+        from infra.engine import _drop_connection_noise
+
+        spans = [{"span_id": "1", "name": "connect", "kind": "SPAN_KIND_CLIENT",
+                  "start_time": 1.0, "end_time": 1.0}]
+        self.assertEqual(_drop_connection_noise(spans), spans)
+
 
 class StudioTraceProviderTest(TestCase):
     """StudioTraceProvider reads the run's spans from the listener's persisted
