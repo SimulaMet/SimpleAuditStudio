@@ -37,7 +37,7 @@ Open <http://localhost:8000>. Try the [live demo](https://sushantgautam-simpleau
 ```bash
 git clone https://github.com/SimulaMet/SimpleAuditStudio
 cd SimpleAuditStudio
-cp .env.local.example .env
+cp .env.dev.example .env
 uv sync --extra dev
 uv run manage.py setup_local
 uv run manage.py dev

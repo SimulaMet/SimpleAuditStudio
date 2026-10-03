@@ -8,7 +8,7 @@ at <http://localhost:8000>, prepares the database, and creates the admin user
 and default workspace when needed.
 
 | # | Setup | Start with | Data |
-|---|-----|---------------------|----------|----------|
+|---|------|---------------------|----------|
 | 1 | **Quick run** | `uvx simpleaudit-studio@latest` | `~/.simpleaudit-studio/` |
 | 2 | **Docker** | `docker build ...` then `docker run ...` | Docker volume |
 | 3 | **Compose** | `cp .env.example .env` then `docker compose up -d` | Docker volumes |
@@ -110,7 +110,7 @@ chat being on by default, add those two lines to get it.)
 The one standard way to run the app while working on this repository:
 
 ```bash
-cp .env.local.example .env      # local settings (SQLite, local admin)
+cp .env.dev.example .env        # local settings (SQLite, local admin)
 uv sync --extra dev             # install the app + dev tools, once
 uv run manage.py setup_local    # first time only: create database + admin + sample data
 uv run manage.py dev            # start: web + worker + queue + chat → http://localhost:8000
@@ -166,7 +166,8 @@ override them when you deliberately need to.
 | `DJANGO_ALLOWED_HOSTS` | Comma-separated; default `*` (see security notes). |
 | `DJANGO_CSRF_TRUSTED_ORIGINS` | Extra trusted origins (full URLs). |
 | `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_HOST`, `POSTGRES_PORT`, `POSTGRES_CONN_MAX_AGE` | PostgreSQL connection (`compose` mode). |
-| `SIMPLEAUDIT_LOCAL_SQLITE` **internal** | `1` = local SQLite database at the repository's `local_test.sqlite3`. Set automatically by the `dev` entry point and by the test suite. |
+| `SIMPLEAUDIT_LOCAL_SQLITE` **internal** | `1` = local SQLite database at the repository's `dev.sqlite3`. Set automatically by the `dev` entry point and by the test suite. |
+| `SIMPLEAUDIT_SQLITE_PATH` | Override where the local dev SQLite file lives. Default: `<repo>/dev.sqlite3`. Relative paths resolve from the repo root; absolute paths are used as-is. Ignored unless `SIMPLEAUDIT_LOCAL_SQLITE=1`. |
 | `SIMPLEAUDIT_MINIMAL` **internal** | `1` = single-process demo mode. Set by the CLI. |
 | `SIMPLEAUDIT_CHAT` | Chat mode: `embedded` / `docker`, or `off` (and `disabled`, `false`, `no`, `0`, unset). On by default in every mode (`embedded` in the single-process modes, `docker` in compose — set in `.env`). Turn off with this var or the `--disable-chat` flag; the flag beats the env value (flag > env > mode default). |
 | `SIMPLEAUDIT_DATA_DIR` | Where single-process mode keeps its data (default `~/.simpleaudit-studio`): the SQLite database and embedded Hatchet's PostgreSQL. |
