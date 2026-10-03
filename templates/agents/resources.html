@@ -12,6 +12,19 @@
 </div>
 
 {% if chat_enabled %}
+{% if section == 'knowledge' and directory_url_enabled %}
+<div class="mb-2 flex items-start gap-2 text-xs text-gray-500">
+  <span class="leading-relaxed">
+    <strong class="text-gray-400">Uploading a whole folder?</strong>
+    Chrome blocks the folder picker inside embedded pages, so use the full page
+    (opens in a new tab) — the rest works fine right here.
+  </span>
+  <a href="{{ directory_url }}" target="_blank" rel="noopener"
+     class="shrink-0 rounded-md border border-gray-700 bg-gray-800 px-2 py-1 text-gray-200 hover:bg-gray-700">
+    Open to upload a folder &nearr;
+  </a>
+</div>
+{% endif %}
 <iframe class="resources-frame w-full rounded-xl border border-gray-800 bg-white"
         src="{{ iframe_src }}"></iframe>
 {% else %}
