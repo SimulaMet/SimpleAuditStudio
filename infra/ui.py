@@ -2753,7 +2753,7 @@ class AgentResourcesView(ProjectMixin, TemplateView):
             # here. Offer a top-level tab on the same origin (the shared Studio
             # cookie authenticates it), where the picker is permitted.
             if section == "knowledge":
-                ctx["directory_url"] = f"{base}{self.SECTIONS[section]}?create=1"
+                ctx["directory_url"] = f"{base}{self.SECTIONS[section]}"
                 ctx["directory_url_enabled"] = True
             else:
                 ctx["directory_url"] = None
