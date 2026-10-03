@@ -85,21 +85,32 @@ class Command(BaseCommand):
         # from .env) is removed: dev_server is a single-process, zero-Docker
         # command. It needs --embedded, or an explicit single-process mode.
         explicit_mode = (os.environ.get("SIMPLEAUDIT_MODE") or "").strip().lower()
-        if not options["embedded"] and not explicit_mode:
-            from config.runtime import VALID_MODES
+        if not options["embedded"] and explicit_mode:
+            # An explicit mode must be one dev_server can actually run
+            # (single-process); unknown and container modes get clear errors.
+            from config.runtime import SINGLE_PROCESS_MODES, VALID_MODES
+
+            if explicit_mode not in VALID_MODES:
+                raise CommandError(
+                    f"SIMPLEAUDIT_MODE={explicit_mode!r} is not a valid mode. "
+                    "Valid modes: " + ", ".join(VALID_MODES) + "."
+                )
+            if explicit_mode not in SINGLE_PROCESS_MODES:
+                raise CommandError(
+                    f"SIMPLEAUDIT_MODE={explicit_mode!r} is a container mode; "
+                    "dev_server is single-process. Use `docker compose up` / "
+                    "`docker run` for it, or run `manage.py dev` for local "
+                    "development."
+                )
+        elif not options["embedded"]:
+            from config.runtime import SINGLE_PROCESS_MODES
 
             raise CommandError(
                 "dev_server now requires zero-Docker mode. Use:\n"
                 "    manage.py dev                 (embedded, hot-reload, chat)\n"
                 "or set SIMPLEAUDIT_MODE to one of: "
-                + ", ".join(VALID_MODES)
-                + "."
-            )
-        if explicit_mode and explicit_mode not in {"dev", "embedded"}:
-            raise CommandError(
-                f"SIMPLEAUDIT_MODE={explicit_mode!r} is a container mode; "
-                "dev_server is single-process. Use `docker compose up` / `docker run` "
-                "for it, or run `manage.py dev` for local development."
+                + ", ".join(SINGLE_PROCESS_MODES)
+                + ".\n(Container modes run via docker: see `docs/deployment.md`.)"
             )
         os.environ.setdefault("SIMPLEAUDIT_MODE", "dev")
 

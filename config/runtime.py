@@ -109,6 +109,35 @@ def _compose_active() -> bool:
     return bool(pg_host and pg_port and has_hatchet)
 
 
+#: Modes that run as a single OS process on the host machine (no Docker).
+SINGLE_PROCESS_MODES = ("dev", "embedded")
+
+#: CLI flags that opt out of chat for one command run.
+CHAT_DISABLE_FLAGS = ("--disable-chat", "--no-chat")
+
+
+def has_chat_disable_flag(argv) -> bool:
+    """Whether ``argv`` carries an explicit opt-out of chat."""
+    return any(flag in argv for flag in CHAT_DISABLE_FLAGS)
+
+
+def is_single_process_run(command, argv) -> bool:
+    """Whether this ``manage.py`` run is a single-process (no-Docker) one.
+
+    True for the ``dev`` command, ``dev_server --embedded``, or any command
+    with ``SIMPLEAUDIT_MODE`` in the single-process set — so the env-var
+    spelling gets the same behavior (SQLite, chat on by default) as the flag.
+    Read from the live environment; correct pre-``django.setup()`` because
+    ``load_dotenv`` already ran.
+    """
+    mode = (os.environ.get("SIMPLEAUDIT_MODE") or "").strip().lower()
+    if mode in SINGLE_PROCESS_MODES:
+        return True
+    if command == "dev":
+        return True
+    return command == "dev_server" and "--embedded" in argv
+
+
 def resolve_mode() -> ModeProfile:
     """Return the resolved :class:`ModeProfile`.
 
