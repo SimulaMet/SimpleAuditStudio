@@ -64,7 +64,9 @@ embedded Hatchet, hot-reload, DEBUG, `.env`). It is a thin alias of
 
 `dev` applies migrations and bootstraps the admin (a superuser) and the default
 workspace from `BOOTSTRAP_*` in `.env` every time it starts, like the Compose
-`web` service and the uvx CLI. Only one `dev` / `dev_server --embedded` /
+`web` service and the uvx CLI. On start it prints a one-time sign-in link
+(`/auto-login/?token=...`, single use) and opens the browser signed in;
+`--no-browser` skips the pop-up. Only one `dev` / `dev_server --embedded` /
 `uvx` can run at a time: they share the embedded queue directory
 (`~/.simpleaudit-studio/embedded-pg`, or `SIMPLEAUDIT_EMBEDDED_PG_DIR`). The
 worker does not auto-reload; restart the dev server after changing worker code.
@@ -146,7 +148,7 @@ override them when you deliberately need to.
 | `setup_local` | migrate + bootstrap + seed (local dev, one-shot). |
 | `bootstrap_platform` | Create the admin user and default workspace (idempotent). |
 | `seed_platform` | Import scenario packs and model connections, plus demo runs (`seed_demo_audits`). |
-| `dev` | Local dev stack (embedded, hot-reload, chat). `--disable-chat`, `--no-worker`, `--no-reload`. |
+| `dev` | Local dev stack (embedded, hot-reload, chat, one-time sign-in). `--disable-chat`, `--no-worker`, `--no-reload`, `--no-browser`. |
 | `dev_server [--embedded]` | Same stack, spelled out. Requires `--embedded` or `SIMPLEAUDIT_MODE`; the legacy external-Postgres path is removed. |
 | `mode` | Print the resolved run mode and its settings. |
 | `run_worker` | Hatchet worker (Compose `worker`). |

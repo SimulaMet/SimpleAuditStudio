@@ -32,6 +32,32 @@ from django.core.management import call_command
 from django.core.management.base import BaseCommand, CommandError
 
 
+def _open_browser_when_ready(url: str, port: int, timeout: float = 30.0) -> None:
+    """Wait until the web server answers, then open `url` in the default browser.
+
+    `url` is the one-time /auto-login/?token=... link (see auto_login_view).
+    Readiness is polled on /healthz (unauthenticated) so the single-use token
+    is not consumed by the probe. Runs in a daemon thread; any failure just
+    prints a hint. Mirrors the uvx CLI's behavior.
+    """
+    import requests
+
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            if requests.get(f"http://localhost:{port}/healthz", timeout=2).status_code == 200:
+                break
+        except requests.RequestException:
+            time.sleep(0.5)
+    else:
+        print(f"⚠️  Web UI did not come up within {timeout:.0f}s — open {url} manually.")
+        return
+    import webbrowser
+
+    if not webbrowser.open(url):
+        print(f"⚠️  Could not open a browser automatically — visit {url} manually.")
+
+
 def _sync_chat_models() -> str:
     """Give the freshly-started chat Studio's model connections, and say how it went.
 
@@ -78,6 +104,11 @@ class Command(BaseCommand):
         parser.add_argument(
             "--no-reload", action="store_true",
             help="Disable the web server's auto-reloader (enabled by default).",
+        )
+        parser.add_argument(
+            "--no-browser", action="store_true",
+            help="Do not open the default browser signed in; the one-time "
+                 "sign-in link is still printed.",
         )
 
     def handle(self, *args, **options):
@@ -160,6 +191,20 @@ class Command(BaseCommand):
             _worker_mod._CLIENT = start_embedded_hatchet()
             print("✅ Embedded Hatchet ready — no external Postgres/Hatchet needed.\n")
 
+        # One-time sign-in link (like the uvx CLI): /auto-login/?token=... signs
+        # the browser in as the bootstrap user, single use. The token must be in
+        # the environment BEFORE the web process starts, so the runserver child
+        # (which serves the endpoint) inherits it.
+        auto_login_url = ""
+        if use_embedded:
+            import secrets
+
+            os.environ["SIMPLEAUDIT_AUTO_LOGIN_TOKEN"] = secrets.token_urlsafe(32)
+            auto_login_url = (
+                f"http://localhost:{options['port']}/auto-login/?"
+                f"token={os.environ['SIMPLEAUDIT_AUTO_LOGIN_TOKEN']}"
+            )
+
         # --- Web server in a separate process ---
         # Auto-reload is on by default (like `manage.py runserver`). Django's
         # reloader installs signal handlers, which only work in a process's main
@@ -197,6 +242,18 @@ class Command(BaseCommand):
             f"{chat_line}"
             f"   Press Ctrl+C to stop.\n"
         ))
+        if auto_login_url:
+            self.stdout.write(self.style.SUCCESS(
+                f"🔑 One-time sign-in link: {auto_login_url}\n"
+                f"   (signs you in as {username}; works exactly once — "
+                f"pass --no-browser to skip the browser opening.)\n"
+            ))
+            if not options["no_browser"]:
+                threading.Thread(
+                    target=_open_browser_when_ready,
+                    args=(auto_login_url, options["port"]),
+                    daemon=True,
+                ).start()
 
         if options["no_worker"]:
             # Block forever on the main thread; stop the web server child (if any)

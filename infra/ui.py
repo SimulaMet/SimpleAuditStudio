@@ -190,16 +190,22 @@ def logout_view(request):
 def auto_login_view(request):
     """One-click, one-time sign-in for the local one-liner demo.
 
-    The CLI generates a single-use token at startup, prints it, and opens
-    ``/auto-login/?token=...`` in the default browser. The token is checked in
-    constant time and consumed on first use, so the URL cannot be replayed by
-    another machine on the LAN (the demo server binds 0.0.0.0).
-    Only enabled in MINIMAL_CONFIG (local demo) mode — 404 everywhere else.
+    The CLI/dev server generates a single-use token at startup, prints it,
+    and opens ``/auto-login/?token=...`` in the default browser. The token is
+    checked in constant time and consumed on first use, so the URL cannot be
+    replayed by another machine on the LAN (the local servers bind 0.0.0.0).
+    Only enabled in the zero-Docker local modes — ``MINIMAL_CONFIG`` (the uvx
+    demo) or ``SIMPLEAUDIT_LOCAL_SQLITE=1`` (``manage.py dev``) — and 404
+    everywhere else, so a deployed container never exposes it.
     """
     from django.conf import settings
     from django.http import Http404
 
-    if not getattr(settings, "MINIMAL_CONFIG", False):
+    local_mode = (
+        getattr(settings, "MINIMAL_CONFIG", False)
+        or os.environ.get("SIMPLEAUDIT_LOCAL_SQLITE", "").strip() in {"1", "true", "yes", "on"}
+    )
+    if not local_mode:
         raise Http404
     token = request.GET.get("token", "")
     expected = os.environ.get("SIMPLEAUDIT_AUTO_LOGIN_TOKEN", "")
