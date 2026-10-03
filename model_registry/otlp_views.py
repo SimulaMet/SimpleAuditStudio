@@ -14,6 +14,9 @@ Two kinds of endpoints live here:
 """
 from __future__ import annotations
 
+import base64
+import json
+
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from rest_framework.decorators import api_view, permission_classes
@@ -123,6 +126,48 @@ def clear_target_spans(target_id: str) -> None:
 # ─── Ingestion (machine-to-machine) ─────────────────────────────────────────
 
 
+def _otlp_body_to_dict(body: bytes, content_type: str | None) -> dict:
+    """Decode an OTLP trace-export body into the OTLP/HTTP-JSON dict shape.
+
+    Returns a dict parseable by :func:`simpleaudit.tracing.otlp.parse_otlp_json`
+    (int64 timestamps stay strings; that module already handles both int and
+    string nanosecond values).
+    """
+    ctype = (content_type or "").lower()
+    if "protobuf" in ctype or "octet-stream" in ctype:
+        from google.protobuf.json_format import MessageToDict
+        from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import (
+            ExportTraceServiceRequest,
+        )
+
+        req = ExportTraceServiceRequest()
+        req.ParseFromString(body)
+        d = MessageToDict(req, preserving_proto_field_name=False)
+        # protobuf JSON encodes bytes (traceId/spanId/parentSpanId) as base64,
+        # while the OTLP/HTTP JSON spec uses lowercase hex. The rest of the
+        # pipeline (TraceCorrelation, traceparent, OtlpSpan) is hex-based, so
+        # normalize to hex here.
+        _hexify_id_fields(d)
+        return d
+    return json.loads(body)
+
+
+def _hexify_id_fields(node) -> None:
+    """Recursively convert protobuf-JSON base64 id fields to hex in place."""
+    if isinstance(node, dict):
+        for key, value in node.items():
+            if key in ("traceId", "spanId", "parentSpanId") and isinstance(value, str) and value:
+                try:
+                    node[key] = base64.b64decode(value).hex()
+                except Exception:  # noqa: BLE001,S110 - not base64 (already hex); leave as-is
+                    pass
+            else:
+                _hexify_id_fields(value)
+    elif isinstance(node, list):
+        for item in node:
+            _hexify_id_fields(item)
+
+
 @csrf_exempt
 def otlp_traces(request):
     """Accept an OTLP/HTTP-JSON trace export from an authenticated target.
@@ -130,6 +175,11 @@ def otlp_traces(request):
     Auth: ``Authorization: Basic base64(user:pass)`` or ``Bearer <token>``.
     Returns the OTLP ack (200) on success, 401 on auth failure, 405 on a
     non-POST. Spans are tagged with the credential's ``target_id``.
+
+    Accepts both OTLP/HTTP wire formats — ``http/json`` and ``http/protobuf``.
+    OpenWebUI's exporter picks the wire format from ``OTEL_OTLP_SPAN_EXPORTER``
+    and ignores ``OTEL_EXPORTER_OTLP_PROTOCOL``, so targets configured per the
+    standard OTel env-var docs still post protobuf.
     """
     if request.method != "POST":
         return JsonResponse({"error": {"code": "method_not_allowed", "message": "Use POST."}}, status=405)
@@ -162,10 +212,11 @@ def otlp_traces(request):
     try:
         from simpleaudit.tracing.otlp import parse_otlp_json
 
-        # Parse the export, tag each span with the authenticated target so it's
-        # attributable, then normalize into the shared SpanStore (the same
-        # schema the run path and the judge's evidence selection use).
-        raw_spans = parse_otlp_json(request.body)
+        # Parse the export (JSON or protobuf), tag each span with the
+        # authenticated target so it's attributable, then normalize into the
+        # shared SpanStore (the same schema the run path and the judge's
+        # evidence selection use).
+        raw_spans = parse_otlp_json(_otlp_body_to_dict(request.body, request.headers.get("Content-Type")))
         for span in raw_spans:
             attrs = span.get("attributes")
             if attrs is None:
