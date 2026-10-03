@@ -13,14 +13,11 @@
 
 {% if chat_enabled %}
 {% if section == 'knowledge' and directory_url_enabled %}
-<div class="mb-2 flex items-center gap-3 text-xs text-gray-500">
-  <span class="leading-relaxed">
-    Folders, directory sync, and bulk upload live in the full workspace.
-  </span>
+<div class="mb-2">
   <a href="{{ directory_url }}" target="_blank" rel="noopener"
      title="Opens the full Knowledge workspace in a new tab"
-     class="shrink-0 rounded-md border border-gray-700 bg-gray-800 px-2 py-1 text-gray-200 hover:bg-gray-700">
-    Open full workspace &nearr;
+     class="inline-flex items-center gap-1.5 rounded-md border border-gray-700 bg-gray-800 px-2.5 py-1 text-xs text-gray-200 hover:bg-gray-700 transition-colors">
+    📁 Folders, directory sync &amp; bulk upload &nearr;
   </a>
 </div>
 {% endif %}

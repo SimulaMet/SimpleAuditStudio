@@ -58,10 +58,13 @@ class AgentResourcesViewTest(TestCase):
         self._login(user)
         resp = self.client.get("/agents/knowledge/")
         html = resp.content.decode()
-        self.assertIn("Open full workspace", html)
+        self.assertIn("Folders, directory sync", html)
         self.assertIn('target="_blank"', html)
-        # The link points at the full page: no __studio_admin=1, opens Create.
-        self.assertIn('/workspace/knowledge?create=1"', html)
+        # The link points at the plain full page — the href is
+        # ".../workspace/knowledge" with no query string at all (unlike the
+        # iframe src, which carries ?__studio_admin=1&t=).
+        self.assertIn("/workspace/knowledge\"", html)
+        self.assertNotIn("?create=1", html)
 
     def test_tools_does_not_offer_full_workspace_link(self):
         # Tools has no folder-upload flow, so no full-workspace escape hatch.
