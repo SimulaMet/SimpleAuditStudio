@@ -121,6 +121,63 @@ class ResolveModeTests(unittest.TestCase):
         self.assertTrue(d["debug"])
 
 
+class SingleProcessRunTests(unittest.TestCase):
+    """manage.py pre-setup detection: which runs get SQLite + chat defaults."""
+
+    def setUp(self):
+        self._saved = {k: os.environ.get(k) for k in ("SIMPLEAUDIT_MODE",)}
+        os.environ.pop("SIMPLEAUDIT_MODE", None)
+
+    def tearDown(self):
+        for k, v in self._saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+    def test_dev_command(self):
+        self.assertTrue(runtime.is_single_process_run("dev", ["manage.py", "dev"]))
+
+    def test_dev_server_embedded_flag(self):
+        self.assertTrue(
+            runtime.is_single_process_run(
+                "dev_server", ["manage.py", "dev_server", "--embedded"]
+            )
+        )
+
+    def test_env_mode_dev(self):
+        # The env spelling must match the flag spelling exactly.
+        os.environ["SIMPLEAUDIT_MODE"] = "dev"
+        self.assertTrue(runtime.is_single_process_run("dev_server", ["manage.py", "dev_server"]))
+
+    def test_env_mode_embedded(self):
+        os.environ["SIMPLEAUDIT_MODE"] = "embedded"
+        self.assertTrue(runtime.is_single_process_run("dev_server", ["manage.py", "dev_server"]))
+
+    def test_env_mode_case_insensitive(self):
+        os.environ["SIMPLEAUDIT_MODE"] = "  Dev "
+        self.assertTrue(runtime.is_single_process_run("dev_server", ["manage.py", "dev_server"]))
+
+    def test_container_mode_env_not_single_process(self):
+        os.environ["SIMPLEAUDIT_MODE"] = "compose"
+        self.assertFalse(runtime.is_single_process_run("dev_server", ["manage.py", "dev_server"]))
+        os.environ["SIMPLEAUDIT_MODE"] = "single-docker"
+        self.assertFalse(runtime.is_single_process_run("dev_server", ["manage.py", "dev_server"]))
+
+    def test_bare_dev_server_not_single_process(self):
+        self.assertFalse(runtime.is_single_process_run("dev_server", ["manage.py", "dev_server"]))
+
+    def test_other_commands_not_single_process(self):
+        self.assertFalse(runtime.is_single_process_run("migrate", ["manage.py", "migrate"]))
+        self.assertFalse(runtime.is_single_process_run(None, ["manage.py"]))
+
+    def test_chat_disable_flag_variants(self):
+        self.assertTrue(runtime.has_chat_disable_flag(["dev", "--disable-chat"]))
+        self.assertTrue(runtime.has_chat_disable_flag(["dev", "--no-chat"]))
+        self.assertFalse(runtime.has_chat_disable_flag(["dev", "--no-worker"]))
+        self.assertFalse(runtime.has_chat_disable_flag(["dev"]))
+
+
 class ChatPrecedenceTests(unittest.TestCase):
     """Flag > explicit env value > mode default (chat on for single-process)."""
 

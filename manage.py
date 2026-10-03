@@ -20,24 +20,26 @@ def main() -> None:
     os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings")
     command = sys.argv[1] if len(sys.argv) > 1 else None
     argv = sys.argv
-    # Zero-Docker modes are `dev` and `dev_server --embedded`.
-    embedded_mode = command == "dev" or (
-        command == "dev_server" and "--embedded" in argv
-    )
+    # Single-process (no-Docker) runs: `dev`, `dev_server --embedded`, or an
+    # explicit SIMPLEAUDIT_MODE in {dev, embedded} (the env spelling must
+    # behave exactly like the flag). config.runtime is dependency-free.
+    from config import runtime
+
+    if command == "dev":
+        os.environ.setdefault("SIMPLEAUDIT_MODE", "dev")
+    single_process = runtime.is_single_process_run(command, argv)
     # Zero-Docker modes imply SQLite for the domain DB. Decide before Django
     # loads settings: a Postgres `.env` would otherwise make settings import
     # the Postgres driver first.
-    if command == "dev":
-        os.environ.setdefault("SIMPLEAUDIT_MODE", "dev")
-    if embedded_mode:
+    if single_process:
         os.environ.setdefault("SIMPLEAUDIT_LOCAL_SQLITE", "1")
-    # Chat (Open WebUI) is on by default in the single-process modes and must
-    # always be disableable — by the --disable-chat/--no-chat flag (which wins)
-    # or SIMPLEAUDIT_CHAT=off in the environment. Precedence: flag > env >
-    # default. This must happen BEFORE django.setup(), because
-    # chat.config.ENABLED is frozen the moment the chat app is imported.
-    if embedded_mode:
-        if "--disable-chat" in argv or "--no-chat" in argv:
+        # Chat (Open WebUI) is on by default in the single-process modes and
+        # must always be disableable — by the --disable-chat/--no-chat flag
+        # (which wins) or SIMPLEAUDIT_CHAT=off in the environment.
+        # Precedence: flag > env > default. This must happen BEFORE
+        # django.setup(), because chat.config.ENABLED is frozen the moment
+        # the chat app is imported.
+        if runtime.has_chat_disable_flag(argv):
             os.environ["SIMPLEAUDIT_CHAT"] = "off"  # explicit flag beats .env
         else:
             os.environ.setdefault("SIMPLEAUDIT_CHAT", "embedded")
