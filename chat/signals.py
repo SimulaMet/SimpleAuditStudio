@@ -26,6 +26,8 @@ def registered_model_changed(sender, instance, **kwargs):
     _after_commit(f"model {instance.pk}")
 
 
+
+
 def _after_commit(reason: str) -> None:
     """Push once the change is actually committed (and not at all if it isn't)."""
     transaction.on_commit(lambda: sync.schedule_push(reason))

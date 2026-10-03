@@ -190,16 +190,22 @@ def logout_view(request):
 def auto_login_view(request):
     """One-click, one-time sign-in for the local one-liner demo.
 
-    The CLI generates a single-use token at startup, prints it, and opens
-    ``/auto-login/?token=...`` in the default browser. The token is checked in
-    constant time and consumed on first use, so the URL cannot be replayed by
-    another machine on the LAN (the demo server binds 0.0.0.0).
-    Only enabled in MINIMAL_CONFIG (local demo) mode — 404 everywhere else.
+    The CLI/dev server generates a single-use token at startup, prints it,
+    and opens ``/auto-login/?token=...`` in the default browser. The token is
+    checked in constant time and consumed on first use, so the URL cannot be
+    replayed by another machine on the LAN (the local servers bind 0.0.0.0).
+    Only enabled in the zero-Docker local modes — ``MINIMAL_CONFIG`` (the uvx
+    demo) or ``SIMPLEAUDIT_LOCAL_SQLITE=1`` (``manage.py dev``) — and 404
+    everywhere else, so a deployed container never exposes it.
     """
     from django.conf import settings
     from django.http import Http404
 
-    if not getattr(settings, "MINIMAL_CONFIG", False):
+    local_mode = (
+        getattr(settings, "MINIMAL_CONFIG", False)
+        or os.environ.get("SIMPLEAUDIT_LOCAL_SQLITE", "").strip() in {"1", "true", "yes", "on"}
+    )
+    if not local_mode:
         raise Http404
     token = request.GET.get("token", "")
     expected = os.environ.get("SIMPLEAUDIT_AUTO_LOGIN_TOKEN", "")
@@ -586,6 +592,7 @@ def _clone_from_run(source: AuditRun) -> dict:
         "auditor_model_id": source.auditor_model_id,
         "judge_model_id": source.judge_model_id,
         "judge_version_id": source.judge_version_id,
+        "agent_id": source.agent_id,
         "max_turns": params.get("max_turns", ""),
         "language": params.get("language", ""),
         "n_repetitions": params.get("n_repetitions", ""),
@@ -601,6 +608,7 @@ def _design_selection(post=None, clone=None) -> dict:
     "its latest version" (the default tick).
     """
     if post is not None:
+        agent_id = (post.get("agent_id") or "").strip()
         return {
             "sets": post.getlist("scenario_set"),
             "versions": post.getlist("scenario_version"),
@@ -608,9 +616,12 @@ def _design_selection(post=None, clone=None) -> dict:
             "auditor": post.getlist("auditor_model"),
             "judge_model": post.getlist("judge_model"),
             "judge": post.getlist("judge"),
+            "agent_id": agent_id,
+            "agent_trace": (post.get(f"agent_trace_{agent_id}") or "").strip() == "1" if agent_id else True,
         }
     if clone:
         # Clone pins the cloned run's exact version.
+        agent_id = str(clone["agent_id"]) if clone.get("agent_id") else ""
         return {
             "sets": [],
             "versions": [str(clone["scenario_set_version_id"])],
@@ -618,8 +629,10 @@ def _design_selection(post=None, clone=None) -> dict:
             "auditor": [str(clone["auditor_model_id"])],
             "judge_model": [str(clone["judge_model_id"])],
             "judge": [str(clone["judge_version_id"])],
+            "agent_id": agent_id,
+            "agent_trace": True,
         }
-    return {"sets": [], "versions": [], "target": [], "auditor": [], "judge_model": [], "judge": []}
+    return {"sets": [], "versions": [], "target": [], "auditor": [], "judge_model": [], "judge": [], "agent_id": "", "agent_trace": True}
 
 
 def ex_repeat(repeat: dict) -> str:
@@ -724,9 +737,16 @@ class NewExperimentView(ProjectMixin, TemplateView):
         for conn in connections:
             conn.share_label = connection_share_label(conn)
             conn.is_shared = conn.project_id != p.id
+        # Enabled agents in this workspace, offered as an alternative target.
+        from model_registry.models import Agent
+
+        agents = list(
+            Agent.objects.filter(project=p, enabled=True).select_related("base_model", "base_model__connection")
+        )
         kw.update(
             sets=sets,
             connections=connections,
+            agents=agents,
             model_roles=[
                 ("target", "Target", "The model under test.", sel["target"]),
                 ("auditor", "Auditor", "Plays the user and probes the target.", sel["auditor"]),
@@ -807,6 +827,8 @@ class NewExperimentView(ProjectMixin, TemplateView):
                         language_override=run_spec["language"],
                         n_repetitions_override=run_spec["n_repetitions"],
                         gen_config_override=run_spec["gen_config"],
+                        agent=run_spec.get("agent"),
+                        trace_config=None if run_spec.get("target_trace", True) else {},
                     )
                 if repeat:
                     first_point = run
@@ -1037,10 +1059,17 @@ class NewExperimentView(ProjectMixin, TemplateView):
         post = request.POST
         design_post = [(k[len("design__"):], v) for k, vs in post.lists() if k.startswith("design__") for v in vs]
         design = _design_from_review(post)
+        # Per-agent trace: read from design__agent_trace_<id>
+        agent_id = (design.get("agent_id") or "").strip()
+        target_trace = True
+        if agent_id:
+            target_trace = (design.get(f"agent_trace_{agent_id}") or "").strip() == "1"
         try:
             rows, runs, errors = self._rows_from_post(post, p)
         except Exception as e:  # noqa: BLE001 - tampered or stale form: start again from the design
             return self._redesign(design, f"Could not read the review: {e}")
+        for r in runs:
+            r["target_trace"] = target_trace
         try:
             repeat = parse_repeat(design)
         except ValueError as e:
@@ -2254,11 +2283,12 @@ class RunDetailView(ProjectMixin, DetailView):
         from audits.monitors import has_write_role
 
         ctx["can_schedule"] = has_write_role(self.request.user, self.request.project)
-        from audits.services import ROLES, frozen_judge, frozen_model
+        from audits.services import ROLES, frozen_agent, frozen_judge, frozen_model
 
         ctx["frozen_models"] = [frozen_model(run, role) for role in ROLES]
         ctx["judge"] = frozen_judge(run)
         ctx["system_prompt"] = (run.generation_parameters_snapshot or {}).get("system_prompt", "")
+        ctx["frozen_agent"] = frozen_agent(run)
         return ctx
 
 
@@ -2338,8 +2368,69 @@ _REP_KNOWN_KEYS = {
     "conversation", "issues_found", "issues", "positive_behaviors", "recommendations", "summary",
     "severity", "rationale", "evidence", "judge_rationale", "judgment", "scenario_name",
     "scenario_description", "expected_behavior", "file_uri", "_rep_index", "_language", "error",
+    "trace_ids",
     *(f"{r}_{d}_tokens" for r in _REP_TOKEN_ROLES for d in ("input", "output")),
 }
+# Span kinds worth surfacing in the result page's trace card (the same set the
+# engine's evidence selection treats as signal).
+_TRACE_CARD_KINDS = {"LLM", "RETRIEVER", "TOOL", "AGENT", "GUARDRAIL", "EVALUATOR"}
+# Sub-millisecond connection-level spans that HTTP instrumentation adds around
+# every request (TCP connects, pool lookups) — not useful in the trace card.
+_TRACE_CARD_NOISE_NAMES = {"connect", "dns lookup", "tls handshake"}
+_TRACE_CARD_MAX_SPANS = 15
+
+
+def _trace_span_duration_ms(span: dict) -> float:
+    start, end = span.get("start_time"), span.get("end_time")
+    if isinstance(start, (int, float)) and isinstance(end, (int, float)):
+        return max(0.0, (end - start) * 1000.0)
+    return 0.0
+
+
+def _trace_is_noise(span: dict) -> bool:
+    name = str(span.get("name") or "").strip().lower()
+    if name in _TRACE_CARD_NOISE_NAMES:
+        return True
+    # A GET with sub-millisecond duration is an instrumentation artifact
+    # (connection-pool housekeeping), not a user-visible operation.
+    return name == "get" and _trace_span_duration_ms(span) < 1.0
+
+
+def _trace_card_view(rep: dict) -> dict | None:
+    """The trace section of one rep: W3C trace ids + the captured spans.
+
+    ``trace_ids`` are the ids the engine propagated the rep's turns under
+    (persisted on the result); the spans are the ones the target exported for
+    those ids (``judgment["evidence_spans"]``). Returns ``None`` when the rep
+    carries no trace data (tracing was off, or the target exported nothing).
+
+    Spans are shown longest-first with connection noise dropped: targets with
+    OpenInference semantic kinds surface their signal spans first, targets with
+    plain OTel auto-instrumentation (raw SPAN_KIND_*, http.* attributes) are
+    still readable because the meaningful operations are the long ones (the
+    model call, the request root).
+    """
+    trace_ids = rep.get("trace_ids") or []
+    spans = ((rep.get("judgment") or {}).get("evidence_spans") or []) if isinstance(rep.get("judgment"), dict) else []
+    if not trace_ids and not spans:
+        return None
+    ranked = [
+        dict(s, dur_ms=round(_trace_span_duration_ms(s), 1))
+        for s in spans
+        if not _trace_is_noise(s)
+    ]
+    signal = [s for s in ranked if str(s.get("kind") or "").upper() in _TRACE_CARD_KINDS]
+    rest = [s for s in ranked if str(s.get("kind") or "").upper() not in _TRACE_CARD_KINDS]
+    ranked = sorted(signal, key=_trace_span_duration_ms, reverse=True) + sorted(rest, key=_trace_span_duration_ms, reverse=True)
+    shown = ranked[:_TRACE_CARD_MAX_SPANS]
+    import json as _json
+    return {
+        "trace_ids": list(trace_ids),
+        "spans": shown,
+        "spans_json": _json.dumps(shown, indent=2, default=str),
+        "total_spans": len(spans),
+        "hidden_spans": max(len(ranked) - len(shown), 0),
+    }
 
 
 def _as_text_list(value) -> list[str]:
@@ -2369,7 +2460,7 @@ def _judge_grade(judgment: dict) -> dict:
     checklist gives per-item results.
     """
     judgment = judgment if isinstance(judgment, dict) else {}
-    fields, notes = [], []
+    fields, notes, json_notes = [], [], []
     for key, value in judgment.items():
         if key in _JUDGMENT_SHOWN or key.startswith("_") or value in (None, "", [], {}):
             continue
@@ -2383,13 +2474,15 @@ def _judge_grade(judgment: dict) -> dict:
         elif isinstance(value, str):
             notes.append((label, value))
         else:
-            notes.append((label, json.dumps(value, indent=2, ensure_ascii=False)))
+            count = f" ({len(value)})" if isinstance(value, list) else ""
+            json_notes.append((label + count, json.dumps(value, indent=2, ensure_ascii=False, default=str)))
     score = judgment.get("score")
     return {
         "score": f"{score:g}" if isinstance(score, (int, float)) else None,
         "abstained": judgment.get("abstained") if isinstance(judgment.get("abstained"), bool) else None,
         "fields": fields,
         "notes": notes,
+        "json_notes": json_notes,
     }
 
 
@@ -2452,7 +2545,7 @@ def _rep_view(rep: dict, index: int) -> dict:
         "severity": rep.get("severity", ""),
         "summary": rep.get("summary", ""),
         "grade": grade,
-        "has_grade": bool(grade["score"] or grade["abstained"] is not None or grade["fields"] or grade["notes"]),
+        "has_grade": bool(grade["score"] or grade["abstained"] is not None or grade["fields"] or grade["notes"] or grade["json_notes"]),
         "conversation": conversation,
         "turns": turn,
         "images": _image_uris(rep),
@@ -2462,6 +2555,7 @@ def _rep_view(rep: dict, index: int) -> dict:
         "rationale": rep.get("rationale") or rep.get("evidence") or rep.get("judge_rationale") or "",
         "tokens": tokens,
         "total_tokens": total_tokens,
+        "trace": _trace_card_view(rep),
         "other": {k: v for k, v in rep.items() if k not in _REP_KNOWN_KEYS},
     }
 
@@ -2589,6 +2683,338 @@ class RunScriptView(ProjectMixin, View):
         safe_name = "".join(c if c.isalnum() or c in "-_." else "_" for c in run.name)[:60] or "run"
         response["Content-Disposition"] = f'attachment; filename="rerun_{safe_name}_{run.id}.py"'
         return response
+
+
+# ---------------------------------------------------------------------------
+# Agent configuration UI
+# ---------------------------------------------------------------------------
+
+
+class AgentsView(ProjectMixin, TemplateView):
+    """List all agents in the current workspace."""
+
+    template_name = "agents/agents.html"
+
+    def get_context_data(self, **kw):
+        ctx = super().get_context_data(**kw)
+        from model_registry.models import Agent
+
+        ctx["agents"] = (
+            Agent.objects.filter(project=self.request.project)
+            .select_related("base_model", "base_model__connection", "retrieval_profile")
+            .prefetch_related("knowledge_bases", "tools")
+        )
+        return ctx
+
+
+class AgentResourcesView(ProjectMixin, TemplateView):
+    """Restricted-iframe resource manager.
+
+    Embeds Open WebUI's workspace admin (Knowledge / Tools) in an iframe,
+    masked to the target section by chat/embed_admin.css. The iframe points at
+    the chat proxy with the ?__studio_admin=1 marker so the proxy serves the
+    admin sheet. Studio never writes here; the pull-sync keeps local models
+    fresh.
+    """
+
+    template_name = "agents/resources.html"
+
+    # section -> Open WebUI workspace route (verified against the live instance)
+    SECTIONS = {
+        "knowledge": "/workspace/knowledge",
+        "tools": "/workspace/tools",
+    }
+    DEFAULT_SECTION = "knowledge"
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        path = self.request.path
+        if "/agents/tools/" in path:
+            section = "tools"
+        else:
+            section = "knowledge"
+        ctx["section"] = section
+        ctx["section_label"] = "Tools" if section == "tools" else "Knowledge"
+        from chat import config as chat_config
+        if getattr(chat_config, "ENABLED", False):
+            base = chat_config.public_url(self.request)
+            # Per-render nonce: the Open WebUI SPA shell is a static document
+            # that browsers cache with heuristic freshness. A cached document
+            # never reaches the chat proxy, so the ?__studio_admin=1 marker is
+            # never registered and the frame falls back to the chat
+            # stylesheet (workspace tab bar re-exposed). A fresh URL per page
+            # render guarantees the marker request actually goes to the proxy.
+            # The SPA ignores unknown query params (path-based routing).
+            import time
+            create = self.request.GET.get("create") == "1"
+            extra = "&create=1" if create else ""
+            ctx["iframe_src"] = (
+                f"{base}{self.SECTIONS[section]}"
+                f"?__studio_admin=1&t={int(time.time() * 1000)}{extra}"
+            )
+            # "Upload directory" in the Knowledge create/edit modal uses the
+            # File System Access API (showDirectoryPicker), which browsers only
+            # allow in a top-level or same-origin frame. The embed is a
+            # cross-origin subframe, so that one button throws a SecurityError
+            # here. Offer a top-level tab on the same origin (the shared Studio
+            # cookie authenticates it), where the picker is permitted.
+            if section == "knowledge":
+                ctx["directory_url"] = f"{base}{self.SECTIONS[section]}"
+                ctx["directory_url_enabled"] = True
+            else:
+                ctx["directory_url"] = None
+                ctx["directory_url_enabled"] = False
+            ctx["chat_enabled"] = True
+        else:
+            ctx["iframe_src"] = None
+            ctx["chat_enabled"] = False
+        return ctx
+
+
+def _sync_openwebui_resources(project, user):
+    """Pull knowledge bases and tools from OpenWebUI into local models.
+
+    Returns (kb_count, tool_count) or (None, None) if chat is disabled.
+    """
+    from chat import config as chat_config
+
+    if not chat_config.ENABLED:
+        return None, None
+
+    from chat.api import ChatAPI, ChatAPIError
+    from model_registry.models import KnowledgeBase, Tool
+
+    try:
+        api = ChatAPI.as_user(user)
+    except Exception:
+        logger.exception("Chat API setup failed for user %s", user)
+        return None, None
+
+    kb_count = 0
+    try:
+        remote_kbs = api.knowledge_bases()
+        for item in remote_kbs:
+            external_id = item.get("id", "")
+            if not external_id:
+                continue
+            KnowledgeBase.objects.update_or_create(
+                project=project,
+                external_id=external_id,
+                defaults={
+                    "name": item.get("name") or external_id,
+                    "description": item.get("description") or "",
+                },
+            )
+            kb_count += 1
+    except ChatAPIError:
+        pass
+
+    tool_count = 0
+    try:
+        payload = api.request("GET", "/api/v1/functions/")
+        items = payload if isinstance(payload, list) else (payload.get("items") or payload.get("functions") or [])
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            name = item.get("name", "")
+            if not name:
+                continue
+            external_id = item.get("id", "")
+            Tool.objects.update_or_create(
+                project=project,
+                name=name,
+                defaults={
+                    "external_id": external_id,
+                    "description": item.get("description") or "",
+                    "type": "custom" if item.get("kind") == "function" else "builtin",
+                },
+            )
+            tool_count += 1
+    except ChatAPIError:
+        pass
+
+    return kb_count, tool_count
+
+
+class AgentSyncView(ProjectMixin, View):
+    """POST /agents/sync/ — pull KBs and tools from OpenWebUI into local models."""
+
+    def post(self, request):
+        kb_count, tool_count = _sync_openwebui_resources(request.project, request.user)
+        if kb_count is None:
+            return JsonResponse({"error": "Chat is not enabled."}, status=400)
+        return JsonResponse({
+            "ok": True,
+            "knowledge_bases": kb_count,
+            "tools": tool_count,
+        })
+
+
+class AgentDetailView(ProjectMixin, TemplateView):
+    """Create or edit an agent."""
+
+    template_name = "agents/agent_detail.html"
+
+    def get_context_data(self, **kw):
+        ctx = super().get_context_data(**kw)
+        from model_registry.models import (
+            Agent,
+            KnowledgeBase,
+            RegisteredModel,
+            RetrievalProfile,
+            Tool,
+        )
+
+        project = self.request.project
+        agent = None
+        if "agent_id" in self.kwargs:
+            agent = Agent.objects.filter(
+                pk=self.kwargs["agent_id"], project=project
+            ).select_related(
+                "base_model", "base_model__connection", "retrieval_profile"
+            ).prefetch_related("knowledge_bases", "tools").first()
+
+        # Auto-sync from OpenWebUI so the picker lists are always fresh.
+        _sync_openwebui_resources(project, self.request.user)
+
+        ctx["agent"] = agent
+        ctx["models"] = RegisteredModel.objects.filter(project=project, enabled=True).select_related("connection")
+        ctx["knowledge_bases"] = KnowledgeBase.objects.filter(project=project, enabled=True)
+        ctx["tools"] = Tool.objects.filter(project=project, enabled=True)
+        # Gate the "+ New" deep links: without the chat proxy there is no
+        # embedded workspace to create in.
+        ctx["chat_enabled"] = chat_enabled()
+        ctx["retrieval_profiles"] = RetrievalProfile.objects.filter(project=project)
+        ctx["capability_options"] = [
+            {"key": "knowledge_search", "label": "Knowledge Search"},
+            {"key": "file_read", "label": "File Read"},
+            {"key": "web_search", "label": "Web Search"},
+            {"key": "url_fetch", "label": "URL Fetch"},
+            {"key": "calculator", "label": "Calculator"},
+            {"key": "code_execution", "label": "Code Execution"},
+            {"key": "memory", "label": "Memory"},
+            {"key": "subagents", "label": "Subagents"},
+            {"key": "notifications", "label": "Notifications"},
+        ]
+        return ctx
+
+    def post(self, request, *args, **kwargs):
+        from model_registry.models import Agent, KnowledgeBase, Tool
+
+        project = request.project
+        agent = None
+        if "agent_id" in self.kwargs:
+            agent = Agent.objects.filter(pk=self.kwargs["agent_id"], project=project).first()
+
+        name = request.POST.get("name", "").strip()
+        if not name:
+            messages.error(request, "Name is required.")
+            return self._render(request, agent)
+
+        try:
+            base_model_id = int(request.POST.get("base_model"))
+            from model_registry.models import RegisteredModel
+            base_model = RegisteredModel.objects.get(pk=base_model_id, project=project)
+        except (ValueError, RegisteredModel.DoesNotExist):
+            messages.error(request, "Select a valid base model.")
+            return self._render(request, agent)
+
+        retrieval_profile = None
+        profile_id = request.POST.get("retrieval_profile")
+        if profile_id:
+            from model_registry.models import RetrievalProfile
+            retrieval_profile = RetrievalProfile.objects.filter(pk=profile_id, project=project).first()
+
+        if agent:
+            agent.name = name
+            agent.description = request.POST.get("description", "")
+            agent.base_model = base_model
+            agent.system_prompt = request.POST.get("system_prompt", "")
+            agent.retrieval_profile = retrieval_profile
+            agent.enabled = request.POST.get("enabled") == "on"
+            agent.save()
+            agent.knowledge_bases.set(
+                KnowledgeBase.objects.filter(
+                    pk__in=request.POST.getlist("knowledge_bases"), project=project
+                )
+            )
+            agent.tools.set(
+                Tool.objects.filter(pk__in=request.POST.getlist("tools"), project=project)
+            )
+            # Parse capabilities checkboxes
+            caps = {}
+            for cap in ("knowledge_search", "file_read", "web_search", "url_fetch",
+                        "calculator", "code_execution", "memory", "subagents", "notifications"):
+                caps[cap] = request.POST.get(cap) == "on"
+            agent.capabilities = caps
+            agent.save()
+            messages.success(request, f"Agent '{name}' updated.")
+        else:
+            caps = {}
+            for cap in ("knowledge_search", "file_read", "web_search", "url_fetch",
+                        "calculator", "code_execution", "memory", "subagents", "notifications"):
+                caps[cap] = request.POST.get(cap) == "on"
+            agent = Agent.objects.create(
+                project=project,
+                name=name,
+                description=request.POST.get("description", ""),
+                base_model=base_model,
+                system_prompt=request.POST.get("system_prompt", ""),
+                retrieval_profile=retrieval_profile,
+                capabilities=caps,
+                created_by=request.user,
+            )
+            agent.knowledge_bases.set(
+                KnowledgeBase.objects.filter(
+                    pk__in=request.POST.getlist("knowledge_bases"), project=project
+                )
+            )
+            agent.tools.set(
+                Tool.objects.filter(pk__in=request.POST.getlist("tools"), project=project)
+            )
+            messages.success(request, f"Agent '{name}' created.")
+
+        return redirect("agent_detail", agent_id=agent.id)
+
+    def _render(self, request, agent):
+        ctx = self.get_context_data()
+        return render(request, self.template_name, ctx)
+
+
+class AgentDeleteView(ProjectMixin, View):
+    """Delete an agent."""
+
+    def post(self, request, agent_id):
+        from model_registry.models import Agent
+
+        agent = Agent.objects.filter(pk=agent_id, project=request.project).first()
+        if not agent:
+            messages.error(request, "Agent not found.")
+            return redirect("agents")
+        name = agent.name
+        agent.delete()
+        messages.success(request, f"Agent '{name}' deleted.")
+        return redirect("agents")
+
+
+class AgentTestChatView(ProjectMixin, View):
+    """Redirect to chat with the agent's model pinned."""
+
+    def get(self, request, agent_id):
+        from model_registry.models import Agent
+
+        agent = Agent.objects.filter(pk=agent_id, project=request.project).select_related(
+            "base_model", "base_model__connection"
+        ).first()
+        if not agent:
+            messages.error(request, "Agent not found.")
+            return redirect("agents")
+        # Pin the agent's model in the session and redirect to chat
+        conn = agent.base_model.connection
+        model_id = agent.base_model.model_id
+        request.session["chat_pinned_model"] = f"{conn.id}.{model_id}"
+        request.session["chat_agent_id"] = agent.id
+        return redirect("chat")
 
 
 class JudgeScriptView(ProjectMixin, View):

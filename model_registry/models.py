@@ -99,6 +99,46 @@ class RegisteredModel(models.Model):
         return self.connection.has_key
 
 
+class OtlpSpan(models.Model):
+    """A span pushed to Studio's OTLP listener, persisted for cross-process reads.
+
+    The listener (``model_registry.otlp_views.otlp_traces``) keeps an in-memory
+    :class:`~simpleaudit.tracing.store.SpanStore` for the low-latency run path,
+    but that memory is per-process: in production the web/API process ingests
+    spans while a *separate* Hatchet worker runs the audit and needs the same
+    spans to attach as evidence. The DB row is what lets the auditor read what
+    the target exported -- the worker fetches by ``trace_id`` (the W3C id the
+    engine propagated on the run's requests) and ``target_id``.
+
+    Spans are append-only (idempotent on ``span_id``); retention is a separate
+    sweep. ``attributes`` holds the raw OpenInference/OTel attribute map.
+    """
+
+    target_id = models.CharField(max_length=250, db_index=True)
+    trace_id = models.CharField(max_length=64, db_index=True)
+    span_id = models.CharField(max_length=64)
+    name = models.CharField(max_length=500, default="span")
+    kind = models.CharField(max_length=50, default="CHAIN")
+    parent_span_id = models.CharField(max_length=64, blank=True, null=True)
+    start_time = models.FloatField(null=True, blank=True)
+    end_time = models.FloatField(null=True, blank=True)
+    status = models.CharField(max_length=20, default="OK")
+    attributes = models.JSONField(default=dict, blank=True)
+    received_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "core_otlp_span"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["target_id", "trace_id", "span_id"], name="unique_span_per_target_trace"
+            ),
+        ]
+        ordering = ["target_id", "start_time", "span_id"]
+
+    def __str__(self) -> str:
+        return f"OtlpSpan({self.target_id}/{self.trace_id}/{self.span_id} {self.name})"
+
+
 class OTLPCredential(models.Model):
     """A credential that lets an external target push OTLP traces to Studio.
 
@@ -148,4 +188,217 @@ class OTLPCredential(models.Model):
     @property
     def display_name(self) -> str:
         return self.username or self.target_id
+
+
+# ---------------------------------------------------------------------------
+# Agent configuration domain
+# ---------------------------------------------------------------------------
+
+
+class RetrievalProfile(models.Model):
+    """Query-time retrieval settings shared across agents.
+
+    These are *query-time* knobs (top_k, rerank, threshold, …). Index-time
+    settings (embedding model, chunk size) belong to the KnowledgeBase.
+    """
+
+    class SearchMode(models.TextChoices):
+        SEMANTIC = "semantic", "Semantic"
+        HYBRID = "hybrid", "Hybrid (semantic + BM25)"
+
+    project = models.ForeignKey("accounts.Project", on_delete=models.CASCADE, related_name="retrieval_profiles")
+    name = models.CharField(max_length=250)
+    search_mode = models.CharField(max_length=20, choices=SearchMode.choices, default=SearchMode.SEMANTIC)
+    top_k = models.PositiveIntegerField(default=5)
+    rerank_enabled = models.BooleanField(default=False)
+    rerank_top_k = models.PositiveIntegerField(default=4)
+    relevance_threshold = models.FloatField(null=True, blank=True)
+    bm25_weight = models.FloatField(null=True, blank=True)
+    full_context = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "core_retrieval_profile"
+        constraints = [
+            models.UniqueConstraint(fields=["project", "name"], name="unique_retrieval_profile_name_per_project"),
+        ]
+        ordering = ["project__name", "name"]
+
+    def __str__(self) -> str:
+        return self.name
+
+    def config_dict(self) -> dict:
+        return {
+            "search_mode": self.search_mode,
+            "top_k": self.top_k,
+            "rerank_enabled": self.rerank_enabled,
+            "rerank_top_k": self.rerank_top_k,
+            "relevance_threshold": self.relevance_threshold,
+            "bm25_weight": self.bm25_weight,
+            "full_context": self.full_context,
+        }
+
+
+class KnowledgeBase(models.Model):
+    """Studio-side reference to an OpenWebUI knowledge base.
+
+    The actual documents and index live in OpenWebUI; this row carries the
+    audit metadata SimpleAudit needs (authority, trust, sensitivity, version)
+    and a stable ``external_id`` for lookups.
+    """
+
+    class TrustLevel(models.TextChoices):
+        HIGH = "high", "High"
+        MEDIUM = "medium", "Medium"
+        LOW = "low", "Low"
+
+    class Sensitivity(models.TextChoices):
+        PUBLIC = "public", "Public"
+        INTERNAL = "internal", "Internal"
+        CONFIDENTIAL = "confidential", "Confidential"
+        RESTRICTED = "restricted", "Restricted"
+
+    project = models.ForeignKey("accounts.Project", on_delete=models.CASCADE, related_name="knowledge_bases")
+    name = models.CharField(max_length=250)
+    external_id = models.CharField(max_length=250, blank=True, default="")
+    description = models.TextField(blank=True, default="")
+    authority = models.CharField(max_length=250, blank=True, default="")
+    trust_level = models.CharField(max_length=10, choices=TrustLevel.choices, default=TrustLevel.MEDIUM)
+    sensitivity = models.CharField(max_length=20, choices=Sensitivity.choices, default=Sensitivity.INTERNAL)
+    version = models.CharField(max_length=100, blank=True, default="")
+    valid_from = models.DateTimeField(null=True, blank=True)
+    valid_until = models.DateTimeField(null=True, blank=True)
+    enabled = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "core_knowledge_base"
+        constraints = [
+            models.UniqueConstraint(fields=["project", "name"], name="unique_knowledge_base_name_per_project"),
+            models.UniqueConstraint(
+                fields=["project", "external_id"],
+                condition=~models.Q(external_id=""),
+                name="unique_knowledge_base_external_id_per_project",
+            ),
+        ]
+        ordering = ["project__name", "name"]
+
+    def __str__(self) -> str:
+        return self.name
+
+
+class Tool(models.Model):
+    """A normalized tool that an Agent may invoke.
+
+    The backend implementation may be an OpenWebUI built-in, an OpenAPI
+    endpoint, or a custom OpenWebUI function. The safety flags
+    are what SimpleAudit uses to reason about what the agent *may* do.
+    """
+
+    class ToolType(models.TextChoices):
+        BUILTIN = "builtin", "OpenWebUI built-in"
+        OPENAPI = "openapi", "OpenAPI"
+        CUSTOM = "custom", "Custom OpenWebUI function"
+
+    project = models.ForeignKey("accounts.Project", on_delete=models.CASCADE, related_name="tools")
+    name = models.CharField(max_length=250)
+    type = models.CharField(max_length=20, choices=ToolType.choices, default=ToolType.BUILTIN)
+    external_id = models.CharField(max_length=250, blank=True, default="")
+    description = models.TextField(blank=True, default="")
+    input_schema = models.JSONField(default=dict, blank=True)
+    output_schema = models.JSONField(default=dict, blank=True)
+    # Safety properties for auditing.
+    read_only = models.BooleanField(default=True)
+    has_side_effects = models.BooleanField(default=False)
+    external_network = models.BooleanField(default=False)
+    handles_sensitive_data = models.BooleanField(default=False)
+    enabled = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "core_tool"
+        constraints = [
+            models.UniqueConstraint(fields=["project", "name"], name="unique_tool_name_per_project"),
+        ]
+        ordering = ["project__name", "name"]
+
+    def __str__(self) -> str:
+        return self.name
+
+
+class Agent(models.Model):
+    """An auditable RAG/agent target.
+
+    Composes an existing ``RegisteredModel`` (the LLM), optional knowledge
+    bases, tools, a retrieval profile, and explicit capabilities.
+    The Agent is the object a user configures in Studio and then selects in
+    Chat or as an audit target.
+    """
+
+    project = models.ForeignKey("accounts.Project", on_delete=models.CASCADE, related_name="agents")
+    name = models.CharField(max_length=250)
+    description = models.TextField(blank=True, default="")
+    base_model = models.ForeignKey(RegisteredModel, on_delete=models.PROTECT, related_name="agents")
+    system_prompt = models.TextField(blank=True, default="")
+    knowledge_bases = models.ManyToManyField(KnowledgeBase, blank=True, related_name="agents")
+    tools = models.ManyToManyField(Tool, blank=True, related_name="agents")
+    retrieval_profile = models.ForeignKey(
+        RetrievalProfile, on_delete=models.SET_NULL, null=True, blank=True, related_name="agents"
+    )
+    # Explicit capability flags: what the agent is *permitted* to do.
+    capabilities = models.JSONField(default=dict, blank=True)
+    metadata = models.JSONField(default=dict, blank=True)
+    enabled = models.BooleanField(default=True)
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "core_agent"
+        constraints = [
+            models.UniqueConstraint(fields=["project", "name"], name="unique_agent_name_per_project"),
+        ]
+        ordering = ["project__name", "name"]
+
+    def __str__(self) -> str:
+        return self.name
+
+    def config_snapshot(self) -> dict:
+        """A serialisable snapshot of the agent's full configuration.
+
+        Used by audit runs to freeze the configuration at execution time so
+        historical runs remain reproducible.
+        """
+        profile = self.retrieval_profile
+        return {
+            "agent_id": self.id,
+            "name": self.name,
+            "base_model": {
+                "id": self.base_model.id,
+                "display_name": self.base_model.display_name,
+                "model_id": self.base_model.model_id,
+                "connection_id": self.base_model.connection_id,
+            },
+            "system_prompt": self.system_prompt,
+            "knowledge_bases": list(
+                self.knowledge_bases.values_list("id", "name", "external_id", "version")
+            ),
+            "tools": list(self.tools.values_list("id", "name", "type")),
+            "retrieval_profile": {
+                "id": profile.id,
+                "name": profile.name,
+                "search_mode": profile.search_mode,
+                "top_k": profile.top_k,
+                "rerank_enabled": profile.rerank_enabled,
+                "rerank_top_k": profile.rerank_top_k,
+                "relevance_threshold": profile.relevance_threshold,
+                "bm25_weight": profile.bm25_weight,
+                "full_context": profile.full_context,
+            } if profile else None,
+            "capabilities": self.capabilities,
+            "metadata": self.metadata,
+        }
 

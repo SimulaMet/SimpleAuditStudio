@@ -162,6 +162,16 @@ class BuildTraceProviderTest(TestCase):
         with self.assertRaises(ValueError):
             build_trace_provider({"mode": "jaeger"})
 
+    def test_studio_mode_returns_studio_provider(self):
+        from infra.tracing import StudioTraceProvider
+
+        provider = build_trace_provider({"mode": "studio", "target_id": "tgt_1"})
+        self.assertIsInstance(provider, StudioTraceProvider)
+
+    def test_studio_mode_requires_target_id(self):
+        with self.assertRaises(ValueError):
+            build_trace_provider({"mode": "studio"})
+
 
 class RunScenarioTracingWiringTest(TestCase):
     """run_scenario passes the correlation to the engine and attaches evidence."""
@@ -211,6 +221,56 @@ class RunScenarioTracingWiringTest(TestCase):
         # Evidence was fetched from the provider and attached to the judgment.
         self.assertIn("evidence_spans", payload["judgment"])
         self.assertEqual(payload["judgment"]["evidence_spans"][0]["name"], "retrieve")
+        # The scenario's W3C trace ids are persisted on the result for the UI.
+        self.assertEqual(payload["trace_ids"], [tid])
+
+    def test_studio_mode_end_to_end_fetches_listener_spans(self):
+        """studio mode: the provider reads the listener's persisted OtlpSpan
+        rows, so the run attaches exactly the target's exported evidence."""
+        from types import SimpleNamespace
+
+        from infra.engine import run_scenario
+        from model_registry import otlp_views
+        from model_registry.models import OtlpSpan
+
+        tid = "5" * 32
+        OtlpSpan.objects.create(
+            target_id="sim_tgt", trace_id=tid, span_id="9" * 16,
+            name="chat completion", kind="LLM",
+            attributes={"openinference.span.kind": "LLM", "simpleaudit.target_id": "sim_tgt"},
+        )
+        # A span the target exported under a *different* trace must not attach.
+        OtlpSpan.objects.create(target_id="sim_tgt", trace_id="6" * 32, span_id="a" * 15 + "1", name="other", kind="LLM")
+
+        captured = {}
+
+        class FakeAuditor:
+            async def run_async(self, scenarios, **kwargs):
+                captured["kwargs"] = kwargs
+                correlation = kwargs.get("trace_correlation")
+                if correlation is not None:
+                    correlation.record("scen_t1", tid)
+                result = SimpleNamespace(to_dict=lambda: {"severity": "pass", "judgment": {"severity": "pass"}})
+                return [result]
+
+        with mock.patch("infra.engine.build_model_auditor", return_value=(FakeAuditor(), "English")):
+            payload = run_scenario(
+                name="s", description="d", expected_behavior=None, test_prompt=None,
+                target=self._snap("t"), auditor=self._snap("a"), judge=self._snap("j"),
+                generation={"max_turns": 1},
+                trace_config={
+                    "mode": "studio",
+                    "target_id": "sim_tgt",
+                    "timeout": 1.0,
+                    "retry_interval": 0.01,
+                },
+            )
+
+        spans = payload["judgment"]["evidence_spans"]
+        self.assertEqual([s["name"] for s in spans], ["chat completion"])
+        self.assertEqual(payload["trace_ids"], [tid])
+        # The listener read went through the DB-backed fetcher.
+        self.assertEqual(otlp_views.get_spans_for_trace_db("sim_tgt", tid)[0]["span_id"], "9" * 16)
 
     def test_no_trace_config_leaves_judgment_untouched(self):
         from types import SimpleNamespace
@@ -246,3 +306,228 @@ class RunScenarioTracingWiringTest(TestCase):
                 return []
 
         self.assertIsNone(_collect_evidence_spans(_NoTraces(), object()))
+
+    def test_collect_evidence_spans_settles_late_arriving_spans(self):
+        from infra.engine import _collect_evidence_spans
+
+        class _DelayedProvider:
+            """First fetch returns one span; the next returns a second one —
+            the remote exporter's batched flush."""
+
+            def __init__(self):
+                self.calls = 0
+
+            def fetch(self, trace_id):
+                self.calls += 1
+                spans = [{"span_id": "a", "name": "POST /x", "kind": "SPAN_KIND_SERVER",
+                          "start_time": 1.0, "end_time": 2.0}]
+                if self.calls > 1:
+                    spans.append({"span_id": "b", "name": "model call", "kind": "SPAN_KIND_CLIENT",
+                                  "start_time": 1.1, "end_time": 2.5})
+                return spans
+
+        class _Corr:
+            def all_trace_ids(self):
+                return ["t1"]
+
+        spans = _collect_evidence_spans(_Corr(), _DelayedProvider(), settle_timeout=5.0)
+        self.assertIsNotNone(spans)
+        self.assertEqual({s["span_id"] for s in spans}, {"a", "b"})
+
+    def test_collect_evidence_spans_settles_from_empty(self):
+        """Remote exporters can flush the whole batch only after the model
+        call returns: the first fetches are empty, then all spans appear."""
+        from infra.engine import _collect_evidence_spans
+
+        class _EmptyThenBurstProvider:
+            def __init__(self):
+                self.calls = 0
+
+            def fetch(self, trace_id):
+                self.calls += 1
+                if self.calls <= 3:
+                    return []
+                return [{"span_id": "a", "name": "POST /x", "kind": "SPAN_KIND_SERVER",
+                         "start_time": 1.0, "end_time": 2.0}]
+
+        class _Corr:
+            def all_trace_ids(self):
+                return ["t1"]
+
+        spans = _collect_evidence_spans(_Corr(), _EmptyThenBurstProvider(), settle_timeout=5.0)
+        self.assertIsNotNone(spans)
+        self.assertEqual({s["span_id"] for s in spans}, {"a"})
+
+    def test_collect_evidence_spans_settle_verification_catches_final_batch(self):
+        """Observed live (run 21): the first batch arrives, the span set goes
+        quiet, and the final batch of a ~5s-interval exporter lands ~2s
+        later. The delayed verification pass must catch it."""
+        import time as _t
+
+        from infra.engine import _collect_evidence_spans
+
+        class _FinalBatchLateProvider:
+            """Two early fetches return only span a; the batch with span b
+            lands ~2s after the first fetch (between the settle's quiet
+            check and the delayed verification pass)."""
+
+            def __init__(self):
+                self.t0 = _t.monotonic()
+                self.calls = 0
+
+            def fetch(self, trace_id):
+                self.calls += 1
+                spans = [{"span_id": "a", "name": "POST /x", "kind": "SPAN_KIND_SERVER",
+                          "start_time": 1.0, "end_time": 2.0}]
+                if _t.monotonic() - self.t0 >= 2.5:
+                    spans.append({"span_id": "b", "name": "model call",
+                                  "kind": "SPAN_KIND_CLIENT",
+                                  "start_time": 1.1, "end_time": 2.5})
+                return spans
+
+        class _Corr:
+            def all_trace_ids(self):
+                return ["t1"]
+
+        spans = _collect_evidence_spans(_Corr(), _FinalBatchLateProvider(), settle_timeout=5.0)
+        self.assertIsNotNone(spans)
+        self.assertEqual({s["span_id"] for s in spans}, {"a", "b"})
+
+    def test_connection_noise_is_dropped_from_evidence(self):
+        from infra.engine import _drop_connection_noise
+
+        spans = [
+            {"span_id": "1", "name": "connect", "kind": "SPAN_KIND_CLIENT",
+             "start_time": 1.0, "end_time": 1.0},
+            {"span_id": "2", "name": "DNS Lookup", "kind": "SPAN_KIND_CLIENT",
+             "start_time": 1.0, "end_time": 1.0},
+            {"span_id": "3", "name": "GET", "kind": "SPAN_KIND_CLIENT",
+             "start_time": 1.0, "end_time": 1.0004},
+            {"span_id": "4", "name": "GET /favicon.ico", "kind": "SPAN_KIND_CLIENT",
+             "start_time": 1.0, "end_time": 1.0004},  # named GET survives
+            {"span_id": "5", "name": "POST /api/v1/chat/completions", "kind": "SPAN_KIND_SERVER",
+             "start_time": 1.0, "end_time": 5.9},
+            {"span_id": "6", "name": "POST https://gateway/v1/chat/completions", "kind": "SPAN_KIND_CLIENT",
+             "start_time": 1.1, "end_time": 5.9},
+        ]
+        kept = _drop_connection_noise(spans)
+        self.assertEqual([s["span_id"] for s in kept], ["4", "5", "6"])
+
+    def test_connection_noise_kept_when_everything_is_noise(self):
+        from infra.engine import _drop_connection_noise
+
+        spans = [{"span_id": "1", "name": "connect", "kind": "SPAN_KIND_CLIENT",
+                  "start_time": 1.0, "end_time": 1.0}]
+        self.assertEqual(_drop_connection_noise(spans), spans)
+
+
+class StudioTraceProviderTest(TestCase):
+    """StudioTraceProvider reads the run's spans from the listener's persisted
+    OtlpSpan rows by (target_id, trace_id), retrying until available."""
+
+    def test_fetch_returns_persisted_spans(self):
+        from model_registry import otlp_views
+        from model_registry.models import OtlpSpan
+
+        tid = "7" * 32
+        from infra.tracing import StudioTraceProvider
+
+        OtlpSpan.objects.bulk_create([
+            OtlpSpan(target_id="tgt", trace_id=tid, span_id="a" * 16, name="llm chat", kind="LLM",
+                     start_time=1.0, end_time=2.0, attributes={"openinference.span.kind": "LLM"}),
+            OtlpSpan(target_id="tgt", trace_id=tid, span_id="b" * 16, name="retrieval", kind="RETRIEVER",
+                     start_time=0.5, end_time=1.0),
+        ])
+        # A different trace / target must not leak in.
+        OtlpSpan.objects.create(target_id="other", trace_id=tid, span_id="c" * 16, name="nope")
+        OtlpSpan.objects.create(target_id="tgt", trace_id="9" * 32, span_id="d" * 16, name="nope2")
+
+        provider = StudioTraceProvider("tgt", retry_interval=0.01, fetcher=otlp_views.get_spans_for_trace_db)
+        spans = provider.fetch(tid)
+        self.assertEqual({s["name"] for s in spans}, {"llm chat", "retrieval"})
+        # Ordering: start_time then span_id.
+        self.assertEqual([s["name"] for s in spans], ["retrieval", "llm chat"])
+
+    def test_fetch_retries_until_available(self):
+        from infra.tracing import StudioTraceProvider
+
+        tid = "8" * 32
+        calls = {"n": 0}
+
+        def fetcher(target_id, trace_id):
+            calls["n"] += 1
+            if calls["n"] < 3:
+                return []
+            return [{"span_id": "e" * 16, "trace_id": tid, "name": "late", "kind": "TOOL"}]
+
+        provider = StudioTraceProvider("tgt", timeout=5.0, retry_interval=0.01, fetcher=fetcher)
+        spans = provider.fetch(tid)
+        self.assertEqual(len(spans), 1)
+        self.assertGreaterEqual(calls["n"], 3)
+
+    def test_fetch_returns_empty_on_timeout(self):
+        from infra.tracing import StudioTraceProvider
+
+        provider = StudioTraceProvider("tgt", timeout=0.05, retry_interval=0.01, fetcher=lambda t, tid: [])
+        self.assertEqual(provider.fetch("1" * 32), [])
+
+    def test_fetch_empty_target_or_trace_id(self):
+        from infra.tracing import StudioTraceProvider
+
+        provider = StudioTraceProvider("", fetcher=lambda t, tid: [{"x": 1}])
+        self.assertEqual(provider.fetch("2" * 32), [])
+        provider = StudioTraceProvider("tgt", fetcher=lambda t, tid: [{"x": 1}])
+        self.assertEqual(provider.fetch(""), [])
+
+    def test_default_fetcher_reads_db(self):
+        """With no injected fetcher the provider reads the OtlpSpan table."""
+        from model_registry.models import OtlpSpan
+
+        tid = "3" * 32
+        OtlpSpan.objects.create(target_id="tgt", trace_id=tid, span_id="f" * 16, name="db span", kind="AGENT")
+        from infra.tracing import StudioTraceProvider
+
+        provider = StudioTraceProvider("tgt", retry_interval=0.01)
+        self.assertEqual([s["name"] for s in provider.fetch(tid)], ["db span"])
+
+
+class EnrichTraceConfigTest(TestCase):
+    """The worker re-resolves studio mode's target_id from the frozen target."""
+
+    def test_studio_mode_resolves_credential_target_id(self):
+        from infra.tests.factories import (
+            ModelConnectionFactory,
+            ProjectFactory,
+            UserFactory,
+        )
+        from infra.tracing import enrich_trace_config
+        from model_registry import otlp_services as otlp
+
+        project = ProjectFactory()
+        conn = ModelConnectionFactory(project=project, name="owui")
+        user = UserFactory()
+        nc = otlp.create_credential(project=project, connection=conn, auth_mode="basic", user=user)
+
+        enriched = enrich_trace_config(
+            {"mode": "studio"}, {"connection_id": conn.id, "model_id": "m"}
+        )
+        self.assertEqual(enriched["mode"], "studio")
+        self.assertEqual(enriched["target_id"], nc.credential.target_id)
+
+    def test_studio_mode_no_credential_empty_target_id(self):
+        from infra.tests.factories import ModelConnectionFactory, ProjectFactory
+        from infra.tracing import enrich_trace_config
+
+        project = ProjectFactory()
+        conn = ModelConnectionFactory(project=project, name="plain")
+        enriched = enrich_trace_config({"mode": "studio"}, {"connection_id": conn.id})
+        self.assertEqual(enriched["target_id"], "")
+
+    def test_non_studio_config_passthrough(self):
+        from infra.tracing import enrich_trace_config
+
+        tempo = {"mode": "tempo", "base_url": "http://tempo.local"}
+        self.assertIs(enrich_trace_config(tempo, {"connection_id": 1}), tempo)
+        self.assertIsNone(enrich_trace_config(None, {"connection_id": 1}))
+        empty = {}
+        self.assertIs(enrich_trace_config(empty, None), empty)

@@ -23,11 +23,18 @@ dependencies = [
     # PyPI release (not a git ref): PyPI forbids direct URL dependencies in
     # package metadata, so the engine must be a registry dependency. 0.2.0 is
     # the first release containing run_scenario_reps (n_repetitions support);
-    # 0.2.1 adds the native on_turn per-phase progress callback.
-    "simpleaudit==0.3.0",
+    # 0.2.1 adds the native on_turn per-phase progress callback; 0.3.1 adds
+    # the traceparent-to-wire forwarding this repo's tracing relies on.
+    "simpleaudit==0.3.1",
     "cronsim==2.7",
     "psutil>=7.2.2",
+    "opentelemetry-proto>=1.45.0",
 ]
+
+# package = false: Studio is run, not installed as a wheel (hatchling rejects
+# direct-reference dependencies otherwise).
+[tool.uv]
+package = false
 
 [project.optional-dependencies]
 postgres = ["psycopg[binary]==3.2.13"]

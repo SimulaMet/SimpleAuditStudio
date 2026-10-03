@@ -103,6 +103,27 @@ def frozen_judge(run: AuditRun) -> dict:
     }
 
 
+def frozen_agent(run: AuditRun) -> dict | None:
+    """The Agent a run targeted, from its frozen snapshot.
+
+    Returns ``None`` when the run has no agent (bare-model target).
+    """
+    snap = run.agent_config_snapshot
+    if not snap:
+        return None
+    return {
+        "id": snap.get("agent_id"),
+        "name": snap.get("name", "—"),
+        "base_model": snap.get("base_model", {}),
+        "system_prompt": snap.get("system_prompt", ""),
+        "knowledge_bases": snap.get("knowledge_bases", []),
+        "tools": snap.get("tools", []),
+        "retrieval_profile": snap.get("retrieval_profile"),
+        "capabilities": snap.get("capabilities", []),
+        "metadata": snap.get("metadata", {}),
+    }
+
+
 # Keys managed by dedicated form fields — stripped from JSON override to avoid
 # confusion. Probe / judge prompts belong to the judge, not the run.
 _FORM_MANAGED_KEYS = {"max_turns", "n_repetitions", "language", "probe_prompt", "judge_prompt"}
@@ -180,6 +201,7 @@ def create_audit_run(
     trace_config: dict | None = None,
     monitor=None,
     experiment=None,
+    agent=None,
 ) -> AuditRun:
     """Create a queued AuditRun with immutable execution inputs.
 
@@ -187,6 +209,11 @@ def create_audit_run(
     workflow submission after the Phase 4 spike validates the selected system.
 
     ``judge`` is a ``JudgeVersion`` (criteria, output format, probe prompt); ``judge_model`` grades with it.
+
+    When ``agent`` is provided, the run targets an auditable Agent (model +
+    knowledge + tools + retrieval). The agent's ``base_model`` must match
+    ``target_model``. The agent's full configuration is frozen in
+    ``agent_config_snapshot`` for reproducibility.
     """
     # Launching spends the workspace's API keys: viewers may not.
     require_project_role(user, project, ProjectMembership.Role.ADMIN, ProjectMembership.Role.AUDITOR)
@@ -197,6 +224,16 @@ def create_audit_run(
     for model in (target_model, auditor_model, judge_model):
         if model.project_id != project.id or not model.enabled or not model.connection.enabled:
             raise StableAPIError(detail="Model is unavailable in this project.", code="model_unavailable")
+    if agent is not None:
+        if agent.project_id != project.id:
+            raise StableAPIError(detail="Agent belongs to another project.", code="cross_project_input")
+        if not agent.enabled:
+            raise StableAPIError(detail="Agent is disabled.", code="agent_disabled")
+        if agent.base_model_id != target_model.id:
+            raise StableAPIError(
+                detail="Agent's base model does not match the target model.",
+                code="agent_model_mismatch",
+            )
     # Provenance is authoritative: it comes from the installed SimpleAudit
     # package metadata (version) and its PEP 610 direct_url commit (optional).
     # Callers cannot supply their own — that would let a manifest claim an engine
@@ -211,13 +248,30 @@ def create_audit_run(
             code="simpleaudit_provenance_required",
         )
 
+    # Default tracing: when the target's connection has an OTLP credential (the
+    # target is configured to export its spans to Studio), capture them
+    # automatically in studio mode. The worker resolves the credential's
+    # target_id at execution time; an explicit trace_config from the caller wins.
+    if trace_config is None:
+        from model_registry.models import OTLPCredential
+
+        target_id = (
+            OTLPCredential.objects.filter(connection_id=target_model.connection_id, enabled=True)
+            .order_by("-created_at")
+            .values_list("target_id", flat=True)
+            .first()
+        )
+        trace_config = {"mode": "studio", "target_id": target_id or ""} if target_id else {}
+
     now = timezone.now()
+    agent_snapshot = agent.config_snapshot() if agent is not None else None
     return AuditRun.objects.create(
         project=project,
         name=name.strip(),
         status=AuditRun.Status.QUEUED,
         scenario_set_version=scenario_set_version,
         target_model=target_model,
+        agent=agent,
         auditor_model=auditor_model,
         judge_version=judge,
         judge_model=judge_model,
@@ -226,6 +280,7 @@ def create_audit_run(
             max_turns_override=max_turns_override, language_override=language_override,
             n_repetitions_override=n_repetitions_override, gen_config_override=gen_config_override,
         ),
+        agent_config_snapshot=agent_snapshot,
         simpleaudit_version=resolved_version,
         git_commit=resolved_commit,
         trace_config=trace_config or {},

@@ -316,7 +316,12 @@ def scenario_dict(
 
 
 def _collect_evidence_spans(
-    correlation: Any, provider: Any, *, token_budget: int | None = None
+    correlation: Any,
+    provider: Any,
+    *,
+    token_budget: int | None = None,
+    window: tuple[float, float] | None = None,
+    settle_timeout: float | None = None,
 ) -> list[dict[str, Any]] | None:
     """Collect + select evidence spans for the traces a run recorded.
 
@@ -327,6 +332,17 @@ def _collect_evidence_spans(
     timeout elapses), de-duplicate, and select the evidence-relevant kinds via
     the engine's ``select_spans``.
 
+    When the provider supports it and no trace id matched, a time-window
+    fallback (``window`` = wall-clock seconds the run executed) attributes the
+    spans the target exported during that window — the correlation fallback
+    for targets that do not adopt the propagated trace id.
+
+    The fetch is settled: remote exporters flush in batches, so the spans for
+    a trace id can arrive a couple of seconds after the model call returns.
+    The span set is re-polled until it stays quiet for 0.6s, with one delayed
+    verification pass before ``settle_timeout`` elapses (``settle_timeout=None``
+    disables settling — the fast path for tests).
+
     Returns ``None`` when there is no trace evidence — the caller then judges
     on the conversation alone (the normal black-box path). A fetch failure is
     logged, never raised: tracing is best-effort evidence and must not fail an
@@ -334,26 +350,98 @@ def _collect_evidence_spans(
     """
     if correlation is None or provider is None:
         return None
+    import time as _time
+
     from simpleaudit.tracing.selection import select_spans
 
     all_spans: list[dict[str, Any]] = []
     seen: set[str] = set()
-    for tid in correlation.all_trace_ids():
-        try:
-            spans = provider.fetch(tid)
-        except Exception as exc:  # noqa: BLE001 - tracing must not break the run
-            logger = __import__("logging").getLogger("simpleaudit.engine")
-            logger.warning("Trace fetch failed for %s: %s", tid, exc)
-            continue
+
+    def _add(spans: list[dict[str, Any]] | None) -> None:
         for span in spans or []:
             sid = span.get("span_id")
             if sid in seen:
                 continue
             seen.add(sid)
             all_spans.append(span)
+
+    def _fetch_all() -> None:
+        for tid in correlation.all_trace_ids():
+            try:
+                _add(provider.fetch(tid))
+            except Exception as exc:  # noqa: BLE001 - tracing must not break the run
+                logger = __import__("logging").getLogger("simpleaudit.engine")
+                logger.warning("Trace fetch failed for %s: %s", tid, exc)
+
+    def _fetch_window() -> None:
+        if window is not None and hasattr(provider, "fetch_window"):
+            start_ts, end_ts = window
+            try:
+                _add(provider.fetch_window(start_ts, end_ts))
+            except Exception as exc:  # noqa: BLE001 - tracing must not break the run
+                logger = __import__("logging").getLogger("simpleaudit.engine")
+                logger.warning("Trace window fetch failed: %s", exc)
+
+    # Settle: the remote exporter flushes spans in batches, so they routinely
+    # arrive seconds after the model call returns — even *after* the first
+    # fetch comes back empty (observed live: batches ~1-2s apart on a
+    # 5s exporter interval). Poll until the span set is quiet for 0.6s, then
+    # run one delayed verification pass 2.0s later that catches the final
+    # batch of a 5s-interval exporter, so the evidence is complete rather
+    # than a race. Bounded by the settle budget.
+    if settle_timeout:
+        deadline = _time.monotonic() + settle_timeout
+        stable = False
+        while not stable:
+            _fetch_all()
+            if not all_spans:
+                _fetch_window()
+            if not all_spans:
+                if _time.monotonic() >= deadline:
+                    break
+                _time.sleep(0.25)
+                continue
+            before = len(all_spans)
+            _time.sleep(0.6)
+            _fetch_all()
+            if len(all_spans) == before:
+                stable = True
+            elif _time.monotonic() >= deadline:
+                break
+        if stable and _time.monotonic() + 2.0 < deadline:
+            _time.sleep(2.0)
+            _fetch_all()
+            _fetch_window()
+
     if not all_spans:
         return None
+    all_spans = _drop_connection_noise(all_spans)
     return select_spans(all_spans, token_budget=token_budget).selected or None
+
+
+def _drop_connection_noise(spans: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Drop connection-level spans (connect / DNS / TLS / sub-ms GETs) that
+    carry no judging signal.
+
+    Plain OTel auto-instrumentation (e.g. an OpenWebUI deployment) exports
+    hundreds of these around each request; keeping them would drown the real
+    model calls in both the judge's evidence and the UI trace card. Only
+    applied when something survives, so a target that exports nothing else
+    still yields its spans.
+    """
+    def _noise(s: dict[str, Any]) -> bool:
+        name = (s.get("name") or "").lower()
+        if name in {"connect", "dns lookup", "tls handshake"}:
+            return True
+        start, end = s.get("start_time"), s.get("end_time")
+        try:
+            dur = (float(end) - float(start)) * 1000.0 if end and start else -1.0
+        except (TypeError, ValueError):
+            dur = -1.0
+        return name == "get" and 0 <= dur < 1.0
+
+    kept = [s for s in spans if not _noise(s)]
+    return kept or list(spans)
 
 
 def run_scenario(
@@ -398,7 +486,7 @@ def run_scenario(
     here).
     """
     auditor_instance, language = build_model_auditor(
-        target=target, auditor=auditor, judge=judge, generation=generation
+        target=target, auditor=auditor, judge=judge, generation=generation,
     )
     scenario = scenario_dict(
         name=name, description=description, expected_behavior=expected_behavior, test_prompt=test_prompt,
@@ -434,8 +522,13 @@ def run_scenario(
                     trace_correlation=correlation,
                 )
             )
-            # Collect evidence spans while the provider is still alive.
-            evidence_spans = _collect_evidence_spans(correlation, provider)
+            # Collect evidence spans while the provider is still alive. The
+            # settle window covers the remote exporter's batched flush: spans
+            # for the run's trace ids routinely arrive a couple of seconds
+            # after the last model call returns.
+            evidence_spans = _collect_evidence_spans(
+                correlation, provider, settle_timeout=10.0
+            )
     except Exception as exc:
         raise EngineError(f"Scenario execution crashed: {type(exc).__name__}: {exc}") from exc
 
@@ -446,6 +539,12 @@ def run_scenario(
             judgment = {}
         judgment["evidence_spans"] = evidence_spans
         payload["judgment"] = judgment
+    if correlation is not None:
+        # The W3C trace ids the engine propagated this scenario's turns under;
+        # persisted on the ScenarioResult so the UI can re-fetch the spans by
+        # id (and show which traces the run covered) even after the evidence
+        # selection has narrowed them.
+        payload["trace_ids"] = correlation.all_trace_ids()
     payload["_language"] = language
     return payload
 
@@ -607,6 +706,8 @@ def run_scenario_repeated(
                             judgment = {}
                         judgment["evidence_spans"] = evidence
                         rep["judgment"] = judgment
+                    if corr is not None:
+                        rep["trace_ids"] = corr.all_trace_ids()
     except Exception as exc:
         raise EngineError(f"Scenario execution crashed: {type(exc).__name__}: {exc}") from exc
 

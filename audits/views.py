@@ -18,7 +18,7 @@ from infra.exceptions import StableAPIError
 from infra.middleware import set_correlation_context
 from judges.models import Judge, JudgeVersion
 from judges.services import default_judge_version
-from model_registry.models import RegisteredModel
+from model_registry.models import Agent, RegisteredModel
 from scenarios.models import ScenarioSetVersion
 
 logger = logging.getLogger("simpleaudit.audit")
@@ -123,6 +123,9 @@ def create_audit_run_view(request, project_id):
         target_model = RegisteredModel.objects.get(id=data["target_model_id"], project=project)
         auditor_model = RegisteredModel.objects.get(id=data["auditor_model_id"], project=project)
         judge_model = RegisteredModel.objects.get(id=data["judge_model_id"], project=project)
+        agent = None
+        if data.get("agent_id"):
+            agent = Agent.objects.get(id=data["agent_id"], project=project)
         if data.get("judge_version_id"):
             judge = JudgeVersion.objects.select_related("judge").get(id=data["judge_version_id"], judge__project=project)
         elif data.get("judge_id"):
@@ -132,7 +135,7 @@ def create_audit_run_view(request, project_id):
         else:
             judge = default_judge_version(project, request.user)
     except (ScenarioSetVersion.DoesNotExist, RegisteredModel.DoesNotExist, Judge.DoesNotExist,
-            JudgeVersion.DoesNotExist) as exc:
+            JudgeVersion.DoesNotExist, Agent.DoesNotExist) as exc:
         raise StableAPIError(detail="Audit input not found in project.", code="audit_input_not_found", http_status=404) from exc
 
     run = create_audit_run(
@@ -145,6 +148,7 @@ def create_audit_run_view(request, project_id):
         judge_model=judge_model,
         judge=judge,
         trace_config=data.get("trace_config") or None,
+        agent=agent,
     )
 
     # Enqueue durable work. This is best-effort: if the job system is unavailable

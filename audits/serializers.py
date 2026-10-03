@@ -18,6 +18,8 @@ class AuditRunSerializer(serializers.ModelSerializer):
             "scenario_set_version_number",
             "scenario_set_version_hash",
             "target_config_snapshot",
+            "agent",
+            "agent_config_snapshot",
             "auditor_config_snapshot",
             "judge_version",
             "judge_config_snapshot",
@@ -45,6 +47,9 @@ class AuditRunCreateSerializer(serializers.Serializer):
     name = serializers.CharField(max_length=250)
     scenario_set_version_id = serializers.IntegerField()
     target_model_id = serializers.IntegerField()
+    # Optional: target an Agent (model + knowledge + tools + retrieval) instead
+    # of a bare model. When set, target_model_id must match the agent's base model.
+    agent_id = serializers.IntegerField(required=False)
     auditor_model_id = serializers.IntegerField()
     judge_model_id = serializers.IntegerField()
     # How it grades: a judge version, or a judge (its latest version). Neither

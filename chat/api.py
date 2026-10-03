@@ -173,6 +173,7 @@ class ChatAPI:
         ]
 
 
+
 # --- pure helpers (no I/O, so they are cheap to test) ----------------------
 def chat_model_prefix(connection) -> str:
     """The Open WebUI ``prefix_id`` for a connection.

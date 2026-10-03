@@ -1,0 +1,68 @@
+/* Studio admin embed stylesheet.
+ *
+ * Served as Open WebUI's /static/custom.css *for workspace/admin requests*
+ * (the proxy picks this file over chat/embed.css when the request carries the
+ * ?__studio_admin=1 marker). Goal: show only the target workspace section
+ * (Knowledge, Tools, ...) with no Open WebUI tab nav or chrome, so the iframe
+ * reads as a Studio page.
+ *
+ * This file is served INSTEAD of chat/embed.css for admin requests, so it must
+ * carry every hook that still applies in the workspace context. The workspace
+ * pages have no chat sidebar, but the "Open Sidebar" toggle button is present
+ * and must stay hidden (same hook as embed.css).
+ *
+ * DRIFT RISK: the tab-nav selector below is structural (main#main-content >
+ * div > nav) because Open WebUI gives that <nav> no id or aria-label, only
+ * Tailwind classes. An upgrade that changes the DOM depth or adds a sibling
+ * nav will silently re-expose the tab bar. Detection is visual: if the
+ * Models/Knowledge/Prompts/Skills/Tools tab bar reappears at the top of the
+ * embedded frame, re-check the workspace DOM and update the selector. The
+ * #workspace-container id is the stable "keep" hook — if it is renamed, the
+ * whole section disappears, which is loud and easy to spot.
+ */
+
+/* The workspace tab bar (Models / Knowledge / Prompts / Skills / Tools).
+ * Structural: the <nav> in the first child of main#main-content holds this
+ * link row, but also the section's "Create" button — so only the scrollable
+ * link row (the overflow-x-auto div) goes, not the whole nav. Detection is
+ * visual: if the Models/Knowledge/Prompts/Skills/Tools links reappear at the
+ * top of the embedded frame, re-check the workspace DOM and update the
+ * selector. The #workspace-container id is the stable "keep" hook — if it is
+ * renamed, the whole section disappears, which is loud and easy to spot. */
+main#main-content > div > nav div.overflow-x-auto {
+  display: none !important;
+}
+
+/* NOTE: the KB modal's "Access List" row / "Add Access" button / "No access
+ * grants. Private to you." text are masked by chat/embed_admin.js (injected
+ * inline into marked documents by the proxy), not here — they are identified
+ * by text content, which plain CSS cannot match. Private/Public stays. */
+
+/* The chat-history sidebar. On larger screens Open WebUI shows the full
+ * sidebar (a 42px collapsed rail + an expanded panel) even on workspace
+ * pages. The embed shows only the target section, so the whole sidebar goes:
+ *   - #sidebar: the collapsed 42px rail (always present, stable id)
+ *   - the expanded panel: a sibling div with aria-label="Chat history" that
+ *     holds New Chat / Search / Notes / Workspace / Folders / Chats. Matched
+ *     by aria-label (no id); the :not(#sidebar) keeps it from also matching
+ *     the rail.
+ *   - the "Open Sidebar" toggle buttons: two of them (one in the top bar,
+ *     one in the rail), both aria-label="Open Sidebar". With the panel hidden
+ *     they would only open a blank gap.
+ *
+ * Fallback: the rail also carries role="navigation" + data-state in some
+ * render modes, so a second hook beside the id covers a rename. */
+#sidebar,
+div[aria-label="Chat history"]:not(#sidebar),
+[role="navigation"][data-state],
+[aria-label="Open Sidebar"],
+#sidebar-toggle-button {
+  display: none !important;
+}
+
+/* Keep the section content filling the frame. The workspace container is the
+ * stable "keep" hook; give it the full height so the masked frame has no dead
+ * space where the tab bar was. */
+#workspace-container {
+  height: 100% !important;
+}

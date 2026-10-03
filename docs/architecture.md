@@ -56,7 +56,7 @@ ordinary run, so the drift chart is a series of reproducible experiments.
 | Mode | Database | Hatchet | Used by |
 |---|---|---|---|
 | Production (Compose) | PostgreSQL | `hatchet-server` container | `docker-compose.yml` |
-| Local dev | SQLite (`SIMPLEAUDIT_LOCAL_SQLITE=1`) | embedded (`dev_server --embedded`) | contributors |
+| Local dev | SQLite (`SIMPLEAUDIT_LOCAL_SQLITE=1`) | embedded | contributors (`uv run manage.py dev`) |
 | Demo (single container) | SQLite (`SIMPLEAUDIT_MINIMAL=1`) | embedded, started in-process (`infra/minimal_config.py`) | HF Space, `uvx simpleaudit-studio` |
 
 Embedded Hatchet uses the Hatchet SDK's sidecar with its own PostgreSQL

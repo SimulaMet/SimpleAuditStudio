@@ -83,17 +83,21 @@
         </button>
         <div class="min-w-0">
           <h1 class="text-sm font-semibold text-gray-200 leading-tight truncate flex items-center gap-2">
-            <a href="/" class="hover:opacity-80 transition-opacity" title="Go to homepage">
+            <a href="/" class="hover:opacity-80 transition-opacity md:hidden" title="Go to homepage">
               <img src="{% static 'logo.svg' %}?v=3" alt="SimpleAudit" class="h-4 w-4 object-contain rounded shrink-0">
             </a>
-            <a href="/" class="hover:text-accent transition-colors">{% for item in nav_items %}{% if item.active %}{{ item.label }}{% endif %}{% empty %}SimpleAudit{% endfor %}</a>
+            <a href="/" class="hover:text-accent transition-colors">{% for item in nav_items %}{% if item.active %}{{ item.label }}{% if item.active_child %} / {{ item.active_child }}{% endif %}{% endif %}{% empty %}SimpleAudit{% endfor %}</a>
           </h1>
           <nav class="text-xs text-gray-500 leading-tight hidden sm:flex items-center gap-1 truncate" aria-label="Breadcrumb">
             <a href="/" class="hover:text-gray-300 transition-colors">Studio</a>
             {% for item in nav_items %}
               {% if item.active and item.url != '/' %}
                 <span class="text-gray-600">/</span>
-                <span class="text-gray-400">{{ item.label }}</span>
+                <a href="{{ item.url }}" class="hover:text-gray-300 transition-colors">{{ item.label }}</a>
+                {% if item.active_child %}
+                  <span class="text-gray-600">/</span>
+                  <span class="text-gray-400">{{ item.active_child }}</span>
+                {% endif %}
               {% endif %}
             {% endfor %}
             {% block breadcrumb_extra %}{% endblock %}
@@ -207,6 +211,36 @@
   
   document.addEventListener('keydown', e => { if (e.key === 'Escape' && root.classList.contains('sidebar-open')) setDrawer(false); });
   matchMedia('(min-width: 768px)').addEventListener('change', e => { if (e.matches) setDrawer(false); });
+})();
+</script>
+<script>
+// Keep scroll position across same-page reloads (e.g. the ⟳ Sync buttons).
+// The app scrolls inside <main>, not the document, so the browser's native
+// scroll restoration can't help; remember it in localStorage instead.
+(function () {
+  const main = document.querySelector('main');
+  if (!main) return;
+  try {
+    const key = 'sa-scroll:' + location.pathname + location.search;
+    main.addEventListener('scroll', () => {
+      localStorage.setItem(key, String(main.scrollTop));
+    }, { passive: true });
+    window.addEventListener('beforeunload', () => {
+      localStorage.setItem(key, String(main.scrollTop));
+    });
+    if (history.scrollRestoration) history.scrollRestoration = 'manual';
+    const y = Number(localStorage.getItem(key)) || 0;
+    if (y > 0) {
+      // Retry across a few frames: the page may not be laid out on the first
+      // frame after a reload, so the scrollTop assignment would clamp to 0.
+      let tries = 0;
+      const step = () => {
+        main.scrollTop = y;
+        if (main.scrollTop < 1 && ++tries < 10) requestAnimationFrame(step);
+      };
+      requestAnimationFrame(step);
+    }
+  } catch (e) {}
 })();
 </script>
 </body>
