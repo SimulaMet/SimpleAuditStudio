@@ -85,18 +85,23 @@ def write_access(request):
     return {"can_write": write_block_reason(request) is None}
 
 
-# (url name, label, icon, path prefixes that make it active, admin-only)
+# (url name, label, icon, path prefixes that make it active, admin-only, children)
+# children is a tuple of (url name, label, icon) rendered as indented sub-items.
 _NAV = (
-    ("dashboard", "Dashboard", "◉", ("/", "/runs/"), False),
-    ("new_experiment", "New Experiment", "＋", ("/experiments/new/",), False),
-    ("experiments", "Experiments", "⊞", ("/experiments/",), False),
-    ("monitors", "Monitors", "↻", ("/monitors/",), False),
-    ("scenarios", "Scenarios", "▤", ("/scenarios/",), False),
-    ("connections", "Connections", "⬡", ("/connections/",), False),
-    ("judges", "Judges", "⚖", ("/judges/",), False),
-    ("compare", "Compare", "⇄", ("/compare/",), False),
-    ("visualizer", "Visualizer", "◫", ("/visualizer/",), False),
-    ("health", "Health", "⚕", ("/health/",), True),
+    ("dashboard", "Dashboard", "◉", ("/", "/runs/"), False, ()),
+    ("new_experiment", "New Experiment", "＋", ("/experiments/new/",), False, ()),
+    ("experiments", "Experiments", "⊞", ("/experiments/",), False, ()),
+    ("monitors", "Monitors", "↻", ("/monitors/",), False, ()),
+    ("scenarios", "Scenarios", "▤", ("/scenarios/",), False, ()),
+    ("agents", "Agents", "🤖", ("/agents/",), False, (
+        ("agents_knowledge", "Knowledge Bases", "📚"),
+        ("agents_tools", "Tools", "🔧"),
+    )),
+    ("connections", "Connections", "⬡", ("/connections/",), False, ()),
+    ("judges", "Judges", "⚖", ("/judges/",), False, ()),
+    ("compare", "Compare", "⇄", ("/compare/",), False, ()),
+    ("visualizer", "Visualizer", "◫", ("/visualizer/",), False, ()),
+    ("health", "Health", "⚕", ("/health/",), True, ()),
 )
 
 
@@ -112,10 +117,19 @@ def nav(request):
 
     admin = is_any_project_admin(user)
     path = request.path
-    entries = _NAV + ((("chat", "Chat", "💬", ("/chat/",), False),) if chat_enabled() else ())
+    entries = _NAV + ((("chat", "Chat", "💬", ("/chat/",), False, ()),) if chat_enabled() else ())
     items = [
-        {"url": reverse(name), "label": label, "icon": icon, "prefixes": prefixes}
-        for name, label, icon, prefixes, admin_only in entries
+        {
+            "url": reverse(name),
+            "label": label,
+            "icon": icon,
+            "prefixes": prefixes,
+            "children": [
+                {"url": reverse(cname), "label": clabel, "icon": cicon}
+                for cname, clabel, cicon in children
+            ],
+        }
+        for name, label, icon, prefixes, admin_only, children in entries
         if admin or not admin_only
     ]
 
@@ -125,4 +139,9 @@ def nav(request):
     best = max(items, key=score, default=None)
     for item in items:
         item["active"] = best is not None and item is best and score(best) > 0
+        # For sub-pages (children), expose the exact child label so the
+        # breadcrumb can render "Agents / Knowledge" instead of just "Agents".
+        item["active_child"] = next(
+            (c["label"] for c in item["children"] if c["url"] == path), None
+        )
     return {"nav_items": items}

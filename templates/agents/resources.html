@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block title %}{{ section_label }} — SimpleAudit{% endblock %}
+{% block content %}
+<div class="mb-4">
+  <div class="flex items-center gap-2">
+    <a href="{% url 'agents' %}" class="text-xs text-gray-500 hover:text-gray-300">&larr; Agents</a>
+    <h1 class="text-lg font-semibold text-gray-100">{{ section_label }}</h1>
+  </div>
+  <p class="text-sm text-gray-500 mt-0.5 max-w-2xl">
+    Create and manage {{ section_label|lower }}. Changes sync into your agents automatically.
+  </p>
+</div>
+
+{% if chat_enabled %}
+{% if section == 'knowledge' and directory_url_enabled %}
+<div class="mb-2">
+  <a href="{{ directory_url }}" target="_blank" rel="noopener"
+     title="Opens the full Knowledge workspace in a new tab"
+     class="inline-flex items-center gap-1.5 rounded-md border border-gray-700 bg-gray-800 px-2.5 py-1 text-xs text-gray-200 hover:bg-gray-700 transition-colors">
+    📁 Folders, directory sync &amp; bulk upload &nearr;
+  </a>
+</div>
+{% endif %}
+<iframe class="resources-frame w-full rounded-xl border border-gray-800 bg-white"
+        src="{{ iframe_src }}"></iframe>
+{% else %}
+<div class="bg-surface-raised rounded-xl border border-gray-800 p-6 text-sm text-gray-400">
+  Chat (Open WebUI) is not enabled on this server, so resources cannot be managed here.
+  Enable it with <code class="text-gray-300">SIMPLEAUDIT_CHAT=embedded</code>.
+</div>
+{% endif %}
+
+<style>
+  .resources-frame { height: calc(100vh - 220px); min-height: 480px; }
+</style>
+{% endblock %}

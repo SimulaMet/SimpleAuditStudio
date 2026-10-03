@@ -1,0 +1,119 @@
+"""Tests for the /agents/knowledge/ and /agents/tools/ iframe pages."""
+from unittest import mock
+
+from django.test import TestCase
+
+from accounts.models import ProjectMembership
+from infra.tests.factories import ProjectFactory, UserFactory
+
+
+def _member(project, *, is_admin=True):
+    user = UserFactory()
+    ProjectMembership.objects.create(
+        project=project, user=user,
+        role=ProjectMembership.Role.ADMIN if is_admin else ProjectMembership.Role.MEMBER,
+    )
+    return user
+
+
+class AgentResourcesViewTest(TestCase):
+    def setUp(self):
+        self.project = ProjectFactory()
+        self._enabled = mock.patch("chat.config.ENABLED", True)
+        self._enabled.start()
+        self.addCleanup(self._enabled.stop)
+
+    def _login(self, user):
+        self.client.force_login(user)
+
+    def test_anonymous_is_redirected_to_login(self):
+        resp = self.client.get("/agents/knowledge/")
+        self.assertEqual(resp.status_code, 302)
+        self.assertIn("/login/", resp["Location"])
+
+    def test_knowledge_page_renders_knowledge_iframe(self):
+        user = _member(self.project)
+        self._login(user)
+        resp = self.client.get("/agents/knowledge/")
+        self.assertEqual(resp.status_code, 200)
+        self.assertTemplateUsed(resp, "agents/resources.html")
+        self.assertIn("/workspace/knowledge", resp.content.decode())
+        self.assertIn("__studio_admin=1", resp.content.decode())
+        self.assertIn("Knowledge", resp.content.decode())
+
+    def test_tools_page_renders_tools_iframe(self):
+        user = _member(self.project)
+        self._login(user)
+        resp = self.client.get("/agents/tools/")
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn("/workspace/tools", resp.content.decode())
+        self.assertIn("__studio_admin=1", resp.content.decode())
+        self.assertIn("Tools", resp.content.decode())
+
+    def test_knowledge_offers_full_workspace_link(self):
+        # Folder / directory-sync upload uses the File System Access API,
+        # blocked in the cross-origin embed, so the knowledge page must offer a
+        # top-level tab (no admin marker, no nonce) where it is permitted.
+        user = _member(self.project)
+        self._login(user)
+        resp = self.client.get("/agents/knowledge/")
+        html = resp.content.decode()
+        self.assertIn("Folders, directory sync", html)
+        self.assertIn('target="_blank"', html)
+        # The link points at the plain full page — the href is
+        # ".../workspace/knowledge" with no query string at all (unlike the
+        # iframe src, which carries ?__studio_admin=1&t=).
+        self.assertIn("/workspace/knowledge\"", html)
+        self.assertNotIn("?create=1", html)
+
+    def test_tools_does_not_offer_full_workspace_link(self):
+        # Tools has no folder-upload flow, so no full-workspace escape hatch.
+        user = _member(self.project)
+        self._login(user)
+        resp = self.client.get("/agents/tools/")
+        self.assertNotIn("Open full workspace", resp.content.decode())
+
+    def test_view_is_login_protected(self):
+        resp = self.client.get("/agents/tools/")
+        self.assertEqual(resp.status_code, 302)
+        self.assertIn("/login/", resp["Location"])
+
+
+class AgentResourcesNavTest(TestCase):
+    def setUp(self):
+        self.project = ProjectFactory()
+        self.user = _member(self.project)
+        self.client.force_login(self.user)
+
+    def test_knowledge_and_tools_appear_in_sidebar(self):
+        resp = self.client.get("/agents/knowledge/")
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn(b"agents/knowledge", resp.content)
+        self.assertIn(b"agents/tools", resp.content)
+
+    def test_nav_context_has_knowledge_and_tools_as_agents_children(self):
+        resp = self.client.get("/agents/")
+        items = resp.context["nav_items"]
+        # Knowledge Bases and Tools are not top-level items; they sit under Agents.
+        top_labels = [i["label"] for i in items]
+        self.assertNotIn("Knowledge Bases", top_labels)
+        self.assertNotIn("Tools", top_labels)
+        agents = next(i for i in items if i["label"] == "Agents")
+        knowledge = next(c for c in agents["children"] if c["label"] == "Knowledge Bases")
+        self.assertEqual(knowledge["url"], "/agents/knowledge/")
+        tools = next(c for c in agents["children"] if c["label"] == "Tools")
+        self.assertEqual(tools["url"], "/agents/tools/")
+
+
+class AgentResourcesDisabledTest(TestCase):
+    def setUp(self):
+        self.project = ProjectFactory()
+        self.user = _member(self.project)
+        self.client.force_login(self.user)
+
+    def test_chat_disabled_shows_notice_not_iframe(self):
+        with mock.patch("chat.config.ENABLED", False):
+            resp = self.client.get("/agents/knowledge/")
+        self.assertEqual(resp.status_code, 200)
+        self.assertNotIn(b"<iframe", resp.content)
+        self.assertIn(b"not enabled", resp.content)

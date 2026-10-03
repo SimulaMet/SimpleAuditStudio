@@ -31,6 +31,14 @@ class AuditRun(models.Model):
     status = models.CharField(max_length=30, choices=Status.choices, default=Status.QUEUED)
     scenario_set_version = models.ForeignKey("scenarios.ScenarioSetVersion", on_delete=models.RESTRICT, related_name="audit_runs")
     target_model = models.ForeignKey("model_registry.RegisteredModel", on_delete=models.RESTRICT, related_name="target_audit_runs")
+    # Optional: the Agent that composed this target. When set, the run's target
+    # is an auditable agent (model + knowledge + tools + retrieval), not just a
+    # bare model. The agent's full configuration is frozen in
+    # ``agent_config_snapshot`` for reproducibility.
+    agent = models.ForeignKey(
+        "model_registry.Agent", on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="audit_runs",
+    )
     auditor_model = models.ForeignKey("model_registry.RegisteredModel", on_delete=models.RESTRICT, related_name="auditor_audit_runs")
     # How the run is graded (criteria, output format, probe prompt) and the model that grades.
     judge_version = models.ForeignKey("judges.JudgeVersion", on_delete=models.RESTRICT, related_name="audit_runs")
@@ -39,6 +47,10 @@ class AuditRun(models.Model):
     auditor_config_snapshot = models.JSONField()
     judge_config_snapshot = models.JSONField()
     generation_parameters_snapshot = models.JSONField()
+    # Frozen Agent configuration (model, KBs, tools, retrieval, capabilities).
+    # Present only when ``agent`` is set. Lets a historical run be reproduced
+    # even if the live Agent record is later edited or deleted.
+    agent_config_snapshot = models.JSONField(null=True, blank=True)
     # Optional trace acquisition config (Promptfoo parity): {"mode": "builtin"|"tempo", ...}.
     # Empty/absent = no tracing (the normal black-box path). Frozen at run creation
     # like the other snapshots; the worker hands it to the engine's tracing layer.

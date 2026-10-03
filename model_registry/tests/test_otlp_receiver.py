@@ -5,10 +5,12 @@ auth failures, method handling, and revocation.
 """
 import base64
 import json
+from unittest import mock
 
 from django.test import Client, TestCase
 from simpleaudit.tracing.auth import parse_basic_header, parse_bearer_header
 
+import chat.config as chat_config
 from infra.tests.factories import (
     MembershipFactory,
     ModelConnectionFactory,
@@ -229,6 +231,185 @@ class OTLPIngestionEndpointTest(TestCase):
         resp = self.client.post("/otlp/v1/traces", data=_otlp_body(), content_type="application/json")
         self.assertEqual(resp.status_code, 401)
 
+
+class OtlpSpanPersistenceTest(TestCase):
+    """Ingested spans are persisted to OtlpSpan so a separate worker process
+    (the auditor) can read what the web process's listener received, by
+    (target_id, trace_id)."""
+
+    TRACE_ID = "ef" * 16
+
+    def setUp(self):
+        self.user = UserFactory()
+        self.project = ProjectFactory()
+        MembershipFactory(user=self.user, project=self.project, role="admin")
+        self.conn = ModelConnectionFactory(project=self.project, name="owui-a")
+        self.client = Client(SERVER_NAME="localhost")
+        self.nc = otlp.create_credential(project=self.project, connection=self.conn, auth_mode="basic", user=self.user)
+
+    def _body(self, spans):
+        return json.dumps({"resourceSpans": [{"scopeSpans": [{"spans": spans}]}]})
+
+    def test_ingest_persists_normalized_span(self):
+        body = self._body([{
+            "traceId": self.TRACE_ID, "spanId": "11" * 8, "name": "llm chat", "kind": 1,
+            "startTimeUnixNano": 1_700_000_000_000_000_000, "endTimeUnixNano": 1_700_000_001_000_000_000,
+            "attributes": [{"key": "openinference.span.kind", "value": {"stringValue": "LLM"}}],
+            "status": {"code": 0},
+        }])
+        resp = self.client.post(
+            "/otlp/v1/traces", data=body, content_type="application/json",
+            HTTP_AUTHORIZATION=_basic_header(self.nc.credential.username, self.nc.secret),
+        )
+        self.assertEqual(resp.status_code, 200)
+
+        rows = otlp_views.get_spans_for_trace_db(self.nc.credential.target_id, self.TRACE_ID)
+        self.assertEqual(len(rows), 1)
+        row = rows[0]
+        self.assertEqual(row["span_id"], "11" * 8)
+        self.assertEqual(row["name"], "llm chat")
+        self.assertEqual(row["kind"], "LLM")
+        # The target tag survives normalization and persistence.
+        self.assertEqual(row["attributes"]["simpleaudit.target_id"], self.nc.credential.target_id)
+
+    def test_persist_is_idempotent_on_resend(self):
+        """OpenWebUI batches + retries exports; a re-sent span must not duplicate."""
+        body = self._body([{"traceId": self.TRACE_ID, "spanId": "22" * 8, "name": "turn", "kind": 1}])
+        header = _basic_header(self.nc.credential.username, self.nc.secret)
+        for _ in range(3):
+            self.assertEqual(
+                self.client.post("/otlp/v1/traces", data=body, content_type="application/json",
+                                 HTTP_AUTHORIZATION=header).status_code, 200)
+        rows = otlp_views.get_spans_for_trace_db(self.nc.credential.target_id, self.TRACE_ID)
+        self.assertEqual(len(rows), 1)
+
+    def test_trace_lookup_isolated_per_trace_and_target(self):
+        body = self._body([
+            {"traceId": self.TRACE_ID, "spanId": "33" * 8, "name": "a", "kind": 1},
+            {"traceId": "ab" * 16, "spanId": "44" * 8, "name": "b", "kind": 1},
+        ])
+        self.client.post(
+            "/otlp/v1/traces", data=body, content_type="application/json",
+            HTTP_AUTHORIZATION=_basic_header(self.nc.credential.username, self.nc.secret),
+        )
+        # Per-trace isolation: each trace id returns only its own span.
+        self.assertEqual(
+            [s["span_id"] for s in otlp_views.get_spans_for_trace_db(self.nc.credential.target_id, self.TRACE_ID)],
+            ["33" * 8],
+        )
+        self.assertEqual(
+            [s["span_id"] for s in otlp_views.get_spans_for_trace_db(self.nc.credential.target_id, "ab" * 16)],
+            ["44" * 8],
+        )
+        # Per-target isolation: another target sees none of this target's spans.
+        self.assertEqual(otlp_views.get_spans_for_trace_db("other-target", self.TRACE_ID), [])
+
+    def test_persistence_failure_still_acks(self):
+        """A DB failure must not fail the export (the target would retry/flood)."""
+        with mock.patch("model_registry.otlp_views._persist_spans", side_effect=RuntimeError("db down")):
+            resp = self.client.post(
+                "/otlp/v1/traces", data=_otlp_body(), content_type="application/json",
+                HTTP_AUTHORIZATION=_basic_header(self.nc.credential.username, self.nc.secret),
+            )
+        self.assertEqual(resp.status_code, 200)
+        self.assertTrue(resp.json()["authenticated"])
+        # The in-memory store still holds the span.
+        self.assertEqual(len(otlp_views.get_spans_for_target(self.nc.credential.target_id)), 1)
+
+
+
+class OTLPProtobufIngestionTest(TestCase):
+    """The listener accepts the protobuf wire format, not just JSON.
+
+    Regression: Open WebUI's exporter (``OTEL_OTLP_SPAN_EXPORTER=http``)
+    posts ``application/x-protobuf`` and passes the endpoint to the OTLP
+    exporter explicitly (no ``/v1/traces`` append). When the listener only
+    parsed JSON, ``json.loads`` raised on the protobuf body and the catch-all
+    "never fail the export" handler swallowed it — every export was
+    acknowledged 200 but silently dropped.
+    """
+
+    def setUp(self):
+        from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import (
+            ExportTraceServiceRequest,
+        )
+        from opentelemetry.proto.trace.v1 import trace_pb2
+
+        self.user = UserFactory()
+        self.project = ProjectFactory()
+        MembershipFactory(user=self.user, project=self.project, role="admin")
+        self.conn = ModelConnectionFactory(project=self.project, name="owui-pb")
+        self.client = Client(SERVER_NAME="localhost")
+        self.nc = otlp.create_credential(project=self.project, connection=self.conn, auth_mode="basic", user=self.user)
+
+        req = ExportTraceServiceRequest()
+        rs = req.resource_spans.add()
+        rs.resource.attributes.add(key="service.name", value={"string_value": "owui-test"})
+        ss = rs.scope_spans.add()
+        sp = ss.spans.add()
+        self.TRACE_ID = "1a2b" * 8
+        self.SPAN_ID = "cd34" * 4
+        sp.trace_id = bytes.fromhex(self.TRACE_ID)
+        sp.span_id = bytes.fromhex(self.SPAN_ID)
+        sp.name = "invoke_model test-model"
+        sp.kind = trace_pb2.Span.SpanKind.SPAN_KIND_SERVER
+        sp.start_time_unix_nano = 1_700_000_000_000_000_000
+        sp.end_time_unix_nano = 1_700_000_001_500_000_000
+        sp.attributes.add(key="openinference.span.kind", value={"string_value": "LLM"})
+        sp.attributes.add(key="llm.model_name", value={"string_value": "test-model"})
+        self.BODY = req.SerializeToString()
+
+    def _post(self, body, content_type="application/x-protobuf"):
+        return self.client.post(
+            "/otlp/v1/traces", data=body, content_type=content_type,
+            HTTP_AUTHORIZATION=_basic_header(self.nc.credential.username, self.nc.secret),
+        )
+
+    def test_protobuf_export_is_persisted_with_hex_ids(self):
+        resp = self._post(self.BODY)
+        self.assertEqual(resp.status_code, 200)
+        rows = otlp_views.get_spans_for_trace_db(self.nc.credential.target_id, self.TRACE_ID)
+        self.assertEqual(len(rows), 1)
+        row = rows[0]
+        # protobuf-JSON base64 ids are normalized to hex (the pipeline's format).
+        self.assertEqual(row["span_id"], self.SPAN_ID)
+        self.assertEqual(row["name"], "invoke_model test-model")
+        self.assertEqual(row["kind"], "LLM")
+        self.assertEqual(row["attributes"]["llm.model_name"], "test-model")
+        self.assertEqual(row["attributes"]["simpleaudit.target_id"], self.nc.credential.target_id)
+
+    def test_octet_stream_content_type_also_decodes(self):
+        resp = self._post(self.BODY, content_type="application/octet-stream")
+        self.assertEqual(resp.status_code, 200)
+        rows = otlp_views.get_spans_for_trace_db(self.nc.credential.target_id, self.TRACE_ID)
+        self.assertEqual(len(rows), 1)
+
+    def test_json_export_still_works_alongside_protobuf(self):
+        body = json.dumps({"resourceSpans": [{"scopeSpans": [{"spans": [
+            {"traceId": self.TRACE_ID, "spanId": "55" * 8, "name": "json span", "kind": 1}]}]}]})
+        self.assertEqual(self._post(body.encode(), "application/json").status_code, 200)
+        self.assertEqual(self._post(self.BODY).status_code, 200)
+        rows = otlp_views.get_spans_for_trace_db(self.nc.credential.target_id, self.TRACE_ID)
+        self.assertEqual(sorted(r["name"] for r in rows), ["invoke_model test-model", "json span"])
+
+
+class ChatOTLPEndpointTest(TestCase):
+    """Open WebUI's OTLP endpoint must be the full /otlp/v1/traces URL.
+
+    Open WebUI passes ``OTEL_EXPORTER_OTLP_ENDPOINT`` explicitly to
+    ``HttpOTLPSpanExporter``; an explicit endpoint is used as-is (no
+    ``/v1/traces`` append — verified against open-webui/backend
+    ``utils/telemetry/setup.py``). A base-only URL 404s.
+    """
+
+    def test_default_endpoint_is_full_path(self):
+        # Passing an explicit port keeps the assertion independent of $PORT.
+        with mock.patch.object(chat_config, "OTLP_ENDPOINT", ""):
+            self.assertEqual(chat_config.otlp_endpoint_url(8001), "http://127.0.0.1:8001/otlp/v1/traces")
+
+    def test_override_endpoint_used_verbatim(self):
+        with mock.patch.object(chat_config, "OTLP_ENDPOINT", "https://example.com/otlp/v1/traces"):
+            self.assertEqual(chat_config.otlp_endpoint_url(), "https://example.com/otlp/v1/traces")
 
 
 class OTLPFlagTest(TestCase):

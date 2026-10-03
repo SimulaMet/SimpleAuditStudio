@@ -223,7 +223,25 @@ class TestAutoLoginToken(TestCase):
         self.assertEqual(response.status_code, 404)
 
     @override_settings(MINIMAL_CONFIG=False)
-    def test_disabled_outside_minimal_config(self):
-        with patch.dict(os.environ, {"SIMPLEAUDIT_AUTO_LOGIN_TOKEN": self.TOKEN}):
+    def test_disabled_in_non_local_modes(self):
+        # Neither the uvx demo (MINIMAL_CONFIG) nor the dev SQLite flag: the
+        # endpoint must stay 404 so a deployed container never exposes it.
+        # The test env sets SIMPLEAUDIT_LOCAL_SQLITE=1 globally, so neutralize
+        # it explicitly here.
+        with patch.dict(
+            os.environ,
+            {"SIMPLEAUDIT_LOCAL_SQLITE": "", "SIMPLEAUDIT_AUTO_LOGIN_TOKEN": self.TOKEN},
+        ):
             response = self._login(self.TOKEN)
         self.assertEqual(response.status_code, 404)
+
+    @override_settings(MINIMAL_CONFIG=False)
+    def test_enabled_in_dev_sqlite_mode(self):
+        # manage.py dev runs with SIMPLEAUDIT_LOCAL_SQLITE=1 and no
+        # MINIMAL_CONFIG; the one-time sign-in link must work there too.
+        with patch.dict(
+            os.environ, {"SIMPLEAUDIT_LOCAL_SQLITE": "1", "SIMPLEAUDIT_AUTO_LOGIN_TOKEN": self.TOKEN}
+        ):
+            response = self._login(self.TOKEN)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.wsgi_request.user.username, "studio")

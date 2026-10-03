@@ -11,3 +11,11 @@ def jsonify(value):
     if value is None:
         return ""
     return json.dumps(value, ensure_ascii=False)
+
+
+@register.filter
+def get_item(d, key):
+    """Access a dict by key in a template: {{ my_dict|get_item:"key" }}."""
+    if isinstance(d, dict):
+        return d.get(key)
+    return None

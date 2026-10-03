@@ -51,6 +51,12 @@ set before paint in base.html). Mobile: an off-canvas drawer opened from the top
        class="sb-item flex items-center gap-3 px-3 py-2 rounded-lg text-sm whitespace-nowrap {% if item.active %}bg-accent/15 text-accent font-medium{% else %}text-gray-400 hover:text-gray-200 hover:bg-surface-overlay{% endif %}">
       <span class="sb-icon text-base w-5 text-center shrink-0" aria-hidden="true">{{ item.icon }}</span><span class="sidebar-label">{{ item.label }}</span>
     </a>
+    {% for child in item.children %}
+    <a href="{{ child.url }}" aria-label="{{ child.label }}"
+       class="sb-item flex items-center gap-3 pl-9 pr-3 py-1.5 rounded-lg text-sm whitespace-nowrap text-gray-500 hover:text-gray-200 hover:bg-surface-overlay {% if request.path == child.url %}text-accent font-medium{% endif %}">
+      <span class="sb-icon text-sm w-4 text-center shrink-0" aria-hidden="true">{{ child.icon }}</span><span class="sidebar-label">{{ child.label }}</span>
+    </a>
+    {% endfor %}
     {% endfor %}
   </nav>
 

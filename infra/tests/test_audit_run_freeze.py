@@ -121,6 +121,83 @@ class AuditRunFreezeTests(TestCase):
         assert run.simpleaudit_version == "0.1.13"
         assert run.git_commit == ""
 
+    def test_create_audit_run_defaults_to_studio_tracing_when_target_exports_otel(self):
+        """A target whose connection has an OTLP credential gets studio-mode
+        tracing automatically; the worker resolves the live target_id."""
+        from unittest import mock
+
+        from model_registry import otlp_services as otlp
+
+        nc = otlp.create_credential(
+            project=self.project, connection=self.target_conn, auth_mode="basic", user=self.user
+        )
+        with mock.patch(
+            "audits.services.resolve_engine_provenance",
+            return_value=mock.Mock(version="0.1.0", commit="deadbeef", source="metadata"),
+        ):
+            response = self.client.post(
+                f"/api/projects/{self.project.id}/audit-runs/create/",
+                {
+                    "name": "Traced audit",
+                    "scenario_set_version_id": self.version.id,
+                    "target_model_id": self.target.id,
+                    "auditor_model_id": self.auditor.id,
+                    "judge_model_id": self.judge.id,
+                    "judge_version_id": judge_for(self.judge).id,
+                },
+                format="json",
+            )
+        assert response.status_code == 201, response.content
+        run = AuditRun.objects.get(id=response.json()["id"])
+        assert run.trace_config == {"mode": "studio", "target_id": nc.credential.target_id}
+
+    def test_create_audit_run_no_tracing_when_target_has_no_otel(self):
+        from unittest import mock
+
+        with mock.patch(
+            "audits.services.resolve_engine_provenance",
+            return_value=mock.Mock(version="0.1.0", commit="deadbeef", source="metadata"),
+        ):
+            response = self.client.post(
+                f"/api/projects/{self.project.id}/audit-runs/create/",
+                {
+                    "name": "Plain audit",
+                    "scenario_set_version_id": self.version.id,
+                    "target_model_id": self.target.id,
+                    "auditor_model_id": self.auditor.id,
+                    "judge_model_id": self.judge.id,
+                    "judge_version_id": judge_for(self.judge).id,
+                },
+                format="json",
+            )
+        assert response.status_code == 201, response.content
+        run = AuditRun.objects.get(id=response.json()["id"])
+        assert run.trace_config == {}
+
+    def test_create_audit_run_explicit_trace_config_wins(self):
+        from unittest import mock
+
+        with mock.patch(
+            "audits.services.resolve_engine_provenance",
+            return_value=mock.Mock(version="0.1.0", commit="deadbeef", source="metadata"),
+        ):
+            response = self.client.post(
+                f"/api/projects/{self.project.id}/audit-runs/create/",
+                {
+                    "name": "Tempo audit",
+                    "scenario_set_version_id": self.version.id,
+                    "target_model_id": self.target.id,
+                    "auditor_model_id": self.auditor.id,
+                    "judge_model_id": self.judge.id,
+                    "judge_version_id": judge_for(self.judge).id,
+                    "trace_config": {"mode": "tempo", "base_url": "http://tempo.local"},
+                },
+                format="json",
+            )
+        assert response.status_code == 201, response.content
+        run = AuditRun.objects.get(id=response.json()["id"])
+        assert run.trace_config == {"mode": "tempo", "base_url": "http://tempo.local"}
+
     def test_create_audit_run_refuses_when_engine_not_installed(self):
         from unittest import mock
 
