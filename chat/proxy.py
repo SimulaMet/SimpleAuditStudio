@@ -266,8 +266,10 @@ class _Handler(BaseHTTPRequestHandler):
         """
         embed_dir = os.path.dirname(__file__)
         try:
-            css = open(os.path.join(embed_dir, "embed_admin.css"), "r", encoding="utf-8").read()
-            js = open(os.path.join(embed_dir, "embed_admin.js"), "r", encoding="utf-8").read()
+            with open(os.path.join(embed_dir, "embed_admin.css"), "r", encoding="utf-8") as f:
+                css = f.read()
+            with open(os.path.join(embed_dir, "embed_admin.js"), "r", encoding="utf-8") as f:
+                js = f.read()
         except OSError:
             return ""
         return (

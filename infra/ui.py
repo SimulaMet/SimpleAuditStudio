@@ -2787,6 +2787,7 @@ def _sync_openwebui_resources(project, user):
     try:
         api = ChatAPI.as_user(user)
     except Exception:
+        logger.exception("Chat API setup failed for user %s", user)
         return None, None
 
     kb_count = 0

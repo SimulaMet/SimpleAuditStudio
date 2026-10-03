@@ -18,8 +18,7 @@ from infra.exceptions import StableAPIError
 from infra.middleware import set_correlation_context
 from judges.models import Judge, JudgeVersion
 from judges.services import default_judge_version
-from model_registry.models import Agent
-from model_registry.models import RegisteredModel
+from model_registry.models import Agent, RegisteredModel
 from scenarios.models import ScenarioSetVersion
 
 logger = logging.getLogger("simpleaudit.audit")

@@ -483,17 +483,17 @@ class AgentAuditTargetTest(TestCase):
         auditor_model = RegisteredModelFactory(project=self.project)
         judge_model = RegisteredModelFactory(project=self.project)
 
-        kwargs = dict(
-            project=self.project,
-            user=self.user,
-            name="Agent Audit Run",
-            scenario_set_version=version,
-            target_model=self.agent.base_model,
-            auditor_model=auditor_model,
-            judge_model=judge_model,
-            judge=judge_version,
-            agent=self.agent,
-        )
+        kwargs = {
+            "project": self.project,
+            "user": self.user,
+            "name": "Agent Audit Run",
+            "scenario_set_version": version,
+            "target_model": self.agent.base_model,
+            "auditor_model": auditor_model,
+            "judge_model": judge_model,
+            "judge": judge_version,
+            "agent": self.agent,
+        }
         kwargs.update(overrides)
         return create_audit_run(**kwargs)
 
@@ -595,13 +595,13 @@ class AgentAuditTargetTest(TestCase):
         self.assertEqual(ctx.exception.code, "agent_model_mismatch")
 
     def test_no_agent_run_has_null_snapshot(self):
+        from audits.services import create_audit_run
         from infra.tests.factories import (
             JudgeFactory,
             JudgeVersionFactory,
             ScenarioSetFactory,
             ScenarioSetVersionFactory,
         )
-        from audits.services import create_audit_run
 
         scenario_set = ScenarioSetFactory(project=self.project)
         version = ScenarioSetVersionFactory(scenario_set=scenario_set)
@@ -716,14 +716,13 @@ class AgentAuditTargetTest(TestCase):
         self.assertEqual(len(fa["tools"]), 1)
 
     def test_frozen_agent_none_for_bare_model_run(self):
-        from audits.services import frozen_agent
+        from audits.services import create_audit_run, frozen_agent
         from infra.tests.factories import (
             JudgeFactory,
             JudgeVersionFactory,
             ScenarioSetFactory,
             ScenarioSetVersionFactory,
         )
-        from audits.services import create_audit_run
 
         scenario_set = ScenarioSetFactory(project=self.project)
         version = ScenarioSetVersionFactory(scenario_set=scenario_set)
