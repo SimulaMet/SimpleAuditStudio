@@ -2396,35 +2396,17 @@ wheels = [
 
 [[package]]
 name = "simpleaudit"
-version = "0.3.0"
-source = { editable = "/Users/sushantgautam/Documents/SimpleAudit" }
+version = "0.3.1"
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "any-llm-sdk" },
     { name = "fsspec" },
     { name = "tqdm" },
 ]
-
-[package.metadata]
-requires-dist = [
-    { name = "aiohttp", marker = "extra == 'tracing'", specifier = ">=3.9" },
-    { name = "any-llm-sdk", specifier = ">=1.14.0" },
-    { name = "black", marker = "extra == 'dev'", specifier = ">=23.0.0" },
-    { name = "fastapi", marker = "extra == 'visualize'", specifier = ">=0.104.0" },
-    { name = "fsspec", specifier = ">=2023.1.0" },
-    { name = "grpcio", marker = "extra == 'tracing'", specifier = ">=1.60" },
-    { name = "matplotlib", marker = "extra == 'plot'", specifier = ">=3.5.0" },
-    { name = "opentelemetry-proto", marker = "extra == 'tracing'", specifier = ">=1.20" },
-    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8,<9" },
-    { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.21.0" },
-    { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=4.0.0" },
-    { name = "pytest-testmon", marker = "extra == 'dev'", specifier = ">=2,<3" },
-    { name = "pytest-xdist", marker = "extra == 'dev'", specifier = ">=3.6,<3.8" },
-    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.1.0" },
-    { name = "simpleaudit", extras = ["plot", "visualize", "dev"], marker = "extra == 'all'" },
-    { name = "tqdm", specifier = ">=4.66.0" },
-    { name = "uvicorn", extras = ["standard"], marker = "extra == 'visualize'", specifier = ">=0.24.0" },
+sdist = { url = "https://files.pythonhosted.org/packages/96/9c/9648e1f09e236701e49f90beec8870c121c9c22b924c0fb7222ac5494c4d/simpleaudit-0.3.1.tar.gz", hash = "sha256:070e0522aba0954e013af4e66a06f77782172cfe848d119bd88cde4801ffd048", size = 1478920, upload-time = "2026-10-02T10:42:52.33Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/c1/26/b0506c7e43f72bab61e228b02b6e4443ce4a4ab9568e4c5cfdfa174168e0/simpleaudit-0.3.1-py3-none-any.whl", hash = "sha256:059443b8eba0fa0f7b8fc00cfd674436d405d8341219abc8eb2b0ed40bc654ad", size = 1362230, upload-time = "2026-10-02T10:42:50.279Z" },
 ]
-provides-extras = ["tracing", "plot", "visualize", "dev", "all"]
 
 [[package]]
 name = "simpleaudit-studio"
@@ -2491,7 +2473,7 @@ requires-dist = [
     { name = "requests", specifier = "==2.32.5" },
     { name = "ruff", marker = "extra == 'dev'" },
     { name = "sentry-sdk", extras = ["django"], specifier = ">=2.0" },
-    { name = "simpleaudit", editable = "/Users/sushantgautam/Documents/SimpleAudit" },
+    { name = "simpleaudit", specifier = "==0.3.1" },
     { name = "workos", specifier = "==10.4.0" },
 ]
 provides-extras = ["postgres", "server", "dev", "e2e"]

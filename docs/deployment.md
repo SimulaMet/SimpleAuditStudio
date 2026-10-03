@@ -3,94 +3,78 @@
 Status: current (matches the code)  
 Date: 2026-10-03
 
-Four ways to run it. All of them run `migrate` on start and create the admin
-user and default workspace if missing. Each mode is one command;
-`uv run manage.py mode` prints the mode that is currently active and its
-settings.
+The one reference for the **four standard ways** to run Studio. All four start
+the same app at <http://localhost:8000> with the chat assistant on by
+default, apply the database updates on start, and create the admin user and
+default workspace if missing.
 
-| | `dev` | `embedded` | `single-docker` | `compose` |
-|---|---|---|---|---|
-| Start | `uv run manage.py dev` | `uvx simpleaudit-studio` | `docker run -p 8000:8000 -v sa-data:/data <image>` | `docker compose up -d` |
-| Process | single (hot-reload) | single | one container | multi-container |
-| Database | SQLite | SQLite | SQLite | PostgreSQL 16 |
-| Queue | embedded Hatchet | embedded Hatchet | embedded Hatchet | `hatchet-server` container |
-| Chat | on | on | on | on (profile) |
-| Web server | `runserver` :8000 | `runserver` :8000 | `runserver` :8000 | gunicorn :8000 |
-| Data | repo files + `.env` | `~/.simpleaudit-studio` | `/data` volume | Docker volumes |
-| DEBUG | on | off | off | off |
+| # | Way | Standard command(s) | Database | Best for |
+|---|-----|---------------------|----------|----------|
+| 1 | **One-liner** | `uvx simpleaudit-studio@latest` | built in | trying it out; running a stable release |
+| 2 | **Docker** (one container) | `docker build -t simpleaudit-studio .` then `docker run -d -p 8000:7860 -v sa-data:/data --name simpleaudit-studio simpleaudit-studio` | built in | self-hosting a single copy |
+| 3 | **Compose** | `cp .env.example .env` (set three values) then `docker compose up -d` | PostgreSQL 16 (own container) | teams and production |
+| 4 | **Development** | `uv run manage.py dev` | built in | working on the code in this repository |
 
-The local modes (`dev`, `embedded`) share mechanics — SQLite + embedded
-Hatchet + chat — and differ only in intent: `dev` runs your **source checkout**
-with auto-reload and DEBUG; `embedded` runs the **installed artifact**
-(`uvx`) with no reload.
+"Ways" 1–3 need no database server: the app bundles a local SQLite file and
+an embedded job-queue engine. Only Compose runs the full multi-container
+stack with PostgreSQL.
 
-## 1. Demo: uvx and the HF Space
+Chat is on by default in every way and can always be turned off — with the
+`--disable-chat` / `--no-chat` flag or `SIMPLEAUDIT_CHAT=off` (the flag beats
+the env value, which beats the default). Each section below shows its toggle.
+
+`uv run manage.py mode` prints which way is active on this machine and with
+what settings. Older run setups (raw `dev_server` without the embedded
+engine, external-Postgres development) are removed; the table above is the
+whole surface.
+
+## 1. One-liner (`uvx simpleaudit-studio`)
 
 ```bash
-uvx simpleaudit-studio          # models point at api.openai.com; add a key in the UI
-uvx simpleaudit-studio --mock   # built-in mock model server, simulated results
+uvx simpleaudit-studio                    # models point at api.openai.com; add a key in the UI
+uvx simpleaudit-studio --mock             # built-in mock model server, simulated results
+uvx simpleaudit-studio --disable-chat     # start without the chat assistant
 ```
 
-`simpleaudit_studio/cli.py` sets `SIMPLEAUDIT_MINIMAL=1`, migrates, bootstraps,
-seeds scenario packs and model connections, starts embedded Hatchet and runs the
-web server and worker in one process.
+One process: migrates the database, creates the admin user and default
+workspace, seeds scenario packs and model connections, starts the embedded
+job queue, and runs the web app and worker.
 
-Data lives in `~/.simpleaudit-studio/` (`SIMPLEAUDIT_DATA_DIR` changes it):
-`studio.sqlite3` is the database and `embedded-pg/` is the embedded Hatchet
-queue. It is outside the installed package, so upgrades and `uv cache clean`
-keep it, and nothing is written to the folder you run from. Before 0.5.2 the
-database lived inside the package, so each new version started empty; the
-first start of 0.5.2 copies in the most recently used of those old databases
-and says so. Back up that folder to back up your audits.
+Data lives in `~/.simpleaudit-studio/` (`SIMPLEAUDIT_DATA_DIR` moves it):
+`studio.sqlite3` is the database, `embedded-pg/` the job queue. Back up that
+folder to back up your work.
 
-The root `Dockerfile` builds the same thing for the Hugging Face Space
-(`CMD python -m simpleaudit_studio.cli`, port 7860). It sets demo defaults
-(`DEMO_MODE=true`, user `studio` / `admin123`); override secrets in the Space
-settings. Data is lost when the Space restarts.
+The same root `Dockerfile` also powers the hosted
+[Hugging Face Space demo](https://sushantgautam-simpleaudit-studio.hf.space)
+(demo login `studio` / `admin123`; override the secrets in the Space's
+settings). The Space is disposable — its data is lost on restart.
 
-## 2. Local development (`dev`)
+## 2. Docker — one container
 
-```bash
-cp .env.local.example .env
-uv sync --extra dev
-uv run manage.py setup_local            # migrate + admin (BOOTSTRAP_PASSWORD from .env) + seed
-uv run manage.py dev                    # web + worker + embedded queue + chat → http://localhost:8000
-SIMPLEAUDIT_LOCAL_SQLITE=1 uv run manage.py test infra
-```
-
-`dev` is the named entry point for local development (single-process, SQLite,
-embedded Hatchet, hot-reload, DEBUG, `.env`). It is a thin alias of
-`dev_server --embedded`; the mode is pinned to `dev` automatically.
-
-`dev` applies migrations and bootstraps the admin (a superuser) and the default
-workspace from `BOOTSTRAP_*` in `.env` every time it starts, like the Compose
-`web` service and the uvx CLI. On start it prints a one-time sign-in link
-(`/auto-login/?token=...`, single use) and opens the browser signed in;
-`--no-browser` skips the pop-up. Only one `dev` / `dev_server --embedded` /
-`uvx` can run at a time: they share the embedded queue directory
-(`~/.simpleaudit-studio/embedded-pg`, or `SIMPLEAUDIT_EMBEDDED_PG_DIR`). The
-worker does not auto-reload; restart the dev server after changing worker code.
-
-Chat is on by default; `uv run manage.py dev --disable-chat` (or
-`SIMPLEAUDIT_CHAT=off`) turns it off. `uv run manage.py mode` prints the active
-mode and its settings.
-
-## 3. Single Docker (`single-docker`)
-
-The root `Dockerfile` builds the `embedded`/HF-Space bundle into one container
-(SQLite + embedded Hatchet + chat, single process). Point a named volume at
-`/data` to persist it:
+The root `Dockerfile` builds everything into a single container: web app,
+worker, embedded job queue and chat, with all data in `/data`.
 
 ```bash
+git clone https://github.com/SimulaMet/SimpleAuditStudio
+cd SimpleAuditStudio
 docker build -t simpleaudit-studio .
-docker run -p 8000:8000 -v sa-data:/data simpleaudit-studio   # web → http://localhost:8000
+docker run -d -p 8000:7860 -v sa-data:/data --name simpleaudit-studio simpleaudit-studio
 ```
 
-(On Hugging Face Spaces the same image runs with `DEMO_MODE=true`, user
-`studio` / `admin123`; override secrets in the Space settings. Without a
-volume, data is lost when the container restarts.)
+- The container serves on port **7860** (the Hugging Face Space convention);
+  `-p 8000:7860` maps it to <http://localhost:8000> on your machine. Use
+  `-p 7860:7860` if you'd rather keep the same number.
+- All data (database, job queue, chat) lives in the `sa-data` volume, so the
+  container can be deleted and recreated without losing anything. Without the
+  `-v`, data is lost when the container is removed.
+- Login is `studio` / `admin123`. For anything shared, add
+  `-e BOOTSTRAP_PASSWORD=<strong-password>` to the `docker run` line (it only
+  takes effect on first start, while the admin is created).
+- Chat is on by default; add `-e SIMPLEAUDIT_CHAT=off` to run without it.
+- Updating: rebuild the image, stop and remove the old container, run the
+  same `docker run` line again — the `sa-data` volume carries over.
 
-## 4. Docker Compose (production)
+## 3. Compose (teams and production)
 
 ```bash
 cp .env.example .env    # set POSTGRES_PASSWORD, BOOTSTRAP_PASSWORD, DJANGO_SECRET_KEY
@@ -98,23 +82,59 @@ docker compose up -d
 docker compose --profile mock up -d   # also start the mock model server
 ```
 
-Services (`docker-compose.yml`):
+The full stack, each piece in its own container (`docker-compose.yml`):
 
-- `postgres`: domain database; `deploy/postgres-init.sql` creates the separate Hatchet database on first start.
-- `hatchet-server`: durable workflow engine (HTTP :8888, gRPC :7077).
-- `worker`: `manage.py run_worker`; runs audits, the stuck-run sweeper and monitor ticks.
-- `web`: migrate, `bootstrap_platform`, `seed_platform` (skip with `SEED_ON_BOOT=false`, or only the demo runs with `SEED_DEMO_AUDITS=false`), `collectstatic`, gunicorn.
-- `open-webui`, `chat-proxy` (profile `chat`, **on by default**): Open WebUI and its auth/LLM proxy, embedded at `/chat/` on the web service.
-- `mock-model` (profile `mock`): OpenAI-compatible mock server (`deploy/mock_openai_server.py`).
+- `postgres` — the database; `deploy/postgres-init.sql` adds the queue's
+  database on first start.
+- `hatchet-server` — the job queue.
+- `worker` — background jobs: audit runs, the stuck-run sweeper, monitor
+  ticks.
+- `web` — the app at <http://localhost:8000> (gunicorn). On start it applies
+  the database updates, creates the admin and workspace, and seeds scenario
+  packs (`SEED_ON_BOOT=false` skips seeding; `SEED_DEMO_AUDITS=false` keeps
+  only the demo runs).
+- `open-webui`, `chat-proxy` — the chat assistant at `/chat/` (on by
+  default, below).
+- `mock-model` — optional profile `mock`; a fake model API for testing.
 
-`web` and `worker` build from `deploy/compose/Dockerfile`.
+Startup checks refuse to boot until `DJANGO_SECRET_KEY`, `POSTGRES_PASSWORD`
+and `BOOTSTRAP_PASSWORD` in `.env` are set to real values (empty or
+`change-me` is rejected).
 
-Chat is on by default in Compose: `.env` ships with `SIMPLEAUDIT_CHAT=docker`
-(web serves `/chat/`) and `COMPOSE_PROFILES=chat` (starts the two chat
-containers). To run Compose without chat, comment out `COMPOSE_PROFILES=chat`
-and set `SIMPLEAUDIT_CHAT=off` in `.env`, then `docker compose up -d` again.
-(If your `.env` predates this change, add those two lines — compose chat used
-to be opt-in.)
+Your data lives in the named volumes `postgres_data` (database) and
+`open_webui_data` (chat). `web` and `worker` build from
+`deploy/compose/Dockerfile`.
+
+Chat is on by default: `.env` ships with `SIMPLEAUDIT_CHAT=docker` and
+`COMPOSE_PROFILES=chat`. To run Compose without chat, remove or comment out
+both lines and run `docker compose up -d` again. (If your `.env` predates
+chat being on by default, add those two lines to get it.)
+
+## 4. Development (`uv run manage.py dev`)
+
+The one standard way to run the app while working on this repository:
+
+```bash
+cp .env.local.example .env      # local settings (SQLite, local admin)
+uv sync --extra dev             # install the app + dev tools, once
+uv run manage.py setup_local    # first time only: create database + admin + sample data
+uv run manage.py dev            # start: web + worker + queue + chat → http://localhost:8000
+```
+
+On every start it applies database updates, makes sure the admin user and
+default workspace exist, and prints a one-time sign-in link, opening the
+browser signed in (`--no-browser` skips the pop-up).
+
+Day-to-day notes:
+
+- Only one Studio can run at a time on a machine — the one-liner, the dev
+  stack and the Docker container all use the same embedded job-queue folder.
+- The web app hot-reloads on code changes; the background worker does not.
+  After changing `infra/worker.py` or `infra/engine.py`, restart.
+- Flags: `--disable-chat` (start without the chat assistant), `--no-worker`
+  (web + API only), `--no-reload` (no auto-reload), `--port` (default 8000).
+- Tests: `uv run pytest -n auto -m "not slow and not embedded_hatchet"` (fast
+  set) or drop the marker filter for everything.
 
 ## 5. Environment variables
 
@@ -134,13 +154,13 @@ override them when you deliberately need to.
 | `DJANGO_ALLOWED_HOSTS` | Comma-separated; default `*` (see security notes). |
 | `DJANGO_CSRF_TRUSTED_ORIGINS` | Extra trusted origins (full URLs). |
 | `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_HOST`, `POSTGRES_PORT`, `POSTGRES_CONN_MAX_AGE` | PostgreSQL connection (`compose` mode). |
-| `SIMPLEAUDIT_LOCAL_SQLITE` **internal** | `1` = local SQLite database (`local_test.sqlite3`). Set by the single-process modes. |
+| `SIMPLEAUDIT_LOCAL_SQLITE` **internal** | `1` = local SQLite database at the repository's `local_test.sqlite3`. Set automatically by the `dev` entry point and by the test suite. |
 | `SIMPLEAUDIT_MINIMAL` **internal** | `1` = single-process demo mode. Set by the CLI. |
 | `SIMPLEAUDIT_CHAT` | Chat mode: `embedded` / `docker`, or `off` (and `disabled`, `false`, `no`, `0`, unset). On by default in every mode (`embedded` in the single-process modes, `docker` in compose — set in `.env`). Turn off with this var or the `--disable-chat` flag; the flag beats the env value (flag > env > mode default). |
 | `SIMPLEAUDIT_DATA_DIR` | Where single-process mode keeps its data (default `~/.simpleaudit-studio`): the SQLite database and embedded Hatchet's PostgreSQL. |
 | `SIMPLEAUDIT_EMBEDDED_PG_DIR` | Override just embedded Hatchet's PostgreSQL directory (default `<data dir>/embedded-pg`). |
 | `HATCHET_SERVER_URL`, `HATCHET_GRPC_URL`, `HATCHET_API_KEY`, `HATCHET_TOKEN_FILE`, `HATCHET_TLS_STRATEGY` | External Hatchet connection (`compose` mode). |
-| `HATCHET_EMBEDDED_HANDSHAKE` **internal** | Set by `dev` / `dev_server --embedded` so web and worker find the embedded engine; don't set it yourself. |
+| `HATCHET_EMBEDDED_HANDSHAKE` **internal** | Set by the entry points so the web app and worker find the embedded engine; don't set it yourself. |
 | `WORKER_POOL` | Worker label (`cpu` by default). |
 | `BOOTSTRAP_USERNAME`, `BOOTSTRAP_EMAIL`, `BOOTSTRAP_PASSWORD`, `BOOTSTRAP_PROJECT_NAME` | First admin user and workspace. |
 | `DEMO_MODE`, `DEMO_USERNAME`, `DEMO_PASSWORD` | Prefilled demo login and the HF iframe cookie/CSRF policy. |
@@ -157,7 +177,7 @@ override them when you deliberately need to.
 | `bootstrap_platform` | Create the admin user and default workspace (idempotent). |
 | `seed_platform` | Import scenario packs and model connections, plus demo runs (`seed_demo_audits`). |
 | `dev` | Local dev stack (embedded, hot-reload, chat, one-time sign-in). `--disable-chat`, `--no-worker`, `--no-reload`, `--no-browser`. |
-| `dev_server [--embedded]` | Same stack, spelled out. Requires `--embedded` or `SIMPLEAUDIT_MODE`; the legacy external-Postgres path is removed. |
+| `dev_server` | Lower-level version of the same stack. Use `dev` instead. |
 | `mode` | Print the resolved run mode and its settings. |
 | `run_worker` | Hatchet worker (Compose `worker`). |
 | `run_monitors` | One monitor pass, for an external cron if you don't run the worker sweeper. |
