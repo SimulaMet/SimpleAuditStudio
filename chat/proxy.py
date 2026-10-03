@@ -604,8 +604,9 @@ def _spawn(home: Path, studio_port: int | None = None) -> subprocess.Popen:
     if chat.OTLP_ENABLED:
         # Export Open WebUI's spans to Studio's own OTLP listener. Open WebUI
         # picks the HTTP exporter from OTEL_OTLP_SPAN_EXPORTER (not the standard
-        # OTEL_EXPORTER_OTLP_PROTOCOL) and appends /v1/traces to the endpoint, so
-        # this is the base URL, not the full path. Exports unauthenticated by
+        # OTEL_EXPORTER_OTLP_PROTOCOL) and passes the endpoint to the exporter
+        # explicitly, so the exporter POSTs to it as-is (protobuf wire format):
+        # this must be the full /otlp/v1/traces URL. Exports unauthenticated by
         # default (matches the listener's "none" credential fallback); for a
         # basic/bearer credential, set OTEL_BASIC_AUTH_USERNAME / _PASSWORD in the
         # environment, which is inherited here.

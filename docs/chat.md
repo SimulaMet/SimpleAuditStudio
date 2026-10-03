@@ -166,7 +166,7 @@ cookie. Different registrable domains will not work.
 | `SIMPLEAUDIT_CHAT_IDENTITY_TTL` | `5`                      | seconds the proxy caches who a cookie is   |
 | `SIMPLEAUDIT_CHAT_SYNC_DELAY`   | `2`                      | seconds a model-connection push waits      |
 | `SIMPLEAUDIT_CHAT_OTLP`         | `false`                  | export Open WebUI's spans to Studio's OTLP listener |
-| `SIMPLEAUDIT_CHAT_OTLP_ENDPOINT`| Studio's web origin      | base URL of the OTLP listener (embedded: `http://127.0.0.1:<port>`, docker: `http://web:8000`) |
+| `SIMPLEAUDIT_CHAT_OTLP_ENDPOINT`| full OTLP listener URL   | the `/otlp/v1/traces` ingestion URL (embedded: `http://127.0.0.1:<port>/otlp/v1/traces`, docker: `http://web:8000/otlp/v1/traces`) — the exporter uses it as-is |
 | `SIMPLEAUDIT_CHAT_OTLP_SERVICE_NAME` | `open-webui`         | the service name Open WebUI tags its spans with |
 
 ## Exporting Open WebUI's spans to Studio (OTLP)
@@ -182,9 +182,15 @@ enabled `none` credential. The exporter is the standard OTel one, so the
 environment variables are the standard ones, with two Open WebUI specifics:
 
 - Open WebUI selects the HTTP exporter from `OTEL_OTLP_SPAN_EXPORTER`
-  (`http`), **not** the standard `OTEL_EXPORTER_OTLP_PROTOCOL`.
-- The exporter appends `/v1/traces` to `OTEL_EXPORTER_OTLP_ENDPOINT`, so the
-  endpoint is the **base** URL, not the full path.
+  (`http`), **not** the standard `OTEL_EXPORTER_OTLP_PROTOCOL`. `http`
+  selects the **protobuf** wire format (`application/x-protobuf`), so
+  `OTEL_EXPORTER_OTLP_PROTOCOL` is ignored — the listener accepts both
+  JSON and protobuf.
+- Open WebUI passes `OTEL_EXPORTER_OTLP_ENDPOINT` explicitly to its OTLP
+  exporter (see `utils/telemetry/setup.py` in the Open WebUI backend), and an
+  explicit endpoint is used **as-is** — nothing is appended. So the endpoint
+  must be the **full** ingestion URL, e.g.
+  `https://<studio>/otlp/v1/traces` (a base-only URL 404s).
 
 So enabling it is one line:
 

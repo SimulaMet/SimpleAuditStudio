@@ -500,10 +500,13 @@ class OtlpEnvTests(SimpleTestCase):
         self.assertEqual(env["ENABLE_OTEL"], "true")
         self.assertEqual(env["ENABLE_OTEL_TRACES"], "true")
         self.assertEqual(env["OTEL_OTLP_SPAN_EXPORTER"], "http")
-        # Base URL only — Open WebUI's exporter appends /v1/traces itself.
-        self.assertEqual(env["OTEL_EXPORTER_OTLP_ENDPOINT"], "http://127.0.0.1:8000")
+        # Full ingestion URL — Open WebUI passes the endpoint to its OTLP
+        # exporter explicitly, which is used as-is (no path appended).
+        self.assertEqual(env["OTEL_EXPORTER_OTLP_ENDPOINT"], "http://127.0.0.1:8000/otlp/v1/traces")
         self.assertEqual(env["OTEL_SERVICE_NAME"], "open-webui")
 
     def test_explicit_endpoint_wins(self):
-        env = self._spawn_env(endpoint="http://collector:4318")
-        self.assertEqual(env["OTEL_EXPORTER_OTLP_ENDPOINT"], "http://collector:4318")
+        # Whatever the user sets in SIMPLEAUDIT_CHAT_OTLP_ENDPOINT is passed
+        # through verbatim.
+        env = self._spawn_env(endpoint="http://collector:4318/otlp/v1/traces")
+        self.assertEqual(env["OTEL_EXPORTER_OTLP_ENDPOINT"], "http://collector:4318/otlp/v1/traces")

@@ -71,25 +71,31 @@ OTLP_ENABLED = (os.environ.get("SIMPLEAUDIT_CHAT_OTLP") or "").strip().lower() i
     "1", "true", "yes", "on",
 }
 #: Where the OTLP listener lives. Defaults to Studio's own web origin on
-#: loopback; override for a non-default port or a separate collector. The
-#: ``/otlp/v1/traces`` path is appended by Open WebUI's exporter, not here.
+#: loopback; override for a non-default port or a separate collector. Must be
+#: the *full* trace-ingestion URL — Open WebUI passes the endpoint to its
+#: OTLP exporter explicitly, so the exporter uses it as-is (no path is
+#: appended by the exporter).
 OTLP_ENDPOINT = (os.environ.get("SIMPLEAUDIT_CHAT_OTLP_ENDPOINT") or "").rstrip("/")
 #: The service name Open WebUI tags its spans with.
 OTLP_SERVICE_NAME = os.environ.get("SIMPLEAUDIT_CHAT_OTLP_SERVICE_NAME", "open-webui")
 
 
 def otlp_endpoint_url(studio_port: int | None = None) -> str:
-    """The base URL Open WebUI's OTLP exporter should send spans to.
+    """The full OTLP trace-ingestion URL Open WebUI should export spans to.
 
-    ``OTLP_ENDPOINT`` wins when set. Otherwise it is Studio's own web origin on
-    loopback — the same host the proxy and the browser use — so the spans reach
-    the ``/otlp/v1/traces`` listener on this Studio instance. Open WebUI's
-    exporter appends ``/v1/traces`` itself, so this returns the base only.
+    ``OTLP_ENDPOINT`` wins when set. Otherwise it is Studio's own web origin
+    on loopback — the same host the proxy and the browser use — so the spans
+    reach the ``/otlp/v1/traces`` listener on this Studio instance.
+
+    The URL must include the ``/otlp/v1/traces`` path: Open WebUI passes the
+    configured endpoint to its OTLP exporter explicitly (backend
+    ``utils/telemetry/setup.py``), and an explicit endpoint is used as-is —
+    the exporter appends nothing.
     """
     if OTLP_ENDPOINT:
         return OTLP_ENDPOINT
     port = studio_port or int(os.environ.get("PORT", "8000"))
-    return f"http://127.0.0.1:{port}"
+    return f"http://127.0.0.1:{port}/otlp/v1/traces"
 
 
 def public_url(request=None) -> str:
