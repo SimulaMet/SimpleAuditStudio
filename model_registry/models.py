@@ -277,6 +277,11 @@ class KnowledgeBase(models.Model):
         db_table = "core_knowledge_base"
         constraints = [
             models.UniqueConstraint(fields=["project", "name"], name="unique_knowledge_base_name_per_project"),
+            models.UniqueConstraint(
+                fields=["project", "external_id"],
+                condition=~models.Q(external_id=""),
+                name="unique_knowledge_base_external_id_per_project",
+            ),
         ]
         ordering = ["project__name", "name"]
 
