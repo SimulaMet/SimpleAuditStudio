@@ -18,14 +18,33 @@ except ImportError:  # pragma: no cover - python-dotenv is in pyproject.toml
 
 def main() -> None:
     os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings")
-    # Zero-Docker mode (`dev_server --embedded`) implies SQLite for the domain
-    # DB. Decide before Django loads settings: a Postgres `.env` would otherwise
-    # make settings import the Postgres driver first.
-    if sys.argv[1:2] == ["dev_server"] and "--embedded" in sys.argv:
+    command = sys.argv[1] if len(sys.argv) > 1 else None
+    argv = sys.argv
+    # Zero-Docker modes are `dev` and `dev_server --embedded`.
+    embedded_mode = command == "dev" or (
+        command == "dev_server" and "--embedded" in argv
+    )
+    # Zero-Docker modes imply SQLite for the domain DB. Decide before Django
+    # loads settings: a Postgres `.env` would otherwise make settings import
+    # the Postgres driver first.
+    if command == "dev":
+        os.environ.setdefault("SIMPLEAUDIT_MODE", "dev")
+    if embedded_mode:
         os.environ.setdefault("SIMPLEAUDIT_LOCAL_SQLITE", "1")
-    # `dev_server` is a local dev command — it implies DEBUG so the production
-    # hardening block (SECURE_SSL_REDIRECT, HSTS, secure cookies) stays off.
-    if sys.argv[1:2] == ["dev_server"]:
+    # Chat (Open WebUI) is on by default in the single-process modes and must
+    # always be disableable — by the --disable-chat/--no-chat flag (which wins)
+    # or SIMPLEAUDIT_CHAT=off in the environment. Precedence: flag > env >
+    # default. This must happen BEFORE django.setup(), because
+    # chat.config.ENABLED is frozen the moment the chat app is imported.
+    if embedded_mode:
+        if "--disable-chat" in argv or "--no-chat" in argv:
+            os.environ["SIMPLEAUDIT_CHAT"] = "off"  # explicit flag beats .env
+        else:
+            os.environ.setdefault("SIMPLEAUDIT_CHAT", "embedded")
+    # `dev` / `dev_server` are local dev commands — they imply DEBUG so the
+    # production hardening block (SECURE_SSL_REDIRECT, HSTS, secure cookies)
+    # stays off.
+    if command in {"dev", "dev_server"}:
         os.environ.setdefault("DJANGO_DEBUG", "1")
     try:
         from django.core.management import execute_from_command_line

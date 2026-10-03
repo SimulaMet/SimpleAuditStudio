@@ -61,6 +61,6 @@ class Command(BaseCommand):
 
         self.stdout.write(self.style.SUCCESS(
             f"\nSetup complete. Start the server with:\n"
-            "    uv run manage.py runserver\n"
+            "    uv run manage.py dev\n"
             f"Then open http://localhost:8000 (login: {options['username']} / your password)."
         ))

@@ -67,13 +67,18 @@ uv run manage.py setup_local      # migrate, create admin + workspace, seed scen
 ### Daily work
 
 ```bash
-uv run manage.py dev_server --embedded    # web UI + API + worker + embedded Hatchet → http://localhost:8000
+uv run manage.py dev                 # web UI + API + worker + embedded queue + chat → http://localhost:8000
 ```
 
-Every start applies migrations and makes sure the admin (a superuser) and default workspace exist, so pulling new code needs no extra steps. Keep in mind:
+`dev` is the named entry point for local development: single-process, SQLite,
+embedded Hatchet, hot-reloading web server, DEBUG on, reading `.env`. Every
+start applies migrations and makes sure the admin (a superuser) and default
+workspace exist, so pulling new code needs no extra steps. Keep in mind:
 
-- Only one `dev_server --embedded` (or `uvx simpleaudit-studio`) can run at a time: they share the embedded queue database.
-- The web server reloads on code changes; the worker does not. Restart `dev_server` after changing `infra/worker.py` or `infra/engine.py`.
+- Only one `dev` / `dev_server --embedded` / `uvx simpleaudit-studio` can run at
+  a time: they share the embedded queue database.
+- The web server reloads on code changes; the worker does not. Restart the
+  dev server after changing `infra/worker.py` or `infra/engine.py`.
 
 ### Tests and lint
 
@@ -114,11 +119,29 @@ The Django `@tag("...")` values are mirrored onto pytest markers by
 `conftest.py`, so `-m "not slow"` works the same as
 `manage.py test --exclude-tag slow`.
 
-### Other setups
+### The four ways to run
+
+Studio has exactly four run modes. Each is one command; `uv run manage.py mode`
+prints the one that is currently active.
+
+| Mode | Command | DB | Queue | Chat |
+|------|---------|----|-------|------|
+| `dev` | `uv run manage.py dev` | SQLite | embedded | on |
+| `embedded` | `uvx simpleaudit-studio` | SQLite | embedded | on |
+| `single-docker` | `docker run -p 8000:8000 -v sa-data:/data <image>` | SQLite | embedded | on |
+| `compose` | `docker compose up -d` | PostgreSQL 16 | hatchet container | opt-in |
+
+Chat is **on by default** in the single-process modes (`dev`, `embedded`,
+`single-docker`) and can always be turned off — by env (`SIMPLEAUDIT_CHAT=off`)
+or CLI flag (`--disable-chat` / `--no-chat`). Precedence: the flag > the env
+value > the mode default — so `--disable-chat` wins even if a `.env` pins chat
+on. In `compose` it is opt-in (a separate container, gated by
+`COMPOSE_PROFILES=chat` in `.env`).
 
 ```bash
-uv run manage.py dev_server --no-worker   # web UI + API only
-uv run manage.py dev_server               # use the Postgres + Hatchet configured in .env (see .env.example)
+uv run manage.py dev --disable-chat       # dev without Open WebUI
+uv run manage.py dev --no-worker          # web UI + API only
+uv run manage.py mode                     # which mode is active, and with what settings
 ```
 
 See [docs/deployment.md](docs/deployment.md) for every environment variable and management command.
@@ -145,16 +168,22 @@ See [docs/deployment.md](docs/deployment.md) for production hardening, backups, 
 SimpleAudit Studio embeds [Open WebUI](https://openwebui.com) at `/chat/`, signed
 in as your Studio user — workspace admins become Open WebUI admins.
 
-Chat is opt-in. The local one-liner bundles it by default (pass
-`--disable-chat` to turn it off); Docker Compose leaves it out unless `.env`
-says otherwise — uncomment `SIMPLEAUDIT_CHAT` and `COMPOSE_PROFILES` in
-`.env.example` to include it:
+Chat is on by default in the single-process modes (`dev`, `embedded`,
+`single-docker`) and can always be turned off — by env (`SIMPLEAUDIT_CHAT=off`)
+or the `--disable-chat` / `--no-chat` flag. Precedence: the flag > the env
+value > the mode default, so `--disable-chat` wins even if a `.env` pins chat
+on. Docker Compose leaves chat out
+unless `.env` says otherwise — uncomment `SIMPLEAUDIT_CHAT` and
+`COMPOSE_PROFILES` in `.env.example` to include it:
 
 ```bash
-uvx simpleaudit-studio                 # chat included
-uvx simpleaudit-studio --disable-chat  # without it
+uv run manage.py dev                 # chat included
+uv run manage.py dev --disable-chat  # without it
 
-docker compose up -d                   # chat only if enabled in .env
+uvx simpleaudit-studio               # chat included
+uvx simpleaudit-studio --disable-chat # without it
+
+docker compose up -d                 # chat only if enabled in .env
 ```
 
 See [docs/chat.md](docs/chat.md) for how single sign-on works and what must stay
