@@ -14,8 +14,6 @@ from judges.models import Judge, JudgeVersion
 from model_registry.models import (
     Agent,
     KnowledgeBase,
-    MCPServer,
-    MCPTool,
     ModelConnection,
     RegisteredModel,
     RetrievalProfile,
@@ -228,22 +226,6 @@ class ToolFactory(DjangoModelFactory):
     name = factory.Sequence(lambda n: f"Tool {n}")
     type = "builtin"
     read_only = True
-
-
-class MCPServerFactory(DjangoModelFactory):
-    class Meta:
-        model = MCPServer
-    project = factory.SubFactory(ProjectFactory)
-    name = factory.Sequence(lambda n: f"MCP {n}")
-    url = "http://localhost:9000/mcp"
-
-
-class MCPToolFactory(DjangoModelFactory):
-    class Meta:
-        model = MCPTool
-    server = factory.SubFactory(MCPServerFactory)
-    project = factory.LazyAttribute(lambda o: o.server.project)
-    external_name = factory.Sequence(lambda n: f"mcp_tool_{n}")
 
 
 class AgentFactory(DjangoModelFactory):

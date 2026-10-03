@@ -81,31 +81,6 @@ class OpenWebUIAdapter:
             if isinstance(item, dict)
         ]
 
-    def list_mcp_servers(self) -> list[dict[str, Any]]:
-        """All MCP servers configured in OpenWebUI.
-
-        OpenWebUI exposes MCP via ``/api/v1/mcp/`` (if available).
-        """
-        try:
-            payload = self._api.request("GET", "/api/v1/mcp/")
-        except ChatAPIError:
-            return []
-        if isinstance(payload, dict):
-            items = payload.get("items") or payload.get("servers") or []
-        elif isinstance(payload, list):
-            items = payload
-        else:
-            items = []
-        return [
-            {
-                "id": item.get("id", ""),
-                "name": item.get("name", ""),
-                "url": item.get("url", ""),
-            }
-            for item in items
-            if isinstance(item, dict)
-        ]
-
     # --- agent configuration ------------------------------------------------
 
     def create_or_update_agent(self, agent: Agent) -> dict[str, Any]:
@@ -139,11 +114,6 @@ class OpenWebUIAdapter:
             if tool.external_id
         ]
 
-        mcp_tool_refs = [
-            f"{mt.server.name}/{mt.external_name}"
-            for mt in agent.mcp_tools.all()
-        ]
-
         # Build the configuration payload. In a full OpenWebUI deployment this
         # would call a specific "create agent" endpoint. For now we return the
         # resolved identifiers so the chat layer can use them.
@@ -152,7 +122,6 @@ class OpenWebUIAdapter:
             "system_prompt": agent.system_prompt,
             "knowledge_base_ids": kb_ids,
             "tool_ids": tool_ids,
-            "mcp_tools": mcp_tool_refs,
             "retrieval_profile": (
                 agent.retrieval_profile.config_dict()
                 if agent.retrieval_profile
@@ -162,8 +131,8 @@ class OpenWebUIAdapter:
         }
 
         logger.info(
-            "Agent %s configured: model=%s kbs=%d tools=%d mcp=%d",
-            agent.name, openwebui_model_id, len(kb_ids), len(tool_ids), len(mcp_tool_refs),
+            "Agent %s configured: model=%s kbs=%d tools=%d",
+            agent.name, openwebui_model_id, len(kb_ids), len(tool_ids),
         )
         return config
 

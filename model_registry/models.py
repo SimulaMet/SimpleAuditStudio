@@ -293,7 +293,7 @@ class Tool(models.Model):
     """A normalized tool that an Agent may invoke.
 
     The backend implementation may be an OpenWebUI built-in, an OpenAPI
-    endpoint, a custom OpenWebUI function, or an MCP tool. The safety flags
+    endpoint, or a custom OpenWebUI function. The safety flags
     are what SimpleAudit uses to reason about what the agent *may* do.
     """
 
@@ -301,7 +301,6 @@ class Tool(models.Model):
         BUILTIN = "builtin", "OpenWebUI built-in"
         OPENAPI = "openapi", "OpenAPI"
         CUSTOM = "custom", "Custom OpenWebUI function"
-        MCP = "mcp", "MCP"
 
     project = models.ForeignKey("accounts.Project", on_delete=models.CASCADE, related_name="tools")
     name = models.CharField(max_length=250)
@@ -330,60 +329,11 @@ class Tool(models.Model):
         return self.name
 
 
-class MCPServer(models.Model):
-    """An MCP server that exposes tools to agents."""
-
-    project = models.ForeignKey("accounts.Project", on_delete=models.CASCADE, related_name="mcp_servers")
-    name = models.CharField(max_length=250)
-    url = models.URLField()
-    auth_config = models.JSONField(default=dict, blank=True)
-    description = models.TextField(blank=True, default="")
-    enabled = models.BooleanField(default=True)
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
-
-    class Meta:
-        db_table = "core_mcp_server"
-        constraints = [
-            models.UniqueConstraint(fields=["project", "name"], name="unique_mcp_server_name_per_project"),
-        ]
-        ordering = ["project__name", "name"]
-
-    def __str__(self) -> str:
-        return self.name
-
-
-class MCPTool(models.Model):
-    """A single tool exposed by an MCP server.
-
-    An Agent selects individual MCP tools (not the whole server) for
-    least-privilege auditing.
-    """
-
-    server = models.ForeignKey(MCPServer, on_delete=models.CASCADE, related_name="tools")
-    project = models.ForeignKey("accounts.Project", on_delete=models.CASCADE, related_name="mcp_tools")
-    external_name = models.CharField(max_length=250)
-    description = models.TextField(blank=True, default="")
-    input_schema = models.JSONField(default=dict, blank=True)
-    enabled = models.BooleanField(default=True)
-    created_at = models.DateTimeField(auto_now_add=True)
-
-    class Meta:
-        db_table = "core_mcp_tool"
-        constraints = [
-            models.UniqueConstraint(fields=["server", "external_name"], name="unique_mcp_tool_per_server"),
-        ]
-        ordering = ["server__name", "external_name"]
-
-    def __str__(self) -> str:
-        return f"{self.server.name}/{self.external_name}"
-
-
 class Agent(models.Model):
     """An auditable RAG/agent target.
 
     Composes an existing ``RegisteredModel`` (the LLM), optional knowledge
-    bases, tools, MCP tools, a retrieval profile, and explicit capabilities.
+    bases, tools, a retrieval profile, and explicit capabilities.
     The Agent is the object a user configures in Studio and then selects in
     Chat or as an audit target.
     """
@@ -395,7 +345,6 @@ class Agent(models.Model):
     system_prompt = models.TextField(blank=True, default="")
     knowledge_bases = models.ManyToManyField(KnowledgeBase, blank=True, related_name="agents")
     tools = models.ManyToManyField(Tool, blank=True, related_name="agents")
-    mcp_tools = models.ManyToManyField(MCPTool, blank=True, related_name="agents")
     retrieval_profile = models.ForeignKey(
         RetrievalProfile, on_delete=models.SET_NULL, null=True, blank=True, related_name="agents"
     )
@@ -438,9 +387,6 @@ class Agent(models.Model):
                 self.knowledge_bases.values_list("id", "name", "external_id", "version")
             ),
             "tools": list(self.tools.values_list("id", "name", "type")),
-            "mcp_tools": list(
-                self.mcp_tools.values_list("id", "server__name", "external_name")
-            ),
             "retrieval_profile": {
                 "id": profile.id,
                 "name": profile.name,

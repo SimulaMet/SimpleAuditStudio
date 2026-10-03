@@ -10,16 +10,12 @@ from .agent_serializers import (
     AgentDetailSerializer,
     AgentSerializer,
     KnowledgeBaseSerializer,
-    MCPServerSerializer,
-    MCPToolSerializer,
     RetrievalProfileSerializer,
     ToolSerializer,
 )
 from .models import (
     Agent,
     KnowledgeBase,
-    MCPServer,
-    MCPTool,
     RetrievalProfile,
     Tool,
 )
@@ -146,83 +142,6 @@ def tool_detail(request, pk):
     return Response(status=status.HTTP_204_NO_CONTENT)
 
 
-# --- MCP Servers & Tools ----------------------------------------------------
-
-
-@api_view(["GET", "POST"])
-@permission_classes([IsAuthenticated])
-def mcp_servers(request):
-    project = _project(request)
-    if request.method == "GET":
-        servers = MCPServer.objects.filter(project=project).prefetch_related("tools")
-        return Response(MCPServerSerializer(servers, many=True).data)
-
-    serializer = MCPServerSerializer(data=request.data)
-    serializer.is_valid(raise_exception=True)
-    server = serializer.save(project=project)
-    return Response(MCPServerSerializer(server).data, status=status.HTTP_201_CREATED)
-
-
-@api_view(["GET", "PUT", "DELETE"])
-@permission_classes([IsAuthenticated])
-def mcp_server_detail(request, pk):
-    project = _project(request)
-    server = MCPServer.objects.filter(pk=pk, project=project).first()
-    if not server:
-        raise StableAPIError("MCP server not found.", status=404)
-
-    if request.method == "GET":
-        return Response(MCPServerSerializer(server).data)
-
-    if request.method == "PUT":
-        serializer = MCPServerSerializer(server, data=request.data, partial=True)
-        serializer.is_valid(raise_exception=True)
-        serializer.save()
-        return Response(serializer.data)
-
-    server.delete()
-    return Response(status=status.HTTP_204_NO_CONTENT)
-
-
-@api_view(["GET", "POST"])
-@permission_classes([IsAuthenticated])
-def mcp_tools(request, server_pk):
-    project = _project(request)
-    server = MCPServer.objects.filter(pk=server_pk, project=project).first()
-    if not server:
-        raise StableAPIError("MCP server not found.", status=404)
-
-    if request.method == "GET":
-        tool_list = MCPTool.objects.filter(server=server)
-        return Response(MCPToolSerializer(tool_list, many=True).data)
-
-    serializer = MCPToolSerializer(data=request.data)
-    serializer.is_valid(raise_exception=True)
-    tool = serializer.save(server=server, project=project)
-    return Response(MCPToolSerializer(tool).data, status=status.HTTP_201_CREATED)
-
-
-@api_view(["GET", "PUT", "DELETE"])
-@permission_classes([IsAuthenticated])
-def mcp_tool_detail(request, pk):
-    project = _project(request)
-    tool = MCPTool.objects.filter(pk=pk, project=project).first()
-    if not tool:
-        raise StableAPIError("MCP tool not found.", status=404)
-
-    if request.method == "GET":
-        return Response(MCPToolSerializer(tool).data)
-
-    if request.method == "PUT":
-        serializer = MCPToolSerializer(tool, data=request.data, partial=True)
-        serializer.is_valid(raise_exception=True)
-        serializer.save()
-        return Response(serializer.data)
-
-    tool.delete()
-    return Response(status=status.HTTP_204_NO_CONTENT)
-
-
 # --- Agents -----------------------------------------------------------------
 
 
@@ -233,7 +152,7 @@ def agents(request):
     if request.method == "GET":
         agent_list = Agent.objects.filter(project=project).select_related(
             "base_model", "base_model__connection", "retrieval_profile"
-        ).prefetch_related("knowledge_bases", "tools", "mcp_tools__server")
+        ).prefetch_related("knowledge_bases", "tools")
         return Response(AgentDetailSerializer(agent_list, many=True).data)
 
     serializer = AgentSerializer(data=request.data, context={"project": project})
@@ -248,7 +167,7 @@ def agent_detail(request, pk):
     project = _project(request)
     agent = Agent.objects.filter(pk=pk, project=project).select_related(
         "base_model", "base_model__connection", "retrieval_profile"
-    ).prefetch_related("knowledge_bases", "tools", "mcp_tools__server").first()
+    ).prefetch_related("knowledge_bases", "tools").first()
     if not agent:
         raise StableAPIError("Agent not found.", status=404)
 

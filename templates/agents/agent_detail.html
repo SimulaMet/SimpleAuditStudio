@@ -130,25 +130,6 @@
       {% endif %}
     </fieldset>
 
-    <!-- MCP Tools -->
-    <fieldset class="bg-surface-raised rounded-xl border border-gray-800 p-4 space-y-3">
-      <legend class="px-2 text-xs font-semibold text-gray-300 uppercase tracking-wide">MCP Tools</legend>
-      {% if mcp_tools %}
-      <div class="space-y-1.5">
-        {% for mt in mcp_tools %}
-        <label class="flex items-center gap-2 text-sm text-gray-300">
-          <input type="checkbox" name="mcp_tools" value="{{ mt.id }}"
-                 {% if agent and mt in agent.mcp_tools.all %}checked{% endif %}
-                 class="rounded border-gray-600 bg-surface-overlay text-accent focus:ring-accent/50">
-          <span>{{ mt.server.name }} / {{ mt.external_name }}</span>
-        </label>
-        {% endfor %}
-      </div>
-      {% else %}
-      <p class="text-xs text-gray-500">No MCP tools in this workspace.</p>
-      {% endif %}
-    </fieldset>
-
     <!-- Capabilities -->
     <fieldset class="bg-surface-raised rounded-xl border border-gray-800 p-4 space-y-3">
       <legend class="px-2 text-xs font-semibold text-gray-300 uppercase tracking-wide">Capabilities</legend>

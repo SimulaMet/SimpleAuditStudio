@@ -2696,7 +2696,7 @@ class AgentsView(ProjectMixin, TemplateView):
         ctx["agents"] = (
             Agent.objects.filter(project=self.request.project)
             .select_related("base_model", "base_model__connection", "retrieval_profile")
-            .prefetch_related("knowledge_bases", "tools", "mcp_tools__server")
+            .prefetch_related("knowledge_bases", "tools")
         )
         return ctx
 
@@ -2722,23 +2722,20 @@ class AgentResourcesView(ProjectMixin, TemplateView):
 
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
-        section = self.request.GET.get("section", self.DEFAULT_SECTION)
-        if section not in self.SECTIONS:
-            section = self.DEFAULT_SECTION
+        path = self.request.path
+        if "/agents/tools/" in path:
+            section = "tools"
+        else:
+            section = "knowledge"
         ctx["section"] = section
-        ctx["sections"] = [
-            {"key": "knowledge", "label": "Knowledge"},
-            {"key": "tools", "label": "Tools"},
-        ]
+        ctx["section_label"] = "Tools" if section == "tools" else "Knowledge"
         from chat import config as chat_config
         if getattr(chat_config, "ENABLED", False):
             base = chat_config.public_url(self.request)
             ctx["iframe_src"] = f"{base}{self.SECTIONS[section]}?__studio_admin=1"
-            ctx["open_webui_url"] = f"{base}{self.SECTIONS[section]}"
             ctx["chat_enabled"] = True
         else:
             ctx["iframe_src"] = None
-            ctx["open_webui_url"] = None
             ctx["chat_enabled"] = False
         return ctx
 
@@ -2831,8 +2828,6 @@ class AgentDetailView(ProjectMixin, TemplateView):
         from model_registry.models import (
             Agent,
             KnowledgeBase,
-            MCPServer,
-            MCPTool,
             RegisteredModel,
             RetrievalProfile,
             Tool,
@@ -2845,7 +2840,7 @@ class AgentDetailView(ProjectMixin, TemplateView):
                 pk=self.kwargs["agent_id"], project=project
             ).select_related(
                 "base_model", "base_model__connection", "retrieval_profile"
-            ).prefetch_related("knowledge_bases", "tools", "mcp_tools__server").first()
+            ).prefetch_related("knowledge_bases", "tools").first()
 
         # Auto-sync from OpenWebUI so the picker lists are always fresh.
         _sync_openwebui_resources(project, self.request.user)
@@ -2854,8 +2849,6 @@ class AgentDetailView(ProjectMixin, TemplateView):
         ctx["models"] = RegisteredModel.objects.filter(project=project, enabled=True).select_related("connection")
         ctx["knowledge_bases"] = KnowledgeBase.objects.filter(project=project, enabled=True)
         ctx["tools"] = Tool.objects.filter(project=project, enabled=True)
-        ctx["mcp_servers"] = MCPServer.objects.filter(project=project, enabled=True).prefetch_related("tools")
-        ctx["mcp_tools"] = MCPTool.objects.filter(project=project, enabled=True).select_related("server")
         ctx["retrieval_profiles"] = RetrievalProfile.objects.filter(project=project)
         ctx["capability_options"] = [
             {"key": "knowledge_search", "label": "Knowledge Search"},
@@ -2871,7 +2864,7 @@ class AgentDetailView(ProjectMixin, TemplateView):
         return ctx
 
     def post(self, request, *args, **kwargs):
-        from model_registry.models import Agent, KnowledgeBase, MCPTool, Tool
+        from model_registry.models import Agent, KnowledgeBase, Tool
 
         project = request.project
         agent = None
@@ -2913,9 +2906,6 @@ class AgentDetailView(ProjectMixin, TemplateView):
             agent.tools.set(
                 Tool.objects.filter(pk__in=request.POST.getlist("tools"), project=project)
             )
-            agent.mcp_tools.set(
-                MCPTool.objects.filter(pk__in=request.POST.getlist("mcp_tools"), project=project)
-            )
             # Parse capabilities checkboxes
             caps = {}
             for cap in ("knowledge_search", "file_read", "web_search", "url_fetch",
@@ -2946,9 +2936,6 @@ class AgentDetailView(ProjectMixin, TemplateView):
             )
             agent.tools.set(
                 Tool.objects.filter(pk__in=request.POST.getlist("tools"), project=project)
-            )
-            agent.mcp_tools.set(
-                MCPTool.objects.filter(pk__in=request.POST.getlist("mcp_tools"), project=project)
             )
             messages.success(request, f"Agent '{name}' created.")
 

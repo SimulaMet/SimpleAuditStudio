@@ -4,8 +4,6 @@ from rest_framework import serializers
 from model_registry.models import (
     Agent,
     KnowledgeBase,
-    MCPServer,
-    MCPTool,
     RegisteredModel,
     RetrievalProfile,
     Tool,
@@ -46,25 +44,11 @@ class ToolSerializer(serializers.ModelSerializer):
         read_only_fields = ["id"]
 
 
-class MCPServerSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = MCPServer
-        fields = ["id", "name", "url", "auth_config", "description", "enabled"]
-        read_only_fields = ["id"]
-
-
-class MCPToolSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = MCPTool
-        fields = ["id", "server", "external_name", "description", "input_schema", "enabled"]
-        read_only_fields = ["id", "server"]
-
-
 class AgentSerializer(serializers.ModelSerializer):
     """Create/update an Agent.
 
     ``base_model`` is a primary-key reference to an existing ``RegisteredModel``.
-    Knowledge bases, tools, and MCP tools are sets of primary keys.
+    Knowledge bases and tools are sets of primary keys.
     """
 
     base_model = serializers.PrimaryKeyRelatedField(
@@ -80,11 +64,6 @@ class AgentSerializer(serializers.ModelSerializer):
         many=True,
         required=False,
     )
-    mcp_tools = serializers.PrimaryKeyRelatedField(
-        queryset=MCPTool.objects.filter(enabled=True),
-        many=True,
-        required=False,
-    )
     retrieval_profile = serializers.PrimaryKeyRelatedField(
         queryset=RetrievalProfile.objects.all(),
         required=False,
@@ -95,7 +74,7 @@ class AgentSerializer(serializers.ModelSerializer):
         model = Agent
         fields = [
             "id", "name", "description", "base_model", "system_prompt",
-            "knowledge_bases", "tools", "mcp_tools", "retrieval_profile",
+            "knowledge_bases", "tools", "retrieval_profile",
             "capabilities", "metadata", "enabled",
         ]
         read_only_fields = ["id"]
@@ -108,7 +87,7 @@ class AgentSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError(
                     {"base_model": "Model must belong to the same workspace."}
                 )
-            for field in ("knowledge_bases", "tools", "mcp_tools"):
+            for field in ("knowledge_bases", "tools"):
                 items = attrs.get(field)
                 if items:
                     for item in items:
@@ -132,12 +111,11 @@ class AgentDetailSerializer(AgentSerializer):
     retrieval_profile_name = serializers.CharField(source="retrieval_profile.name", read_only=True)
     knowledge_base_names = serializers.SerializerMethodField()
     tool_names = serializers.SerializerMethodField()
-    mcp_tool_names = serializers.SerializerMethodField()
 
     class Meta(AgentSerializer.Meta):
         fields = AgentSerializer.Meta.fields + [
             "base_model_name", "connection_name", "retrieval_profile_name",
-            "knowledge_base_names", "tool_names", "mcp_tool_names",
+            "knowledge_base_names", "tool_names",
         ]
 
     def get_knowledge_base_names(self, obj) -> list[str]:
@@ -145,6 +123,3 @@ class AgentDetailSerializer(AgentSerializer):
 
     def get_tool_names(self, obj) -> list[str]:
         return list(obj.tools.values_list("name", flat=True))
-
-    def get_mcp_tool_names(self, obj) -> list[str]:
-        return [f"{mt.server.name}/{mt.external_name}" for mt in obj.mcp_tools.all()]

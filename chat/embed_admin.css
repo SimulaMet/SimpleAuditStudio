@@ -34,6 +34,20 @@ nav.backdrop-blur-xl.drag-region {
   display: none !important;
 }
 
+/* The tab bar (Models / Knowledge / Prompts / Skills / Tools) inside the
+ * workspace top bar. This is a <div> with overflow-x-auto that contains
+ * links to /workspace/* routes — not the <nav> above, which wraps it. */
+main#main-content > div > nav > div > div > div.overflow-x-auto {
+  display: none !important;
+}
+
+/* The "Access List" section in the KB create/edit modal: the label div,
+ * the "Add access" button, and the "No access grants" empty-state text. */
+.modal div:has(> div:text-is("Access List")),
+.modal div:has(> div:text-is("Access List")) ~ * {
+  display: none !important;
+}
+
 /* The "Open Sidebar" toggle in the workspace top bar. Same stable id as in
  * chat/embed.css; the workspace has no chat sidebar, but the button is present
  * and would open a blank gap, so it goes. */
