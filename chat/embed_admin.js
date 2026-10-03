@@ -81,12 +81,30 @@
       a.style.display = 'none';
     }
   }
+  function maskUploadMenu() {
+    // "Upload directory" and "Sync directory" use the File System Access API
+    // (showDirectoryPicker), which browsers only allow in a top-level or
+    // same-origin frame. This embed is a cross-origin subframe, so those two
+    // rows would throw a SecurityError. They live in the full workspace (linked
+    // from the Studio page), so hide the rows here and keep the rest of the "+"
+    // menu (Upload files, New directory, Add webpage, Add text content).
+    var rows = document.querySelectorAll('button');
+    for (var i = 0; i < rows.length; i++) {
+      var t = rows[i].textContent.trim();
+      if (t === 'Upload directory' || t === 'Sync directory') {
+        if (rows[i].style.display !== 'none') {
+          rows[i].style.display = 'none';
+        }
+      }
+    }
+  }
   function scan() {
     var modals = document.querySelectorAll('div.modal');
     for (var k = 0; k < modals.length; k++) {
       maskModal(modals[k]);
     }
     maskBranding();
+    maskUploadMenu();
   }
   var observer = new MutationObserver(scan);
   function start() {
