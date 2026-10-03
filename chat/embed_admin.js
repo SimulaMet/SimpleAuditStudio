@@ -12,6 +12,20 @@
  * origin, where Studio owns no other assets.
  */
 (function () {
+  // No hover tooltip: the browser shows the frame's document title when the
+  // pointer sits on the iframe, and Open WebUI names its pages "Open WebUI
+  // <section>". Pin the title empty so nothing shows. The <title> element
+  // exists at injection time (we are in <head>); a MutationObserver keeps it
+  // pinned because the SPA re-sets the title after boot.
+  var titleEl = document.querySelector('title');
+  if (titleEl) {
+    titleEl.textContent = '';
+    new MutationObserver(function () {
+      if (titleEl.textContent.trim() !== '') {
+        titleEl.textContent = '';
+      }
+    }).observe(titleEl, { childList: true, characterData: true, subtree: true });
+  }
   function text(el) {
     return el.textContent.trim();
   }
@@ -39,11 +53,40 @@
       }
     }
   }
+  function maskBranding() {
+    // The "Made by Open WebUI Community" credit + "Discover a tool" promo
+    // card shown in empty workspace states: pure branding, no function here.
+    // Find the promo link, then climb to the smallest ancestor that also
+    // holds the credit text — that is the card — and hide it.
+    var link = document.querySelector('main#main-content a[href*="openwebui.com"]');
+    if (!link) {
+      return;
+    }
+    var a = link;
+    var aborted = false;
+    while (a && a.parentElement) {
+      a = a.parentElement;
+      var t = a.textContent || '';
+      if (t.indexOf('Made by Open WebUI Community') !== -1) {
+        break;
+      }
+      // Safety: if the credit is no longer next to the link, do not keep
+      // climbing towards <main> and hide the whole section.
+      if (t.length > 800) {
+        aborted = true;
+        break;
+      }
+    }
+    if (!aborted && a && a !== document.body && a.style.display !== 'none') {
+      a.style.display = 'none';
+    }
+  }
   function scan() {
     var modals = document.querySelectorAll('div.modal');
     for (var k = 0; k < modals.length; k++) {
       maskModal(modals[k]);
     }
+    maskBranding();
   }
   var observer = new MutationObserver(scan);
   function start() {
