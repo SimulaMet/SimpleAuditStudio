@@ -99,4 +99,23 @@
     // Injected into <head>: the body may not exist yet.
     document.addEventListener('DOMContentLoaded', start);
   }
+  // ?create=1 — deep link from Studio's agent form: once the SPA has rendered
+  // the section header, click Create so the user lands directly in the form.
+  if (new URLSearchParams(location.search).get('create') === '1') {
+    var attempts = 0;
+    var poll = setInterval(function () {
+      attempts += 1;
+      var btns = document.querySelectorAll('main#main-content nav button');
+      for (var i = 0; i < btns.length; i++) {
+        if (btns[i].textContent.trim() === 'Create') {
+          clearInterval(poll);
+          btns[i].click();
+          return;
+        }
+      }
+      if (attempts > 100) { // ~25 s: the SPA failed to boot; give up
+        clearInterval(poll);
+      }
+    }, 250);
+  }
 })();

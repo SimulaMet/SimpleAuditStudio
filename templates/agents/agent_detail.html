@@ -56,7 +56,14 @@
 
     <!-- Knowledge -->
     <fieldset class="bg-surface-raised rounded-xl border border-gray-800 p-4 space-y-3" data-kb-fieldset>
-      <legend class="px-2 text-xs font-semibold text-gray-300 uppercase tracking-wide">Knowledge Bases</legend>
+      <legend class="px-2 text-xs font-semibold text-gray-300 uppercase tracking-wide">
+        Knowledge Bases
+        {% if chat_enabled %}
+        <a href="{% url 'agents_knowledge' %}?create=1" target="_blank" rel="noopener"
+           class="ml-2 normal-case font-normal tracking-normal text-[11px] text-gray-500 hover:text-white transition-colors"
+           title="Open Knowledge Bases in a new tab and start creating">＋ New</a>
+        {% endif %}
+      </legend>
       <div class="flex items-center gap-2">
         <input type="search" data-filter placeholder="Search knowledge bases…" aria-label="Search knowledge bases"
                class="flex-1 px-2.5 py-1.5 rounded-lg bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-2 focus:ring-accent/50">
@@ -102,7 +109,14 @@
 
     <!-- Tools -->
     <fieldset class="bg-surface-raised rounded-xl border border-gray-800 p-4 space-y-3" data-tools-fieldset>
-      <legend class="px-2 text-xs font-semibold text-gray-300 uppercase tracking-wide">Tools</legend>
+      <legend class="px-2 text-xs font-semibold text-gray-300 uppercase tracking-wide">
+        Tools
+        {% if chat_enabled %}
+        <a href="{% url 'agents_tools' %}?create=1" target="_blank" rel="noopener"
+           class="ml-2 normal-case font-normal tracking-normal text-[11px] text-gray-500 hover:text-white transition-colors"
+           title="Open Tools in a new tab and start creating">＋ New</a>
+        {% endif %}
+      </legend>
       <div class="flex items-center gap-2">
         <input type="search" data-filter placeholder="Search tools…" aria-label="Search tools"
                class="flex-1 px-2.5 py-1.5 rounded-lg bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-2 focus:ring-accent/50">
