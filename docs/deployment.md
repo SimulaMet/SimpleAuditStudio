@@ -3,30 +3,25 @@
 Status: current (matches the code)  
 Date: 2026-10-03
 
-The one reference for the **four standard ways** to run Studio. All four start
-the same app at <http://localhost:8000> with the chat assistant on by
-default, apply the database updates on start, and create the admin user and
-default workspace if missing.
+This is the practical reference for running Studio. Every setup opens the app
+at <http://localhost:8000>, prepares the database, and creates the admin user
+and default workspace when needed.
 
-| # | Way | Standard command(s) | Database | Best for |
+| # | Setup | Start with | Data |
 |---|-----|---------------------|----------|----------|
-| 1 | **One-liner** | `uvx simpleaudit-studio@latest` | built in | trying it out; running a stable release |
-| 2 | **Docker** (one container) | `docker build -t simpleaudit-studio .` then `docker run -d -p 8000:7860 -v sa-data:/data --name simpleaudit-studio simpleaudit-studio` | built in | self-hosting a single copy |
-| 3 | **Compose** | `cp .env.example .env` (set three values) then `docker compose up -d` | PostgreSQL 16 (own container) | teams and production |
-| 4 | **Development** | `uv run manage.py dev` | built in | working on the code in this repository |
+| 1 | **Quick run** | `uvx simpleaudit-studio@latest` | `~/.simpleaudit-studio/` |
+| 2 | **Docker** | `docker build ...` then `docker run ...` | Docker volume |
+| 3 | **Compose** | `cp .env.example .env` then `docker compose up -d` | Docker volumes |
+| 4 | **Development** | `uv run manage.py dev` | Local files |
 
-"Ways" 1–3 need no database server: the app bundles a local SQLite file and
+Setups 1–3 need no separate database server: the app bundles a local SQLite file and
 an embedded job-queue engine. Only Compose runs the full multi-container
 stack with PostgreSQL.
 
-Chat is on by default in every way and can always be turned off — with the
-`--disable-chat` / `--no-chat` flag or `SIMPLEAUDIT_CHAT=off` (the flag beats
-the env value, which beats the default). Each section below shows its toggle.
+Chat is on by default. To turn it off, use `--disable-chat` where available or
+set `SIMPLEAUDIT_CHAT=off`. The flag takes priority over the environment value.
 
-`uv run manage.py mode` prints which way is active on this machine and with
-what settings. Older run setups (raw `dev_server` without the embedded
-engine, external-Postgres development) are removed; the table above is the
-whole surface.
+`uv run manage.py mode` prints the active setup and settings.
 
 ## 1. One-liner (`uvx simpleaudit-studio`)
 
@@ -136,7 +131,24 @@ Day-to-day notes:
 - Tests: `uv run pytest -n auto -m "not slow and not embedded_hatchet"` (fast
   set) or drop the marker filter for everything.
 
-## 5. Environment variables
+## 5. Models
+
+The starter connections use a built-in mock model. For real audits, open
+**Models** in Studio and add any OpenAI-compatible service. Use its base URL
+and API key; local services such as Ollama usually do not need a key.
+
+Examples:
+
+| Service | Base URL |
+|---|---|
+| Ollama | `http://localhost:11434/v1` |
+| vLLM | `http://your-server:8000/v1` |
+| OpenAI | `https://api.openai.com/v1` |
+
+Then start an experiment from **New Experiment**. The `--mock` option starts
+a fake model for local testing without an API key.
+
+## 6. Environment variables
 
 Only these are read by the code.
 
@@ -169,7 +181,7 @@ override them when you deliberately need to.
 | `LOG_LEVEL`, `PORT` | Logging level; web port for the CLI. |
 | any name in a connection's `secret_reference` | Model API key read at execution time. |
 
-## 6. Management commands
+## 7. Management commands
 
 | Command | Does |
 |---|---|
@@ -183,13 +195,13 @@ override them when you deliberately need to.
 | `run_monitors` | One monitor pass, for an external cron if you don't run the worker sweeper. |
 | `purge_test_data` | Delete runs, scenario sets and models left by smoke tests (`--dry-run` first). |
 
-## 7. Operations
+## 8. Operations
 
 - **Health:** `/healthz` (liveness), `/readyz` (readiness), `/health/` (admin panel).
 - **Backups:** `docker compose exec postgres pg_dump -U simpleaudit simpleaudit > backup.sql`. Restore with `psql` into an empty database before starting `web`.
 - **Upgrades:** pull, `docker compose build`, `docker compose up -d`. Migrations run when `web` starts; take a backup first.
 
-## 8. Security notes
+## 9. Security notes
 
 - Set a strong `DJANGO_SECRET_KEY` and change `BOOTSTRAP_PASSWORD` (start-up
   checks reject empty values and `change-me`).
