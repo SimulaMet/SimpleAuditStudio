@@ -2701,6 +2701,84 @@ class AgentsView(ProjectMixin, TemplateView):
         return ctx
 
 
+def _sync_openwebui_resources(project, user):
+    """Pull knowledge bases and tools from OpenWebUI into local models.
+
+    Returns (kb_count, tool_count) or (None, None) if chat is disabled.
+    """
+    from chat import config as chat_config
+
+    if not chat_config.ENABLED:
+        return None, None
+
+    from chat.api import ChatAPI, ChatAPIError
+    from model_registry.models import KnowledgeBase, Tool
+
+    try:
+        api = ChatAPI.as_user(user)
+    except Exception:
+        return None, None
+
+    kb_count = 0
+    try:
+        remote_kbs = api.knowledge_bases()
+        for item in remote_kbs:
+            external_id = item.get("id", "")
+            if not external_id:
+                continue
+            KnowledgeBase.objects.update_or_create(
+                project=project,
+                external_id=external_id,
+                defaults={
+                    "name": item.get("name") or external_id,
+                    "description": item.get("description") or "",
+                },
+            )
+            kb_count += 1
+    except ChatAPIError:
+        pass
+
+    tool_count = 0
+    try:
+        payload = api.request("GET", "/api/v1/functions/")
+        items = payload if isinstance(payload, list) else (payload.get("items") or payload.get("functions") or [])
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            name = item.get("name", "")
+            if not name:
+                continue
+            external_id = item.get("id", "")
+            Tool.objects.update_or_create(
+                project=project,
+                name=name,
+                defaults={
+                    "external_id": external_id,
+                    "description": item.get("description") or "",
+                    "type": "custom" if item.get("kind") == "function" else "builtin",
+                },
+            )
+            tool_count += 1
+    except ChatAPIError:
+        pass
+
+    return kb_count, tool_count
+
+
+class AgentSyncView(ProjectMixin, View):
+    """POST /agents/sync/ — pull KBs and tools from OpenWebUI into local models."""
+
+    def post(self, request):
+        kb_count, tool_count = _sync_openwebui_resources(request.project, request.user)
+        if kb_count is None:
+            return JsonResponse({"error": "Chat is not enabled."}, status=400)
+        return JsonResponse({
+            "ok": True,
+            "knowledge_bases": kb_count,
+            "tools": tool_count,
+        })
+
+
 class AgentDetailView(ProjectMixin, TemplateView):
     """Create or edit an agent."""
 
@@ -2726,6 +2804,9 @@ class AgentDetailView(ProjectMixin, TemplateView):
             ).select_related(
                 "base_model", "base_model__connection", "retrieval_profile"
             ).prefetch_related("knowledge_bases", "tools", "mcp_tools__server").first()
+
+        # Auto-sync from OpenWebUI so the picker lists are always fresh.
+        _sync_openwebui_resources(project, self.request.user)
 
         ctx["agent"] = agent
         ctx["models"] = RegisteredModel.objects.filter(project=project, enabled=True).select_related("connection")
