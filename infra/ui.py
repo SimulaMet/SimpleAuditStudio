@@ -2732,7 +2732,18 @@ class AgentResourcesView(ProjectMixin, TemplateView):
         from chat import config as chat_config
         if getattr(chat_config, "ENABLED", False):
             base = chat_config.public_url(self.request)
-            ctx["iframe_src"] = f"{base}{self.SECTIONS[section]}?__studio_admin=1"
+            # Per-render nonce: the Open WebUI SPA shell is a static document
+            # that browsers cache with heuristic freshness. A cached document
+            # never reaches the chat proxy, so the ?__studio_admin=1 marker is
+            # never registered and the frame falls back to the chat
+            # stylesheet (workspace tab bar re-exposed). A fresh URL per page
+            # render guarantees the marker request actually goes to the proxy.
+            # The SPA ignores unknown query params (path-based routing).
+            import time
+            ctx["iframe_src"] = (
+                f"{base}{self.SECTIONS[section]}"
+                f"?__studio_admin=1&t={int(time.time() * 1000)}"
+            )
             ctx["chat_enabled"] = True
         else:
             ctx["iframe_src"] = None

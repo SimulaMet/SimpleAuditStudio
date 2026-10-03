@@ -21,32 +21,22 @@
  * whole section disappears, which is loud and easy to spot.
  */
 
-/* The workspace tab nav (Models / Knowledge / Prompts / Skills / Tools).
- * Structural: it is the first <nav> inside the first child of
- * main#main-content. Hiding it leaves only the section content. */
-main#main-content > div > nav {
+/* The workspace tab bar (Models / Knowledge / Prompts / Skills / Tools).
+ * Structural: the <nav> in the first child of main#main-content holds this
+ * link row, but also the section's "Create" button — so only the scrollable
+ * link row (the overflow-x-auto div) goes, not the whole nav. Detection is
+ * visual: if the Models/Knowledge/Prompts/Skills/Tools links reappear at the
+ * top of the embedded frame, re-check the workspace DOM and update the
+ * selector. The #workspace-container id is the stable "keep" hook — if it is
+ * renamed, the whole section disappears, which is loud and easy to spot. */
+main#main-content > div > nav div.overflow-x-auto {
   display: none !important;
 }
 
-/* Redundant fallback: the tab nav is the only element with this class combo,
- * so a DOM-depth change is not enough to re-expose it. */
-nav.backdrop-blur-xl.drag-region {
-  display: none !important;
-}
-
-/* The tab bar (Models / Knowledge / Prompts / Skills / Tools) inside the
- * workspace top bar. This is a <div> with overflow-x-auto that contains
- * links to /workspace/* routes — not the <nav> above, which wraps it. */
-main#main-content > div > nav > div > div > div.overflow-x-auto {
-  display: none !important;
-}
-
-/* The "Access List" section in the KB create/edit modal: the label div,
- * the "Add access" button, and the "No access grants" empty-state text. */
-.modal div:has(> div:text-is("Access List")),
-.modal div:has(> div:text-is("Access List")) ~ * {
-  display: none !important;
-}
+/* NOTE: the KB modal's "Access List" row / "Add Access" button / "No access
+ * grants. Private to you." text are masked by chat/embed_admin.js (injected
+ * inline into marked documents by the proxy), not here — they are identified
+ * by text content, which plain CSS cannot match. Private/Public stays. */
 
 /* The "Open Sidebar" toggle in the workspace top bar. Same stable id as in
  * chat/embed.css; the workspace has no chat sidebar, but the button is present
