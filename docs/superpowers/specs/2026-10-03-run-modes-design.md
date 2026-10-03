@@ -37,6 +37,19 @@ Concrete symptom that motivated this design: the bundled chat (Open WebUI) is
 - No change to the Postgres/Hatchet behavior of Compose beyond the mode
   label.
 
+## Decisions (fixed)
+
+- **Legacy modes are removed, in code and in docs.** The only supported ways
+  to run Studio are the four modes below. In particular the legacy
+  `manage.py dev_server` **without** `--embedded` (connecting to external
+  Postgres + Hatchet from a `.env`) is removed, not documented as "advanced".
+- **Chat can always be turned off, in every mode**, two independent ways:
+  - env: `SIMPLEAUDIT_CHAT=off` (also `disabled`, `disable`, `false`, `no`,
+    `none`, `0`, or unset).
+  - CLI flag: `--disable-chat` / `--no-chat` (already exists on the `uvx` CLI;
+    this spec adds it to `manage.py dev`).
+  There is no mode where chat is forced on.
+
 ## The four modes
 
 | # | Mode ID | Command | Process model | DB | Queue | Chat | Data location | DEBUG |
@@ -67,8 +80,6 @@ New environment variable `SIMPLEAUDIT_MODE`, one of
   - `manage.py dev` → `dev`
   - `manage.py dev_server --embedded` → `dev` (keeps the existing flag working,
     now labeled `dev`)
-  - `manage.py dev_server` (no `--embedded`) → resolved from `SIMPLEAUDIT_CHAT`
-    and queue config (legacy path, still supported).
 
 ### 2. `resolve_mode()` — single source of truth
 
@@ -98,23 +109,46 @@ This is deliberately additive: nothing that reads
 changes behavior. `resolve_mode()` is a *lens* over those flags, not a
 replacement, which keeps the change reviewable and low-risk.
 
-### 3. Uniform chat default
+### 3. Chat default, and always-disableable
 
 Chat (Open WebUI) is **on by default for every single-process mode**
 (`embedded`, `dev`, `single-docker`), and stays **opt-in for `compose`**
 (chat is a separate container there, gated by `COMPOSE_PROFILES=chat`).
 
-Implementation: `manage.py dev_server` sets
-`os.environ.setdefault("SIMPLEAUDIT_CHAT", "embedded")` the same way the CLI
-already does. This is the direct fix for the motivating symptom.
+It can be turned **off in every mode**, independently, two ways:
+- **Env:** `SIMPLEAUDIT_CHAT=off` (accepted spellings: `off`, `disabled`,
+  `disable`, `false`, `no`, `none`, `0`, or unset — see
+  `chat.config.DISABLED_VALUES`). Setting any of these wins over the mode
+  default, so `SIMPLEAUDIT_CHAT=off` + `dev` mode = dev without chat.
+- **CLI flag:** `--disable-chat` / `--no-chat`. The `uvx` CLI already sets
+  `SIMPLEAUDIT_CHAT=off` when given; `manage.py dev` gains the same flag and
+  the same behavior.
+
+The flag takes precedence over the env default (an explicit opt-out beats the
+mode's on-by-default), but a user who explicitly sets `SIMPLEAUDIT_CHAT=embedded`
+in `.env` to force it on wins over a bare flag — the rule is: explicit env
+value > CLI flag > mode default. This keeps "always an option to disable chat"
+true without surprising anyone who pins chat on in `.env`.
+
+Implementation: `manage.py dev_server` / `manage.py dev` set
+`os.environ.setdefault("SIMPLEAUDIT_CHAT", "embedded")` only when it is unset
+and no disable flag was given. This is the direct fix for the motivating
+symptom (chat off by default on the dev path).
 
 ### 4. `manage.py dev` — the missing honest name
 
 New management command `infra/management/commands/dev.py`: a thin alias of
 `dev_server` that (a) defaults to `--embedded`, (b) sets
-`SIMPLEAUDIT_MODE=dev`, and (c) delegates to `dev_server.handle`. Existing
-`dev_server` invocations are unchanged. This gives mode 4 the name the docs
-will use without inventing mechanics.
+`SIMPLEAUDIT_MODE=dev`, and (c) delegates to `dev_server.handle`. It accepts
+the chat disable flag (`--disable-chat` / `--no-chat`) and passes it through.
+This gives mode 4 the name the docs will use without inventing mechanics.
+
+**The legacy non-embedded `dev_server` path is removed.** `dev_server`
+therefore requires `--embedded` (or an explicit `SIMPLEAUDIT_MODE`): running
+`manage.py dev_server` with neither `--embedded` nor a resolvable mode is a
+clear error pointing at the four modes, not a fallback to external
+Postgres + Hatchet. `--no-worker` (web-only) is retained as a dev convenience,
+not a mode.
 
 ### 5. `manage.py mode` — the "what am I running" diagnostic
 
@@ -156,10 +190,12 @@ single-process modes.
   `dev_server --embedded` behavior (SQLite implied).
 - **Only one `--embedded`/`dev`/`uvx` at a time:** unchanged — they share the
   embedded Postgres dir; the existing startup notice stays.
-- **Legacy `dev_server` (no `--embedded`) against external Postgres +
-  Hatchet:** still supported; resolves to a profile with
-  `database=postgres, queue=external`. Not given a new name; documented as
-  "advanced".
+- **Legacy `dev_server` (no `--embedded`):** removed. Running it without
+  `--embedded` (and without an explicit `SIMPLEAUDIT_MODE`) prints the four
+  valid modes and exits. No external-Postgres dev path.
+- **Chat off in every mode:** `SIMPLEAUDIT_CHAT=off` (any accepted spelling) or
+  the `--disable-chat`/`--no-chat` flag disables chat in any mode; the mode
+  default (on for single-process) applies only when neither is present.
 - **Unknown `SIMPLEAUDIT_MODE` value:** startup error listing the four valid
   values (fail fast, don't silently guess).
 
@@ -171,7 +207,12 @@ single-process modes.
 - Chat default: assert `dev_server` sets `SIMPLEAUDIT_CHAT` to `embedded`
   when unset (mirrors the existing CLI test).
 - `manage.py dev`: assert it is accepted and delegates (smoke: `--help` and a
-  resolve check), and that `dev_server` behavior is unchanged.
+  resolve check); assert `--disable-chat` on `dev` sets chat off.
+- `dev_server` legacy removal: assert `dev_server` with no `--embedded` and no
+  `SIMPLEAUDIT_MODE` errors out and lists the four modes; assert
+  `dev_server --embedded` still works and resolves to `dev`.
+- Chat disable in every mode: unit-test the precedence (explicit env value >
+  CLI flag > mode default) for `embedded` and `dev`.
 - `manage.py mode`: assert it renders the profile and exits 0 for each of the
   four modes (fixture env vars).
 - No new `slow` / `embedded_hatchet` tags needed; these are lightweight.
@@ -185,7 +226,11 @@ single-process modes.
 ## Rollout order (for the later implementation plan)
 
 1. `resolve_mode()` + `ModeProfile` + unit tests (no behavior change).
-2. Uniform chat default in `dev_server`.
-3. `manage.py dev` alias.
+2. Uniform chat default (on) for the single-process modes, plus the
+   explicit-env > CLI-flag > mode-default precedence.
+3. `manage.py dev` alias with `--disable-chat`; remove the legacy
+   non-embedded `dev_server` path (make `--embedded`/`SIMPLEAUDIT_MODE`
+   required).
 4. `manage.py mode` diagnostic.
-5. Docs: 4-mode table in README + deployment.md, mark flags as internal.
+5. Docs: 4-mode table in README + deployment.md, mark flags as internal, and
+   delete the legacy "advanced" external-Postgres dev instructions.
