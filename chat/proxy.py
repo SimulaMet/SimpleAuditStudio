@@ -70,6 +70,36 @@ def _remember_identity(cookie: str, identity: dict[str, str] | None) -> None:
             _identity_cache.clear()    # cheap and rare; entries are seconds old
         _identity_cache[cookie] = (time.monotonic() + IDENTITY_TTL, identity)
 
+# The ?__studio_admin=1 marker rides on the initial document request; the
+# page's own /static/custom.css request has no query, so remember "this
+# browser asked for the admin sheet" for a short window, keyed on the cookie
+# (same identity the proxy already uses). Short on purpose, like IDENTITY_TTL.
+ADMIN_MARKER_TTL = float(os.environ.get("SIMPLEAUDIT_CHAT_ADMIN_MARKER_TTL", "30"))
+_admin_marker: dict[str, float] = {}
+_admin_marker_lock = threading.Lock()
+
+
+def _mark_admin(cookie: str) -> None:
+    if ADMIN_MARKER_TTL <= 0:
+        return
+    with _admin_marker_lock:
+        if len(_admin_marker) > 1024:
+            _admin_marker.clear()
+        _admin_marker[cookie] = time.monotonic() + ADMIN_MARKER_TTL
+
+
+def _is_admin(cookie: str) -> bool:
+    if ADMIN_MARKER_TTL <= 0:
+        return False
+    with _admin_marker_lock:
+        expiry = _admin_marker.get(cookie)
+        if expiry is None:
+            return False
+        if expiry < time.monotonic():
+            _admin_marker.pop(cookie, None)
+            return False
+        return True
+
 # Connection-level headers that must not be forwarded (RFC 9110 §7.6.1).
 _HOP_BY_HOP = frozenset({
     "connection", "keep-alive", "proxy-authenticate", "proxy-authorization",
@@ -131,7 +161,7 @@ class _Handler(BaseHTTPRequestHandler):
         # (chat/embed.css) rather than in a copy of Open WebUI an upgrade would
         # overwrite. A static asset, so it needs no identity.
         if self.command == "GET" and urlsplit(self.path).path == "/static/custom.css":
-            self._serve_embed_css()
+            self._serve_embed_css(admin=_is_admin(self.headers.get("Cookie", "")))
             return
 
         headers = {k: v for k, v in self.headers.items() if k.lower() not in _STRIP_FROM_REQUEST}
@@ -141,6 +171,8 @@ class _Handler(BaseHTTPRequestHandler):
         if not any(k.lower() == "accept-encoding" for k in headers):
             headers["Accept-Encoding"] = "identity"
         cookie = self.headers.get("Cookie", "")
+        if "__studio_admin=1" in urlsplit(self.path).query:
+            _mark_admin(cookie)
 
         identity = self._identify(cookie)
         if identity is None:
@@ -177,14 +209,17 @@ class _Handler(BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError):
             pass    # the browser navigated away mid-stream
 
-    def _serve_embed_css(self) -> None:
-        """Serve chat/embed.css as Open WebUI's /static/custom.css.
+    def _serve_embed_css(self, admin: bool = False) -> None:
+        """Serve Studio's embed stylesheet as Open WebUI's /static/custom.css.
 
-        The bytes come from this repo, not the upstream, so the embed styling
-        survives Open WebUI upgrades and lives in one place shared with the
-        Docker mode (which mounts the same file for Caddy).
+        ``admin`` selects chat/embed_admin.css (workspace mask) over
+        chat/embed.css (chat mask). The bytes come from this repo, not the
+        upstream, so the embed styling survives Open WebUI upgrades and lives
+        in one place shared with the Docker mode (which mounts the same file
+        for Caddy).
         """
-        css = (Path(__file__).parent / "embed.css").read_bytes()
+        filename = "embed_admin.css" if admin else "embed.css"
+        css = (Path(__file__).parent / filename).read_bytes()
         self.send_response(200)
         self.send_header("Content-Type", "text/css; charset=utf-8")
         self.send_header("Content-Length", str(len(css)))

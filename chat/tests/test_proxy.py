@@ -152,6 +152,7 @@ class ProxyTests(SimpleTestCase):
 
     def setUp(self):
         proxy._identity_cache.clear()
+        proxy._admin_marker.clear()
         _StubStudio.calls = 0
 
     def test_a_signed_in_browser_is_identified(self):
@@ -254,6 +255,36 @@ class ProxyTests(SimpleTestCase):
         self.assertIn("text/css", response.headers["Content-Type"])
         self.assertIn("#sidebar", response.text)
         self.assertNotIn("email", response.text)   # not the upstream's echo
+
+    def test_admin_marker_selects_the_admin_stylesheet(self):
+        """A request carrying ?__studio_admin=1 makes the proxy serve
+        chat/embed_admin.css (which hides the workspace tab nav) for the
+        subsequent /static/custom.css request, instead of chat/embed.css.
+
+        The marker rides on the initial document request; the CSS request
+        itself has no query, so the proxy must remember the marker per
+        browser (cookie) for a short window.
+        """
+        # 1. The initial document request carries the marker.
+        httpx.get(f"{self.url}/workspace/knowledge?__studio_admin=1",
+                  headers={"Cookie": VALID_COOKIE})
+        # 2. The page's own CSS request (no query) now gets the admin sheet.
+        response = httpx.get(f"{self.url}/static/custom.css",
+                             headers={"Cookie": VALID_COOKIE})
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("text/css", response.headers["Content-Type"])
+        # embed_admin.css keeps #workspace-container and hides the tab nav.
+        self.assertIn("#workspace-container", response.text)
+        self.assertIn("main#main-content > div > nav", response.text)
+
+    def test_no_marker_serves_the_chat_stylesheet(self):
+        """Without the marker, /static/custom.css is still chat/embed.css."""
+        httpx.get(f"{self.url}/workspace/knowledge", headers={"Cookie": VALID_COOKIE})
+        response = httpx.get(f"{self.url}/static/custom.css",
+                             headers={"Cookie": VALID_COOKIE})
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("#sidebar", response.text)
+        self.assertNotIn("#workspace-container", response.text)
 
     def test_open_webui_favicon_comes_from_studio_without_auth(self):
         response = httpx.get(f"{self.url}/static/favicon-32x32.svg")
