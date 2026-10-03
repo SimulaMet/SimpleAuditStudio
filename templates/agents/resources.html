@@ -7,13 +7,13 @@
     <h1 class="text-lg font-semibold text-gray-100">{{ section_label }}</h1>
   </div>
   <p class="text-sm text-gray-500 mt-0.5 max-w-2xl">
-    Create and manage {{ section_label|lower }} in Open WebUI. Changes sync into Studio automatically.
+    Create and manage {{ section_label|lower }}. Changes sync into your agents automatically.
   </p>
 </div>
 
 {% if chat_enabled %}
 <iframe class="resources-frame w-full rounded-xl border border-gray-800 bg-white"
-        src="{{ iframe_src }}" title="Open WebUI {{ section_label }}"></iframe>
+        src="{{ iframe_src }}"></iframe>
 {% else %}
 <div class="bg-surface-raised rounded-xl border border-gray-800 p-6 text-sm text-gray-400">
   Chat (Open WebUI) is not enabled on this server, so resources cannot be managed here.
