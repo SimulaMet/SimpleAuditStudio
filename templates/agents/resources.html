@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block title %}Agent Resources — SimpleAudit{% endblock %}
+{% block content %}
+<div class="flex flex-wrap items-start justify-between gap-3 mb-4">
+  <div>
+    <div class="flex items-center gap-2">
+      <a href="{% url 'agents' %}" class="text-xs text-gray-500 hover:text-gray-300">&larr; Agents</a>
+      <h1 class="text-lg font-semibold text-gray-100">Agent Resources</h1>
+    </div>
+    <p class="text-sm text-gray-500 mt-0.5 max-w-2xl">
+      Create and manage knowledge bases and tools in Open WebUI. Changes sync into Studio automatically.
+    </p>
+  </div>
+  {% if chat_enabled and open_webui_url %}
+  <a href="{{ open_webui_url }}" target="_blank" rel="noopener"
+     class="px-3 py-1.5 rounded-lg border border-gray-700 text-gray-300 text-xs font-medium hover:bg-gray-800 whitespace-nowrap">
+    Open in Open WebUI
+  </a>
+  {% endif %}
+</div>
+
+<div class="flex gap-1 mb-3">
+  {% for s in sections %}
+  <a href="?section={{ s.key }}"
+     class="px-3 py-1.5 rounded-lg text-xs font-medium {% if s.key == section %}bg-accent text-white{% else %}bg-surface-raised text-gray-400 hover:text-gray-200 border border-gray-800{% endif %}">
+    {{ s.label }}
+  </a>
+  {% endfor %}
+</div>
+
+{% if chat_enabled %}
+<iframe class="resources-frame w-full rounded-xl border border-gray-800 bg-white"
+        src="{{ iframe_src }}" title="Open WebUI {{ section }}"></iframe>
+{% else %}
+<div class="bg-surface-raised rounded-xl border border-gray-800 p-6 text-sm text-gray-400">
+  Chat (Open WebUI) is not enabled on this server, so resources cannot be managed here.
+  Enable it with <code class="text-gray-300">SIMPLEAUDIT_CHAT=embedded</code>.
+</div>
+{% endif %}
+
+<style>
+  .resources-frame { height: calc(100vh - 220px); min-height: 480px; }
+</style>
+{% endblock %}
