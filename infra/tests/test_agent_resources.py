@@ -71,12 +71,12 @@ class AgentResourcesNavTest(TestCase):
     def test_nav_context_has_knowledge_and_tools_as_agents_children(self):
         resp = self.client.get("/agents/")
         items = resp.context["nav_items"]
-        # Knowledge and Tools are not top-level items; they sit under Agents.
+        # Knowledge Bases and Tools are not top-level items; they sit under Agents.
         top_labels = [i["label"] for i in items]
-        self.assertNotIn("Knowledge", top_labels)
+        self.assertNotIn("Knowledge Bases", top_labels)
         self.assertNotIn("Tools", top_labels)
         agents = next(i for i in items if i["label"] == "Agents")
-        knowledge = next(c for c in agents["children"] if c["label"] == "Knowledge")
+        knowledge = next(c for c in agents["children"] if c["label"] == "Knowledge Bases")
         self.assertEqual(knowledge["url"], "/agents/knowledge/")
         tools = next(c for c in agents["children"] if c["label"] == "Tools")
         self.assertEqual(tools["url"], "/agents/tools/")

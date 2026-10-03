@@ -86,14 +86,18 @@
             <a href="/" class="hover:opacity-80 transition-opacity md:hidden" title="Go to homepage">
               <img src="{% static 'logo.svg' %}?v=3" alt="SimpleAudit" class="h-4 w-4 object-contain rounded shrink-0">
             </a>
-            <a href="/" class="hover:text-accent transition-colors">{% for item in nav_items %}{% if item.active %}{{ item.label }}{% endif %}{% empty %}SimpleAudit{% endfor %}</a>
+            <a href="/" class="hover:text-accent transition-colors">{% for item in nav_items %}{% if item.active %}{{ item.label }}{% if item.active_child %} / {{ item.active_child }}{% endif %}{% endif %}{% empty %}SimpleAudit{% endfor %}</a>
           </h1>
           <nav class="text-xs text-gray-500 leading-tight hidden sm:flex items-center gap-1 truncate" aria-label="Breadcrumb">
             <a href="/" class="hover:text-gray-300 transition-colors">Studio</a>
             {% for item in nav_items %}
               {% if item.active and item.url != '/' %}
                 <span class="text-gray-600">/</span>
-                <span class="text-gray-400">{{ item.label }}</span>
+                <a href="{{ item.url }}" class="hover:text-gray-300 transition-colors">{{ item.label }}</a>
+                {% if item.active_child %}
+                  <span class="text-gray-600">/</span>
+                  <span class="text-gray-400">{{ item.active_child }}</span>
+                {% endif %}
               {% endif %}
             {% endfor %}
             {% block breadcrumb_extra %}{% endblock %}

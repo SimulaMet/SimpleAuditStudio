@@ -94,7 +94,7 @@ _NAV = (
     ("monitors", "Monitors", "↻", ("/monitors/",), False, ()),
     ("scenarios", "Scenarios", "▤", ("/scenarios/",), False, ()),
     ("agents", "Agents", "🤖", ("/agents/",), False, (
-        ("agents_knowledge", "Knowledge", "📚"),
+        ("agents_knowledge", "Knowledge Bases", "📚"),
         ("agents_tools", "Tools", "🔧"),
     )),
     ("connections", "Connections", "⬡", ("/connections/",), False, ()),
@@ -139,4 +139,9 @@ def nav(request):
     best = max(items, key=score, default=None)
     for item in items:
         item["active"] = best is not None and item is best and score(best) > 0
+        # For sub-pages (children), expose the exact child label so the
+        # breadcrumb can render "Agents / Knowledge" instead of just "Agents".
+        item["active_child"] = next(
+            (c["label"] for c in item["children"] if c["url"] == path), None
+        )
     return {"nav_items": items}

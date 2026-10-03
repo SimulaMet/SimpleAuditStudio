@@ -33,6 +33,26 @@ from django.core.management import call_command
 from django.core.management.base import BaseCommand
 
 
+def _sync_chat_models() -> str:
+    """Give the freshly-started chat Studio's model connections, and say how it went.
+
+    Signals keep the chat in step afterwards (chat/signals.py); this is the first
+    push, for a chat that has just started or was off while connections changed.
+    Without it, Open WebUI keeps whatever provider config it had before (stale
+    keys, deleted connections), and a chat pinned to a connection whose key was
+    not pushed answers "Not authenticated" until the next connection save.
+    """
+    from chat.api import ChatAPIError
+    from chat.sync import push_now
+
+    try:
+        result = push_now()
+    except ChatAPIError as exc:
+        return f"Models not synced to chat: {exc}"
+    kept = f", kept {result['kept']} added in chat" if result["kept"] else ""
+    return f"Synced {result['pushed']} model connection(s) to chat{kept}."
+
+
 class Command(BaseCommand):
     help = "Run the local dev web server + Hatchet worker together."
 
@@ -187,6 +207,7 @@ class Command(BaseCommand):
         def report():
             if chat_proxy.wait_until_ready(process):
                 print(f"\n✅ Chat is ready — http://localhost:{port}/chat/", flush=True)
+                print(f"   {_sync_chat_models()}\n", flush=True)
             elif process.poll() is not None:
                 print(f"\n⚠️  Chat stopped (exit {process.returncode}). Studio is unaffected.", flush=True)
                 print(f"   What happened: {chat_proxy.log_path()}\n", flush=True)

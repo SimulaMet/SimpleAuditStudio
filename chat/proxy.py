@@ -108,7 +108,13 @@ _HOP_BY_HOP = frozenset({
 _STRIP_FROM_REQUEST = _HOP_BY_HOP | {h.lower() for h in chat.TRUSTED_HEADERS}
 # Dropped from the response so the iframe in Studio is allowed to render it.
 # X-Frame-Options has no origin allow-list, so it can only be removed.
-_STRIP_FROM_RESPONSE = _HOP_BY_HOP | {"x-frame-options"}
+# Cache headers are stripped too: Open WebUI sends "cache-control: no-cache"
+# but that still permits heuristic freshness, so the browser cached the
+# workspace document (and the ?__studio_admin=1 document with it) across
+# reloads. A cached document never reaches the proxy, so the admin marker is
+# never set and the resource iframes get the chat stylesheet — re-exposing the
+# workspace tab bar. We re-issue cache headers for HTML below.
+_STRIP_FROM_RESPONSE = _HOP_BY_HOP | {"x-frame-options", "cache-control", "etag", "last-modified"}
 
 # Open WebUI references its favicon with absolute paths from its own static
 # directory. Serve Studio's branding at those paths so the embedded origin
@@ -171,8 +177,15 @@ class _Handler(BaseHTTPRequestHandler):
         if not any(k.lower() == "accept-encoding" for k in headers):
             headers["Accept-Encoding"] = "identity"
         cookie = self.headers.get("Cookie", "")
-        if "__studio_admin=1" in urlsplit(self.path).query:
+        is_admin_doc = "__studio_admin=1" in urlsplit(self.path).query
+        if is_admin_doc:
             _mark_admin(cookie)
+            # The Studio mask is injected into these documents as text, so the
+            # upstream must answer identity-encoded — with a browser
+            # Accept-Encoding, iter_raw() would yield compressed bytes that
+            # the injection step (and its UTF-8 round-trip) would corrupt.
+            # The document is a small SPA shell, so the extra bytes are noise.
+            headers["Accept-Encoding"] = "identity"
 
         identity = self._identify(cookie)
         if identity is None:
@@ -192,14 +205,46 @@ class _Handler(BaseHTTPRequestHandler):
                 self.command, chat.UPSTREAM + self.path, headers=headers, content=body,
             ) as upstream:
                 self.send_response(upstream.status_code)
+                # Whether the body below is modified (Studio mask injected),
+                # which makes the upstream Content-Length wrong for the wire.
+                will_inject = is_admin_doc and "text/html" in upstream.headers.get("Content-Type", "").lower()
                 for key, value in upstream.headers.multi_items():
-                    if key.lower() not in _STRIP_FROM_RESPONSE:
+                    key_l = key.lower()
+                    if key_l not in _STRIP_FROM_RESPONSE:
+                        if will_inject and key_l == "content-length":
+                            continue
                         self.send_header(key, value)
+                # HTML documents must not be served from the browser cache: a
+                # cached workspace document never reaches this handler, so a
+                # ?__studio_admin=1 load would skip the marker and the iframe
+                # would fall back to the chat stylesheet. The document is a
+                # Svelte SPA shell (assets are content-hashed), so no-store is
+                # cheap here. Non-HTML (API/JSON) gets no-cache: back/forward
+                # cache stays usable, but stale entries are never honored.
+                html = "text/html" in upstream.headers.get("Content-Type", "").lower()
+                if html:
+                    self.send_header("Cache-Control", "no-store")
+                else:
+                    self.send_header("Cache-Control", "no-cache")
                 # Responses are streamed without a known length (SSE included),
                 # so the connection delimits the body.
                 self.send_header("Connection", "close")
                 self.close_connection = True
                 self.end_headers()
+
+                if html and is_admin_doc:
+                    # Buffer the (small, content-hashed SPA shell) so Studio's
+                    # mask is injected inline; the external /static/custom.css
+                    # link cannot be relied on to carry it.
+                    doc = b"".join(upstream.iter_raw()).decode("utf-8", "replace")
+                    inject = self._admin_inline()
+                    marker = "</head>" if "</head>" in doc else "</body>"
+                    if marker in doc and inject:
+                        doc = doc.replace(marker, inject + marker, 1)
+                    payload = doc.encode("utf-8")
+                    self.wfile.write(payload)
+                    self.wfile.flush()
+                    return
                 for chunk in upstream.iter_raw():
                     self.wfile.write(chunk)
                     self.wfile.flush()
@@ -208,6 +253,28 @@ class _Handler(BaseHTTPRequestHandler):
             self.send_error(502, "Chat backend unavailable")
         except (BrokenPipeError, ConnectionResetError):
             pass    # the browser navigated away mid-stream
+
+    def _admin_inline(self) -> str:
+        """Inline <style>/<script> block injected into marked admin documents.
+
+        Reading both files from disk here (not at import time) means edits to
+        chat/embed_admin.css / chat/embed_admin.js take effect on the next
+        page load without restarting the proxy, which StatReloader does not
+        manage. The CSS is inlined too — Open WebUI's /static/custom.css link
+        can be answered from a stale browser-cache entry or race the marker,
+        so the document carries its own mask that always applies.
+        """
+        embed_dir = os.path.dirname(__file__)
+        try:
+            css = open(os.path.join(embed_dir, "embed_admin.css"), "r", encoding="utf-8").read()
+            js = open(os.path.join(embed_dir, "embed_admin.js"), "r", encoding="utf-8").read()
+        except OSError:
+            return ""
+        return (
+            "\n<!-- Studio admin embed mask (injected by SimpleAudit chat proxy) -->\n"
+            "<style>\n" + css + "\n</style>\n"
+            "<script>\n" + js + "\n</script>\n"
+        )
 
     def _serve_embed_css(self, admin: bool = False) -> None:
         """Serve Studio's embed stylesheet as Open WebUI's /static/custom.css.
@@ -223,7 +290,12 @@ class _Handler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", "text/css; charset=utf-8")
         self.send_header("Content-Length", str(len(css)))
-        self.send_header("Cache-Control", "no-cache")
+        # no-store, not just no-cache: the response body depends on the
+        # per-browser admin marker state, and this URL is also fetched by the
+        # chat iframe. "no-cache" with a Date header still lets browsers apply
+        # heuristic freshness and serve the other mask from cache, which
+        # re-exposes the workspace tab bar in the resource iframes.
+        self.send_header("Cache-Control", "no-store")
         self.send_header("Connection", "close")
         self.close_connection = True
         self.end_headers()
