@@ -16,7 +16,7 @@ with a Django web UI, a durable worker, and an optional Open WebUI chat module.
 
 | mode | command | db | queue |
 |---|---|---|---|
-| dev | `manage.py dev` / `dev_server --embedded` | SQLite (repo root, `dev.sqlite3`) | embedded |
+| dev | `manage.py dev` | SQLite (repo root, `dev.sqlite3`) | embedded |
 | embedded | `spin` / `uvx simpleaudit-studio` | SQLite (`~/.simpleaudit-studio/`) | embedded |
 | compose | `docker compose up -d` | Postgres | external Hatchet |
 | single-docker | `docker run <image>` (HF Space) | SQLite (`/data`) | embedded |
