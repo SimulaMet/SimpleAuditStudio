@@ -128,8 +128,8 @@ through the API.
 
 ## Docker
 
-Chat is off by default in Compose. Uncomment both switches in `.env` (they are
-commented out in `.env.example`) to start chat too:
+Chat is **on by default** in Compose. A fresh `.env` (from `.env.example`)
+already ships with both switches enabled:
 
 ```bash
 # .env
@@ -141,8 +141,12 @@ SIMPLEAUDIT_STUDIO_URL=http://localhost:8000   # where signed-out users are sent
 docker compose up -d
 ```
 
-They are independent, and setting only `SIMPLEAUDIT_CHAT` gives a `/chat/`
-page with nothing behind it.
+To run Compose without chat, set `SIMPLEAUDIT_CHAT=off` and comment out
+`COMPOSE_PROFILES=chat` (or remove `chat` from it), then `docker compose up -d`
+again. (`.env` files that predate this default need the two lines added.)
+
+The two switches are independent, and setting only `SIMPLEAUDIT_CHAT` gives a
+`/chat/` page with nothing behind it.
 
 This runs `open-webui` (no published port) behind `chat-proxy`, a Caddy container
 configured by [deploy/compose/Caddyfile.chat](../deploy/compose/Caddyfile.chat).

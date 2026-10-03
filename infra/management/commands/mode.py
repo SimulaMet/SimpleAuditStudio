@@ -59,16 +59,11 @@ class Command(BaseCommand):
         return f"postgres ({name} @ {host}:{port})"
 
     def _describe_chat(self, profile) -> str:
-        env = (os.environ.get("SIMPLEAUDIT_CHAT") or "").strip().lower()
-        effective = profile.chat
-        if env in {"off", "disabled", "disable", "false", "no", "none", "0"}:
-            effective = "off (SIMPLEAUDIT_CHAT=off)"
-        elif env and profile.chat != "off":
-            effective = f"on ({env})"
-        elif effective == "on":
-            effective = "on (default)"
-        elif effective == "opt-in":
-            effective = "opt-in (compose profile)"
-        else:
-            effective = "off"
-        return effective
+        from config import runtime
+
+        effective = runtime.effective_chat_mode(profile.id)
+        if effective == "off":
+            return "off (SIMPLEAUDIT_CHAT=off)"
+        if effective == profile.chat_mode and profile.chat == "on":
+            return f"on (default: {effective})"
+        return f"on ({effective})"

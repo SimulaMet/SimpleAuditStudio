@@ -55,7 +55,7 @@ Concrete symptom that motivated this design: the bundled chat (Open WebUI) is
 | # | Mode ID | Command | Process model | DB | Queue | Chat | Data location | DEBUG |
 |---|---------|---------|---------------|----|-------|------|---------------|-------|
 | 1 | `single-docker` | `docker run -p 8000:8000 -v sa-data:/data <image>` | one container | SQLite | embedded Hatchet | on | `/data` (volume) | off |
-| 2 | `compose` | `docker compose up -d` | multi-container | PostgreSQL 16 | `hatchet-server` container | opt-in (profile) | Docker volumes | off |
+| 2 | `compose` | `docker compose up -d` | multi-container | PostgreSQL 16 | `hatchet-server` container | on (profile) | Docker volumes | off |
 | 3 | `embedded` | `uvx simpleaudit-studio` | one process | SQLite | embedded Hatchet | on | `~/.simpleaudit-studio` | off |
 | 4 | `dev` | `uv run manage.py dev` | one process (hot-reload) | SQLite | embedded Hatchet | on | repo-local (`local_test.sqlite3`) + `.env` | on |
 
@@ -93,7 +93,8 @@ class ModeProfile:
     process: str            # "single" | "multi-container"
     database: str           # "sqlite" | "postgres"
     queue: str              # "embedded" | "external"
-    chat: str               # "on" | "off" | "opt-in"
+    chat: str               # "on" | "off"
+    chat_mode: str          # "embedded" | "docker" (the SIMPLEAUDIT_CHAT value the on-default uses)
     debug: bool
 ```
 
@@ -111,9 +112,13 @@ replacement, which keeps the change reviewable and low-risk.
 
 ### 3. Chat default, and always-disableable
 
-Chat (Open WebUI) is **on by default for every single-process mode**
-(`embedded`, `dev`, `single-docker`), and stays **opt-in for `compose`**
-(chat is a separate container there, gated by `COMPOSE_PROFILES=chat`).
+Chat (Open WebUI) is **on by default in every mode** (`embedded`, `dev`,
+`single-docker`, and `compose`). In compose the chat default is the
+`docker` chat mode, enabled by `SIMPLEAUDIT_CHAT=docker` plus
+`COMPOSE_PROFILES=chat` in `.env` (both ship enabled in `.env.example`, so a
+fresh compose setup starts the two chat containers). The chat containers
+themselves remain gated by the `chat` compose profile, so disabling is clean
+(`SIMPLEAUDIT_CHAT=off` + drop the profile).
 
 It can be turned **off in every mode**, independently, two ways:
 - **Env:** `SIMPLEAUDIT_CHAT=off` (accepted spellings: `off`, `disabled`,
