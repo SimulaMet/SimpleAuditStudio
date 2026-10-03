@@ -76,6 +76,11 @@ class Command(BaseCommand):
         if options["pool"]:
             settings.WORKER_POOL = options["pool"]
 
+        # Optional chat (Open WebUI + its forward-auth proxy). Only starts when
+        # SIMPLEAUDIT_CHAT is enabled; a failed start never blocks the rest of
+        # the stack, mirroring the uvx CLI.
+        chat_process = self.start_chat_if_enabled(options["port"])
+
         # Zero-Docker mode: spin up embedded Hatchet (sidecar + embedded Postgres)
         # and point the worker's shared client at it. Setting _CLIENT directly
         # avoids touching infra.worker.get_client() (which is gated on
@@ -113,10 +118,16 @@ class Command(BaseCommand):
             time.sleep(1)  # give the web server a moment to bind
 
         username = os.environ.get("BOOTSTRAP_USERNAME", "studio")
+        chat_line = (
+            f"   Chat:       http://localhost:{options['port']}/chat/\n"
+            if chat_process is not None
+            else ""
+        )
         self.stdout.write(self.style.SUCCESS(
             f"\n🚀 Dev server running — Web UI: http://localhost:{options['port']}  "
             f"(login: {username})\n"
-            f"   API docs: http://localhost:{options['port']}/api/schema/\n"
+            f"   API docs:   http://localhost:{options['port']}/api/schema/\n"
+            f"{chat_line}"
             f"   Press Ctrl+C to stop.\n"
         ))
 
@@ -128,9 +139,8 @@ class Command(BaseCommand):
             except KeyboardInterrupt:
                 pass
             finally:
-                if web_proc is not None:
-                    web_proc.terminate()
-                    web_proc.wait(timeout=5)
+                self._stop_web(web_proc)
+                self._stop_chat()
             return
 
         # --- Worker in the MAIN thread (required for signal handlers) ---
@@ -142,9 +152,62 @@ class Command(BaseCommand):
         except KeyboardInterrupt:
             self.stdout.write(self.style.WARNING("\nShutting down..."))
         finally:
-            if web_proc is not None:
-                web_proc.terminate()
-                web_proc.wait(timeout=5)
+            self._stop_web(web_proc)
+            self._stop_chat()
+
+    def start_chat_if_enabled(self, port: int):
+        """Start Open WebUI + its forward-auth proxy when SIMPLEAUDIT_CHAT is on.
+
+        Mirrors the uvx CLI: chat is one part of the stack, so a failed start
+        (no open-webui, a taken port, a failed spawn) never blocks the rest.
+        Returns the Open WebUI process, or None when chat is off or failed.
+        """
+        from chat import config as chat_config
+
+        if not chat_config.ENABLED:
+            return None
+
+        from chat import proxy as chat_proxy
+
+        self.stdout.write(self.style.NOTICE("Starting chat (Open WebUI)..."))
+        if chat_proxy.is_first_run():
+            self.stdout.write(self.style.WARNING(
+                "   First start downloads it (~1 GB via uvx) and can take a few minutes."
+            ))
+            self.stdout.write("   Studio is usable right away; /chat/ works once the download finishes.")
+        try:
+            process = chat_proxy.start_open_webui(port)
+        except (OSError, RuntimeError) as exc:
+            self.stdout.write(self.style.WARNING(
+                f"\n⚠️  Chat could not start ({exc}); continuing without it.\n"
+            ))
+            return None
+        chat_proxy.serve(port)
+
+        def report():
+            if chat_proxy.wait_until_ready(process):
+                print(f"\n✅ Chat is ready — http://localhost:{port}/chat/", flush=True)
+            elif process.poll() is not None:
+                print(f"\n⚠️  Chat stopped (exit {process.returncode}). Studio is unaffected.", flush=True)
+                print(f"   What happened: {chat_proxy.log_path()}\n", flush=True)
+            else:
+                print("\n⚠️  Chat is still not answering. Studio is unaffected.", flush=True)
+
+        threading.Thread(target=report, daemon=True).start()
+        return process
+
+    def _stop_web(self, web_proc):
+        if web_proc is not None:
+            web_proc.terminate()
+            web_proc.wait(timeout=5)
+
+    def _stop_chat(self):
+        try:
+            from chat.proxy import stop_open_webui
+
+            stop_open_webui()
+        except Exception:  # chat teardown must never block shutdown
+            pass
 
     def prepare_database(self):
         """Apply migrations and make sure the bootstrap admin (a superuser) exists."""
