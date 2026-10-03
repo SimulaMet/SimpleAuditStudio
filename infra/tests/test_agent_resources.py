@@ -68,15 +68,17 @@ class AgentResourcesNavTest(TestCase):
         self.assertIn(b"agents/knowledge", resp.content)
         self.assertIn(b"agents/tools", resp.content)
 
-    def test_nav_context_has_knowledge_and_tools_entries(self):
+    def test_nav_context_has_knowledge_and_tools_as_agents_children(self):
         resp = self.client.get("/agents/")
         items = resp.context["nav_items"]
-        labels = [i["label"] for i in items]
-        self.assertIn("Knowledge", labels)
-        self.assertIn("Tools", labels)
-        knowledge = next(i for i in items if i["label"] == "Knowledge")
+        # Knowledge and Tools are not top-level items; they sit under Agents.
+        top_labels = [i["label"] for i in items]
+        self.assertNotIn("Knowledge", top_labels)
+        self.assertNotIn("Tools", top_labels)
+        agents = next(i for i in items if i["label"] == "Agents")
+        knowledge = next(c for c in agents["children"] if c["label"] == "Knowledge")
         self.assertEqual(knowledge["url"], "/agents/knowledge/")
-        tools = next(i for i in items if i["label"] == "Tools")
+        tools = next(c for c in agents["children"] if c["label"] == "Tools")
         self.assertEqual(tools["url"], "/agents/tools/")
 
 
