@@ -24,6 +24,12 @@ Needs [uv](https://docs.astral.sh/uv/):
 uvx simpleaudit-studio@latest
 ```
 
+To run the latest code from GitHub instead of the published package:
+
+```bash
+uvx --from "git+https://github.com/SimulaMet/SimpleAuditStudio@main" spin
+```
+
 Open <http://localhost:8000>. Try the [live demo](https://sushantgautam-simpleaudit-studio.hf.space) if you do not want to install anything.
 
 ## Development
