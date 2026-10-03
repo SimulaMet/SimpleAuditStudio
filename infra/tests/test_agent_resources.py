@@ -80,6 +80,14 @@ class AgentResourcesNavTest(TestCase):
         self.assertIn(b"agents/resources", resp.content)
         self.assertIn(b"Resources", resp.content)
 
+    def test_nav_context_has_resources_child_under_agents(self):
+        from infra.context_processors import nav
+        resp = self.client.get("/agents/")
+        items = resp.context["nav_items"]
+        agents = next(i for i in items if i["label"] == "Agents")
+        child = next(c for c in agents["children"] if c["label"] == "Resources")
+        self.assertEqual(child["url"], "/agents/resources/")
+
 
 class AgentResourcesDisabledTest(TestCase):
     def setUp(self):
