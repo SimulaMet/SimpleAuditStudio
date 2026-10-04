@@ -1,0 +1,3808 @@
+diff --git a/.env.example b/.env.example
+index df63e08e..5b0d7767 100644
+--- a/.env.example
++++ b/.env.example
+@@ -16,6 +16,11 @@ CORS_ALLOW_ORIGIN='*'
+ # For production you should set this to match the proxy configuration (127.0.0.1)
+ FORWARDED_ALLOW_IPS='*'
+ 
++# Optional URL subpath prefix for reverse-proxy deployments (e.g. "/openwebui").
++# Must start with a leading slash and must not end with a trailing slash.
++# Leave empty to serve at the root path.
++WEBUI_SUBPATH=""
++
+ # DO NOT TRACK
+ SCARF_NO_ANALYTICS=true
+ DO_NOT_TRACK=true
+diff --git a/.github/workflows/docker.yaml b/.github/workflows/docker.yaml
+index abd03628..ca4f9cb7 100644
+--- a/.github/workflows/docker.yaml
++++ b/.github/workflows/docker.yaml
+@@ -2,6 +2,12 @@ name: Create and publish Docker images with specific build args
+ 
+ on:
+   workflow_dispatch:
++    inputs:
++      webui_subpath:
++        description: 'URL subpath to bake into the image (e.g. /openwebui). Leave empty to serve at root.'
++        required: false
++        default: ''
++        type: string
+   push:
+     branches:
+       - main
+@@ -15,6 +21,7 @@ concurrency:
+ 
+ env:
+   REGISTRY: ghcr.io
++  IMAGE_REPOSITORY: spencercjh/open-webui
+ 
+ jobs:
+   build:
+@@ -57,8 +64,8 @@ jobs:
+     steps:
+       - name: Prepare environment
+         run: |
+-          echo "IMAGE_NAME=${GITHUB_REPOSITORY,,}" >> ${GITHUB_ENV}
+-          echo "FULL_IMAGE_NAME=${REGISTRY}/${GITHUB_REPOSITORY,,}" >> ${GITHUB_ENV}
++          echo "IMAGE_NAME=${IMAGE_REPOSITORY,,}" >> ${GITHUB_ENV}
++          echo "FULL_IMAGE_NAME=${REGISTRY}/${IMAGE_REPOSITORY,,}" >> ${GITHUB_ENV}
+           platform=${{ matrix.platform.arch }}
+           echo "PLATFORM_PAIR=${platform//\//-}" >> ${GITHUB_ENV}
+ 
+@@ -88,15 +95,15 @@ jobs:
+         with:
+           images: ${{ env.FULL_IMAGE_NAME }}
+           tags: |
+-            type=ref,event=branch
+-            type=ref,event=tag
+-            type=sha,prefix=git-
+-            type=semver,pattern={{version}}
+-            type=semver,pattern={{major}}.{{minor}}
+-            ${{ matrix.variant.suffix != '' && format('type=raw,enable={0},prefix=,suffix=,value={1}', github.ref == 'refs/heads/main', matrix.variant.name) || '' }}
++            type=ref,event=branch,suffix=${{ steps.tag-context.outputs.combined_suffix }}
++            type=ref,event=tag,suffix=${{ steps.tag-context.outputs.combined_suffix }}
++            type=sha,prefix=git-,suffix=${{ steps.tag-context.outputs.combined_suffix }}
++            type=semver,pattern={{version}},suffix=${{ steps.tag-context.outputs.combined_suffix }}
++            type=semver,pattern={{major}}.{{minor}},suffix=${{ steps.tag-context.outputs.combined_suffix }}
++            ${{ format('type=raw,enable={0},value=latest{1}', github.ref == 'refs/heads/main', steps.tag-context.outputs.combined_suffix) }}
++            ${{ matrix.variant.suffix != '' && format('type=raw,enable={0},value={1}', github.ref == 'refs/heads/main', steps.tag-context.outputs.alias_tag) || '' }}
+           flavor: |
+-            latest=${{ github.ref == 'refs/heads/main' }}
+-            ${{ matrix.variant.suffix != '' && format('suffix={0},onlatest=true', matrix.variant.suffix) || '' }}
++            latest=false
+ 
+       - name: Extract metadata for Docker cache
+         id: cache-meta
+@@ -110,6 +117,43 @@ jobs:
+             prefix=cache-${{ matrix.variant.name }}-${{ matrix.platform.arch }}-
+             latest=false
+ 
++      - name: Validate WEBUI_SUBPATH
++        env:
++          WEBUI_SUBPATH_INPUT: ${{ inputs.webui_subpath }}
++        run: |
++          sub="$WEBUI_SUBPATH_INPUT"
++          if [ -n "$sub" ]; then
++            case "$sub" in
++              /*) ;;
++              *) echo "::error::WEBUI_SUBPATH must start with '/' (got '$sub'); leave empty to serve at root."; exit 1 ;;
++            esac
++            case "$sub" in
++              */) echo "::error::WEBUI_SUBPATH must not end with a trailing '/' (got '$sub'); use e.g. /openwebui."; exit 1 ;;
++            esac
++          fi
++          echo "WEBUI_SUBPATH validated as '${sub:-<root>}'"
++
++      - name: Derive tag context
++        id: tag-context
++        env:
++          WEBUI_SUBPATH_INPUT: ${{ inputs.webui_subpath }}
++          VARIANT_NAME: ${{ matrix.variant.name }}
++          VARIANT_SUFFIX: ${{ matrix.variant.suffix }}
++        run: |
++          subpath_suffix=""
++          alias_tag="$VARIANT_NAME"
++          if [ -n "$WEBUI_SUBPATH_INPUT" ]; then
++            subpath_suffix="-subpath"
++            alias_tag="${VARIANT_NAME}${subpath_suffix}"
++          fi
++
++          combined_suffix="${VARIANT_SUFFIX}${subpath_suffix}"
++
++          {
++            echo "combined_suffix=${combined_suffix}"
++            echo "alias_tag=${alias_tag}"
++          } >> "$GITHUB_OUTPUT"
++
+       - name: Build Docker image
+         uses: docker/build-push-action@v5
+         id: build
+@@ -124,6 +168,7 @@ jobs:
+           sbom: true
+           build-args: |
+             BUILD_HASH=${{ github.sha }}
++            WEBUI_SUBPATH=${{ inputs.webui_subpath }}
+             ${{ matrix.variant.build_args }}
+ 
+       - name: Export digest
+@@ -165,8 +210,8 @@ jobs:
+     steps:
+       - name: Prepare environment
+         run: |
+-          echo "IMAGE_NAME=${GITHUB_REPOSITORY,,}" >> ${GITHUB_ENV}
+-          echo "FULL_IMAGE_NAME=${REGISTRY}/${GITHUB_REPOSITORY,,}" >> ${GITHUB_ENV}
++          echo "IMAGE_NAME=${IMAGE_REPOSITORY,,}" >> ${GITHUB_ENV}
++          echo "FULL_IMAGE_NAME=${REGISTRY}/${IMAGE_REPOSITORY,,}" >> ${GITHUB_ENV}
+ 
+       - name: Download digests
+         id: download
+@@ -201,6 +246,28 @@ jobs:
+           username: ${{ github.actor }}
+           password: ${{ secrets.GITHUB_TOKEN }}
+ 
++      - name: Derive tag context
++        if: steps.check.outputs.skip != 'true'
++        id: tag-context
++        env:
++          WEBUI_SUBPATH_INPUT: ${{ inputs.webui_subpath }}
++          VARIANT_NAME: ${{ matrix.variant.name }}
++          VARIANT_SUFFIX: ${{ matrix.variant.suffix }}
++        run: |
++          subpath_suffix=""
++          alias_tag="$VARIANT_NAME"
++          if [ -n "$WEBUI_SUBPATH_INPUT" ]; then
++            subpath_suffix="-subpath"
++            alias_tag="${VARIANT_NAME}${subpath_suffix}"
++          fi
++
++          combined_suffix="${VARIANT_SUFFIX}${subpath_suffix}"
++
++          {
++            echo "combined_suffix=${combined_suffix}"
++            echo "alias_tag=${alias_tag}"
++          } >> "$GITHUB_OUTPUT"
++
+       - name: Extract metadata for Docker images
+         if: steps.check.outputs.skip != 'true'
+         id: meta
+@@ -208,15 +275,15 @@ jobs:
+         with:
+           images: ${{ env.FULL_IMAGE_NAME }}
+           tags: |
+-            type=ref,event=branch
+-            type=ref,event=tag
+-            type=sha,prefix=git-
+-            type=semver,pattern={{version}}
+-            type=semver,pattern={{major}}.{{minor}}
+-            ${{ matrix.variant.suffix != '' && format('type=raw,enable={0},prefix=,suffix=,value={1}', github.ref == 'refs/heads/main', matrix.variant.name) || '' }}
++            type=ref,event=branch,suffix=${{ steps.tag-context.outputs.combined_suffix }}
++            type=ref,event=tag,suffix=${{ steps.tag-context.outputs.combined_suffix }}
++            type=sha,prefix=git-,suffix=${{ steps.tag-context.outputs.combined_suffix }}
++            type=semver,pattern={{version}},suffix=${{ steps.tag-context.outputs.combined_suffix }}
++            type=semver,pattern={{major}}.{{minor}},suffix=${{ steps.tag-context.outputs.combined_suffix }}
++            ${{ format('type=raw,enable={0},value=latest{1}', github.ref == 'refs/heads/main', steps.tag-context.outputs.combined_suffix) }}
++            ${{ matrix.variant.suffix != '' && format('type=raw,enable={0},value={1}', github.ref == 'refs/heads/main', steps.tag-context.outputs.alias_tag) || '' }}
+           flavor: |
+-            latest=${{ github.ref == 'refs/heads/main' }}
+-            ${{ matrix.variant.suffix != '' && format('suffix={0},onlatest=true', matrix.variant.suffix) || '' }}
++            latest=false
+ 
+       - name: Create manifest list and push
+         if: steps.check.outputs.skip != 'true'
+@@ -233,7 +300,7 @@ jobs:
+ 
+   copy-to-dockerhub:
+     runs-on: ubuntu-latest
+-    if: ${{ !cancelled() && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')) }}
++    if: ${{ !cancelled() && inputs.webui_subpath == '' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')) }}
+     needs: [merge]
+     continue-on-error: true
+     strategy:
+@@ -254,8 +321,8 @@ jobs:
+     steps:
+       - name: Prepare environment
+         run: |
+-          echo "IMAGE_NAME=${GITHUB_REPOSITORY,,}" >> ${GITHUB_ENV}
+-          echo "FULL_IMAGE_NAME=${REGISTRY}/${GITHUB_REPOSITORY,,}" >> ${GITHUB_ENV}
++          echo "IMAGE_NAME=${IMAGE_REPOSITORY,,}" >> ${GITHUB_ENV}
++          echo "FULL_IMAGE_NAME=${REGISTRY}/${IMAGE_REPOSITORY,,}" >> ${GITHUB_ENV}
+ 
+       - name: Set up Docker Buildx
+         uses: docker/setup-buildx-action@v3
+diff --git a/Dockerfile b/Dockerfile
+index 36e29e70..14d7ceaa 100644
+--- a/Dockerfile
++++ b/Dockerfile
+@@ -26,6 +26,7 @@ ARG GID=0
+ ######## WebUI frontend ########
+ FROM --platform=$BUILDPLATFORM node:22-alpine3.20 AS build
+ ARG BUILD_HASH
++ARG WEBUI_SUBPATH=""
+ 
+ # Set Node.js options (heap limit Allocation failed - JavaScript heap out of memory)
+ # ENV NODE_OPTIONS="--max-old-space-size=4096"
+@@ -40,6 +41,7 @@ RUN npm ci --force
+ 
+ COPY . .
+ ENV APP_BUILD_HASH=${BUILD_HASH}
++ENV WEBUI_SUBPATH=${WEBUI_SUBPATH}
+ RUN npm run build
+ 
+ ######## WebUI backend ########
+@@ -205,4 +207,9 @@ ARG BUILD_HASH
+ ENV WEBUI_BUILD_VERSION=${BUILD_HASH}
+ ENV DOCKER=true
+ 
++# Default the backend runtime subpath to match the value the frontend was built
++# with. Can still be overridden at runtime with `-e WEBUI_SUBPATH=...`.
++ARG WEBUI_SUBPATH=""
++ENV WEBUI_SUBPATH=${WEBUI_SUBPATH}
++
+ CMD [ "bash", "start.sh"]
+diff --git a/backend/open_webui/__init__.py b/backend/open_webui/__init__.py
+index 92cadefe..6a69f75a 100644
+--- a/backend/open_webui/__init__.py
++++ b/backend/open_webui/__init__.py
+@@ -67,7 +67,7 @@ def serve(
+             os.environ['LD_LIBRARY_PATH'] = ':'.join(LD_LIBRARY_PATH)
+ 
+     import open_webui.main  # noqa: F401
+-    from open_webui.env import UVICORN_WORKERS  # Import the workers setting
++    from open_webui.env import UVICORN_WORKERS, WEBUI_SUBPATH  # Import the workers setting and web subpath
+ 
+     # On Windows, uvicorn's default loop factory hardcodes ProactorEventLoop,
+     # which is incompatible with psycopg v3 async.  Setting loop='none' lets
+@@ -81,6 +81,7 @@ def serve(
+         forwarded_allow_ips='*',
+         workers=UVICORN_WORKERS,
+         loop=loop,
++        root_path=WEBUI_SUBPATH,
+     )
+ 
+ 
+@@ -90,12 +91,15 @@ def dev(
+     port: int = 8080,
+     reload: bool = True,
+ ):
++    from open_webui.env import WEBUI_SUBPATH
++
+     uvicorn.run(
+         'open_webui.main:app',
+         host=host,
+         port=port,
+         reload=reload,
+         forwarded_allow_ips='*',
++        root_path=WEBUI_SUBPATH,
+     )
+ 
+ 
+diff --git a/backend/open_webui/env.py b/backend/open_webui/env.py
+index 2f6b4ed6..c9ed1a8b 100644
+--- a/backend/open_webui/env.py
++++ b/backend/open_webui/env.py
+@@ -774,6 +774,30 @@ if WEBUI_NAME != 'Open WebUI':
+ 
+ WEBUI_FAVICON_URL = 'https://openwebui.com/favicon.png'
+ WEBUI_BUILD_HASH = os.getenv('WEBUI_BUILD_HASH', 'dev-build')
++# Optional URL subpath prefix for reverse-proxy deployments (e.g. "/openwebui").
++# Leave empty to serve the app at the root path.
++WEBUI_SUBPATH = os.getenv('WEBUI_SUBPATH', '')
++# Surface the resolved subpath at startup so misconfigured deployments are easy
++# to diagnose from the pod logs.
++if WEBUI_SUBPATH == '':
++    log.info('WEBUI_SUBPATH is empty; serving Open WebUI at the root path "/".')
++else:
++    log.info(
++        'WEBUI_SUBPATH=%r; Open WebUI will be served under this prefix (FastAPI root_path).',
++        WEBUI_SUBPATH,
++    )
++    if not WEBUI_SUBPATH.startswith('/'):
++        log.warning(
++            'WEBUI_SUBPATH=%r does not start with "/"; a reverse-proxy subpath must look '
++            'like "/openwebui". This is almost certainly misconfigured.',
++            WEBUI_SUBPATH,
++        )
++    if WEBUI_SUBPATH != '/' and WEBUI_SUBPATH.endswith('/'):
++        log.warning(
++            'WEBUI_SUBPATH=%r ends with a trailing "/"; it should not (use "/openwebui", '
++            'not "/openwebui/"). This is almost certainly misconfigured.',
++            WEBUI_SUBPATH,
++        )
+ TRUSTED_SIGNATURE_KEY = os.getenv('TRUSTED_SIGNATURE_KEY', '')
+ 
+ ####################################
+diff --git a/backend/open_webui/main.py b/backend/open_webui/main.py
+index e05497c6..300528a4 100644
+--- a/backend/open_webui/main.py
++++ b/backend/open_webui/main.py
+@@ -468,6 +468,7 @@ from open_webui.env import (
+     WEBUI_SECRET_KEY,
+     WEBUI_SESSION_COOKIE_SAME_SITE,
+     WEBUI_SESSION_COOKIE_SECURE,
++    WEBUI_SUBPATH,
+ )
+ from open_webui.internal.db import ScopedSession, engine, get_async_session
+ from open_webui.models.access_grants import AccessGrants
+@@ -752,7 +753,9 @@ app = FastAPI(
+     openapi_url='/openapi.json' if ENV == 'dev' else None,
+     redoc_url=None,
+     lifespan=lifespan,
++    root_path=WEBUI_SUBPATH,
+ )
++log.info('FastAPI app initialized with root_path=%r (from WEBUI_SUBPATH).', app.root_path)
+ 
+ # Used by readiness checks to gate traffic until startup work is done.
+ app.state.startup_complete = False
+@@ -2401,6 +2404,7 @@ async def get_app_config(request: Request):
+         'status': True,
+         'name': app.state.WEBUI_NAME,
+         'version': VERSION,
++        'subpath': WEBUI_SUBPATH,
+         'default_locale': str(DEFAULT_LOCALE),
+         'oauth': {
+             'providers': {name: config.get('name', name) for name, config in OAUTH_PROVIDERS.items()},
+@@ -2856,25 +2860,25 @@ async def get_manifest_json():
+             'name': app.state.WEBUI_NAME,
+             'short_name': app.state.WEBUI_NAME,
+             'description': f'{app.state.WEBUI_NAME} is an open, extensible, user-friendly interface for AI that adapts to your workflow.',
+-            'start_url': '/',
++            'start_url': f'{WEBUI_SUBPATH}/',
+             'display': 'standalone',
+             'background_color': '#343541',
+             'icons': [
+                 {
+-                    'src': '/static/logo.png',
++                    'src': f'{WEBUI_SUBPATH}/static/logo.png',
+                     'type': 'image/png',
+                     'sizes': '500x500',
+                     'purpose': 'any',
+                 },
+                 {
+-                    'src': '/static/logo.png',
++                    'src': f'{WEBUI_SUBPATH}/static/logo.png',
+                     'type': 'image/png',
+                     'sizes': '500x500',
+                     'purpose': 'maskable',
+                 },
+             ],
+             'share_target': {
+-                'action': '/',
++                'action': f'{WEBUI_SUBPATH}/',
+                 'method': 'GET',
+                 'params': {'text': 'shared'},
+             },
+@@ -3010,9 +3014,9 @@ def swagger_ui_html(*args, **kwargs):
+     return get_swagger_ui_html(
+         *args,
+         **kwargs,
+-        swagger_js_url='/static/swagger-ui/swagger-ui-bundle.js',
+-        swagger_css_url='/static/swagger-ui/swagger-ui.css',
+-        swagger_favicon_url='/static/swagger-ui/favicon.png',
++        swagger_js_url=f'{WEBUI_SUBPATH}/static/swagger-ui/swagger-ui-bundle.js',
++        swagger_css_url=f'{WEBUI_SUBPATH}/static/swagger-ui/swagger-ui.css',
++        swagger_favicon_url=f'{WEBUI_SUBPATH}/static/swagger-ui/favicon.png',
+     )
+ 
+ 
+diff --git a/backend/open_webui/routers/models.py b/backend/open_webui/routers/models.py
+index 75ee4e72..b3937b57 100644
+--- a/backend/open_webui/routers/models.py
++++ b/backend/open_webui/routers/models.py
+@@ -520,6 +520,10 @@ async def get_model_profile_image(
+     profile_image_url = None
+     updated_at = None
+ 
++    # Prefix static-asset redirects with the ASGI root_path so they keep the
++    # reverse-proxy subpath (a bare "/static/..." Location drops it → 404).
++    root_path = request.scope.get('root_path', '').rstrip('/')
++
+     # First, check the database for regular models
+     model_meta = await Models.get_model_meta_by_id(id, db=db)
+     if model_meta:
+@@ -558,7 +562,7 @@ async def get_model_profile_image(
+                 # only serve known-safe raster types inline; reject SVG/unknown (can run script on our origin)
+                 if media_type not in PROFILE_IMAGE_ALLOWED_MIME_TYPES:
+                     return RedirectResponse(
+-                        url='/static/favicon.png',
++                        url=f'{root_path}/static/favicon.png',
+                         status_code=status.HTTP_302_FOUND,
+                     )
+ 
+@@ -580,12 +584,12 @@ async def get_model_profile_image(
+             safe_static = _safe_static_redirect_path(profile_image_url)
+             if safe_static:
+                 return RedirectResponse(
+-                    url=safe_static,
++                    url=f'{root_path}{safe_static}',
+                     status_code=status.HTTP_302_FOUND,
+                 )
+ 
+     return RedirectResponse(
+-        url='/static/favicon.png',
++        url=f'{root_path}/static/favicon.png',
+         status_code=status.HTTP_302_FOUND,
+     )
+ 
+diff --git a/backend/open_webui/socket/main.py b/backend/open_webui/socket/main.py
+index 2884847a..1113d86b 100644
+--- a/backend/open_webui/socket/main.py
++++ b/backend/open_webui/socket/main.py
+@@ -29,6 +29,7 @@ from open_webui.env import (
+     WEBSOCKET_SERVER_LOGGING,
+     WEBSOCKET_SERVER_PING_INTERVAL,
+     WEBSOCKET_SERVER_PING_TIMEOUT,
++    WEBUI_SUBPATH,
+ )
+ from open_webui.models.access_grants import AccessGrants
+ from open_webui.models.channels import Channels
+@@ -231,9 +232,14 @@ async def periodic_usage_pool_cleanup():
+         release_func()
+ 
+ 
++# engineio's ASGIApp matches the *full* request path (it does not subtract the
++# ASGI root_path), so under a reverse-proxy subpath the browser hits
++# `${WEBUI_SUBPATH}/ws/socket.io` and the handshake would otherwise 404 into a
++# websocket-scope `not_found`. Prefix socketio_path with WEBUI_SUBPATH so it
++# stays aligned with the frontend client (`path: ${base}/ws/socket.io`).
+ app = socketio.ASGIApp(
+     sio,
+-    socketio_path='/ws/socket.io',
++    socketio_path=f'{WEBUI_SUBPATH}/ws/socket.io',
+ )
+ 
+ 
+diff --git a/backend/open_webui/utils/asgi_middleware.py b/backend/open_webui/utils/asgi_middleware.py
+index 3594b62a..a4a7734f 100644
+--- a/backend/open_webui/utils/asgi_middleware.py
++++ b/backend/open_webui/utils/asgi_middleware.py
+@@ -256,7 +256,8 @@ class RedirectMiddleware:
+                     redirect_params['q'] = text
+ 
+         if redirect_params:
+-            redirect_url = f'/?{urlencode(redirect_params)}'
++            root_path = (scope.get('root_path') or '').rstrip('/')
++            redirect_url = f'{root_path}/?{urlencode(redirect_params)}'
+             response = RedirectResponse(url=redirect_url)
+             await response(scope, receive, send)
+             return
+diff --git a/backend/tests/test_asgi_middleware.py b/backend/tests/test_asgi_middleware.py
+new file mode 100644
+index 00000000..bd0db41e
+--- /dev/null
++++ b/backend/tests/test_asgi_middleware.py
+@@ -0,0 +1,34 @@
++from starlette.applications import Starlette
++from starlette.responses import PlainTextResponse
++from starlette.routing import Route
++from starlette.testclient import TestClient
++
++from open_webui.utils.asgi_middleware import RedirectMiddleware
++
++
++async def ok(_request):
++    return PlainTextResponse('ok')
++
++
++def build_client(*, root_path: str = '') -> TestClient:
++    app = Starlette(routes=[Route('/', ok), Route('/watch', ok)])
++    app.add_middleware(RedirectMiddleware)
++    return TestClient(app, root_path=root_path)
++
++
++def test_redirect_middleware_keeps_root_path_for_watch_redirect():
++    client = build_client(root_path='/openwebui')
++
++    response = client.get('/watch?v=abc123', follow_redirects=False)
++
++    assert response.status_code in (301, 302, 307, 308)
++    assert response.headers['location'] == '/openwebui/?youtube=abc123'
++
++
++def test_redirect_middleware_uses_root_when_no_root_path_is_set():
++    client = build_client()
++
++    response = client.get('/watch?v=abc123', follow_redirects=False)
++
++    assert response.status_code in (301, 302, 307, 308)
++    assert response.headers['location'] == '/?youtube=abc123'
+diff --git a/backend/tests/test_env.py b/backend/tests/test_env.py
+new file mode 100644
+index 00000000..0920a357
+--- /dev/null
++++ b/backend/tests/test_env.py
+@@ -0,0 +1,11 @@
++import importlib
++
++
++def test_env_exports_webui_subpath(monkeypatch):
++    monkeypatch.setenv('WEBUI_SECRET_KEY', 'test-secret')
++    monkeypatch.setenv('WEBUI_SUBPATH', '/openwebui')
++
++    env_module = importlib.import_module('open_webui.env')
++    env_module = importlib.reload(env_module)
++
++    assert env_module.WEBUI_SUBPATH == '/openwebui'
+diff --git a/src/app.html b/src/app.html
+index 285164d0..320af72a 100644
+--- a/src/app.html
++++ b/src/app.html
+@@ -2,37 +2,51 @@
+ <html lang="en">
+ 	<head>
+ 		<meta charset="utf-8" />
+-		<link rel="icon" type="image/png" href="/static/favicon.png" crossorigin="use-credentials" />
+ 		<link
+ 			rel="icon"
+ 			type="image/png"
+-			href="/static/favicon-96x96.png"
++			href="%sveltekit.assets%/static/favicon.png"
++			crossorigin="use-credentials"
++		/>
++		<link
++			rel="icon"
++			type="image/png"
++			href="%sveltekit.assets%/static/favicon-96x96.png"
+ 			sizes="96x96"
+ 			crossorigin="use-credentials"
+ 		/>
+ 		<link
+ 			rel="icon"
+ 			type="image/svg+xml"
+-			href="/static/favicon.svg"
++			href="%sveltekit.assets%/static/favicon.svg"
++			crossorigin="use-credentials"
++		/>
++		<link
++			rel="shortcut icon"
++			href="%sveltekit.assets%/static/favicon.ico"
+ 			crossorigin="use-credentials"
+ 		/>
+-		<link rel="shortcut icon" href="/static/favicon.ico" crossorigin="use-credentials" />
+ 		<link
+ 			rel="apple-touch-icon"
+ 			sizes="180x180"
+-			href="/static/apple-touch-icon.png"
++			href="%sveltekit.assets%/static/apple-touch-icon.png"
+ 			crossorigin="use-credentials"
+ 		/>
+-		<link rel="manifest" href="/manifest.json" crossorigin="use-credentials" />
++		<link rel="manifest" href="%sveltekit.assets%/manifest.json" crossorigin="use-credentials" />
+ 		<meta
+ 			name="viewport"
+ 			content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover, interactive-widget=resizes-content"
+ 		/>
+ 		<meta name="theme-color" content="#171717" />
+ 		<meta name="robots" content="noindex,nofollow" />
++		<meta name="webui-assets" content="%sveltekit.assets%" />
+ 
+-		<script src="/static/loader.js" defer crossorigin="use-credentials"></script>
+-		<link rel="stylesheet" href="/static/custom.css" crossorigin="use-credentials" />
++		<script src="%sveltekit.assets%/static/loader.js" defer crossorigin="use-credentials"></script>
++		<link
++			rel="stylesheet"
++			href="%sveltekit.assets%/static/custom.css"
++			crossorigin="use-credentials"
++		/>
+ 
+ 		<script>
+ 			function resizeIframe(obj) {
+@@ -71,9 +85,10 @@
+ 					metaThemeColorTag.setAttribute('content', '#171717');
+ 				}
+ 
++				const assetsBase = document.querySelector('meta[name="webui-assets"]')?.content || '';
+ 				const preloadHref = document.documentElement.classList.contains('dark')
+-					? '/static/splash-dark.png'
+-					: '/static/splash.png';
++					? `${assetsBase}/static/splash-dark.png`
++					: `${assetsBase}/static/splash.png`;
+ 				const preload = document.createElement('link');
+ 				preload.rel = 'preload';
+ 				preload.as = 'image';
+@@ -102,7 +117,10 @@
+ 					'position: absolute; width: auto; height: 6rem; top: 44%; left: 50%; transform: translateX(-50%); display:block;';
+ 				logo.loading = 'eager';
+ 				logo.fetchPriority = 'high';
+-				logo.src = isDarkMode ? '/static/splash-dark.png' : '/static/splash.png';
++				const _assetsBase = document.querySelector('meta[name="webui-assets"]')?.content || '';
++				logo.src = isDarkMode
++					? `${_assetsBase}/static/splash-dark.png`
++					: `${_assetsBase}/static/splash.png`;
+ 
+ 				document.addEventListener('DOMContentLoaded', function () {
+ 					const splash = document.getElementById('splash-screen');
+@@ -150,7 +168,7 @@
+ 				<img
+ 					id="logo-her"
+ 					style="width: auto; height: 13rem"
+-					src="/static/splash.png"
++					src="%sveltekit.assets%/static/splash.png"
+ 					loading="eager"
+ 					fetchpriority="high"
+ 					class="animate-pulse-fast"
+diff --git a/src/lib/components/NotificationToast.svelte b/src/lib/components/NotificationToast.svelte
+index 537d55f1..d3226c2e 100644
+--- a/src/lib/components/NotificationToast.svelte
++++ b/src/lib/components/NotificationToast.svelte
+@@ -72,7 +72,7 @@
+ 			if (!$playingNotificationSound && $isLastActiveTab) {
+ 				playingNotificationSound.set(true);
+ 
+-				const audio = new Audio(`/audio/notification.mp3`);
++				const audio = new Audio(`${WEBUI_BASE_URL}/audio/notification.mp3`);
+ 				audio.play().finally(() => {
+ 					// Ensure the global state is reset after the sound finishes
+ 					playingNotificationSound.set(false);
+diff --git a/src/lib/components/admin/Analytics.svelte b/src/lib/components/admin/Analytics.svelte
+index 4aa6ae86..01f9e61a 100644
+--- a/src/lib/components/admin/Analytics.svelte
++++ b/src/lib/components/admin/Analytics.svelte
+@@ -1,4 +1,5 @@
+ <script>
++	import { base } from '$app/paths';
+ 	import { onMount, getContext } from 'svelte';
+ 	import { goto } from '$app/navigation';
+ 	import { user } from '$lib/stores';
+@@ -11,7 +12,7 @@
+ 
+ 	onMount(async () => {
+ 		if ($user?.role !== 'admin') {
+-			await goto('/');
++			await goto(`${base}/`);
+ 		}
+ 		loaded = true;
+ 	});
+diff --git a/src/lib/components/admin/Analytics/Dashboard.svelte b/src/lib/components/admin/Analytics/Dashboard.svelte
+index 245d00fc..2f30d44c 100644
+--- a/src/lib/components/admin/Analytics/Dashboard.svelte
++++ b/src/lib/components/admin/Analytics/Dashboard.svelte
+@@ -1,4 +1,5 @@
+ <script lang="ts">
++	import { base } from '$app/paths';
+ 	import { onMount, getContext } from 'svelte';
+ 	import { models } from '$lib/stores';
+ 	import {
+@@ -394,7 +395,7 @@
+ 											alt={model.name}
+ 											class="size-5 rounded-full object-cover shrink-0"
+ 											on:error={(e) => {
+-												e.target.src = '/favicon.png';
++												e.target.src = `${base}/static/favicon.png`;
+ 											}}
+ 										/>
+ 										<span class="truncate max-w-[150px]">{model.name}</span>
+@@ -500,7 +501,7 @@
+ 											alt={user.name || 'User'}
+ 											class="size-5 rounded-full object-cover shrink-0"
+ 											on:error={(e) => {
+-												e.target.src = '/user.png';
++												e.target.src = `${base}/static/user.png`;
+ 											}}
+ 										/>
+ 										<span class="truncate max-w-[150px]"
+diff --git a/src/lib/components/admin/Analytics/ModelUsage.svelte b/src/lib/components/admin/Analytics/ModelUsage.svelte
+index a176080b..2e6a1f24 100644
+--- a/src/lib/components/admin/Analytics/ModelUsage.svelte
++++ b/src/lib/components/admin/Analytics/ModelUsage.svelte
+@@ -1,4 +1,5 @@
+ <script lang="ts">
++	import { base } from '$app/paths';
+ 	import { onMount, getContext } from 'svelte';
+ 	import { models } from '$lib/stores';
+ 	import { getModelAnalytics } from '$lib/apis/analytics';
+@@ -147,7 +148,7 @@
+ 									alt={model.name}
+ 									class="size-5 rounded-full object-cover shrink-0"
+ 									on:error={(e) => {
+-										e.target.src = '/favicon.png';
++										e.target.src = `${base}/static/favicon.png`;
+ 									}}
+ 								/>
+ 								<span class="font-medium text-gray-800 dark:text-gray-200">{model.name}</span>
+diff --git a/src/lib/components/admin/Evaluations.svelte b/src/lib/components/admin/Evaluations.svelte
+index 98a32873..af172bab 100644
+--- a/src/lib/components/admin/Evaluations.svelte
++++ b/src/lib/components/admin/Evaluations.svelte
+@@ -1,4 +1,5 @@
+ <script>
++	import { base } from '$app/paths';
+ 	import { getContext, tick, onMount } from 'svelte';
+ 	import { goto } from '$app/navigation';
+ 	import { page } from '$app/stores';
+@@ -56,7 +57,7 @@
+ 		>
+ 			<a
+ 				id="leaderboard"
+-				href="/admin/evaluations/leaderboard"
++				href="{base}/admin/evaluations/leaderboard"
+ 				draggable="false"
+ 				class="px-0.5 py-1 min-w-fit rounded-lg lg:flex-none flex text-right transition select-none {selectedTab ===
+ 				'leaderboard'
+@@ -82,7 +83,7 @@
+ 
+ 			<a
+ 				id="feedback"
+-				href="/admin/evaluations/feedback"
++				href="{base}/admin/evaluations/feedback"
+ 				draggable="false"
+ 				class="px-0.5 py-1 min-w-fit rounded-lg lg:flex-none flex text-right transition select-none {selectedTab ===
+ 				'feedback'
+diff --git a/src/lib/components/admin/Evaluations/FeedbackModal.svelte b/src/lib/components/admin/Evaluations/FeedbackModal.svelte
+index d9125e68..2b9653f3 100644
+--- a/src/lib/components/admin/Evaluations/FeedbackModal.svelte
++++ b/src/lib/components/admin/Evaluations/FeedbackModal.svelte
+@@ -1,4 +1,5 @@
+ <script lang="ts">
++	import { base } from '$app/paths';
+ 	import Modal from '$lib/components/common/Modal.svelte';
+ 	import { getContext } from 'svelte';
+ 	const i18n = getContext('i18n');
+@@ -59,7 +60,7 @@
+ 
+ 							<div class="flex-1 text-xs">
+ 								<a
+-									href={`/s/${selectedFeedback?.meta?.chat_id}`}
++									href={`${base}/s/${selectedFeedback?.meta?.chat_id}`}
+ 									class=" hover:underline"
+ 									target="_blank"
+ 								>
+diff --git a/src/lib/components/admin/Evaluations/Leaderboard.svelte b/src/lib/components/admin/Evaluations/Leaderboard.svelte
+index a5deba03..ace93b93 100644
+--- a/src/lib/components/admin/Evaluations/Leaderboard.svelte
++++ b/src/lib/components/admin/Evaluations/Leaderboard.svelte
+@@ -1,4 +1,5 @@
+ <script lang="ts">
++	import { base } from '$app/paths';
+ 	import { onMount, getContext } from 'svelte';
+ 	import { models } from '$lib/stores';
+ 	import { getLeaderboard } from '$lib/apis/evaluations';
+@@ -182,7 +183,7 @@
+ 									alt={model.name}
+ 									class="size-5 rounded-full object-cover shrink-0"
+ 									on:error={(e) => {
+-										e.target.src = '/favicon.png';
++										e.target.src = `${base}/static/favicon.png`;
+ 									}}
+ 								/>
+ 								<Tooltip content={`${model.name} (${model.id})`} placement="top-start">
+diff --git a/src/lib/components/admin/Functions.svelte b/src/lib/components/admin/Functions.svelte
+index 37922ad6..baf0adcf 100644
+--- a/src/lib/components/admin/Functions.svelte
++++ b/src/lib/components/admin/Functions.svelte
+@@ -1,4 +1,5 @@
+ <script lang="ts">
++	import { base } from '$app/paths';
+ 	import { toast } from 'svelte-sonner';
+ 	import fileSaver from 'file-saver';
+ 	const { saveAs } = fileSaver;
+@@ -138,7 +139,7 @@
+ 				id: `${_function.id}_clone`,
+ 				name: `${_function.name} (${$i18n.t('Clone')})`
+ 			});
+-			goto('/admin/functions/create');
++			goto(`${base}/admin/functions/create`);
+ 		}
+ 	};
+ 
+@@ -263,7 +264,7 @@
+ 		sessionStorage.function = JSON.stringify({
+ 			...func
+ 		});
+-		goto('/admin/functions/create');
++		goto(`${base}/admin/functions/create`);
+ 	}}
+ />
+ 
+@@ -333,7 +334,7 @@
+ 						{/if}
+ 						<AddFunctionMenu
+ 							createHandler={() => {
+-								goto('/admin/functions/create');
++								goto(`${base}/admin/functions/create`);
+ 							}}
+ 							importFromLinkHandler={() => {
+ 								showImportModal = true;
+@@ -422,7 +423,7 @@
+ 						>
+ 							<a
+ 								class=" flex flex-1 space-x-3.5 cursor-pointer w-full"
+-								href={`/admin/functions/edit?id=${encodeURIComponent(func.id)}`}
++								href={`${base}/admin/functions/edit?id=${encodeURIComponent(func.id)}`}
+ 							>
+ 								<div class="flex items-center text-left">
+ 									<div class=" flex-1 self-center pl-1">
+@@ -529,7 +530,7 @@
+ 									<FunctionMenu
+ 										{func}
+ 										editHandler={() => {
+-											goto(`/admin/functions/edit?id=${encodeURIComponent(func.id)}`);
++											goto(`${base}/admin/functions/edit?id=${encodeURIComponent(func.id)}`);
+ 										}}
+ 										shareHandler={() => {
+ 											shareHandler(func);
+diff --git a/src/lib/components/admin/Functions/FunctionEditor.svelte b/src/lib/components/admin/Functions/FunctionEditor.svelte
+index eca65e92..42087cc0 100644
+--- a/src/lib/components/admin/Functions/FunctionEditor.svelte
++++ b/src/lib/components/admin/Functions/FunctionEditor.svelte
+@@ -1,4 +1,5 @@
+ <script>
++	import { base } from '$app/paths';
+ 	import { getContext, onMount, tick } from 'svelte';
+ 	import { goto } from '$app/navigation';
+ 
+@@ -307,7 +308,7 @@ class Pipe:
+ 								<button
+ 									class="w-full text-left text-sm py-1.5 px-1 rounded-lg dark:text-gray-300 dark:hover:text-white hover:bg-black/5 dark:hover:bg-gray-850"
+ 									on:click={() => {
+-										goto('/admin/functions');
++										goto(`${base}/admin/functions`);
+ 									}}
+ 									type="button"
+ 								>
+diff --git a/src/lib/components/admin/Settings/Models.svelte b/src/lib/components/admin/Settings/Models.svelte
+index cacb5b5e..887ab5bc 100644
+--- a/src/lib/components/admin/Settings/Models.svelte
++++ b/src/lib/components/admin/Settings/Models.svelte
+@@ -1,4 +1,5 @@
+ <script lang="ts">
++	import { base } from '$app/paths';
+ 	import { marked } from 'marked';
+ 	import fileSaver from 'file-saver';
+ 	const { saveAs } = fileSaver;
+@@ -301,7 +302,7 @@
+ 			id: `${model.id}-clone`,
+ 			name: `${model.name} (Clone)`
+ 		});
+-		goto('/workspace/models/create');
++		goto(`${base}/workspace/models/create`);
+ 	};
+ 
+ 	const exportModelHandler = async (model) => {
+@@ -597,7 +598,7 @@
+ 											alt="modelfile profile"
+ 											class=" rounded-full w-full h-auto object-cover"
+ 											on:error={(e) => {
+-												e.target.src = '/favicon.png';
++												e.target.src = `${base}/static/favicon.png`;
+ 											}}
+ 										/>
+ 									</div>
+diff --git a/src/lib/components/admin/Users.svelte b/src/lib/components/admin/Users.svelte
+index f3a5f5e5..240a8ecf 100644
+--- a/src/lib/components/admin/Users.svelte
++++ b/src/lib/components/admin/Users.svelte
+@@ -1,4 +1,5 @@
+ <script>
++	import { base } from '$app/paths';
+ 	import { getContext, tick, onMount } from 'svelte';
+ 	import { toast } from 'svelte-sonner';
+ 
+@@ -34,7 +35,7 @@
+ 
+ 	onMount(async () => {
+ 		if ($user?.role !== 'admin') {
+-			await goto('/');
++			await goto(`${base}/`);
+ 		}
+ 
+ 		loaded = true;
+@@ -62,7 +63,7 @@
+ 	>
+ 		<a
+ 			id="overview"
+-			href="/admin/users/overview"
++			href="{base}/admin/users/overview"
+ 			draggable="false"
+ 			class="px-0.5 py-1 min-w-fit rounded-lg lg:flex-none flex text-right transition select-none {selectedTab ===
+ 			'overview'
+@@ -86,7 +87,7 @@
+ 
+ 		<a
+ 			id="groups"
+-			href="/admin/users/groups"
++			href="{base}/admin/users/groups"
+ 			draggable="false"
+ 			class="px-0.5 py-1 min-w-fit rounded-lg lg:flex-none flex text-right transition select-none {selectedTab ===
+ 			'groups'
+diff --git a/src/lib/components/admin/Users/Groups.svelte b/src/lib/components/admin/Users/Groups.svelte
+index c9c57ea5..e36afeb2 100644
+--- a/src/lib/components/admin/Users/Groups.svelte
++++ b/src/lib/components/admin/Users/Groups.svelte
+@@ -1,4 +1,5 @@
+ <script>
++	import { base } from '$app/paths';
+ 	import { toast } from 'svelte-sonner';
+ 	import dayjs from 'dayjs';
+ 	import relativeTime from 'dayjs/plugin/relativeTime';
+@@ -100,7 +101,7 @@
+ 
+ 	onMount(async () => {
+ 		if ($user?.role !== 'admin') {
+-			await goto('/');
++			await goto(`${base}/`);
+ 			return;
+ 		}
+ 
+diff --git a/src/lib/components/admin/Users/UserList.svelte b/src/lib/components/admin/Users/UserList.svelte
+index 40c7cffb..3f3a60a2 100644
+--- a/src/lib/components/admin/Users/UserList.svelte
++++ b/src/lib/components/admin/Users/UserList.svelte
+@@ -1,4 +1,5 @@
+ <script lang="ts">
++	import { base } from '$app/paths';
+ 	import { WEBUI_API_BASE_URL, WEBUI_BASE_URL } from '$lib/constants';
+ 	import { WEBUI_NAME, config, user, showSidebar } from '$lib/stores';
+ 	import { goto } from '$app/navigation';
+@@ -381,7 +382,7 @@
+ 										src={`${WEBUI_API_BASE_URL}/users/${user.id}/profile/image`}
+ 										alt="user"
+ 										on:error={(e) => {
+-											e.currentTarget.src = '/favicon.png';
++											e.currentTarget.src = `${base}/static/favicon.png`;
+ 										}}
+ 									/>
+ 								</ProfilePreview>
+diff --git a/src/lib/components/admin/Users/UserList/EditUserModal.svelte b/src/lib/components/admin/Users/UserList/EditUserModal.svelte
+index ba115ad9..e097499b 100644
+--- a/src/lib/components/admin/Users/UserList/EditUserModal.svelte
++++ b/src/lib/components/admin/Users/UserList/EditUserModal.svelte
+@@ -1,4 +1,5 @@
+ <script lang="ts">
++	import { base } from '$app/paths';
+ 	import { toast } from 'svelte-sonner';
+ 	import dayjs from 'dayjs';
+ 	import { createEventDispatcher } from 'svelte';
+@@ -122,9 +123,9 @@
+ 														class="px-1.5 py-0.5 rounded-xl bg-gray-100 dark:bg-gray-850 text-xs"
+ 													>
+ 														<a
+-															href={'/admin/users/groups?id=' + userGroup.id}
++															href={`${base}/admin/users/groups?id=${userGroup.id}`}
+ 															on:click|preventDefault={() =>
+-																goto('/admin/users/groups?id=' + userGroup.id)}
++																goto(`${base}/admin/users/groups?id=` + userGroup.id)}
+ 														>
+ 															{userGroup.name}
+ 														</a>
+diff --git a/src/lib/components/automations/AutomationEditor.svelte b/src/lib/components/automations/AutomationEditor.svelte
+index 463cb0fa..50d4794d 100644
+--- a/src/lib/components/automations/AutomationEditor.svelte
++++ b/src/lib/components/automations/AutomationEditor.svelte
+@@ -1,4 +1,5 @@
+ <script lang="ts">
++	import { base } from '$app/paths';
+ 	import { onMount, getContext } from 'svelte';
+ 	import { toast } from 'svelte-sonner';
+ 	import { goto } from '$app/navigation';
+@@ -139,7 +140,7 @@
+ 		});
+ 		if (res) {
+ 			toast.success($i18n.t(`Deleted {{name}}`, { name: automation.name }));
+-			goto('/automations');
++			goto(`${base}/automations`);
+ 		}
+ 	};
+ 
+@@ -227,7 +228,7 @@
+ 						<button
+ 							class="text-sm p-1.5 hover:bg-black/5 dark:hover:bg-white/5 rounded-lg transition"
+ 							aria-label={$i18n.t('Back')}
+-							on:click={() => goto('/automations')}
++							on:click={() => goto(`${base}/automations`)}
+ 							type="button"
+ 						>
+ 							<ChevronLeft strokeWidth="2.5" />
+@@ -395,7 +396,7 @@
+ 											? 'cursor-pointer'
+ 											: 'cursor-default'}"
+ 										on:click={() => {
+-											if (run.chat_id) goto(`/c/${run.chat_id}`);
++											if (run.chat_id) goto(`${base}/c/${run.chat_id}`);
+ 										}}
+ 										type="button"
+ 									>
+diff --git a/src/lib/components/automations/ModelDropdown.svelte b/src/lib/components/automations/ModelDropdown.svelte
+index 848c6507..31527339 100644
+--- a/src/lib/components/automations/ModelDropdown.svelte
++++ b/src/lib/components/automations/ModelDropdown.svelte
+@@ -1,4 +1,5 @@
+ <script lang="ts">
++	import { base } from '$app/paths';
+ 	import { getContext } from 'svelte';
+ 
+ 	import { models } from '$lib/stores';
+@@ -108,7 +109,7 @@
+ 							class="rounded-full size-5 items-center mr-2"
+ 							loading="lazy"
+ 							on:error={(e) => {
+-								e.currentTarget.src = '/favicon.png';
++								e.currentTarget.src = `${base}/static/favicon.png`;
+ 							}}
+ 						/>
+ 						<div class="truncate">
+diff --git a/src/lib/components/channel/Channel.svelte b/src/lib/components/channel/Channel.svelte
+index 77626a10..74824f3f 100644
+--- a/src/lib/components/channel/Channel.svelte
++++ b/src/lib/components/channel/Channel.svelte
+@@ -1,4 +1,5 @@
+ <script lang="ts">
++	import { base } from '$app/paths';
+ 	import { toast } from 'svelte-sonner';
+ 	import { Pane, PaneGroup, PaneResizer } from 'paneforge';
+ 
+@@ -108,7 +109,7 @@
+ 				}
+ 			}
+ 		} else {
+-			goto('/');
++			goto(`${base}/`);
+ 		}
+ 	};
+ 
+diff --git a/src/lib/components/channel/MessageInput/MentionList.svelte b/src/lib/components/channel/MessageInput/MentionList.svelte
+index 0d8ce881..6bed9704 100644
+--- a/src/lib/components/channel/MessageInput/MentionList.svelte
++++ b/src/lib/components/channel/MessageInput/MentionList.svelte
+@@ -1,4 +1,5 @@
+ <script lang="ts">
++	import { base } from '$app/paths';
+ 	import { getContext, onDestroy, onMount } from 'svelte';
+ 	const i18n = getContext('i18n');
+ 
+@@ -201,7 +202,7 @@
+ 								alt={item?.data?.name ?? item.id}
+ 								class="rounded-full size-5 items-center mr-2"
+ 								on:error={(e) => {
+-									e.currentTarget.src = '/favicon.png';
++									e.currentTarget.src = `${base}/static/favicon.png`;
+ 								}}
+ 							/>
+ 						{:else if item.type === 'user'}
+@@ -210,7 +211,7 @@
+ 								alt={item?.label ?? item.id}
+ 								class="rounded-full size-5 items-center mr-2"
+ 								on:error={(e) => {
+-									e.currentTarget.src = '/favicon.png';
++									e.currentTarget.src = `${base}/static/favicon.png`;
+ 								}}
+ 							/>
+ 						{/if}
+diff --git a/src/lib/components/channel/Messages/Message.svelte b/src/lib/components/channel/Messages/Message.svelte
+index a853a0e7..d2573de7 100644
+--- a/src/lib/components/channel/Messages/Message.svelte
++++ b/src/lib/components/channel/Messages/Message.svelte
+@@ -1,4 +1,5 @@
+ <script lang="ts">
++	import { base } from '$app/paths';
+ 	import dayjs from 'dayjs';
+ 	import relativeTime from 'dayjs/plugin/relativeTime';
+ 	import isToday from 'dayjs/plugin/isToday';
+@@ -333,7 +334,7 @@
+ 									message.reply_to_message.meta.model_id}
+ 								class="size-4 ml-0.5 rounded-full object-cover"
+ 								on:error={(e) => {
+-									e.currentTarget.src = '/favicon.png';
++									e.currentTarget.src = `${base}/static/favicon.png`;
+ 								}}
+ 							/>
+ 						{:else}
+@@ -376,7 +377,7 @@
+ 								alt={message.meta.model_name ?? message.meta.model_id}
+ 								class="size-8 translate-y-1 ml-0.5 object-cover rounded-full"
+ 								on:error={(e) => {
+-									e.currentTarget.src = '/favicon.png';
++									e.currentTarget.src = `${base}/static/favicon.png`;
+ 								}}
+ 							/>
+ 						{:else if message.user?.role === 'webhook'}
+diff --git a/src/lib/components/channel/Messages/Message/UserStatus.svelte b/src/lib/components/channel/Messages/Message/UserStatus.svelte
+index c4e6cce7..5c1b939c 100644
+--- a/src/lib/components/channel/Messages/Message/UserStatus.svelte
++++ b/src/lib/components/channel/Messages/Message/UserStatus.svelte
+@@ -1,4 +1,5 @@
+ <script lang="ts">
++	import { base } from '$app/paths';
+ 	import { getContext, onMount } from 'svelte';
+ 
+ 	const i18n = getContext('i18n');
+@@ -27,7 +28,7 @@
+ 		});
+ 
+ 		if (res) {
+-			goto(`/channels/${res.id}`);
++			goto(`${base}/channels/${res.id}`);
+ 		}
+ 	};
+ </script>
+diff --git a/src/lib/components/channel/Thread.svelte b/src/lib/components/channel/Thread.svelte
+index ba03f3a6..97e915bc 100644
+--- a/src/lib/components/channel/Thread.svelte
++++ b/src/lib/components/channel/Thread.svelte
+@@ -1,4 +1,5 @@
+ <script lang="ts">
++	import { base } from '$app/paths';
+ 	import { goto } from '$app/navigation';
+ 
+ 	import { socket, user } from '$lib/stores';
+@@ -57,7 +58,7 @@
+ 			await tick();
+ 			scrollToBottom();
+ 		} else {
+-			goto('/');
++			goto(`${base}/`);
+ 		}
+ 	};
+ 
+diff --git a/src/lib/components/chat/Chat.svelte b/src/lib/components/chat/Chat.svelte
+index 69652dbe..71575289 100644
+--- a/src/lib/components/chat/Chat.svelte
++++ b/src/lib/components/chat/Chat.svelte
+@@ -1,4 +1,5 @@
+ <script lang="ts">
++	import { base } from '$app/paths';
+ 	import { v4 as uuidv4 } from 'uuid';
+ 	import { toast } from 'svelte-sonner';
+ 	import { PaneGroup, Pane, PaneResizer } from 'paneforge';
+@@ -260,7 +261,7 @@
+ 			const chatInput = document.getElementById('chat-input');
+ 			chatInput?.focus();
+ 		} else {
+-			await goto('/');
++			await goto(`${base}/`);
+ 		}
+ 	};
+ 
+@@ -1260,7 +1261,7 @@
+ 		await showArtifacts.set(false);
+ 
+ 		if ($page.url.pathname.includes('/c/')) {
+-			window.history.replaceState(history.state, '', `/`);
++			window.history.replaceState(history.state, '', `${base}/`);
+ 		}
+ 
+ 		autoScroll = true;
+@@ -1394,7 +1395,7 @@
+ 		}
+ 
+ 		chat = await getChatById(localStorage.token, $chatId).catch(async (error) => {
+-			await goto('/');
++			await goto(`${base}/`);
+ 			return null;
+ 		});
+ 
+@@ -2542,7 +2543,7 @@
+ 				if (res.chat_id && $chatId !== res.chat_id && $chatId === _chatId) {
+ 					await chatId.set(res.chat_id);
+ 					if (!$temporaryChatEnabled) {
+-						window.history.replaceState(history.state, '', `/c/${res.chat_id}`);
++						window.history.replaceState(history.state, '', `${base}/c/${res.chat_id}`);
+ 						currentChatPage.set(1);
+ 						await chats.set(await getChatList(localStorage.token, $currentChatPage));
+ 
+@@ -2819,7 +2820,7 @@
+ 			_chatId = chat.id;
+ 			await chatId.set(_chatId);
+ 
+-			window.history.replaceState(history.state, '', `/c/${_chatId}`);
++			window.history.replaceState(history.state, '', `${base}/c/${_chatId}`);
+ 
+ 			await tick();
+ 
+@@ -2913,7 +2914,7 @@
+ 			await archiveChatById(localStorage.token, id);
+ 			currentChatPage.set(1);
+ 			initNewChat();
+-			await goto('/');
++			await goto(`${base}/`);
+ 			chats.set(await getChatList(localStorage.token, $currentChatPage));
+ 			pinnedChats.set(await getPinnedChatList(localStorage.token));
+ 			toast.success($i18n.t('Chat archived.'));
+@@ -2938,7 +2939,7 @@
+ 			if (res) {
+ 				currentChatPage.set(1);
+ 				initNewChat();
+-				await goto('/');
++				await goto(`${base}/`);
+ 				chats.set(await getChatList(localStorage.token, $currentChatPage));
+ 				pinnedChats.set(await getPinnedChatList(localStorage.token));
+ 				allTags.set(await getAllTags(localStorage.token));
+@@ -3076,7 +3077,7 @@
+ 									chatId.set(savedChat.id);
+ 									chats.set(await getChatList(localStorage.token, $currentChatPage));
+ 
+-									await goto(`/c/${savedChat.id}`);
++									await goto(`${base}/c/${savedChat.id}`);
+ 									toast.success($i18n.t('Conversation saved successfully'));
+ 								}
+ 							} catch (error) {
+diff --git a/src/lib/components/chat/ChatPlaceholder.svelte b/src/lib/components/chat/ChatPlaceholder.svelte
+index e497b6b2..b40d6a78 100644
+--- a/src/lib/components/chat/ChatPlaceholder.svelte
++++ b/src/lib/components/chat/ChatPlaceholder.svelte
+@@ -1,4 +1,5 @@
+ <script lang="ts">
++	import { base } from '$app/paths';
+ 	import { WEBUI_API_BASE_URL, WEBUI_BASE_URL } from '$lib/constants';
+ 	import { marked } from 'marked';
+ 	import DOMPurify from 'dompurify';
+@@ -61,7 +62,7 @@
+ 								alt="logo"
+ 								draggable="false"
+ 								on:error={(e) => {
+-									e.currentTarget.src = '/favicon.png';
++									e.currentTarget.src = `${base}/static/favicon.png`;
+ 								}}
+ 							/>
+ 						</Tooltip>
+diff --git a/src/lib/components/chat/FileNav/SqliteView.svelte b/src/lib/components/chat/FileNav/SqliteView.svelte
+index 74072c5a..ca584f99 100644
+--- a/src/lib/components/chat/FileNav/SqliteView.svelte
++++ b/src/lib/components/chat/FileNav/SqliteView.svelte
+@@ -1,6 +1,7 @@
+ <script lang="ts">
+ 	import { getContext, onDestroy } from 'svelte';
+ 	import Spinner from '../../common/Spinner.svelte';
++	import { WEBUI_BASE_URL } from '$lib/constants';
+ 
+ 	const i18n = getContext('i18n');
+ 
+@@ -29,7 +30,7 @@
+ 		try {
+ 			const initSqlJs = (await import('sql.js')).default;
+ 			const SQL = await initSqlJs({
+-				locateFile: () => '/sql.js/sql-wasm.wasm'
++				locateFile: () => `${WEBUI_BASE_URL}/sql.js/sql-wasm.wasm`
+ 			});
+ 			db = new SQL.Database(new Uint8Array(data));
+ 
+diff --git a/src/lib/components/chat/MessageInput.svelte b/src/lib/components/chat/MessageInput.svelte
+index 646abf24..f2e13a2a 100644
+--- a/src/lib/components/chat/MessageInput.svelte
++++ b/src/lib/components/chat/MessageInput.svelte
+@@ -1,4 +1,5 @@
+ <script lang="ts">
++	import { base } from '$app/paths';
+ 	import DOMPurify from 'dompurify';
+ 	import { toast } from 'svelte-sonner';
+ 
+@@ -831,7 +832,7 @@
+ 		if (res) {
+ 			// Clear the input content saved in session storage.
+ 			sessionStorage.removeItem('chat-input');
+-			goto(`/notes/${res.id}`);
++			goto(`${base}/notes/${res.id}`);
+ 		}
+ 	};
+ 
+diff --git a/src/lib/components/chat/MessageInput/Commands/Models.svelte b/src/lib/components/chat/MessageInput/Commands/Models.svelte
+index 61ae3ceb..71eb1d10 100644
+--- a/src/lib/components/chat/MessageInput/Commands/Models.svelte
++++ b/src/lib/components/chat/MessageInput/Commands/Models.svelte
+@@ -1,4 +1,5 @@
+ <script lang="ts">
++	import { base } from '$app/paths';
+ 	import Fuse from 'fuse.js';
+ 
+ 	import { createEventDispatcher, onDestroy, onMount } from 'svelte';
+@@ -87,7 +88,7 @@
+ 						alt={model?.name ?? model.id}
+ 						class="rounded-full size-5 items-center mr-2"
+ 						on:error={(e) => {
+-							e.currentTarget.src = '/favicon.png';
++							e.currentTarget.src = `${base}/static/favicon.png`;
+ 						}}
+ 					/>
+ 					<div class="truncate">
+diff --git a/src/lib/components/chat/MessageInput/TerminalMenu.svelte b/src/lib/components/chat/MessageInput/TerminalMenu.svelte
+index ca721ceb..e02bd0c8 100644
+--- a/src/lib/components/chat/MessageInput/TerminalMenu.svelte
++++ b/src/lib/components/chat/MessageInput/TerminalMenu.svelte
+@@ -1,4 +1,5 @@
+ <script lang="ts">
++	import { base } from '$app/paths';
+ 	import { getContext } from 'svelte';
+ 	import { goto } from '$app/navigation';
+ 
+@@ -196,7 +197,7 @@
+ 									class="p-0.5 rounded-md text-gray-400 hover:text-gray-600 dark:text-gray-500 dark:hover:text-gray-300 transition"
+ 									on:click|stopPropagation={() => {
+ 										show = false;
+-										goto('/admin/settings/integrations');
++										goto(`${base}/admin/settings/integrations`);
+ 									}}
+ 								>
+ 									<svg
+diff --git a/src/lib/components/chat/Messages/Citations.svelte b/src/lib/components/chat/Messages/Citations.svelte
+index c4a6e072..988e31fe 100644
+--- a/src/lib/components/chat/Messages/Citations.svelte
++++ b/src/lib/components/chat/Messages/Citations.svelte
+@@ -1,4 +1,5 @@
+ <script lang="ts">
++	import { base } from '$app/paths';
+ 	import { getContext } from 'svelte';
+ 	import { embed, showControls, showEmbeds } from '$lib/stores';
+ 
+@@ -179,7 +180,7 @@
+ 							alt="favicon"
+ 							class="size-4 rounded-full shrink-0 border border-white dark:border-gray-850 bg-white dark:bg-gray-900"
+ 							on:error={(e) => {
+-								e.target.src = '/favicon.png';
++								e.target.src = `${base}/static/favicon.png`;
+ 							}}
+ 						/>
+ 					{/each}
+diff --git a/src/lib/components/chat/Messages/Markdown/MarkdownInlineTokens/MentionToken.svelte b/src/lib/components/chat/Messages/Markdown/MarkdownInlineTokens/MentionToken.svelte
+index 9497444b..0b075d4c 100644
+--- a/src/lib/components/chat/Messages/Markdown/MarkdownInlineTokens/MentionToken.svelte
++++ b/src/lib/components/chat/Messages/Markdown/MarkdownInlineTokens/MentionToken.svelte
+@@ -1,4 +1,5 @@
+ <script lang="ts">
++	import { base } from '$app/paths';
+ 	import type { Token } from 'marked';
+ 	import { LinkPreview } from 'bits-ui';
+ 
+@@ -95,13 +96,13 @@
+ 						console.log('Clicked user mention', id);
+ 					} else if (idType === 'M') {
+ 						console.log('Clicked model mention', id);
+-						await goto(`/?model=${id}`);
++						await goto(`${base}/?model=${id}`);
+ 					}
+ 				} else if (triggerChar === '#') {
+ 					if (idType === 'C') {
+ 						// Open channel
+ 						if ($channels.find((c) => c.id === id)) {
+-							await goto(`/channels/${id}`);
++							await goto(`${base}/channels/${id}`);
+ 						}
+ 					} else if (idType === 'T') {
+ 						// Open thread
+diff --git a/src/lib/components/chat/ModelSelector/ModelItem.svelte b/src/lib/components/chat/ModelSelector/ModelItem.svelte
+index d387bbbe..012cb058 100644
+--- a/src/lib/components/chat/ModelSelector/ModelItem.svelte
++++ b/src/lib/components/chat/ModelSelector/ModelItem.svelte
+@@ -1,4 +1,5 @@
+ <script lang="ts">
++	import { base } from '$app/paths';
+ 	import { marked } from 'marked';
+ 
+ 	import { getContext, tick } from 'svelte';
+@@ -84,7 +85,7 @@
+ 						class="rounded-full size-5 flex items-center"
+ 						loading="lazy"
+ 						on:error={(e) => {
+-							e.currentTarget.src = '/favicon.png';
++							e.currentTarget.src = `${base}/static/favicon.png`;
+ 						}}
+ 					/>
+ 				</Tooltip>
+diff --git a/src/lib/components/chat/ModelSelector/ModelItemMenu.svelte b/src/lib/components/chat/ModelSelector/ModelItemMenu.svelte
+index d0f46b26..972440aa 100644
+--- a/src/lib/components/chat/ModelSelector/ModelItemMenu.svelte
++++ b/src/lib/components/chat/ModelSelector/ModelItemMenu.svelte
+@@ -1,6 +1,7 @@
+ <script lang="ts">
+ 	import { getContext } from 'svelte';
+ 	import { goto } from '$app/navigation';
++	import { base } from '$app/paths';
+ 
+ 	import Dropdown from '$lib/components/common/Dropdown.svelte';
+ 	import Tooltip from '$lib/components/common/Tooltip.svelte';
+@@ -56,8 +57,8 @@
+ 
+ 						goto(
+ 							model?.preset || model?.info?.base_model_id
+-								? `/workspace/models/edit?id=${encodeURIComponent(model?.id ?? '')}`
+-								: `/admin/settings/models?id=${encodeURIComponent(model?.id ?? '')}`
++								? `${base}/workspace/models/edit?id=${encodeURIComponent(model?.id ?? '')}`
++								: `${base}/admin/settings/models?id=${encodeURIComponent(model?.id ?? '')}`
+ 						);
+ 						show = false;
+ 					}}
+diff --git a/src/lib/components/chat/ModelSelector/Selector.svelte b/src/lib/components/chat/ModelSelector/Selector.svelte
+index 928bc14e..b4d046dc 100644
+--- a/src/lib/components/chat/ModelSelector/Selector.svelte
++++ b/src/lib/components/chat/ModelSelector/Selector.svelte
+@@ -1,4 +1,5 @@
+ <script lang="ts">
++	import { base } from '$app/paths';
+ 	import { marked } from 'marked';
+ 	import Fuse from 'fuse.js';
+ 
+@@ -704,7 +705,7 @@
+ 										{$i18n.t('Connect to an AI provider to start chatting')}
+ 									</div>
+ 									<a
+-										href="/admin/settings/connections"
++										href="{base}/admin/settings/connections"
+ 										class="px-4 py-1.5 rounded-xl text-xs font-medium bg-gray-900 dark:bg-white text-white dark:text-gray-900 hover:bg-gray-800 dark:hover:bg-gray-100 transition"
+ 										on:click={() => {
+ 											show = false;
+diff --git a/src/lib/components/chat/Navbar.svelte b/src/lib/components/chat/Navbar.svelte
+index aea242e9..feb40b6e 100644
+--- a/src/lib/components/chat/Navbar.svelte
++++ b/src/lib/components/chat/Navbar.svelte
+@@ -1,4 +1,5 @@
+ <script lang="ts">
++	import { base } from '$app/paths';
+ 	import { getContext } from 'svelte';
+ 	import { toast } from 'svelte-sonner';
+ 
+@@ -144,7 +145,7 @@
+ 										}
+ 
+ 										if ($page.url.pathname !== '/') {
+-											await goto('/');
++											await goto(`${base}/`);
+ 										}
+ 
+ 										// add 'temporary-chat=true' to the URL
+diff --git a/src/lib/components/chat/Placeholder.svelte b/src/lib/components/chat/Placeholder.svelte
+index 4577ff9b..1aa7ecd7 100644
+--- a/src/lib/components/chat/Placeholder.svelte
++++ b/src/lib/components/chat/Placeholder.svelte
+@@ -1,4 +1,5 @@
+ <script lang="ts">
++	import { base } from '$app/paths';
+ 	import { toast } from 'svelte-sonner';
+ 	import { marked } from 'marked';
+ 	import DOMPurify from 'dompurify';
+@@ -132,7 +133,7 @@
+ 											aria-hidden="true"
+ 											draggable="false"
+ 											on:error={(e) => {
+-												e.currentTarget.src = '/favicon.png';
++												e.currentTarget.src = `${base}/static/favicon.png`;
+ 											}}
+ 										/>
+ 									</button>
+diff --git a/src/lib/components/chat/Placeholder/ChatList.svelte b/src/lib/components/chat/Placeholder/ChatList.svelte
+index d73bc30a..a98747fd 100644
+--- a/src/lib/components/chat/Placeholder/ChatList.svelte
++++ b/src/lib/components/chat/Placeholder/ChatList.svelte
+@@ -1,4 +1,5 @@
+ <script lang="ts">
++	import { base } from '$app/paths';
+ 	import { getContext, onMount } from 'svelte';
+ 	const i18n = getContext('i18n');
+ 
+@@ -150,7 +151,7 @@
+ 			<a
+ 				class=" w-full flex justify-between items-center rounded-lg text-sm py-2 px-3 hover:bg-gray-50 dark:hover:bg-gray-850"
+ 				draggable="false"
+-				href={`/c/${chat.id}`}
++				href={`${base}/c/${chat.id}`}
+ 				on:click={() => (show = false)}
+ 			>
+ 				<div class="text-ellipsis line-clamp-1 w-full sm:basis-3/5">
+diff --git a/src/lib/components/chat/Settings/DataControls.svelte b/src/lib/components/chat/Settings/DataControls.svelte
+index 2507191b..59e0b39b 100644
+--- a/src/lib/components/chat/Settings/DataControls.svelte
++++ b/src/lib/components/chat/Settings/DataControls.svelte
+@@ -1,4 +1,5 @@
+ <script lang="ts">
++	import { base } from '$app/paths';
+ 	import fileSaver from 'file-saver';
+ 	const { saveAs } = fileSaver;
+ 
+@@ -110,7 +111,7 @@
+ 	};
+ 
+ 	const archiveAllChatsHandler = async () => {
+-		await goto('/');
++		await goto(`${base}/`);
+ 		await archiveAllChats(localStorage.token).catch((error) => {
+ 			toast.error(`${error}`);
+ 		});
+@@ -122,7 +123,7 @@
+ 	};
+ 
+ 	const deleteAllChatsHandler = async () => {
+-		await goto('/');
++		await goto(`${base}/`);
+ 		await deleteAllChats(localStorage.token).catch((error) => {
+ 			toast.error(`${error}`);
+ 		});
+@@ -145,7 +146,7 @@
+ 	onUpdate={handleArchivedChatsChange}
+ 	onDelete={(id) => {
+ 		if ($chatId === id) {
+-			goto('/');
++			goto(`${base}/`);
+ 			chatId.set('');
+ 		}
+ 	}}
+diff --git a/src/lib/components/chat/SettingsModal.svelte b/src/lib/components/chat/SettingsModal.svelte
+index ffc01f53..14098dd8 100644
+--- a/src/lib/components/chat/SettingsModal.svelte
++++ b/src/lib/components/chat/SettingsModal.svelte
+@@ -1,4 +1,5 @@
+ <script lang="ts">
++	import { base } from '$app/paths';
+ 	import { getContext, onMount, tick } from 'svelte';
+ 	import { toast } from 'svelte-sonner';
+ 	import { config, models, settings, user } from '$lib/stores';
+@@ -861,14 +862,14 @@
+ 				{/if}
+ 				{#if $user?.role === 'admin'}
+ 					<a
+-						href="/admin/settings"
++						href="{base}/admin/settings"
+ 						draggable="false"
+ 						class="px-0.5 md:px-2.5 py-1 min-w-fit rounded-xl flex-1 md:flex-none md:mt-auto flex select-none text-left transition {$settings?.highContrastMode
+ 							? 'hover:bg-gray-200 dark:hover:bg-gray-800'
+ 							: 'text-gray-300 dark:text-gray-600 hover:text-gray-700 dark:hover:text-white'}"
+ 						on:click={async (e) => {
+ 							e.preventDefault();
+-							await goto('/admin/settings');
++							await goto(`${base}/admin/settings`);
+ 							show = false;
+ 						}}
+ 					>
+diff --git a/src/lib/components/chat/ShareChatModal.svelte b/src/lib/components/chat/ShareChatModal.svelte
+index 8d67e47d..fec3aa33 100644
+--- a/src/lib/components/chat/ShareChatModal.svelte
++++ b/src/lib/components/chat/ShareChatModal.svelte
+@@ -1,4 +1,5 @@
+ <script lang="ts">
++	import { base } from '$app/paths';
+ 	import { getContext, onMount } from 'svelte';
+ 	import { models, config, user } from '$lib/stores';
+ 
+@@ -28,7 +29,7 @@
+ 		const _chat = chat;
+ 
+ 		const sharedChat = await shareChatById(localStorage.token, chatId);
+-		shareUrl = `${window.location.origin}/s/${sharedChat.share_id}`;
++		shareUrl = `${window.location.origin}${base}/s/${sharedChat.share_id}`;
+ 		console.log(shareUrl);
+ 		chat = await getChatById(localStorage.token, chatId);
+ 
+@@ -129,7 +130,7 @@
+ 			<div class="px-5 pt-4 pb-5 w-full flex flex-col">
+ 				<div class="text-sm dark:text-gray-300">
+ 					{#if chat.share_id}
+-						<a href="/s/{chat.share_id}" target="_blank"
++						<a href="{base}/s/{chat.share_id}" target="_blank"
+ 							>{$i18n.t('You have shared this chat')}
+ 							<span class=" underline">{$i18n.t('before')}</span>.</a
+ 						>
+diff --git a/src/lib/components/chat/XTerminal.svelte b/src/lib/components/chat/XTerminal.svelte
+index e16beef9..6346a64c 100644
+--- a/src/lib/components/chat/XTerminal.svelte
++++ b/src/lib/components/chat/XTerminal.svelte
+@@ -78,7 +78,11 @@
+ 				const session = await res.json();
+ 				sessionId = session.id;
+ 
+-				const wsBase = base.replace(/^https:/, 'wss:').replace(/^http:/, 'ws:');
++				// Absolute ws(s):// — convert an http(s) base, or build from the current
++				// origin when base is root-relative (production / reverse-proxy subpath).
++				const wsBase = /^https?:/.test(base)
++					? base.replace(/^http/, 'ws')
++					: `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}${base}`;
+ 				wsUrl = `${wsBase}/api/terminals/${sessionId}`;
+ 			} else {
+ 				// System terminal — proxy through Open WebUI backend
+@@ -96,7 +100,11 @@
+ 				const session = await res.json();
+ 				sessionId = session.id;
+ 
+-				const wsBase = base.replace(/^https:/, 'wss:').replace(/^http:/, 'ws:');
++				// Absolute ws(s):// — convert an http(s) base, or build from the current
++				// origin when base is root-relative (production / reverse-proxy subpath).
++				const wsBase = /^https?:/.test(base)
++					? base.replace(/^http/, 'ws')
++					: `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}${base}`;
+ 				wsUrl = `${wsBase}/terminals/${info.serverId}/api/terminals/${sessionId}`;
+ 			}
+ 
+diff --git a/src/lib/components/common/Banner.svelte b/src/lib/components/common/Banner.svelte
+index a80056cb..4f7af1bc 100644
+--- a/src/lib/components/common/Banner.svelte
++++ b/src/lib/components/common/Banner.svelte
+@@ -108,7 +108,7 @@
+ 				<div class="hidden md:flex group w-fit md:items-center">
+ 					<a
+ 						class="text-gray-700 dark:text-white text-xs font-semibold underline"
+-						href="/"
++						href="{WEBUI_BASE_URL}/"
+ 						target="_blank"
+ 					>
+ 						{$i18n.t('Learn More')}
+diff --git a/src/lib/components/common/ChatList.svelte b/src/lib/components/common/ChatList.svelte
+index 2ff24001..fe5c43a7 100644
+--- a/src/lib/components/common/ChatList.svelte
++++ b/src/lib/components/common/ChatList.svelte
+@@ -1,4 +1,5 @@
+ <script lang="ts">
++	import { base } from '$app/paths';
+ 	import { getContext } from 'svelte';
+ 	import dayjs from 'dayjs';
+ 	import calendar from 'dayjs/plugin/calendar';
+@@ -81,7 +82,7 @@
+ 					{/if}
+ 					<a
+ 						class={showUserInfo ? 'flex-1' : 'basis-3/5'}
+-						href={shareUrl ? `/s/${chat.id}` : `/c/${chat.id}`}
++						href={shareUrl ? `${base}/s/${chat.id}` : `${base}/c/${chat.id}`}
+ 						on:click={() => onChatClick?.(chat.id)}
+ 					>
+ 						<div class="text-ellipsis line-clamp-1 w-full">
+diff --git a/src/lib/components/common/RichTextInput/Image/image.ts b/src/lib/components/common/RichTextInput/Image/image.ts
+index 08e27fc0..b2663850 100644
+--- a/src/lib/components/common/RichTextInput/Image/image.ts
++++ b/src/lib/components/common/RichTextInput/Image/image.ts
+@@ -140,7 +140,7 @@ export const Image = Node.create<ImageOptions>({
+ 				if (file) {
+ 					img.setAttribute('src', safeImageUrl(file.url || ''));
+ 				} else {
+-					img.setAttribute('src', '/image-placeholder.png');
++					img.setAttribute('src', safeImageUrl('/image-placeholder.png'));
+ 				}
+ 			} else {
+ 				img.setAttribute('src', safeImageUrl(node.attrs.src || ''));
+@@ -156,7 +156,7 @@ export const Image = Node.create<ImageOptions>({
+ 					if (file) {
+ 						img.setAttribute('src', safeImageUrl(file.url || ''));
+ 					} else {
+-						img.setAttribute('src', '/image-placeholder.png');
++						img.setAttribute('src', safeImageUrl('/image-placeholder.png'));
+ 					}
+ 				}
+ 			});
+diff --git a/src/lib/components/layout/ChatsModal.svelte b/src/lib/components/layout/ChatsModal.svelte
+index b56ed780..14244334 100644
+--- a/src/lib/components/layout/ChatsModal.svelte
++++ b/src/lib/components/layout/ChatsModal.svelte
+@@ -1,4 +1,5 @@
+ <script lang="ts">
++	import { base } from '$app/paths';
+ 	import { toast } from 'svelte-sonner';
+ 	import { getContext } from 'svelte';
+ 
+@@ -270,7 +271,7 @@
+ 									{/if}
+ 									<a
+ 										class={showUserInfo ? 'flex-1' : 'basis-3/5'}
+-										href={shareUrl ? `/s/${chat.id}` : `/c/${chat.id}`}
++										href={shareUrl ? `${base}/s/${chat.id}` : `${base}/c/${chat.id}`}
+ 										on:click={() => (show = false)}
+ 									>
+ 										<div class="text-ellipsis line-clamp-1 w-full">
+@@ -437,7 +438,7 @@
+ 														'border-b'} border-gray-50 dark:border-gray-850/30 text-xs"
+ 												>
+ 													<td class="px-3 py-1 w-2/3">
+-														<a href="/c/{chat.id}" target="_blank">
++														<a href="{base}/c/{chat.id}" target="_blank" rel="noopener noreferrer">
+ 															<div class=" hover:underline line-clamp-1">
+ 																{chat.title}
+ 															</div>
+diff --git a/src/lib/components/layout/Overlay/AccountPending.svelte b/src/lib/components/layout/Overlay/AccountPending.svelte
+index ae3b7e89..4c4fe47b 100644
+--- a/src/lib/components/layout/Overlay/AccountPending.svelte
++++ b/src/lib/components/layout/Overlay/AccountPending.svelte
+@@ -1,6 +1,7 @@
+ <script lang="ts">
+ 	import DOMPurify from 'dompurify';
+ 	import { marked } from 'marked';
++	import { base } from '$app/paths';
+ 
+ 	import { getAdminDetails } from '$lib/apis/auths';
+ 	import { onMount, tick, getContext } from 'svelte';
+@@ -61,7 +62,7 @@
+ 					<button
+ 						class="relative z-20 flex px-5 py-2 rounded-full bg-white border border-gray-100 dark:border-none hover:bg-gray-100 text-gray-700 transition font-medium text-sm"
+ 						on:click={async () => {
+-							location.href = '/';
++							location.href = `${base}/`;
+ 						}}
+ 					>
+ 						{$i18n.t('Check Again')}
+@@ -71,7 +72,7 @@
+ 						class="text-xs text-center w-full mt-2 text-gray-400 underline"
+ 						on:click={async () => {
+ 							localStorage.removeItem('token');
+-							location.href = '/auth';
++							location.href = `${base}/auth`;
+ 						}}>{$i18n.t('Sign Out')}</button
+ 					>
+ 				</div>
+diff --git a/src/lib/components/layout/SearchModal.svelte b/src/lib/components/layout/SearchModal.svelte
+index 5617de7c..d3aba668 100644
+--- a/src/lib/components/layout/SearchModal.svelte
++++ b/src/lib/components/layout/SearchModal.svelte
+@@ -1,4 +1,5 @@
+ <script lang="ts">
++	import { base } from '$app/paths';
+ 	import { toast } from 'svelte-sonner';
+ 	import { getContext, onDestroy, onMount, tick } from 'svelte';
+ 	const i18n = getContext('i18n');
+@@ -28,7 +29,7 @@
+ 		{
+ 			label: $i18n.t('Start a new conversation'),
+ 			onClick: async () => {
+-				await goto(`/${query ? `?q=${query}` : ''}`);
++				await goto(`${base}/${query ? `?q=${query}` : ''}`);
+ 				show = false;
+ 				onClose();
+ 			},
+@@ -235,7 +236,7 @@
+ 						{
+ 							label: $i18n.t('Create a new note'),
+ 							onClick: async () => {
+-								await goto(`/notes?content=${query}`);
++								await goto(`${base}/notes?content=${encodeURIComponent(query)}`);
+ 								show = false;
+ 								onClose();
+ 							},
+@@ -372,14 +373,14 @@
+ 							idx + actions.length
+ 								? 'bg-gray-50 dark:bg-gray-850'
+ 								: ''}"
+-							href="/c/{chat.id}"
++							href="{base}/c/{chat.id}"
+ 							draggable="false"
+ 							data-arrow-selected={selectedIdx === idx + actions.length ? 'true' : undefined}
+ 							on:mouseenter={() => {
+ 								selectedIdx = idx + actions.length;
+ 							}}
+ 							on:click={async () => {
+-								await goto(`/c/${chat.id}`);
++								await goto(`${base}/c/${chat.id}`);
+ 								show = false;
+ 								onClose();
+ 							}}
+diff --git a/src/lib/components/layout/Sidebar.svelte b/src/lib/components/layout/Sidebar.svelte
+index f2329273..903f64d9 100644
+--- a/src/lib/components/layout/Sidebar.svelte
++++ b/src/lib/components/layout/Sidebar.svelte
+@@ -4,6 +4,7 @@
+ 	import Sortable from 'sortablejs';
+ 
+ 	import { goto } from '$app/navigation';
++	import { base } from '$app/paths';
+ 	import {
+ 		user,
+ 		chats,
+@@ -684,7 +685,7 @@
+ 	}}
+ 	onDelete={(id) => {
+ 		if ($chatId === id) {
+-			goto('/');
++			goto(`${base}/`);
+ 			chatId.set('');
+ 		}
+ 	}}
+@@ -725,7 +726,7 @@
+ 			await initChannels();
+ 			showCreateChannel = false;
+ 			showChannels = true;
+-			goto(`/channels/${res.id}`);
++			goto(`${base}/channels/${res.id}`);
+ 		}
+ 	}}
+ />
+@@ -764,7 +765,7 @@
+ 	id="sidebar-new-chat-button"
+ 	class="hidden"
+ 	on:click={() => {
+-		goto('/');
++		goto(`${base}/`);
+ 		newChatHandler();
+ 	}}
+ />
+@@ -819,13 +820,13 @@
+ 					<Tooltip content={$i18n.t('New Chat')} placement="right">
+ 						<a
+ 							class=" cursor-pointer flex rounded-xl hover:bg-gray-100 dark:hover:bg-gray-850 transition group"
+-							href="/"
++							href="{base}/"
+ 							draggable="false"
+ 							on:click={async (e) => {
+ 								e.stopImmediatePropagation();
+ 								e.preventDefault();
+ 
+-								goto('/');
++								goto(`${base}/`);
+ 								newChatHandler();
+ 							}}
+ 							aria-label={$i18n.t('New Chat')}
+@@ -1008,7 +1009,7 @@
+ 			>
+ 				<a
+ 					class="flex items-center rounded-xl size-8.5 h-full justify-center hover:bg-gray-100/50 dark:hover:bg-gray-850/50 transition no-drag-region"
+-					href="/"
++					href="{base}/"
+ 					draggable="false"
+ 					on:click={newChatHandler}
+ 				>
+@@ -1020,7 +1021,7 @@
+ 					/>
+ 				</a>
+ 
+-				<a href="/" class="flex flex-1 px-0.5" on:click={newChatHandler}>
++				<a href="{base}/" class="flex flex-1 px-1.5" on:click={newChatHandler}>
+ 					<div
+ 						id="sidebar-webui-name"
+ 						class=" self-center font-medium text-gray-850 dark:text-white font-primary"
+@@ -1069,7 +1070,7 @@
+ 						<a
+ 							id="sidebar-new-chat-button"
+ 							class="group grow flex items-center space-x-3 rounded-2xl px-2.5 py-2 hover:bg-gray-100 dark:hover:bg-gray-900 transition outline-none"
+-							href="/"
++							href="{base}/"
+ 							draggable="false"
+ 							on:click={newChatHandler}
+ 							aria-label={$i18n.t('New Chat')}
+@@ -1210,7 +1211,7 @@
+ 						onAdd={async () => {
+ 							const note = await createNoteHandler('New Note');
+ 							if (note) {
+-								goto(`/notes/${note.id}`);
++								goto(`${base}/notes/${note.id}`);
+ 							}
+ 						}}
+ 						onAddLabel={$i18n.t('New Note')}
+@@ -1219,7 +1220,7 @@
+ 							{#each $pinnedNotes as note (note.id)}
+ 								<a
+ 									class="w-full flex items-center gap-2.5 rounded-xl px-2.5 py-1.5 hover:bg-gray-100 dark:hover:bg-gray-900 transition group text-sm"
+-									href={`/notes/${note.id}`}
++									href={`${base}/notes/${note.id}`}
+ 									on:click={() => {
+ 										itemClickHandler();
+ 									}}
+diff --git a/src/lib/components/layout/Sidebar/ChannelItem.svelte b/src/lib/components/layout/Sidebar/ChannelItem.svelte
+index e8cf1ff7..20c900f9 100644
+--- a/src/lib/components/layout/Sidebar/ChannelItem.svelte
++++ b/src/lib/components/layout/Sidebar/ChannelItem.svelte
+@@ -1,4 +1,5 @@
+ <script lang="ts">
++	import { base } from '$app/paths';
+ 	import { toast } from 'svelte-sonner';
+ 	import { onMount, getContext, tick, onDestroy } from 'svelte';
+ 	const i18n = getContext('i18n');
+@@ -83,7 +84,7 @@
+ >
+ 	<a
+ 		class=" w-full flex justify-between"
+-		href="/channels/{channel.id}"
++		href="{base}/channels/{channel.id}"
+ 		on:click={() => {
+ 			console.log(channel);
+ 
+diff --git a/src/lib/components/layout/Sidebar/ChannelModal.svelte b/src/lib/components/layout/Sidebar/ChannelModal.svelte
+index 4da7896b..0e58d2db 100644
+--- a/src/lib/components/layout/Sidebar/ChannelModal.svelte
++++ b/src/lib/components/layout/Sidebar/ChannelModal.svelte
+@@ -1,4 +1,5 @@
+ <script lang="ts">
++	import { base } from '$app/paths';
+ 	import { getContext, createEventDispatcher, onMount } from 'svelte';
+ 	const i18n = getContext('i18n');
+ 
+@@ -121,8 +122,8 @@
+ 			toast.success($i18n.t('Channel deleted successfully'));
+ 			onUpdate();
+ 
+-			if ($page.url.pathname === `/channels/${channelId}`) {
+-				goto('/');
++			if ($page.url.pathname === `${base}/channels/${channelId}`) {
++				goto(`${base}/`);
+ 			}
+ 		}
+ 
+diff --git a/src/lib/components/layout/Sidebar/ChatItem.svelte b/src/lib/components/layout/Sidebar/ChatItem.svelte
+index a0ebfb48..11411175 100644
+--- a/src/lib/components/layout/Sidebar/ChatItem.svelte
++++ b/src/lib/components/layout/Sidebar/ChatItem.svelte
+@@ -6,6 +6,7 @@
+ </script>
+ 
+ <script lang="ts">
++	import { base } from '$app/paths';
+ 	import { toast } from 'svelte-sonner';
+ 	import { goto, invalidate, invalidateAll } from '$app/navigation';
+ 	import { onMount, getContext, createEventDispatcher, tick } from 'svelte';
+@@ -151,7 +152,7 @@
+ 		});
+ 
+ 		if (res) {
+-			goto(`/c/${res.id}`);
++			goto(`${base}/c/${res.id}`);
+ 
+ 			currentChatPage.set(1);
+ 			await chats.set(await getChatList(localStorage.token, $currentChatPage));
+@@ -173,7 +174,7 @@
+ 		if (res) {
+ 			tags.set(await getAllTags(localStorage.token));
+ 			if ($chatId === id) {
+-				await goto('/');
++				await goto(`${base}/`);
+ 
+ 				await chatId.set('');
+ 				await tick();
+@@ -195,7 +196,7 @@
+ 			await archiveChatById(localStorage.token, id);
+ 
+ 			if ($chatId === id) {
+-				await goto('/');
++				await goto(`${base}/`);
+ 				chatId.set('');
+ 			}
+ 
+@@ -492,7 +493,7 @@
+ 				: selected
+ 					? 'bg-gray-100 dark:bg-gray-950 selected'
+ 					: ' group-hover:bg-gray-100 dark:group-hover:bg-gray-950'}  whitespace-nowrap text-ellipsis"
+-			href="/c/{id}"
++			href="{base}/c/{id}"
+ 			on:click={() => {
+ 				dispatch('select');
+ 
+diff --git a/src/lib/components/layout/Sidebar/PinnedModelItem.svelte b/src/lib/components/layout/Sidebar/PinnedModelItem.svelte
+index 42340d9f..e43e1206 100644
+--- a/src/lib/components/layout/Sidebar/PinnedModelItem.svelte
++++ b/src/lib/components/layout/Sidebar/PinnedModelItem.svelte
+@@ -1,4 +1,5 @@
+ <script lang="ts">
++	import { base } from '$app/paths';
+ 	import { getContext } from 'svelte';
+ 
+ 	const i18n = getContext('i18n');
+@@ -30,7 +31,7 @@
+ 	>
+ 		<a
+ 			class="grow flex items-center space-x-2.5 rounded-xl px-2.5 py-[7px] group-hover:bg-gray-100 dark:group-hover:bg-gray-900 transition"
+-			href="/?model={model?.id}"
++			href="{base}/?model={model?.id}"
+ 			on:click={onClick}
+ 			draggable="false"
+ 		>
+@@ -40,7 +41,7 @@
+ 					class=" size-5 rounded-full -translate-x-[0.5px]"
+ 					alt="logo"
+ 					on:error={(e) => {
+-						e.currentTarget.src = '/favicon.png';
++						e.currentTarget.src = `${base}/static/favicon.png`;
+ 					}}
+ 				/>
+ 			</div>
+diff --git a/src/lib/components/layout/Sidebar/RecursiveFolder.svelte b/src/lib/components/layout/Sidebar/RecursiveFolder.svelte
+index fa80719d..521f7c2c 100644
+--- a/src/lib/components/layout/Sidebar/RecursiveFolder.svelte
++++ b/src/lib/components/layout/Sidebar/RecursiveFolder.svelte
+@@ -1,4 +1,5 @@
+ <script>
++	import { base } from '$app/paths';
+ 	import { getContext, createEventDispatcher, onMount, onDestroy, tick } from 'svelte';
+ 
+ 	const i18n = getContext('i18n');
+@@ -538,7 +539,7 @@
+ 							await selectedFolder.set(folder);
+ 						}
+ 
+-						await goto('/');
++						await goto(`${base}/`);
+ 
+ 						if ($mobile) {
+ 							showSidebar.set(!$showSidebar);
+diff --git a/src/lib/components/layout/Sidebar/UserMenu.svelte b/src/lib/components/layout/Sidebar/UserMenu.svelte
+index fd250bb8..3f9b78c6 100644
+--- a/src/lib/components/layout/Sidebar/UserMenu.svelte
++++ b/src/lib/components/layout/Sidebar/UserMenu.svelte
+@@ -2,6 +2,7 @@
+ 	import { createEventDispatcher, getContext, onMount, tick } from 'svelte';
+ 
+ 	import { goto } from '$app/navigation';
++	import { base } from '$app/paths';
+ 	import { fade, slide } from 'svelte/transition';
+ 
+ 	import { getUsage } from '$lib/apis';
+@@ -255,7 +256,7 @@
+ 
+ 			{#if role === 'admin'}
+ 				<a
+-					href="/admin"
++					href="{base}/admin"
+ 					draggable="false"
+ 					class="flex rounded-xl py-1.5 px-3 w-full hover:bg-gray-50 dark:hover:bg-gray-800 transition cursor-pointer select-none"
+ 					on:click={async (e) => {
+@@ -264,7 +265,7 @@
+ 						}
+ 						e.preventDefault();
+ 						show = false;
+-						goto('/admin');
++						goto(`${base}/admin`);
+ 						if ($mobile) {
+ 							await tick();
+ 							showSidebar.set(false);
+@@ -304,14 +305,14 @@
+ 			{#if $user?.role === 'admin' || $user?.permissions?.workspace?.models || $user?.permissions?.workspace?.knowledge || $user?.permissions?.workspace?.prompts || $user?.permissions?.workspace?.tools}
+ 				<div class="flex items-center w-full">
+ 					<a
+-						href="/workspace"
++						href="{base}/workspace"
+ 						draggable="false"
+ 						class="flex flex-1 rounded-xl py-1.5 px-3 hover:bg-gray-50 dark:hover:bg-gray-800 transition cursor-pointer select-none"
+ 						on:click={async (e) => {
+ 							if (e.metaKey || e.ctrlKey || e.shiftKey || e.button === 1) return;
+ 							e.preventDefault();
+ 							show = false;
+-							goto('/workspace');
++							goto(`${base}/workspace`);
+ 							if ($mobile) {
+ 								await tick();
+ 								showSidebar.set(false);
+@@ -361,14 +362,14 @@
+ 			{#if ($config?.features?.enable_notes ?? false) && ($user?.role === 'admin' || ($user?.permissions?.features?.notes ?? true))}
+ 				<div class="flex items-center w-full">
+ 					<a
+-						href="/notes"
++						href="{base}/notes"
+ 						draggable="false"
+ 						class="flex flex-1 rounded-xl py-1.5 px-3 hover:bg-gray-50 dark:hover:bg-gray-800 transition cursor-pointer select-none"
+ 						on:click={async (e) => {
+ 							if (e.metaKey || e.ctrlKey || e.shiftKey || e.button === 1) return;
+ 							e.preventDefault();
+ 							show = false;
+-							goto('/notes');
++							goto(`${base}/notes`);
+ 							if ($mobile) {
+ 								await tick();
+ 								showSidebar.set(false);
+@@ -405,14 +406,14 @@
+ 			{#if $config?.features?.enable_calendar && ($user?.role === 'admin' || $user?.permissions?.features?.calendar)}
+ 				<div class="flex items-center w-full">
+ 					<a
+-						href="/calendar"
++						href="{base}/calendar"
+ 						draggable="false"
+ 						class="flex flex-1 rounded-xl py-1.5 px-3 hover:bg-gray-50 dark:hover:bg-gray-800 transition cursor-pointer select-none"
+ 						on:click={async (e) => {
+ 							if (e.metaKey || e.ctrlKey || e.shiftKey || e.button === 1) return;
+ 							e.preventDefault();
+ 							show = false;
+-							goto('/calendar');
++							goto(`${base}/calendar`);
+ 						}}
+ 					>
+ 						<div class="self-center mr-3">
+@@ -458,14 +459,14 @@
+ 			{#if $config?.features?.enable_automations && ($user?.role === 'admin' || $user?.permissions?.features?.automations)}
+ 				<div class="flex items-center w-full">
+ 					<a
+-						href="/automations"
++						href="{base}/automations"
+ 						draggable="false"
+ 						class="flex flex-1 rounded-xl py-1.5 px-3 hover:bg-gray-50 dark:hover:bg-gray-800 transition cursor-pointer select-none"
+ 						on:click={async (e) => {
+ 							if (e.metaKey || e.ctrlKey || e.shiftKey || e.button === 1) return;
+ 							e.preventDefault();
+ 							show = false;
+-							goto('/automations');
++							goto(`${base}/automations`);
+ 							if ($mobile) {
+ 								await tick();
+ 								showSidebar.set(false);
+@@ -515,14 +516,14 @@
+ 			{#if role === 'admin'}
+ 				<div class="flex items-center w-full">
+ 					<a
+-						href="/playground"
++						href="{base}/playground"
+ 						draggable="false"
+ 						class="flex flex-1 rounded-xl py-1.5 px-3 hover:bg-gray-50 dark:hover:bg-gray-800 transition cursor-pointer select-none"
+ 						on:click={async (e) => {
+ 							if (e.metaKey || e.ctrlKey || e.shiftKey || e.button === 1) return;
+ 							e.preventDefault();
+ 							show = false;
+-							goto('/playground');
++							goto(`${base}/playground`);
+ 							if ($mobile) {
+ 								await tick();
+ 								showSidebar.set(false);
+@@ -627,7 +628,7 @@
+ 					user.set(null);
+ 					localStorage.removeItem('token');
+ 
+-					location.href = res?.redirect_url ?? '/auth';
++					location.href = res?.redirect_url ?? `${base}/auth`;
+ 					show = false;
+ 				}}
+ 			>
+diff --git a/src/lib/components/notes/NoteEditor.svelte b/src/lib/components/notes/NoteEditor.svelte
+index 42162438..d5bae974 100644
+--- a/src/lib/components/notes/NoteEditor.svelte
++++ b/src/lib/components/notes/NoteEditor.svelte
+@@ -1,4 +1,5 @@
+ <script lang="ts">
++	import { base } from '$app/paths';
+ 	import { getContext, onDestroy, onMount, tick } from 'svelte';
+ 	import { v4 as uuidv4 } from 'uuid';
+ 	import fileSaver from 'file-saver';
+@@ -195,7 +196,7 @@
+ 				$socket?.on('note-events', noteEventHandler);
+ 			}
+ 		} else {
+-			goto('/');
++			goto(`${base}/`);
+ 			return;
+ 		}
+ 
+@@ -619,7 +620,7 @@ ${content}
+ 
+ 		if (res) {
+ 			toast.success($i18n.t('Note deleted successfully'));
+-			goto('/notes');
++			goto(`${base}/notes`);
+ 		} else {
+ 			toast.error($i18n.t('Failed to delete note'));
+ 		}
+diff --git a/src/lib/components/notes/Notes.svelte b/src/lib/components/notes/Notes.svelte
+index e7762cf2..451acab1 100644
+--- a/src/lib/components/notes/Notes.svelte
++++ b/src/lib/components/notes/Notes.svelte
+@@ -1,4 +1,5 @@
+ <script lang="ts">
++	import { base } from '$app/paths';
+ 	import { marked } from 'marked';
+ 	import { toast } from 'svelte-sonner';
+ 	import fileSaver from 'file-saver';
+@@ -357,7 +358,7 @@
+ 							const res = await createNoteHandler(dayjs().format('YYYY-MM-DD'));
+ 
+ 							if (res) {
+-								goto(`/notes/${res.id}`);
++								goto(`${base}/notes/${res.id}`);
+ 							}
+ 						}}
+ 					>
+@@ -482,7 +483,10 @@
+ 											<div
+ 												class=" flex cursor-pointer w-full px-3.5 py-1.5 border border-gray-50 dark:border-gray-850/30 bg-transparent dark:hover:bg-gray-850 hover:bg-white rounded-2xl transition"
+ 											>
+-												<a href={`/notes/${note.id}`} class="w-full flex flex-col justify-between">
++												<a
++													href={`${base}/notes/${note.id}`}
++													class="w-full flex flex-col justify-between"
++												>
+ 													<div class="flex-1">
+ 														<div class="  flex items-center gap-2 self-center justify-between">
+ 															<Tooltip
+@@ -578,7 +582,7 @@
+ 											>
+ 												<div class=" flex flex-1 space-x-4 cursor-pointer w-full">
+ 													<a
+-														href={`/notes/${note.id}`}
++														href={`${base}/notes/${note.id}`}
+ 														class="w-full -translate-y-0.5 flex flex-col justify-between"
+ 													>
+ 														<div class="flex-1">
+diff --git a/src/lib/components/playground/Chat.svelte b/src/lib/components/playground/Chat.svelte
+index c5be2c6e..d0618558 100644
+--- a/src/lib/components/playground/Chat.svelte
++++ b/src/lib/components/playground/Chat.svelte
+@@ -1,4 +1,5 @@
+ <script lang="ts">
++	import { base } from '$app/paths';
+ 	import fileSaver from 'file-saver';
+ 	const { saveAs } = fileSaver;
+ 
+@@ -303,7 +304,7 @@
+ 
+ 	onMount(async () => {
+ 		if ($user?.role !== 'admin') {
+-			await goto('/');
++			await goto(`${base}/`);
+ 		}
+ 
+ 		if ($settings?.models) {
+diff --git a/src/lib/components/playground/Completions.svelte b/src/lib/components/playground/Completions.svelte
+index e69aae35..a6b3ae3e 100644
+--- a/src/lib/components/playground/Completions.svelte
++++ b/src/lib/components/playground/Completions.svelte
+@@ -1,4 +1,5 @@
+ <script lang="ts">
++	import { base } from '$app/paths';
+ 	import { toast } from 'svelte-sonner';
+ 
+ 	import { goto } from '$app/navigation';
+@@ -105,7 +106,7 @@
+ 
+ 	onMount(async () => {
+ 		if ($user?.role !== 'admin') {
+-			await goto('/');
++			await goto(`${base}/`);
+ 		}
+ 
+ 		if ($settings?.models) {
+diff --git a/src/lib/components/playground/Images.svelte b/src/lib/components/playground/Images.svelte
+index f61a3fe4..38881052 100644
+--- a/src/lib/components/playground/Images.svelte
++++ b/src/lib/components/playground/Images.svelte
+@@ -1,4 +1,5 @@
+ <script lang="ts">
++	import { base } from '$app/paths';
+ 	import { toast } from 'svelte-sonner';
+ 	import { onMount, getContext } from 'svelte';
+ 	import { goto } from '$app/navigation';
+@@ -114,7 +115,7 @@
+ 
+ 	onMount(async () => {
+ 		if ($user?.role !== 'admin') {
+-			await goto('/');
++			await goto(`${base}/`);
+ 			return;
+ 		}
+ 		loaded = true;
+diff --git a/src/lib/components/workspace/Knowledge.svelte b/src/lib/components/workspace/Knowledge.svelte
+index b2e11791..c64a1f8c 100644
+--- a/src/lib/components/workspace/Knowledge.svelte
++++ b/src/lib/components/workspace/Knowledge.svelte
+@@ -1,4 +1,5 @@
+ <script lang="ts">
++	import { base } from '$app/paths';
+ 	import dayjs from 'dayjs';
+ 	import relativeTime from 'dayjs/plugin/relativeTime';
+ 	dayjs.extend(relativeTime);
+@@ -178,7 +179,7 @@
+ 			<div class="flex w-full justify-end gap-1.5">
+ 				<a
+ 					class=" px-2 py-1.5 rounded-xl bg-black text-white dark:bg-white dark:text-black transition font-medium text-sm flex items-center"
+-					href="/workspace/knowledge/create"
++					href="{base}/workspace/knowledge/create"
+ 				>
+ 					<Plus className="size-3" strokeWidth="2.5" />
+ 
+@@ -257,7 +258,7 @@
+ 										)
+ 									);
+ 								} else {
+-									goto(`/workspace/knowledge/${item.id}`);
++									goto(`${base}/workspace/knowledge/${item.id}`);
+ 								}
+ 							}}
+ 						>
+diff --git a/src/lib/components/workspace/Knowledge/CreateKnowledgeBase.svelte b/src/lib/components/workspace/Knowledge/CreateKnowledgeBase.svelte
+index 88d68cac..3ee99865 100644
+--- a/src/lib/components/workspace/Knowledge/CreateKnowledgeBase.svelte
++++ b/src/lib/components/workspace/Knowledge/CreateKnowledgeBase.svelte
+@@ -1,4 +1,5 @@
+ <script>
++	import { base } from '$app/paths';
+ 	import { toast } from 'svelte-sonner';
+ 
+ 	import { goto } from '$app/navigation';
+@@ -36,7 +37,7 @@
+ 
+ 		if (res) {
+ 			toast.success($i18n.t('Knowledge created successfully.'));
+-			goto(`/workspace/knowledge/${res.id}`);
++			goto(`${base}/workspace/knowledge/${res.id}`);
+ 		}
+ 
+ 		loading = false;
+@@ -47,7 +48,7 @@
+ 	<button
+ 		class="flex space-x-1"
+ 		on:click={() => {
+-			goto('/workspace/knowledge');
++			goto(`${base}/workspace/knowledge`);
+ 		}}
+ 	>
+ 		<div class=" self-center">
+diff --git a/src/lib/components/workspace/Knowledge/KnowledgeBase.svelte b/src/lib/components/workspace/Knowledge/KnowledgeBase.svelte
+index 1cdadd05..11fe8e56 100644
+--- a/src/lib/components/workspace/Knowledge/KnowledgeBase.svelte
++++ b/src/lib/components/workspace/Knowledge/KnowledgeBase.svelte
+@@ -1,4 +1,5 @@
+ <script lang="ts">
++	import { base } from '$app/paths';
+ 	import Fuse from 'fuse.js';
+ 	import { toast } from 'svelte-sonner';
+ 	import { v4 as uuidv4 } from 'uuid';
+@@ -1108,7 +1109,7 @@
+ 			}
+ 			knowledgeId = knowledge?.id;
+ 		} else {
+-			goto('/workspace/knowledge');
++			goto(`${base}/workspace/knowledge`);
+ 		}
+ 
+ 		const dropZone = document.querySelector('body');
+diff --git a/src/lib/components/workspace/Models.svelte b/src/lib/components/workspace/Models.svelte
+index a78fe3e4..45872ce1 100644
+--- a/src/lib/components/workspace/Models.svelte
++++ b/src/lib/components/workspace/Models.svelte
+@@ -1,4 +1,5 @@
+ <script lang="ts">
++	import { base } from '$app/paths';
+ 	import { marked } from 'marked';
+ 
+ 	import { toast } from 'svelte-sonner';
+@@ -139,7 +140,7 @@
+ 			id: `${model.id}-clone`,
+ 			name: `${model.name} (Clone)`
+ 		});
+-		goto('/workspace/models/create');
++		goto(`${base}/workspace/models/create`);
+ 	};
+ 
+ 	const shareModelHandler = async (model) => {
+@@ -426,7 +427,7 @@
+ 				{/if}
+ 				<a
+ 					class=" px-2 py-1.5 rounded-xl bg-black text-white dark:bg-white dark:text-black transition font-medium text-sm flex items-center"
+-					href="/workspace/models/create"
++					href="{base}/workspace/models/create"
+ 				>
+ 					<Plus className="size-3" strokeWidth="2.5" />
+ 
+@@ -585,7 +586,7 @@
+ 							id="model-item-{model.id}"
+ 							on:click={() => {
+ 								if (model.write_access) {
+-									goto(`/workspace/models/edit?id=${encodeURIComponent(model.id)}`);
++									goto(`${base}/workspace/models/edit?id=${encodeURIComponent(model.id)}`);
+ 								}
+ 							}}
+ 						>
+@@ -604,7 +605,7 @@
+ 												loading="lazy"
+ 												decoding="async"
+ 												on:error={(e) => {
+-													e.target.src = '/favicon.png';
++													e.target.src = `${base}/static/favicon.png`;
+ 												}}
+ 											/>
+ 										</div>
+@@ -676,7 +677,7 @@
+ 																	writeAccess={model.write_access}
+ 																	editHandler={() => {
+ 																		goto(
+-																			`/workspace/models/edit?id=${encodeURIComponent(model.id)}`
++																			`${base}/workspace/models/edit?id=${encodeURIComponent(model.id)}`
+ 																		);
+ 																	}}
+ 																	shareHandler={() => {
+diff --git a/src/lib/components/workspace/Prompts.svelte b/src/lib/components/workspace/Prompts.svelte
+index 7974ee8e..358e121c 100644
+--- a/src/lib/components/workspace/Prompts.svelte
++++ b/src/lib/components/workspace/Prompts.svelte
+@@ -1,4 +1,5 @@
+ <script lang="ts">
++	import { base } from '$app/paths';
+ 	import { toast } from 'svelte-sonner';
+ 	import fileSaver from 'file-saver';
+ 	const { saveAs } = fileSaver;
+@@ -137,7 +138,7 @@
+ 		clonedPrompt.command = slugify(`${baseCommand} clone`);
+ 
+ 		sessionStorage.prompt = JSON.stringify(clonedPrompt);
+-		goto('/workspace/prompts/create');
++		goto(`${base}/workspace/prompts/create`);
+ 	};
+ 
+ 	const exportHandler = async (prompt) => {
+@@ -311,7 +312,7 @@
+ 				{/if}
+ 				<a
+ 					class=" px-2 py-1.5 rounded-xl bg-black text-white dark:bg-white dark:text-black transition font-medium text-sm flex items-center"
+-					href="/workspace/prompts/create"
++					href="{base}/workspace/prompts/create"
+ 				>
+ 					<Plus className="size-3" strokeWidth="2.5" />
+ 
+@@ -393,7 +394,7 @@
+ 				{#each prompts as prompt (prompt.id)}
+ 					<a
+ 						class=" flex space-x-4 cursor-pointer text-left w-full px-3 py-2.5 dark:hover:bg-gray-850/50 hover:bg-gray-50 transition rounded-2xl"
+-						href={`/workspace/prompts/${prompt.id}`}
++						href={`${base}/workspace/prompts/${prompt.id}`}
+ 					>
+ 						<div class=" flex flex-col flex-1 space-x-4 cursor-pointer w-full pl-1">
+ 							<div class="flex items-center justify-between w-full mb-0.5">
+diff --git a/src/lib/components/workspace/Prompts/PromptEditor.svelte b/src/lib/components/workspace/Prompts/PromptEditor.svelte
+index 5a2cf138..87de0ecb 100644
+--- a/src/lib/components/workspace/Prompts/PromptEditor.svelte
++++ b/src/lib/components/workspace/Prompts/PromptEditor.svelte
+@@ -1,4 +1,5 @@
+ <script lang="ts">
++	import { base } from '$app/paths';
+ 	import { onMount, tick, getContext } from 'svelte';
+ 
+ 	import Textarea from '$lib/components/common/Textarea.svelte';
+@@ -656,10 +657,10 @@
+ 							<div class="flex items-center gap-1 text-xs text-gray-500 dark:text-gray-400">
+ 								{#if entry.user}
+ 									<img
+-										src={`/api/v1/users/${entry.user.id}/profile/image`}
++										src={`${base}/api/v1/users/${entry.user.id}/profile/image`}
+ 										alt={entry.user.name}
+ 										class="size-3 rounded-full mr-0.5"
+-										on:error={(e) => (e.target.src = '/user.png')}
++										on:error={(e) => (e.target.src = `${base}/static/user.png`)}
+ 									/>
+ 									<span class="truncate">{entry.user.name}</span>
+ 									<span>•</span>
+diff --git a/src/lib/components/workspace/Skills.svelte b/src/lib/components/workspace/Skills.svelte
+index 96ab15a4..c3e99605 100644
+--- a/src/lib/components/workspace/Skills.svelte
++++ b/src/lib/components/workspace/Skills.svelte
+@@ -1,4 +1,5 @@
+ <script lang="ts">
++	import { base } from '$app/paths';
+ 	import { toast } from 'svelte-sonner';
+ 	import fileSaver from 'file-saver';
+ 	const { saveAs } = fileSaver;
+@@ -105,7 +106,7 @@
+ 				id: `${_skill.id}_clone`,
+ 				name: `${_skill.name} (Clone)`
+ 			});
+-			goto('/workspace/skills/create');
++			goto(`${base}/workspace/skills/create`);
+ 		}
+ 	};
+ 
+@@ -250,7 +251,7 @@
+ 											is_active: true,
+ 											access_grants: []
+ 										});
+-										goto('/workspace/skills/create');
++										goto(`${base}/workspace/skills/create`);
+ 									}
+ 								};
+ 								reader.readAsText(file);
+@@ -299,7 +300,7 @@
+ 				{#if $user?.role === 'admin' || $user?.permissions?.workspace?.skills}
+ 					<a
+ 						class=" px-2 py-1.5 rounded-xl bg-black text-white dark:bg-white dark:text-black transition font-medium text-sm flex items-center"
+-						href="/workspace/skills/create"
++						href="{base}/workspace/skills/create"
+ 					>
+ 						<Plus className="size-3" strokeWidth="2.5" />
+ 
+@@ -380,7 +381,7 @@
+ 							{#if skill.write_access}
+ 								<a
+ 									class=" flex flex-1 space-x-3.5 cursor-pointer w-full"
+-									href={`/workspace/skills/edit?id=${encodeURIComponent(skill.id)}`}
++									href={`${base}/workspace/skills/edit?id=${encodeURIComponent(skill.id)}`}
+ 								>
+ 									<div class="flex items-center text-left">
+ 										<div class=" flex-1 self-center">
+@@ -466,7 +467,7 @@
+ 									{:else}
+ 										<SkillMenu
+ 											editHandler={() => {
+-												goto(`/workspace/skills/edit?id=${encodeURIComponent(skill.id)}`);
++												goto(`${base}/workspace/skills/edit?id=${encodeURIComponent(skill.id)}`);
+ 											}}
+ 											cloneHandler={() => {
+ 												cloneHandler(skill);
+diff --git a/src/lib/components/workspace/Skills/SkillEditor.svelte b/src/lib/components/workspace/Skills/SkillEditor.svelte
+index 79c01582..401b473b 100644
+--- a/src/lib/components/workspace/Skills/SkillEditor.svelte
++++ b/src/lib/components/workspace/Skills/SkillEditor.svelte
+@@ -1,4 +1,5 @@
+ <script lang="ts">
++	import { base } from '$app/paths';
+ 	import { onMount, tick, getContext } from 'svelte';
+ 
+ 	import Textarea from '$lib/components/common/Textarea.svelte';
+@@ -109,7 +110,7 @@
+ 									class="w-full text-left text-sm py-1.5 px-1 rounded-lg dark:text-gray-300 dark:hover:text-white hover:bg-black/5 dark:hover:bg-gray-850"
+ 									aria-label={$i18n.t('Back')}
+ 									on:click={() => {
+-										goto('/workspace/skills');
++										goto(`${base}/workspace/skills`);
+ 									}}
+ 									type="button"
+ 								>
+diff --git a/src/lib/components/workspace/Tools.svelte b/src/lib/components/workspace/Tools.svelte
+index 50462c1c..c6f31ee3 100644
+--- a/src/lib/components/workspace/Tools.svelte
++++ b/src/lib/components/workspace/Tools.svelte
+@@ -1,4 +1,5 @@
+ <script lang="ts">
++	import { base } from '$app/paths';
+ 	import { toast } from 'svelte-sonner';
+ 	import fileSaver from 'file-saver';
+ 	const { saveAs } = fileSaver;
+@@ -126,7 +127,7 @@
+ 				id: `${_tool.id}_clone`,
+ 				name: `${_tool.name} (Clone)`
+ 			});
+-			goto('/workspace/tools/create');
++			goto(`${base}/workspace/tools/create`);
+ 		}
+ 	};
+ 
+@@ -211,7 +212,7 @@
+ 		sessionStorage.tool = JSON.stringify({
+ 			...tool
+ 		});
+-		goto('/workspace/tools/create');
++		goto(`${base}/workspace/tools/create`);
+ 	}}
+ 	loadUrlHandler={async (url) => {
+ 		return await loadToolByUrl(localStorage.token, url);
+@@ -285,7 +286,7 @@
+ 				{#if $user?.role === 'admin'}
+ 					<AddToolMenu
+ 						createHandler={() => {
+-							goto('/workspace/tools/create');
++							goto(`${base}/workspace/tools/create`);
+ 						}}
+ 						importFromLinkHandler={() => {
+ 							showImportModal = true;
+@@ -302,7 +303,7 @@
+ 				{:else}
+ 					<a
+ 						class=" px-2 py-1.5 rounded-xl bg-black text-white dark:bg-white dark:text-black transition font-medium text-sm flex items-center"
+-						href="/workspace/tools/create"
++						href="{base}/workspace/tools/create"
+ 					>
+ 						<Plus className="size-3" strokeWidth="2.5" />
+ 
+@@ -380,7 +381,7 @@
+ 							{#if tool.write_access}
+ 								<a
+ 									class=" flex flex-1 space-x-3.5 cursor-pointer w-full"
+-									href={`/workspace/tools/edit?id=${encodeURIComponent(tool.id)}`}
++									href={`${base}/workspace/tools/edit?id=${encodeURIComponent(tool.id)}`}
+ 								>
+ 									<div class="flex items-center text-left">
+ 										<div class=" flex-1 self-center">
+@@ -518,7 +519,7 @@
+ 
+ 										<ToolMenu
+ 											editHandler={() => {
+-												goto(`/workspace/tools/edit?id=${encodeURIComponent(tool.id)}`);
++												goto(`${base}/workspace/tools/edit?id=${encodeURIComponent(tool.id)}`);
+ 											}}
+ 											shareHandler={() => {
+ 												shareHandler(tool);
+diff --git a/src/lib/components/workspace/Tools/ToolkitEditor.svelte b/src/lib/components/workspace/Tools/ToolkitEditor.svelte
+index 9b1641c9..5f0647e6 100644
+--- a/src/lib/components/workspace/Tools/ToolkitEditor.svelte
++++ b/src/lib/components/workspace/Tools/ToolkitEditor.svelte
+@@ -1,4 +1,5 @@
+ <script>
++	import { base } from '$app/paths';
+ 	import { toast } from 'svelte-sonner';
+ 	import { getContext, onMount, tick } from 'svelte';
+ 
+@@ -229,7 +230,7 @@ class Tools:
+ 									class="w-full text-left text-sm py-1.5 px-1 rounded-lg dark:text-gray-300 dark:hover:text-white hover:bg-black/5 dark:hover:bg-gray-850"
+ 									aria-label={$i18n.t('Back')}
+ 									on:click={() => {
+-										goto('/workspace/tools');
++										goto(`${base}/workspace/tools`);
+ 									}}
+ 									type="button"
+ 								>
+diff --git a/src/lib/constants.ts b/src/lib/constants.ts
+index b25ec0f8..9e730fb7 100644
+--- a/src/lib/constants.ts
++++ b/src/lib/constants.ts
+@@ -1,10 +1,13 @@
+ import { browser, dev } from '$app/environment';
++import { base } from '$app/paths';
+ // import { version } from '../../package.json';
+ 
+ export const APP_NAME = 'Open WebUI';
+ 
+ export const WEBUI_HOSTNAME = browser ? (dev ? `${location.hostname}:8080` : ``) : '';
+-export const WEBUI_BASE_URL = browser ? (dev ? `http://${WEBUI_HOSTNAME}` : ``) : ``;
++// In dev mode connect to the backend dev server; in production use the SvelteKit base path so
++// that all API requests are relative to whatever subpath the app is deployed under.
++export const WEBUI_BASE_URL = browser ? (dev ? `http://${WEBUI_HOSTNAME}` : base) : base;
+ export const WEBUI_API_BASE_URL = `${WEBUI_BASE_URL}/api/v1`;
+ 
+ export const OLLAMA_API_BASE_URL = `${WEBUI_BASE_URL}/ollama`;
+diff --git a/src/lib/pyodide/pyodideKernel.worker.ts b/src/lib/pyodide/pyodideKernel.worker.ts
+index 4f1eea6d..4a407dd1 100644
+--- a/src/lib/pyodide/pyodideKernel.worker.ts
++++ b/src/lib/pyodide/pyodideKernel.worker.ts
+@@ -21,7 +21,8 @@ type CellState = {
+ const initializePyodide = async () => {
+ 	// Ensure Pyodide is loaded once and cached in the worker's global scope
+ 	if (!self.pyodide) {
+-		self.indexURL = '/pyodide/';
++		// Base-prefixed (Vite injects BASE_URL) so Pyodide loads under a subpath deploy.
++		self.indexURL = `${import.meta.env.BASE_URL}pyodide/`;
+ 		self.stdout = '';
+ 		self.stderr = '';
+ 		self.cells = {};
+diff --git a/src/lib/utils/google-drive-picker.ts b/src/lib/utils/google-drive-picker.ts
+index 64b7f371..137a1c7f 100644
+--- a/src/lib/utils/google-drive-picker.ts
++++ b/src/lib/utils/google-drive-picker.ts
+@@ -1,10 +1,12 @@
++import { WEBUI_BASE_URL } from '$lib/constants';
++
+ // Google Drive Picker API configuration
+ let API_KEY = '';
+ let CLIENT_ID = '';
+ 
+ // Function to fetch credentials from backend config
+ async function getCredentials() {
+-	const response = await fetch('/api/config');
++	const response = await fetch(`${WEBUI_BASE_URL}/api/config`);
+ 	if (!response.ok) {
+ 		throw new Error('Failed to fetch Google Drive credentials');
+ 	}
+diff --git a/src/lib/utils/onedrive-file-picker.ts b/src/lib/utils/onedrive-file-picker.ts
+index 198a8bca..21f7af95 100644
+--- a/src/lib/utils/onedrive-file-picker.ts
++++ b/src/lib/utils/onedrive-file-picker.ts
+@@ -1,5 +1,6 @@
+ import type { PopupRequest, PublicClientApplication } from '@azure/msal-browser';
+ import { v4 as uuidv4 } from 'uuid';
++import { WEBUI_BASE_URL } from '$lib/constants';
+ 
+ class OneDriveConfig {
+ 	private static instance: OneDriveConfig;
+@@ -32,7 +33,7 @@ class OneDriveConfig {
+ 	}
+ 
+ 	private async getCredentials(): Promise<void> {
+-		const response = await fetch('/api/config', {
++		const response = await fetch(`${WEBUI_BASE_URL}/api/config`, {
+ 			headers: {
+ 				'Content-Type': 'application/json'
+ 			},
+diff --git a/src/lib/utils/safeImageUrl.ts b/src/lib/utils/safeImageUrl.ts
+index 82a834ca..83850df8 100644
+--- a/src/lib/utils/safeImageUrl.ts
++++ b/src/lib/utils/safeImageUrl.ts
+@@ -20,11 +20,14 @@ export function safeImageUrl(url: string): string {
+ 		return `${WEBUI_BASE_URL}${PLACEHOLDER_IMAGE}`;
+ 	}
+ 
++	if (url.startsWith('/')) {
++		return url.startsWith(`${WEBUI_BASE_URL}/`) ? url : `${WEBUI_BASE_URL}${url}`;
++	}
++
+ 	if (
+-		url.startsWith(WEBUI_BASE_URL) ||
++		(WEBUI_BASE_URL !== '' && (url === WEBUI_BASE_URL || url.startsWith(`${WEBUI_BASE_URL}/`))) ||
+ 		url.startsWith('https://www.gravatar.com/avatar/') ||
+-		url.startsWith('data:') ||
+-		url.startsWith('/')
++		url.startsWith('data:')
+ 	) {
+ 		return url;
+ 	}
+diff --git a/src/lib/workers/kokoro.worker.ts b/src/lib/workers/kokoro.worker.ts
+index ce047a65..a17b248a 100644
+--- a/src/lib/workers/kokoro.worker.ts
++++ b/src/lib/workers/kokoro.worker.ts
+@@ -2,7 +2,8 @@ import { env } from '@huggingface/transformers';
+ import { KokoroTTS } from 'kokoro-js';
+ 
+ // TODO: Below doesn't work as expected, need to investigate further
+-env.backends.onnx.wasm.wasmPaths = '/wasm/';
++// Base-prefixed (Vite injects BASE_URL) so the ONNX wasm loads under a subpath deploy.
++env.backends.onnx.wasm.wasmPaths = `${import.meta.env.BASE_URL}wasm/`;
+ 
+ let tts;
+ let isInitialized = false; // Flag to track initialization status
+diff --git a/src/lib/workers/pyodide.worker.ts b/src/lib/workers/pyodide.worker.ts
+index cdbd9006..42075579 100644
+--- a/src/lib/workers/pyodide.worker.ts
++++ b/src/lib/workers/pyodide.worker.ts
+@@ -25,7 +25,10 @@ async function loadPyodideAndPackages(packages: string[] = []) {
+ 	self.result = null;
+ 
+ 	self.pyodide = await loadPyodide({
+-		indexURL: '/pyodide/',
++		// Resolve Pyodide assets under the app base (Vite injects BASE_URL, always
++		// trailing-slashed) so they load under a reverse-proxy subpath. Workers can't
++		// read $app/paths, so import.meta.env.BASE_URL is the build-time source of truth.
++		indexURL: `${import.meta.env.BASE_URL}pyodide/`,
+ 		stdout: (text) => {
+ 			console.log('Python output:', text);
+ 
+diff --git a/src/routes/(app)/+layout.svelte b/src/routes/(app)/+layout.svelte
+index 772ae6fe..bb198a89 100644
+--- a/src/routes/(app)/+layout.svelte
++++ b/src/routes/(app)/+layout.svelte
+@@ -1,4 +1,5 @@
+ <script lang="ts">
++	import { base } from '$app/paths';
+ 	import { toast } from 'svelte-sonner';
+ 	import { onMount, tick, getContext } from 'svelte';
+ 	import { openDB, deleteDB } from 'idb';
+@@ -194,7 +195,7 @@
+ 
+ 	onMount(async () => {
+ 		if ($user === undefined || $user === null) {
+-			await goto('/auth');
++			await goto(`${base}/auth`);
+ 			return;
+ 		}
+ 		if (!['user', 'admin'].includes($user?.role)) {
+@@ -296,7 +297,7 @@
+ 					} else {
+ 						temporaryChatEnabled.set(!$temporaryChatEnabled);
+ 					}
+-					await goto('/');
++					await goto(`${base}/`);
+ 					setTimeout(() => {
+ 						document.getElementById('new-chat-button')?.click();
+ 					}, 0);
+diff --git a/src/routes/(app)/admin/+layout.svelte b/src/routes/(app)/admin/+layout.svelte
+index 66e106d8..8d2bdd15 100644
+--- a/src/routes/(app)/admin/+layout.svelte
++++ b/src/routes/(app)/admin/+layout.svelte
+@@ -1,4 +1,5 @@
+ <script lang="ts">
++	import { base } from '$app/paths';
+ 	import { onMount, getContext } from 'svelte';
+ 	import { goto } from '$app/navigation';
+ 
+@@ -14,7 +15,7 @@
+ 
+ 	onMount(async () => {
+ 		if ($user?.role !== 'admin') {
+-			await goto('/');
++			await goto(`${base}/`);
+ 		}
+ 		loaded = true;
+ 	});
+@@ -64,7 +65,7 @@
+ 							class="min-w-fit p-1.5 {$page.url.pathname.includes('/admin/users')
+ 								? ''
+ 								: 'text-gray-300 dark:text-gray-600 hover:text-gray-700 dark:hover:text-white'} transition select-none"
+-							href="/admin">{$i18n.t('Users')}</a
++							href="{base}/admin">{$i18n.t('Users')}</a
+ 						>
+ 
+ 						{#if $config?.features.enable_admin_analytics ?? true}
+@@ -73,7 +74,7 @@
+ 								class="min-w-fit p-1.5 {$page.url.pathname.includes('/admin/analytics')
+ 									? ''
+ 									: 'text-gray-300 dark:text-gray-600 hover:text-gray-700 dark:hover:text-white'} transition select-none"
+-								href="/admin/analytics">{$i18n.t('Analytics')}</a
++								href="{base}/admin/analytics">{$i18n.t('Analytics')}</a
+ 							>
+ 						{/if}
+ 
+@@ -82,7 +83,7 @@
+ 							class="min-w-fit p-1.5 {$page.url.pathname.includes('/admin/evaluations')
+ 								? ''
+ 								: 'text-gray-300 dark:text-gray-600 hover:text-gray-700 dark:hover:text-white'} transition select-none"
+-							href="/admin/evaluations">{$i18n.t('Evaluations')}</a
++							href="{base}/admin/evaluations">{$i18n.t('Evaluations')}</a
+ 						>
+ 
+ 						<a
+@@ -90,7 +91,7 @@
+ 							class="min-w-fit p-1.5 {$page.url.pathname.includes('/admin/functions')
+ 								? ''
+ 								: 'text-gray-300 dark:text-gray-600 hover:text-gray-700 dark:hover:text-white'} transition select-none"
+-							href="/admin/functions">{$i18n.t('Functions')}</a
++							href="{base}/admin/functions">{$i18n.t('Functions')}</a
+ 						>
+ 
+ 						<a
+@@ -98,7 +99,7 @@
+ 							class="min-w-fit p-1.5 {$page.url.pathname.includes('/admin/settings')
+ 								? ''
+ 								: 'text-gray-300 dark:text-gray-600 hover:text-gray-700 dark:hover:text-white'} transition select-none"
+-							href="/admin/settings">{$i18n.t('Settings')}</a
++							href="{base}/admin/settings">{$i18n.t('Settings')}</a
+ 						>
+ 					</div>
+ 				</div>
+diff --git a/src/routes/(app)/admin/+page.svelte b/src/routes/(app)/admin/+page.svelte
+index 2f12bbab..a0fbe462 100644
+--- a/src/routes/(app)/admin/+page.svelte
++++ b/src/routes/(app)/admin/+page.svelte
+@@ -1,8 +1,9 @@
+ <script lang="ts">
++	import { base } from '$app/paths';
+ 	import { goto } from '$app/navigation';
+ 	import { onMount } from 'svelte';
+ 
+ 	onMount(() => {
+-		goto('/admin/users');
++		goto(`${base}/admin/users`);
+ 	});
+ </script>
+diff --git a/src/routes/(app)/admin/analytics/+page.svelte b/src/routes/(app)/admin/analytics/+page.svelte
+index b0f2b001..2b6b32e8 100644
+--- a/src/routes/(app)/admin/analytics/+page.svelte
++++ b/src/routes/(app)/admin/analytics/+page.svelte
+@@ -1,4 +1,5 @@
+ <script>
++	import { base } from '$app/paths';
+ 	import { onMount } from 'svelte';
+ 	import { goto } from '$app/navigation';
+ 	import { config } from '$lib/stores';
+@@ -6,7 +7,7 @@
+ 
+ 	onMount(() => {
+ 		if (!($config?.features.enable_admin_analytics ?? true)) {
+-			goto('/admin');
++			goto(`${base}/admin`);
+ 		}
+ 	});
+ </script>
+diff --git a/src/routes/(app)/admin/analytics/[tab]/+page.svelte b/src/routes/(app)/admin/analytics/[tab]/+page.svelte
+index b0f2b001..2b6b32e8 100644
+--- a/src/routes/(app)/admin/analytics/[tab]/+page.svelte
++++ b/src/routes/(app)/admin/analytics/[tab]/+page.svelte
+@@ -1,4 +1,5 @@
+ <script>
++	import { base } from '$app/paths';
+ 	import { onMount } from 'svelte';
+ 	import { goto } from '$app/navigation';
+ 	import { config } from '$lib/stores';
+@@ -6,7 +7,7 @@
+ 
+ 	onMount(() => {
+ 		if (!($config?.features.enable_admin_analytics ?? true)) {
+-			goto('/admin');
++			goto(`${base}/admin`);
+ 		}
+ 	});
+ </script>
+diff --git a/src/routes/(app)/admin/evaluations/+page.svelte b/src/routes/(app)/admin/evaluations/+page.svelte
+index 176e3162..fd25b01a 100644
+--- a/src/routes/(app)/admin/evaluations/+page.svelte
++++ b/src/routes/(app)/admin/evaluations/+page.svelte
+@@ -1,11 +1,12 @@
+ <script>
++	import { base } from '$app/paths';
+ 	import { goto } from '$app/navigation';
+ 	import { onMount } from 'svelte';
+ 
+ 	import Evaluations from '$lib/components/admin/Evaluations.svelte';
+ 
+ 	onMount(() => {
+-		goto('/admin/evaluations/leaderboard');
++		goto(`${base}/admin/evaluations/leaderboard`);
+ 	});
+ </script>
+ 
+diff --git a/src/routes/(app)/admin/functions/create/+page.svelte b/src/routes/(app)/admin/functions/create/+page.svelte
+index bb13a759..9b87731e 100644
+--- a/src/routes/(app)/admin/functions/create/+page.svelte
++++ b/src/routes/(app)/admin/functions/create/+page.svelte
+@@ -1,4 +1,5 @@
+ <script>
++	import { base } from '$app/paths';
+ 	import { toast } from 'svelte-sonner';
+ 	import { onMount, getContext } from 'svelte';
+ 	import { goto } from '$app/navigation';
+@@ -56,7 +57,7 @@
+ 				)
+ 			);
+ 
+-			await goto('/admin/functions');
++			await goto(`${base}/admin/functions`);
+ 		}
+ 	};
+ 
+diff --git a/src/routes/(app)/admin/functions/edit/+page.svelte b/src/routes/(app)/admin/functions/edit/+page.svelte
+index 6a456b98..987a44d1 100644
+--- a/src/routes/(app)/admin/functions/edit/+page.svelte
++++ b/src/routes/(app)/admin/functions/edit/+page.svelte
+@@ -1,4 +1,5 @@
+ <script>
++	import { base } from '$app/paths';
+ 	import { toast } from 'svelte-sonner';
+ 	import { onMount, getContext } from 'svelte';
+ 
+@@ -66,7 +67,7 @@
+ 		if (id) {
+ 			func = await getFunctionById(localStorage.token, id).catch((error) => {
+ 				toast.error(`${error}`);
+-				goto('/admin/functions');
++				goto(`${base}/admin/functions`);
+ 				return null;
+ 			});
+ 
+diff --git a/src/routes/(app)/admin/settings/+page.svelte b/src/routes/(app)/admin/settings/+page.svelte
+index d8a497cb..768a5095 100644
+--- a/src/routes/(app)/admin/settings/+page.svelte
++++ b/src/routes/(app)/admin/settings/+page.svelte
+@@ -1,10 +1,11 @@
+ <script>
++	import { base } from '$app/paths';
+ 	import { goto } from '$app/navigation';
+ 	import { onMount } from 'svelte';
+ 	import Settings from '$lib/components/admin/Settings.svelte';
+ 
+ 	onMount(() => {
+-		goto('/admin/settings/general');
++		goto(`${base}/admin/settings/general`);
+ 	});
+ </script>
+ 
+diff --git a/src/routes/(app)/admin/users/+page.svelte b/src/routes/(app)/admin/users/+page.svelte
+index 3f200961..8cd12c8a 100644
+--- a/src/routes/(app)/admin/users/+page.svelte
++++ b/src/routes/(app)/admin/users/+page.svelte
+@@ -1,8 +1,9 @@
+ <script>
++	import { base } from '$app/paths';
+ 	import { goto } from '$app/navigation';
+ 	import { onMount } from 'svelte';
+ 
+ 	onMount(async () => {
+-		await goto('/admin/users/overview');
++		await goto(`${base}/admin/users/overview`);
+ 	});
+ </script>
+diff --git a/src/routes/(app)/automations/+page.svelte b/src/routes/(app)/automations/+page.svelte
+index 0fef27bd..36d0191d 100644
+--- a/src/routes/(app)/automations/+page.svelte
++++ b/src/routes/(app)/automations/+page.svelte
+@@ -1,4 +1,5 @@
+ <script lang="ts">
++	import { base } from '$app/paths';
+ 	import { onMount, onDestroy, getContext } from 'svelte';
+ 
+ 	import { toast } from 'svelte-sonner';
+@@ -190,7 +191,7 @@
+ 			!$config?.features?.enable_automations ||
+ 			($user?.role !== 'admin' && !($user?.permissions?.features?.automations ?? false))
+ 		) {
+-			goto('/');
++			goto(`${base}/`);
+ 			return;
+ 		}
+ 
+@@ -230,7 +231,7 @@
+ 	on:save={(e) => {
+ 		getAutomationList();
+ 		if (e.detail?.id) {
+-			goto(`/automations/${e.detail.id}`);
++			goto(`${base}/automations/${e.detail.id}`);
+ 		}
+ 	}}
+ />
+@@ -416,7 +417,7 @@
+ 							{#each automations as automation (automation.id)}
+ 								<a
+ 									class="flex space-x-4 text-left w-full px-3 py-2.5 dark:hover:bg-gray-850/50 hover:bg-gray-50 transition rounded-2xl"
+-									href={`/automations/${automation.id}`}
++									href={`${base}/automations/${automation.id}`}
+ 								>
+ 									<div class="flex-1">
+ 										<div class="line-clamp-1 text-sm">{automation.name}</div>
+@@ -428,7 +429,7 @@
+ 									<div class="flex flex-row gap-0.5 self-center">
+ 										<AutomationMenu
+ 											editHandler={() => {
+-												goto(`/automations/${automation.id}`);
++												goto(`${base}/automations/${automation.id}`);
+ 											}}
+ 											runHandler={() => {
+ 												runNowHandler(automation);
+diff --git a/src/routes/(app)/automations/[id]/+page.svelte b/src/routes/(app)/automations/[id]/+page.svelte
+index 5e9f71b7..aaf1ff25 100644
+--- a/src/routes/(app)/automations/[id]/+page.svelte
++++ b/src/routes/(app)/automations/[id]/+page.svelte
+@@ -1,6 +1,7 @@
+ <script lang="ts">
+ 	import { toast } from 'svelte-sonner';
+ 	import { goto } from '$app/navigation';
++	import { base } from '$app/paths';
+ 	import { onMount, getContext } from 'svelte';
+ 
+ 	import { page } from '$app/stores';
+@@ -22,7 +23,7 @@
+ 			!$config?.features?.enable_automations ||
+ 			($user?.role !== 'admin' && !($user?.permissions?.features?.automations ?? false))
+ 		) {
+-			goto('/');
++			goto(`${base}/`);
+ 			return;
+ 		}
+ 
+@@ -36,10 +37,10 @@
+ 				automation = res;
+ 				loaded = true;
+ 			} else {
+-				goto('/automations');
++				goto(`${base}/automations`);
+ 			}
+ 		} else {
+-			goto('/automations');
++			goto(`${base}/automations`);
+ 		}
+ 	});
+ </script>
+diff --git a/src/routes/(app)/calendar/+page.svelte b/src/routes/(app)/calendar/+page.svelte
+index 5aa94c73..ab78862c 100644
+--- a/src/routes/(app)/calendar/+page.svelte
++++ b/src/routes/(app)/calendar/+page.svelte
+@@ -2,6 +2,7 @@
+ 	import { onMount, getContext, tick } from 'svelte';
+ 	import { toast } from 'svelte-sonner';
+ 	import { goto } from '$app/navigation';
++	import { base } from '$app/paths';
+ 	import { WEBUI_NAME, mobile, showSidebar, user } from '$lib/stores';
+ 	import {
+ 		getCalendars,
+@@ -139,9 +140,9 @@
+ 		const evt = e.detail;
+ 		if (evt.meta?.automation_id) {
+ 			if (evt.meta?.chat_id) {
+-				goto(`/c/${evt.meta.chat_id}`);
++				goto(`${base}/c/${evt.meta.chat_id}`);
+ 			} else {
+-				goto(`/automations/${evt.meta.automation_id}`);
++				goto(`${base}/automations/${evt.meta.automation_id}`);
+ 			}
+ 			return;
+ 		}
+diff --git a/src/routes/(app)/home/+layout.svelte b/src/routes/(app)/home/+layout.svelte
+index 02009c2b..5d40f759 100644
+--- a/src/routes/(app)/home/+layout.svelte
++++ b/src/routes/(app)/home/+layout.svelte
+@@ -1,4 +1,5 @@
+ <script lang="ts">
++	import { base } from '$app/paths';
+ 	import { onMount, getContext } from 'svelte';
+ 	import { WEBUI_NAME, showSidebar, functions, mobile } from '$lib/stores';
+ 	import { page } from '$app/stores';
+@@ -52,14 +53,14 @@
+ 						class="min-w-fit p-1.5 {$page.url.pathname.includes('/home/notes')
+ 							? ''
+ 							: 'text-gray-300 dark:text-gray-600 hover:text-gray-700 dark:hover:text-white'} transition"
+-						href="/playground/notes">{$i18n.t('Notes')}</a
++						href="{base}/playground/notes">{$i18n.t('Notes')}</a
+ 					>
+ 
+ 					<a
+ 						class="min-w-fit p-1.5 {$page.url.pathname.includes('/playground/calendar')
+ 							? ''
+ 							: 'text-gray-300 dark:text-gray-600 hover:text-gray-700 dark:hover:text-white'} transition"
+-						href="/playground/completions">{$i18n.t('Calendar')}</a
++						href="{base}/playground/completions">{$i18n.t('Calendar')}</a
+ 					>
+ 				</div>
+ 			</div>
+diff --git a/src/routes/(app)/notes/+layout.svelte b/src/routes/(app)/notes/+layout.svelte
+index 2ee82879..2c8924ec 100644
+--- a/src/routes/(app)/notes/+layout.svelte
++++ b/src/routes/(app)/notes/+layout.svelte
+@@ -1,4 +1,5 @@
+ <script lang="ts">
++	import { base } from '$app/paths';
+ 	import { onMount, getContext } from 'svelte';
+ 	import { WEBUI_NAME, showSidebar, functions, config, user, showArchivedChats } from '$lib/stores';
+ 	import { goto } from '$app/navigation';
+@@ -15,7 +16,7 @@
+ 			)
+ 		) {
+ 			// If the feature is not enabled, redirect to the home page
+-			goto('/');
++			goto(`${base}/`);
+ 		}
+ 
+ 		loaded = true;
+diff --git a/src/routes/(app)/notes/+page.svelte b/src/routes/(app)/notes/+page.svelte
+index efe511e6..a5a1a557 100644
+--- a/src/routes/(app)/notes/+page.svelte
++++ b/src/routes/(app)/notes/+page.svelte
+@@ -1,4 +1,5 @@
+ <script>
++	import { base } from '$app/paths';
+ 	import { getContext, onMount } from 'svelte';
+ 
+ 	const i18n = getContext('i18n');
+@@ -29,7 +30,7 @@
+ 			const res = await createNoteHandler(title, content);
+ 
+ 			if (res) {
+-				goto(`/notes/${res.id}`);
++				goto(`${base}/notes/${res.id}`);
+ 			}
+ 			return;
+ 		}
+@@ -72,7 +73,7 @@
+ 						<div
+ 							class="flex gap-1 scrollbar-none overflow-x-auto w-fit text-center text-sm font-medium bg-transparent py-1 touch-auto pointer-events-auto"
+ 						>
+-							<a class="min-w-fit transition" href="/notes">
++							<a class="min-w-fit transition" href="{base}/notes">
+ 								{$i18n.t('Notes')}
+ 							</a>
+ 						</div>
+diff --git a/src/routes/(app)/notes/new/+page.svelte b/src/routes/(app)/notes/new/+page.svelte
+index 417ace1c..70d60a39 100644
+--- a/src/routes/(app)/notes/new/+page.svelte
++++ b/src/routes/(app)/notes/new/+page.svelte
+@@ -1,4 +1,5 @@
+ <script lang="ts">
++	import { base } from '$app/paths';
+ 	import { onMount } from 'svelte';
+ 
+ 	import { goto } from '$app/navigation';
+@@ -14,7 +15,7 @@
+ 		const res = await createNoteHandler(title, content);
+ 
+ 		if (res) {
+-			goto(`/notes/${res.id}`);
++			goto(`${base}/notes/${res.id}`);
+ 		}
+ 	});
+ </script>
+diff --git a/src/routes/(app)/playground/+layout.svelte b/src/routes/(app)/playground/+layout.svelte
+index 6d71039d..526956dd 100644
+--- a/src/routes/(app)/playground/+layout.svelte
++++ b/src/routes/(app)/playground/+layout.svelte
+@@ -1,4 +1,5 @@
+ <script lang="ts">
++	import { base } from '$app/paths';
+ 	import { onMount, getContext } from 'svelte';
+ 	import { WEBUI_NAME, showSidebar, functions, mobile } from '$lib/stores';
+ 	import { page } from '$app/stores';
+@@ -53,14 +54,14 @@
+ 						class="min-w-fit p-1.5 {['/playground', '/playground/'].includes($page.url.pathname)
+ 							? ''
+ 							: 'text-gray-300 dark:text-gray-600 hover:text-gray-700 dark:hover:text-white'} transition select-none"
+-						href="/playground">{$i18n.t('Chat')}</a
++						href="{base}/playground">{$i18n.t('Chat')}</a
+ 					>
+ 
+ 					<!-- <a
+ 						class="min-w-fit p-1.5 {$page.url.pathname.includes('/playground/notes')
+ 							? ''
+ 							: 'text-gray-300 dark:text-gray-600 hover:text-gray-700 dark:hover:text-white'} transition"
+-						href="/playground/notes">{$i18n.t('Notes')}</a
++						href="{base}/playground/notes">{$i18n.t('Notes')}</a
+ 					> -->
+ 
+ 					<a
+@@ -68,7 +69,7 @@
+ 						class="min-w-fit p-1.5 {$page.url.pathname.includes('/playground/completions')
+ 							? ''
+ 							: 'text-gray-300 dark:text-gray-600 hover:text-gray-700 dark:hover:text-white'} transition select-none"
+-						href="/playground/completions">{$i18n.t('Completions')}</a
++						href="{base}/playground/completions">{$i18n.t('Completions')}</a
+ 					>
+ 
+ 					<a
+@@ -76,7 +77,7 @@
+ 						class="min-w-fit p-1.5 {$page.url.pathname.includes('/playground/images')
+ 							? ''
+ 							: 'text-gray-300 dark:text-gray-600 hover:text-gray-700 dark:hover:text-white'} transition select-none"
+-						href="/playground/images">{$i18n.t('Images')}</a
++						href="{base}/playground/images">{$i18n.t('Images')}</a
+ 					>
+ 				</div>
+ 			</div>
+diff --git a/src/routes/(app)/workspace/+layout.svelte b/src/routes/(app)/workspace/+layout.svelte
+index c2805334..7ae9b479 100644
+--- a/src/routes/(app)/workspace/+layout.svelte
++++ b/src/routes/(app)/workspace/+layout.svelte
+@@ -1,4 +1,5 @@
+ <script lang="ts">
++	import { base } from '$app/paths';
+ 	import { onMount, getContext } from 'svelte';
+ 	import {
+ 		WEBUI_NAME,
+@@ -22,21 +23,21 @@
+ 	onMount(async () => {
+ 		if ($user?.role !== 'admin') {
+ 			if ($page.url.pathname.includes('/models') && !$user?.permissions?.workspace?.models) {
+-				goto('/');
++				goto(`${base}/`);
+ 			} else if (
+ 				$page.url.pathname.includes('/knowledge') &&
+ 				!$user?.permissions?.workspace?.knowledge
+ 			) {
+-				goto('/');
++				goto(`${base}/`);
+ 			} else if (
+ 				$page.url.pathname.includes('/prompts') &&
+ 				!$user?.permissions?.workspace?.prompts
+ 			) {
+-				goto('/');
++				goto(`${base}/`);
+ 			} else if ($page.url.pathname.includes('/tools') && !$user?.permissions?.workspace?.tools) {
+-				goto('/');
++				goto(`${base}/`);
+ 			} else if ($page.url.pathname.includes('/skills') && !$user?.permissions?.workspace?.skills) {
+-				goto('/');
++				goto(`${base}/`);
+ 			}
+ 		}
+ 
+@@ -91,7 +92,7 @@
+ 								class="min-w-fit p-1.5 {$page.url.pathname.includes('/workspace/models')
+ 									? ''
+ 									: 'text-gray-300 dark:text-gray-600 hover:text-gray-700 dark:hover:text-white'} transition select-none"
+-								href="/workspace/models">{$i18n.t('Models')}</a
++								href="{base}/workspace/models">{$i18n.t('Models')}</a
+ 							>
+ 						{/if}
+ 
+@@ -102,7 +103,7 @@
+ 								class="min-w-fit p-1.5 {$page.url.pathname.includes('/workspace/knowledge')
+ 									? ''
+ 									: 'text-gray-300 dark:text-gray-600 hover:text-gray-700 dark:hover:text-white'} transition select-none"
+-								href="/workspace/knowledge"
++								href="{base}/workspace/knowledge"
+ 							>
+ 								{$i18n.t('Knowledge')}
+ 							</a>
+@@ -115,7 +116,7 @@
+ 								class="min-w-fit p-1.5 {$page.url.pathname.includes('/workspace/prompts')
+ 									? ''
+ 									: 'text-gray-300 dark:text-gray-600 hover:text-gray-700 dark:hover:text-white'} transition select-none"
+-								href="/workspace/prompts">{$i18n.t('Prompts')}</a
++								href="{base}/workspace/prompts">{$i18n.t('Prompts')}</a
+ 							>
+ 						{/if}
+ 
+@@ -126,7 +127,7 @@
+ 								class="min-w-fit p-1.5 {$page.url.pathname.includes('/workspace/skills')
+ 									? ''
+ 									: 'text-gray-300 dark:text-gray-600 hover:text-gray-700 dark:hover:text-white'} transition select-none"
+-								href="/workspace/skills"
++								href="{base}/workspace/skills"
+ 							>
+ 								{$i18n.t('Skills')}
+ 							</a>
+@@ -139,7 +140,7 @@
+ 								class="min-w-fit p-1.5 {$page.url.pathname.includes('/workspace/tools')
+ 									? ''
+ 									: 'text-gray-300 dark:text-gray-600 hover:text-gray-700 dark:hover:text-white'} transition select-none"
+-								href="/workspace/tools"
++								href="{base}/workspace/tools"
+ 							>
+ 								{$i18n.t('Tools')}
+ 							</a>
+diff --git a/src/routes/(app)/workspace/+page.svelte b/src/routes/(app)/workspace/+page.svelte
+index af9c6eef..35fa8851 100644
+--- a/src/routes/(app)/workspace/+page.svelte
++++ b/src/routes/(app)/workspace/+page.svelte
+@@ -1,4 +1,5 @@
+ <script lang="ts">
++	import { base } from '$app/paths';
+ 	import { goto } from '$app/navigation';
+ 	import { user } from '$lib/stores';
+ 	import { onMount } from 'svelte';
+@@ -6,20 +7,20 @@
+ 	onMount(() => {
+ 		if ($user?.role !== 'admin') {
+ 			if ($user?.permissions?.workspace?.models) {
+-				goto('/workspace/models');
++				goto(`${base}/workspace/models`);
+ 			} else if ($user?.permissions?.workspace?.knowledge) {
+-				goto('/workspace/knowledge');
++				goto(`${base}/workspace/knowledge`);
+ 			} else if ($user?.permissions?.workspace?.prompts) {
+-				goto('/workspace/prompts');
++				goto(`${base}/workspace/prompts`);
+ 			} else if ($user?.permissions?.workspace?.tools) {
+-				goto('/workspace/tools');
++				goto(`${base}/workspace/tools`);
+ 			} else if ($user?.permissions?.workspace?.skills) {
+-				goto('/workspace/skills');
++				goto(`${base}/workspace/skills`);
+ 			} else {
+-				goto('/');
++				goto(`${base}/`);
+ 			}
+ 		} else {
+-			goto('/workspace/models');
++			goto(`${base}/workspace/models`);
+ 		}
+ 	});
+ </script>
+diff --git a/src/routes/(app)/workspace/functions/create/+page.svelte b/src/routes/(app)/workspace/functions/create/+page.svelte
+index 14eec3b6..011668de 100644
+--- a/src/routes/(app)/workspace/functions/create/+page.svelte
++++ b/src/routes/(app)/workspace/functions/create/+page.svelte
+@@ -1,8 +1,9 @@
+ <script lang="ts">
++	import { base } from '$app/paths';
+ 	import { goto } from '$app/navigation';
+ 	import { onMount } from 'svelte';
+ 
+ 	onMount(() => {
+-		goto('/admin/functions/create');
++		goto(`${base}/admin/functions/create`);
+ 	});
+ </script>
+diff --git a/src/routes/(app)/workspace/models/create/+page.svelte b/src/routes/(app)/workspace/models/create/+page.svelte
+index 5ae4ac16..eef1481d 100644
+--- a/src/routes/(app)/workspace/models/create/+page.svelte
++++ b/src/routes/(app)/workspace/models/create/+page.svelte
+@@ -1,4 +1,5 @@
+ <script lang="ts">
++	import { base } from '$app/paths';
+ 	import { toast } from 'svelte-sonner';
+ 	import { goto } from '$app/navigation';
+ 	import { config, models, settings } from '$lib/stores';
+@@ -53,7 +54,7 @@
+ 					)
+ 				);
+ 				toast.success($i18n.t('Model created successfully!'));
+-				await goto('/workspace/models');
++				await goto(`${base}/workspace/models`);
+ 			}
+ 		}
+ 	};
+diff --git a/src/routes/(app)/workspace/models/edit/+page.svelte b/src/routes/(app)/workspace/models/edit/+page.svelte
+index d05ff370..3b14d6c3 100644
+--- a/src/routes/(app)/workspace/models/edit/+page.svelte
++++ b/src/routes/(app)/workspace/models/edit/+page.svelte
+@@ -1,4 +1,5 @@
+ <script>
++	import { base } from '$app/paths';
+ 	import { toast } from 'svelte-sonner';
+ 	import { goto } from '$app/navigation';
+ 
+@@ -23,15 +24,17 @@
+ 			});
+ 
+ 			if (!model) {
+-				goto('/workspace/models');
++				await goto(`${base}/workspace/models`);
++				return;
+ 			}
+ 
+ 			if (!model?.write_access) {
+ 				toast.error($i18n.t('You do not have permission to edit this model'));
+-				goto('/workspace/models');
++				await goto(`${base}/workspace/models`);
++				return;
+ 			}
+ 		} else {
+-			goto('/workspace/models');
++			goto(`${base}/workspace/models`);
+ 		}
+ 	});
+ 
+@@ -46,7 +49,7 @@
+ 				)
+ 			);
+ 			toast.success($i18n.t('Model updated successfully'));
+-			await goto('/workspace/models');
++			await goto(`${base}/workspace/models`);
+ 		}
+ 	};
+ </script>
+diff --git a/src/routes/(app)/workspace/prompts/[id]/+page.svelte b/src/routes/(app)/workspace/prompts/[id]/+page.svelte
+index d16d235d..8cbfb353 100644
+--- a/src/routes/(app)/workspace/prompts/[id]/+page.svelte
++++ b/src/routes/(app)/workspace/prompts/[id]/+page.svelte
+@@ -1,4 +1,5 @@
+ <script lang="ts">
++	import { base } from '$app/paths';
+ 	import { toast } from 'svelte-sonner';
+ 	import { goto } from '$app/navigation';
+ 	import { onMount, getContext } from 'svelte';
+@@ -58,10 +59,10 @@
+ 					access_grants: _prompt?.access_grants === undefined ? [] : _prompt?.access_grants
+ 				};
+ 			} else {
+-				goto('/workspace/prompts');
++				goto(`${base}/workspace/prompts`);
+ 			}
+ 		} else {
+-			goto('/workspace/prompts');
++			goto(`${base}/workspace/prompts`);
+ 		}
+ 	});
+ </script>
+diff --git a/src/routes/(app)/workspace/prompts/create/+page.svelte b/src/routes/(app)/workspace/prompts/create/+page.svelte
+index 988d0dd3..0233118a 100644
+--- a/src/routes/(app)/workspace/prompts/create/+page.svelte
++++ b/src/routes/(app)/workspace/prompts/create/+page.svelte
+@@ -1,4 +1,5 @@
+ <script lang="ts">
++	import { base } from '$app/paths';
+ 	import { toast } from 'svelte-sonner';
+ 	import { goto } from '$app/navigation';
+ 	import { onMount, tick, getContext } from 'svelte';
+@@ -26,7 +27,7 @@
+ 
+ 		if (res) {
+ 			toast.success($i18n.t('Prompt created successfully'));
+-			await goto('/workspace/prompts');
++			await goto(`${base}/workspace/prompts`);
+ 		}
+ 	};
+ 
+diff --git a/src/routes/(app)/workspace/skills/create/+page.svelte b/src/routes/(app)/workspace/skills/create/+page.svelte
+index 07955eae..ca794867 100644
+--- a/src/routes/(app)/workspace/skills/create/+page.svelte
++++ b/src/routes/(app)/workspace/skills/create/+page.svelte
+@@ -1,4 +1,5 @@
+ <script lang="ts">
++	import { base } from '$app/paths';
+ 	import { toast } from 'svelte-sonner';
+ 	import { goto } from '$app/navigation';
+ 	import { skills } from '$lib/stores';
+@@ -29,7 +30,7 @@
+ 		if (res) {
+ 			toast.success($i18n.t('Skill created successfully'));
+ 			await skills.set(await getSkills(localStorage.token));
+-			await goto('/workspace/skills');
++			await goto(`${base}/workspace/skills`);
+ 		}
+ 	};
+ 
+diff --git a/src/routes/(app)/workspace/skills/edit/+page.svelte b/src/routes/(app)/workspace/skills/edit/+page.svelte
+index 7aa95418..212f8622 100644
+--- a/src/routes/(app)/workspace/skills/edit/+page.svelte
++++ b/src/routes/(app)/workspace/skills/edit/+page.svelte
+@@ -1,4 +1,5 @@
+ <script lang="ts">
++	import { base } from '$app/paths';
+ 	import { toast } from 'svelte-sonner';
+ 	import { goto } from '$app/navigation';
+ 	import { skills } from '$lib/stores';
+@@ -56,10 +57,10 @@
+ 					access_grants: _skill?.access_grants === undefined ? [] : _skill?.access_grants
+ 				};
+ 			} else {
+-				goto('/workspace/skills');
++				goto(`${base}/workspace/skills`);
+ 			}
+ 		} else {
+-			goto('/workspace/skills');
++			goto(`${base}/workspace/skills`);
+ 		}
+ 	});
+ </script>
+diff --git a/src/routes/(app)/workspace/tools/create/+page.svelte b/src/routes/(app)/workspace/tools/create/+page.svelte
+index e0baedcd..3844d5d8 100644
+--- a/src/routes/(app)/workspace/tools/create/+page.svelte
++++ b/src/routes/(app)/workspace/tools/create/+page.svelte
+@@ -1,4 +1,5 @@
+ <script>
++	import { base } from '$app/paths';
+ 	import { goto } from '$app/navigation';
+ 	import { createNewTool, getTools } from '$lib/apis/tools';
+ 	import ToolkitEditor from '$lib/components/workspace/Tools/ToolkitEditor.svelte';
+@@ -47,7 +48,7 @@
+ 			toast.success($i18n.t('Tool created successfully'));
+ 			tools.set(await getTools(localStorage.token));
+ 
+-			await goto('/workspace/tools');
++			await goto(`${base}/workspace/tools`);
+ 		}
+ 	};
+ 
+diff --git a/src/routes/(app)/workspace/tools/edit/+page.svelte b/src/routes/(app)/workspace/tools/edit/+page.svelte
+index 14df72c1..93a9c494 100644
+--- a/src/routes/(app)/workspace/tools/edit/+page.svelte
++++ b/src/routes/(app)/workspace/tools/edit/+page.svelte
+@@ -1,4 +1,5 @@
+ <script>
++	import { base } from '$app/paths';
+ 	import { goto } from '$app/navigation';
+ 	import { page } from '$app/stores';
+ 	import { getToolById, getTools, updateToolById } from '$lib/apis/tools';
+@@ -47,7 +48,7 @@
+ 			toast.success($i18n.t('Tool updated successfully'));
+ 			tools.set(await getTools(localStorage.token));
+ 
+-			// await goto('/workspace/tools');
++			// await goto(`${base}/workspace/tools`);
+ 		}
+ 	};
+ 
+@@ -58,13 +59,13 @@
+ 		if (id) {
+ 			const res = await getToolById(localStorage.token, id).catch((error) => {
+ 				toast.error(`${error}`);
+-				goto('/workspace/tools');
++				goto(`${base}/workspace/tools`);
+ 				return null;
+ 			});
+ 
+ 			if (res && !res.write_access) {
+ 				toast.error($i18n.t('You do not have permission to edit this tool'));
+-				goto('/workspace/tools');
++				goto(`${base}/workspace/tools`);
+ 				return;
+ 			}
+ 
+diff --git a/src/routes/+layout.svelte b/src/routes/+layout.svelte
+index 9916fadf..f9d0475b 100644
+--- a/src/routes/+layout.svelte
++++ b/src/routes/+layout.svelte
+@@ -55,6 +55,7 @@
+ 	import { getSessionUser, updateUserTimezone, userSignOut } from '$lib/apis/auths';
+ 	import { getAllTags, getChatList } from '$lib/apis/chats';
+ 	import { chatCompletion } from '$lib/apis/openai';
++	import { base } from '$app/paths';
+ 	import {
+ 		addOpenAIConnection,
+ 		removeOpenAIConnection,
+@@ -116,12 +117,18 @@
+ 	const DISCONNECT_TOAST_DELAY_MS = 2000;
+ 
+ 	const setupSocket = async (enableWebsocket) => {
+-		const _socket = io(`${WEBUI_BASE_URL}` || undefined, {
++		// WEBUI_BASE_URL is the SvelteKit base ("/openwebui") under a subpath deploy,
++		// or a full dev URL. socket.io parses the first arg's path as the *namespace*,
++		// so passing the subpath here connects to namespace "/openwebui" (the server
++		// only registers "/" → CONNECT_ERROR "44/openwebui"). Pass the dev origin
++		// as-is, otherwise connect same-origin; the subpath rides only on `path` below.
++		const socketServerUrl = WEBUI_BASE_URL.startsWith('http') ? WEBUI_BASE_URL : undefined;
++		const _socket = io(socketServerUrl, {
+ 			reconnection: true,
+ 			reconnectionDelay: 1000,
+ 			reconnectionDelayMax: 5000,
+ 			randomizationFactor: 0.5,
+-			path: '/ws/socket.io',
++			path: `${base}/ws/socket.io`,
+ 			transports: enableWebsocket ? ['websocket'] : ['polling', 'websocket'],
+ 			auth: { token: localStorage.token }
+ 		});
+@@ -487,7 +494,7 @@
+ 			toast.custom(NotificationToast, {
+ 				componentProps: {
+ 					onClick: () => {
+-						goto('/calendar');
++						goto(`${base}/calendar`);
+ 					},
+ 					title: data.title,
+ 					content: timeStr
+@@ -620,7 +627,7 @@
+ 					) {
+ 						playingNotificationSound.set(true);
+ 
+-						const audio = new Audio(`/audio/notification.mp3`);
++						const audio = new Audio(`${WEBUI_BASE_URL}/audio/notification.mp3`);
+ 						audio.play().finally(() => {
+ 							// Ensure the global state is reset after the sound finishes
+ 							playingNotificationSound.set(false);
+@@ -639,7 +646,7 @@
+ 					toast.custom(NotificationToast, {
+ 						componentProps: {
+ 							onClick: () => {
+-								goto(`/c/${event.chat_id}`);
++								goto(`${base}/c/${event.chat_id}`);
+ 							},
+ 							content: content,
+ 							title: displayTitle
+@@ -747,7 +754,7 @@
+ 				toast.custom(NotificationToast, {
+ 					componentProps: {
+ 						onClick: () => {
+-							goto(`/channels/${event.channel_id}`);
++							goto(`${base}/channels/${event.channel_id}`);
+ 						},
+ 						content: data?.content,
+ 						title: `${title}`
+@@ -774,7 +781,7 @@
+ 			user.set(null);
+ 			localStorage.removeItem('token');
+ 
+-			location.href = res?.redirect_url ?? '/auth';
++			location.href = res?.redirect_url ?? `${base}/auth`;
+ 		}
+ 	};
+ 
+@@ -790,12 +797,12 @@
+ 		}
+ 		if (event.type === 'query' && (event.data?.query || event.data?.files?.length)) {
+ 			desktopEvent.set(event);
+-			await goto('/');
++			await goto(`${base}/`);
+ 			return;
+ 		}
+ 		if (event.type === 'call') {
+ 			desktopEvent.set(event);
+-			await goto('/');
++			await goto(`${base}/`);
+ 			return;
+ 		}
+ 		if (event.type === 'theme:update' && event.data?.theme) {
+@@ -1024,7 +1031,7 @@
+ 			if (error?.authRedirect) {
+ 				// Forward-auth proxy is redirecting to an external login page.
+ 				// Full-page navigation lets the browser follow the redirect natively.
+-				window.location.href = '/';
++				window.location.href = `${base}/`;
+ 				return;
+ 			}
+ 			console.error('Error loading backend config:', error);
+@@ -1089,19 +1096,19 @@
+ 					} else {
+ 						// Redirect Invalid Session User to /auth Page
+ 						localStorage.removeItem('token');
+-						await goto(`/auth?redirect=${encodedUrl}`);
++						await goto(`${base}/auth?redirect=${encodedUrl}`);
+ 					}
+ 				} else {
+ 					// Don't redirect if we're already on the auth page
+ 					// Needed because we pass in tokens from OAuth logins via URL fragments
+-					if ($page.url.pathname !== '/auth') {
+-						await goto(`/auth?redirect=${encodedUrl}`);
++					if ($page.url.pathname !== `${base}/auth`) {
++						await goto(`${base}/auth?redirect=${encodedUrl}`);
+ 					}
+ 				}
+ 			}
+ 		} else {
+ 			// Redirect to /error when Backend Not Detected
+-			await goto(`/error`);
++			await goto(`${base}/error`);
+ 		}
+ 
+ 		await tick();
+@@ -1122,7 +1129,7 @@
+ 
+ 			document.getElementById('splash-screen')?.remove();
+ 
+-			const audio = new Audio(`/audio/greeting.mp3`);
++			const audio = new Audio(`${WEBUI_BASE_URL}/audio/greeting.mp3`);
+ 			const playAudio = () => {
+ 				audio.play();
+ 				document.removeEventListener('click', playAudio);
+@@ -1170,7 +1177,7 @@
+ 		rel="search"
+ 		type="application/opensearchdescription+xml"
+ 		title={$WEBUI_NAME}
+-		href="/opensearch.xml"
++		href="{base}/opensearch.xml"
+ 		crossorigin="use-credentials"
+ 	/>
+ </svelte:head>
+diff --git a/src/routes/error/+page.svelte b/src/routes/error/+page.svelte
+index 9c665b5b..54065cc5 100644
+--- a/src/routes/error/+page.svelte
++++ b/src/routes/error/+page.svelte
+@@ -1,5 +1,6 @@
+ <script>
+ 	import { goto } from '$app/navigation';
++	import { base } from '$app/paths';
+ 	import { WEBUI_NAME, config } from '$lib/stores';
+ 	import { onMount, getContext } from 'svelte';
+ 
+@@ -9,7 +10,7 @@
+ 
+ 	onMount(async () => {
+ 		if ($config) {
+-			await goto('/');
++			await goto(`${base}/`);
+ 		}
+ 
+ 		loaded = true;
+@@ -47,7 +48,7 @@
+ 						<button
+ 							class="relative z-20 flex px-5 py-2 rounded-full bg-gray-100 hover:bg-gray-200 transition font-medium text-sm text-black"
+ 							on:click={() => {
+-								location.href = '/';
++								location.href = `${base}/`;
+ 							}}
+ 						>
+ 							{$i18n.t('Check Again')}
+diff --git a/src/routes/s/[id]/+page.svelte b/src/routes/s/[id]/+page.svelte
+index 6601c1fd..577bb05a 100644
+--- a/src/routes/s/[id]/+page.svelte
++++ b/src/routes/s/[id]/+page.svelte
+@@ -1,4 +1,5 @@
+ <script lang="ts">
++	import { base } from '$app/paths';
+ 	import { onMount, tick, getContext } from 'svelte';
+ 	import { goto } from '$app/navigation';
+ 	import { page } from '$app/stores';
+@@ -50,7 +51,7 @@
+ 				await tick();
+ 				loaded = true;
+ 			} else {
+-				await goto('/');
++				await goto(`${base}/`);
+ 			}
+ 		})();
+ 	}
+@@ -87,7 +88,7 @@
+ 		);
+ 		await chatId.set($page.params.id);
+ 		chat = await getChatByShareId(localStorage.token, $chatId).catch(async (error) => {
+-			await goto('/');
++			await goto(`${base}/`);
+ 			return null;
+ 		});
+ 
+@@ -136,7 +137,7 @@
+ 		});
+ 
+ 		if (res) {
+-			goto(`/c/${res.id}`);
++			goto(`${base}/c/${res.id}`);
+ 		}
+ 	};
+ </script>
+diff --git a/src/routes/watch/+page.svelte b/src/routes/watch/+page.svelte
+index 78eab5be..b727a8c1 100644
+--- a/src/routes/watch/+page.svelte
++++ b/src/routes/watch/+page.svelte
+@@ -1,4 +1,5 @@
+ <script>
++	import { base } from '$app/paths';
+ 	import { onMount } from 'svelte';
+ 	import { goto } from '$app/navigation';
+ 
+@@ -13,10 +14,10 @@
+ 
+ 			// Redirect to root with 'youtube' parameter
+ 
+-			goto(`/?youtube=${encodeURIComponent(videoId)}`);
++			goto(`${base}/?youtube=${encodeURIComponent(videoId)}`);
+ 		} else {
+ 			// Redirect to root if 'v' parameter doesn't exist
+-			goto('/');
++			goto(`${base}/`);
+ 		}
+ 	});
+ </script>
+diff --git a/svelte.config.js b/svelte.config.js
+index 82e05951..9bb7f754 100644
+--- a/svelte.config.js
++++ b/svelte.config.js
+@@ -3,6 +3,11 @@ import * as child_process from 'node:child_process';
+ import { vitePreprocess } from '@sveltejs/vite-plugin-svelte';
+ import fs from 'node:fs';
+ 
++// Optional URL subpath prefix for reverse-proxy deployments (e.g. "/openwebui").
++// Must start with a leading slash and must not end with a trailing slash.
++// Leave empty to serve at the root path.
++const WEBUI_BASE_PATH = process.env.WEBUI_SUBPATH || '';
++
+ /** @type {import('@sveltejs/kit').Config} */
+ const config = {
+ 	// Consult https://kit.svelte.dev/docs/integrations#preprocessors
+@@ -17,6 +22,16 @@ const config = {
+ 			assets: 'build',
+ 			fallback: 'index.html'
+ 		}),
++		paths: {
++			base: WEBUI_BASE_PATH,
++			// Bake absolute, base-prefixed asset URLs instead of runtime-relative ones.
++			// With the default (relative: true) SvelteKit derives `base` from the
++			// document URL and emits relative `%sveltekit.assets%` paths, so static
++			// refs in app.html (e.g. /static/favicon.png) and nested-route asset loads
++			// drop the subpath. A fixed reverse-proxy subpath is always served from
++			// `base`, so absolute paths are correct and route-independent.
++			relative: false
++		},
+ 		// poll for new version name every 60 seconds (to trigger reload mechanic in +layout.svelte)
+ 		version: {
+ 			name: (() => {
+diff --git a/vite.config.ts b/vite.config.ts
+index df802c08..58ae7d7a 100644
+--- a/vite.config.ts
++++ b/vite.config.ts
+@@ -3,6 +3,11 @@ import { defineConfig } from 'vite';
+ 
+ import { viteStaticCopy } from 'vite-plugin-static-copy';
+ 
++// Optional URL subpath prefix for reverse-proxy deployments (e.g. "/openwebui").
++// Must start with a leading slash and must not end with a trailing slash.
++// Leave empty to serve at the root path.
++const WEBUI_BASE_PATH = process.env.WEBUI_SUBPATH || '';
++
+ export default defineConfig({
+ 	plugins: [
+ 		sveltekit(),
+@@ -20,6 +25,7 @@ export default defineConfig({
+ 		APP_VERSION: JSON.stringify(process.env.npm_package_version),
+ 		APP_BUILD_HASH: JSON.stringify(process.env.APP_BUILD_HASH || 'dev-build')
+ 	},
++	base: WEBUI_BASE_PATH || '/',
+ 	build: {
+ 		sourcemap: true
+ 	},
