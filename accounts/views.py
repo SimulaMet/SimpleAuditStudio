@@ -284,11 +284,16 @@ def add_member(request, project_id):
     except User.DoesNotExist:
         raise StableAPIError(detail="User not found.", code="user_not_found", http_status=404)
 
-    membership, _created = ProjectMembership.objects.update_or_create(
+    # get_or_create (not update_or_create) so ``created_by`` records the
+    # original grantor even when the role is later changed.
+    membership, created = ProjectMembership.objects.get_or_create(
         project=project,
         user=target,
-        defaults={"role": role},
+        defaults={"role": role, "created_by": request.user},
     )
+    if not created and membership.role != role:
+        membership.role = role
+        membership.save(update_fields=["role"])
     return Response(ProjectMembershipSerializer(membership).data, status=status.HTTP_201_CREATED)
 
 
