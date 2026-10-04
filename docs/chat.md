@@ -329,6 +329,29 @@ A connection's registered models become that provider's `model_ids` in Open
 WebUI, so chat offers what Studio registered. A connection with no registered
 models is left unrestricted.
 
+### Agents, knowledge bases and tools
+
+Studio's `/agents/` resources stay thin references: the durable config lives
+in Studio, and the executable copy lives in Open WebUI. Every create/update
+pushes to Open WebUI (best-effort, after the Studio row is saved), and every
+delete propagates:
+
+- **Agents** become *workspace model* entries (`studio.agent-<pk>`) that
+  inherit the base connection model and attach the agent's knowledge bases
+  via the model's `meta.knowledge`. Chat "Test in Chat" pins that entry.
+- **Knowledge bases** and **tools** are created/renamed in Open WebUI's own
+  knowledge base and toolkit stores; the local row keeps the returned id in
+  `external_id` for listing. Tool *source code* is never stored in Studio —
+  Open WebUI owns it, and a metadata-only Studio edit re-pushes the untouched
+  remote source.
+
+The sync is best-effort: a down Open WebUI is logged, not fatal, and the next
+edit retries. The agent
+detail page and `GET /api/agents/<id>/` (`openwebui_live`) show the live
+Open WebUI entry, falling back to the cached Studio row when it is
+unreachable. When chat is disabled everything is a no-op and Studio works
+standalone.
+
 ## Removing it
 
 Set `SIMPLEAUDIT_CHAT=disabled`, or pass `--disable-chat` to the CLI.

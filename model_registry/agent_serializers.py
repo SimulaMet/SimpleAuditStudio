@@ -33,15 +33,21 @@ class KnowledgeBaseSerializer(serializers.ModelSerializer):
 
 
 class ToolSerializer(serializers.ModelSerializer):
+    # Open WebUI owns the tool's Python source; Studio never stores it.
+    # Supplied on create (and optionally on edit) and pushed straight through.
+    content = serializers.CharField(
+        required=False, allow_blank=True, write_only=True, default="",
+    )
+
     class Meta:
         model = Tool
         fields = [
             "id", "name", "type", "external_id", "description",
             "input_schema", "output_schema",
             "read_only", "has_side_effects", "external_network",
-            "handles_sensitive_data", "enabled",
+            "handles_sensitive_data", "enabled", "content",
         ]
-        read_only_fields = ["id"]
+        read_only_fields = ["id", "external_id"]
 
 
 class AgentSerializer(serializers.ModelSerializer):
@@ -75,9 +81,9 @@ class AgentSerializer(serializers.ModelSerializer):
         fields = [
             "id", "name", "description", "base_model", "system_prompt",
             "knowledge_bases", "tools", "retrieval_profile",
-            "capabilities", "metadata", "enabled",
+            "capabilities", "metadata", "enabled", "external_id",
         ]
-        read_only_fields = ["id"]
+        read_only_fields = ["id", "external_id"]
 
     def validate(self, attrs):
         project = self.context.get("project")
@@ -111,11 +117,12 @@ class AgentDetailSerializer(AgentSerializer):
     retrieval_profile_name = serializers.CharField(source="retrieval_profile.name", read_only=True)
     knowledge_base_names = serializers.SerializerMethodField()
     tool_names = serializers.SerializerMethodField()
+    openwebui_live = serializers.SerializerMethodField()
 
     class Meta(AgentSerializer.Meta):
         fields = AgentSerializer.Meta.fields + [
             "base_model_name", "connection_name", "retrieval_profile_name",
-            "knowledge_base_names", "tool_names",
+            "knowledge_base_names", "tool_names", "openwebui_live",
         ]
 
     def get_knowledge_base_names(self, obj) -> list[str]:
@@ -123,3 +130,18 @@ class AgentDetailSerializer(AgentSerializer):
 
     def get_tool_names(self, obj) -> list[str]:
         return list(obj.tools.values_list("name", flat=True))
+
+    def get_openwebui_live(self, obj):
+        """Live Open WebUI model entry, fetched on demand (None if unsynced/down).
+
+        Only populated when the context sets ``fetch_live`` (the detail
+        endpoint) — the list stays a pure cache read.
+        """
+        if not self.context.get("fetch_live"):
+            return None
+        from model_registry.services import agent_live_openwebui
+        request = self.context.get("request")
+        user = getattr(request, "user", None)
+        if user is None or not user.is_authenticated:
+            return None
+        return agent_live_openwebui(obj, user)

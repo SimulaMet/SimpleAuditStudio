@@ -221,6 +221,91 @@ class ChatAPI:
                 f"POST /api/v1/files/ returned non-JSON content ({response.status_code})."
             ) from exc
 
+    # --- agents as Open WebUI "workspace models" ---------------------------
+    def create_workspace_model(
+        self, model_id: str, name: str, *, base_model_id: str | None = None,
+        description: str = "", knowledge: list[dict[str, Any]] | None = None,
+        params: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Create a Studio agent as an Open WebUI workspace model entry.
+
+        The entry inherits ``base_model_id`` (the pushed connection's model)
+        and attaches knowledge bases via ``meta.knowledge`` (file-shaped
+        entries the chat runtime reads at completion time). Returns the
+        created row. Raises ``ChatAPIError`` when the id is taken.
+        """
+        meta: dict[str, Any] = {"description": description or None}
+        if knowledge is not None:
+            meta["knowledge"] = knowledge
+        return self.request(
+            "POST", "/api/v1/models/create",
+            json={
+                "id": model_id,
+                "name": name,
+                "base_model_id": base_model_id,
+                "meta": meta,
+                "params": params or {},
+            },
+        )
+
+    def update_workspace_model(
+        self, model_id: str, name: str, *, base_model_id: str | None = None,
+        description: str = "", knowledge: list[dict[str, Any]] | None = None,
+        params: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Update an existing workspace model entry (same shape as create)."""
+        meta: dict[str, Any] = {"description": description or None}
+        if knowledge is not None:
+            meta["knowledge"] = knowledge
+        return self.request(
+            "POST", "/api/v1/models/model/update",
+            json={
+                "id": model_id,
+                "name": name,
+                "base_model_id": base_model_id,
+                "meta": meta,
+                "params": params or {},
+            },
+        )
+
+    def get_workspace_model(self, model_id: str) -> dict[str, Any]:
+        """One workspace model entry. The id may contain '/', so it goes in the query."""
+        return self.request("GET", f"/api/v1/models/model?id={model_id}")
+
+    def delete_workspace_model(self, model_id: str) -> bool:
+        return self.request("POST", "/api/v1/models/model/delete", json={"id": model_id})
+
+    # --- KB / tool writes (sync on create/edit) ----------------------------
+    def update_knowledge_base(self, knowledge_id: str, name: str, description: str) -> dict[str, Any]:
+        """Rename / re-describe an existing Open WebUI knowledge base."""
+        return self.request(
+            "POST", f"/api/v1/knowledge/{knowledge_id}/update",
+            json={"name": name, "description": description},
+        )
+
+    def delete_knowledge_base(self, knowledge_id: str) -> bool:
+        return self.request("DELETE", f"/api/v1/knowledge/{knowledge_id}/delete")
+
+    def get_tool(self, tool_id: str) -> dict[str, Any]:
+        """One toolkit tool, with content and specs."""
+        return self.request("GET", f"/api/v1/tools/id/{tool_id}")
+
+    def update_tool(self, tool_id: str, name: str, content: str, description: str = "") -> dict[str, Any]:
+        """Replace a toolkit tool's source / metadata. ``content`` must stay
+        a valid toolkit module (same format as ``create_tool``)."""
+        return self.request(
+            "POST", f"/api/v1/tools/id/{tool_id}/update",
+            json={
+                "id": tool_id,
+                "name": name,
+                "content": content,
+                "meta": {"description": description, "manifest": {}},
+            },
+        )
+
+    def delete_tool(self, tool_id: str) -> bool:
+        return self.request("DELETE", f"/api/v1/tools/id/{tool_id}/delete")
+
     def list_models(self) -> list[str]:
         """Every model id Open WebUI currently registers, as plain strings.
 

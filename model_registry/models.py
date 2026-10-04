@@ -361,6 +361,11 @@ class Agent(models.Model):
     description = models.TextField(blank=True, default="")
     base_model = models.ForeignKey(RegisteredModel, on_delete=models.PROTECT, related_name="agents")
     system_prompt = models.TextField(blank=True, default="")
+    # The OpenWebUI workspace-model id this agent is synced to (deterministic
+    # ``studio.agent-<pk>``); empty until the first successful sync. The live
+    # configuration lives in OpenWebUI; this row is the durable reference the
+    # audit snapshot and the chat layer use.
+    external_id = models.CharField(max_length=255, blank=True, default="")
     knowledge_bases = models.ManyToManyField(KnowledgeBase, blank=True, related_name="agents")
     tools = models.ManyToManyField(Tool, blank=True, related_name="agents")
     retrieval_profile = models.ForeignKey(
@@ -394,6 +399,7 @@ class Agent(models.Model):
         return {
             "agent_id": self.id,
             "name": self.name,
+            "openwebui_model_id": self.external_id,
             "base_model": {
                 "id": self.base_model.id,
                 "display_name": self.base_model.display_name,

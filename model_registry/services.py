@@ -1,9 +1,12 @@
 """Services for the model registry: talking to a connection's server."""
 from __future__ import annotations
 
+import logging
 import os
 
 import httpx
+
+logger = logging.getLogger(__name__)
 
 # Quick-start presets for the connection form: (key, label, provider, base URL, key hint).
 PROVIDER_PRESETS = [
@@ -207,3 +210,142 @@ def connection_share_label(conn) -> str:
     if conn.visibility == ModelConnection.Visibility.ADMINS:
         return "Shared with my admin workspaces"
     return "This workspace only"
+
+
+# --- Open WebUI sync orchestration ------------------------------------------
+#
+# Open WebUI is the source of truth for agent/KB/tool *content and behavior*;
+# Studio keeps the durable reference rows (identity + audit metadata) and
+# pushes on create/edit. Every function below is a no-op returning
+# ``"skipped"`` when chat is disabled, and never raises — a flaky Open WebUI
+# must not break a Studio request.
+
+
+def _chat_sync_enabled() -> bool:
+    from chat import config as chat_config
+
+    return bool(chat_config.ENABLED)
+
+
+def _adapter_for(user):
+    from chat.api import ChatAPI
+    from integrations.openwebui.client import OpenWebUIAdapter
+
+    return OpenWebUIAdapter(ChatAPI.as_user(user))
+
+
+def sync_agent_to_openwebui(agent, user) -> str:
+    """Push an agent to Open WebUI (create-or-update its model entry).
+
+    Returns ``"created"``, ``"updated"`` or ``"skipped"`` (chat disabled or
+    sync failed). Failures are logged and left for the next edit to retry.
+    """
+    if not _chat_sync_enabled():
+        return "skipped"
+    try:
+        adapter = _adapter_for(user)
+        result = adapter.push_agent(agent)
+        return result["status"]
+    except Exception:
+        logger.exception("Agent '%s' Open WebUI sync failed", agent.name)
+        return "skipped"
+
+
+def agent_live_openwebui(agent, user) -> dict | None:
+    """The live Open WebUI model entry for an agent, for detail-page display.
+
+    ``None`` means "no live view" (chat disabled, agent never synced, entry
+    deleted in Open WebUI, or Open WebUI down) — callers fall back to the
+    local cached row. Never raises.
+    """
+    if not _chat_sync_enabled() or not agent.external_id:
+        return None
+    try:
+        return _adapter_for(user).agent_remote(agent)
+    except Exception:
+        logger.exception("Agent '%s' Open WebUI live fetch failed", agent.name)
+        return None
+
+
+def delete_agent_from_openwebui(agent) -> None:
+    """Delete an agent's Open WebUI model entry (best-effort, never raises)."""
+    if not _chat_sync_enabled() or not agent.external_id:
+        return
+    try:
+        _adapter_for(_any_user()).delete_agent(agent)
+    except Exception:
+        logger.exception("Agent '%s' Open WebUI delete failed", agent.name)
+
+
+def sync_knowledge_base_to_openwebui(kb, user) -> str:
+    """Create or update a knowledge base in Open WebUI.
+
+    New KBs (no ``external_id``) get a fresh entry; existing ones are renamed /
+    re-described in place. Returns the new status or ``"skipped"``.
+    """
+    if not _chat_sync_enabled():
+        return "skipped"
+    try:
+        adapter = _adapter_for(user)
+        if kb.external_id:
+            adapter._api.update_knowledge_base(kb.external_id, kb.name, kb.description)
+            return "updated"
+        row = adapter._api.create_knowledge_base(kb.name, kb.description)
+        kb.external_id = row.get("id", "")
+        kb.save(update_fields=["external_id", "updated_at"])
+        return "created"
+    except Exception:
+        logger.exception("Knowledge base '%s' Open WebUI sync failed", kb.name)
+        return "skipped"
+
+
+def delete_knowledge_base_from_openwebui(kb) -> None:
+    if not _chat_sync_enabled() or not kb.external_id:
+        return
+    try:
+        _adapter_for(_any_user())._api.delete_knowledge_base(kb.external_id)
+    except Exception:
+        logger.exception("Knowledge base '%s' Open WebUI delete failed", kb.name)
+
+
+def sync_tool_to_openwebui(tool, user, *, content: str) -> str:
+    """Create or update a tool in Open WebUI from toolkit-module ``content``.
+
+    Studio does not persist tool source (Open WebUI owns it), so the caller
+    supplies the content — e.g. the uploaded file body on create, or the
+    untouched remote content on a metadata-only edit.
+    """
+    if not _chat_sync_enabled():
+        return "skipped"
+    try:
+        adapter = _adapter_for(user)
+        tool_id = f"studio.tool-{tool.pk}"
+        if tool.external_id:
+            adapter._api.update_tool(tool.external_id, tool.name, content, tool.description)
+            return "updated"
+        row = adapter._api.create_tool(tool_id, tool.name, content, tool.description)
+        tool.external_id = row.get("id", "") or tool_id
+        tool.save(update_fields=["external_id", "updated_at"])
+        return "created"
+    except Exception:
+        logger.exception("Tool '%s' Open WebUI sync failed", tool.name)
+        return "skipped"
+
+
+def delete_tool_from_openwebui(tool) -> None:
+    if not _chat_sync_enabled() or not tool.external_id:
+        return
+    try:
+        _adapter_for(_any_user())._api.delete_tool(tool.external_id)
+    except Exception:
+        logger.exception("Tool '%s' Open WebUI delete failed", tool.name)
+
+
+def _any_user():
+    """An authenticated user for a deletion-time API call (admin is cleanest)."""
+    from django.contrib.auth import get_user_model
+
+    return (
+        get_user_model().objects.filter(is_superuser=True).order_by("id").first()
+        or get_user_model().objects.order_by("id").first()
+    )
