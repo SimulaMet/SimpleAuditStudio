@@ -188,7 +188,7 @@ override them when you deliberately need to.
 |---|---|
 | `setup_local` | migrate + bootstrap + seed (local dev, one-shot). |
 | `bootstrap_platform` | Create the admin user and default workspace (idempotent). |
-| `seed_platform` | Import scenario packs and model connections, plus demo runs (`seed_demo_audits`). |
+| `seed_platform` | Import scenario packs and model connections, plus demo runs (`seed_demo_audits`) and the demo "Support Refund Assistant" agent (skip with `--skip-demo-agent`). |
 | `dev` | Local dev stack (embedded, hot-reload, chat, one-time sign-in). `--disable-chat`, `--no-worker`, `--no-reload`, `--no-browser`. |
 | `dev_server` | Lower-level version of the same stack. Use `dev` instead. |
 | `mode` | Print the resolved run mode and its settings. |

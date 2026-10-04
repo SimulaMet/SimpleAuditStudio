@@ -13,26 +13,43 @@
  * (the targets are identified by text content, and :text-is() is not a real
  * CSS selector), so the masking lives here.
  *
- * The whole script self-gates on the PAGE URL carrying embed=admin. Studio's
- * admin workspace iframes always load with ?embed=admin; plain /chat/ and the
- * top-level /chat/workspace pages do not, and must keep the full menu (upload
- * / sync directory, Access List, branding). Reading from disk per request,
- * edits apply on the next page load without a server restart (the proxy and
- * views are not StatReloader-managed). Keep this file browser-safe and
- * dependency-free: it runs in the Open WebUI origin, where Studio owns no
- * other assets.
+ * The script self-gates on the PAGE URL (Caddy mode fetches loader.js with NO
+ * query, so the gate reads the page's own URL, not the script's):
+ *  - ?embed=admin — Studio's admin workspace iframes (Knowledge, Tools):
+ *    full mask (Access List row, directory rows, branding, title pin).
+ *  - top-level /chat/workspace/knowledge (no embed flag) — the page Studio's
+ *    "Folders, directory sync & bulk upload" button opens: the Access List /
+ *    Add Access row + branding + title pin are masked, but the "Upload
+ *    directory" / "Sync directory" rows STAY — that page is the canonical
+ *    place for folder bulk upload, so directory masking stays embed-only.
+ *  - plain /chat/ and other pages: unmasked.
+ * Reading from disk per request, edits apply on the next page load without a
+ * server restart (the proxy and views are not StatReloader-managed). Keep
+ * this file browser-safe and dependency-free: it runs in the Open WebUI
+ * origin, where Studio owns no other assets.
  */
 (function () {
-  // Caddy mode fetches loader.js with NO query, so gate on the page's own
-  // query string (the script runs in the page context, `defer`). Only
-  // Studio's admin workspace embeds carry embed=admin.
+  // Gate on the page URL: embed=admin for the admin iframes, plus the
+  // top-level knowledge workspace pages (path-based, no query).
+  var isAdminEmbed = false;
+  var isTopLevelKnowledge = false;
   try {
-    if (new URLSearchParams(window.location.search).get("embed") !== "admin") {
+    var params = new URLSearchParams(window.location.search);
+    isAdminEmbed = params.get("embed") === "admin";
+    isTopLevelKnowledge =
+      !isAdminEmbed &&
+      window.location.pathname.indexOf("/workspace/knowledge") !== -1;
+    if (!isAdminEmbed && !isTopLevelKnowledge) {
       return;
     }
   } catch (e) {
     return;
   }
+  // NOTE: the subpath fork's KnowledgeBase "Back" button navigates to the
+  // root-relative '/workspace/knowledge' (a missed ${base} prefix in the
+  // fork build). The front door (Caddy) repairs it at the HTTP layer with a
+  // handle /workspace/* -> 308 /chat{uri} (see chat/proxy.py), so nothing
+  // client-side to do here.
   // No hover tooltip: the browser shows the frame's document title when the
   // pointer sits on the iframe, and Open WebUI names its pages "Open WebUI
   // <section>". Pin the title empty so nothing shows. The <title> element
@@ -74,6 +91,28 @@
       }
     }
   }
+  function maskAccessControl() {
+    // OWUI per-collection Access Control (the "Access" button in the KB
+    // detail header -> "Access Control" modal: Private/Public + Add Access).
+    // Studio manages who can use a KB, so OWUI's access rows are dead
+    // weight in every Studio surface: the button goes in the embed and on
+    // the top-level workspace pages, and the modal is hidden if it is
+    // opened (the Private/Public state itself stays).
+    for (const b of document.querySelectorAll('main#main-content button')) {
+      if ((b.textContent || '').trim() === 'Access' &&
+          b.style.display !== 'none') {
+        b.style.display = 'none';
+      }
+    }
+    const modal = document.querySelector('div.modal');
+    if (modal && (modal.textContent || '').includes('Access Control')) {
+      var body = modal.querySelector('.modal-body') ||
+        modal.querySelector('form') || modal;
+      if (body !== modal && body.style.display !== 'none') {
+        body.style.display = 'none';
+      }
+    }
+  }
   function maskBranding() {
     // The "Made by Open WebUI Community" credit + "Discover a tool" promo
     // card shown in empty workspace states: pure branding, no function here.
@@ -103,12 +142,13 @@
     }
   }
   function maskUploadMenu() {
-    // "Upload directory" and "Sync directory" live in the full workspace,
-    // which Studio opens top-level at /chat/workspace/knowledge (same
-    // origin). The in-frame "+" menu keeps its file-level entries (Upload
-    // files, New directory, Add webpage, Add text content); the two
-    // directory rows are hidden here so the embed stays the quick path and
-    // folder bulk-upload has one canonical place.
+    // Embed-only: the in-frame "+" menu keeps its file-level entries (Upload
+    // files, New directory, Add webpage, Add text content) while the "Upload
+    // directory" / "Sync directory" rows are hidden, so folder bulk upload
+    // has one canonical place — the top-level workspace, which keeps them.
+    if (!isAdminEmbed) {
+      return;
+    }
     var rows = document.querySelectorAll('button');
     for (var i = 0; i < rows.length; i++) {
       var t = rows[i].textContent.trim();
@@ -124,6 +164,7 @@
     for (var k = 0; k < modals.length; k++) {
       maskModal(modals[k]);
     }
+    maskAccessControl();
     maskBranding();
     maskUploadMenu();
   }

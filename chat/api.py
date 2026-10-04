@@ -156,6 +156,71 @@ class ChatAPI:
         ]
         return summary
 
+    # --- push: resources -> Open WebUI (one-time seeding / admin) ----------
+    def create_knowledge_base(self, name: str, description: str = "") -> dict[str, Any]:
+        """Create a knowledge base in Open WebUI. Returns the created row (has ``id``)."""
+        return self.request(
+            "POST", "/api/v1/knowledge/create",
+            json={"name": name, "description": description},
+        )
+
+    def add_file_to_knowledge_base(self, knowledge_id: str, file_id: str) -> Any:
+        """Link an already-uploaded file (see ``upload_file``) to a knowledge base."""
+        return self.request(
+            "POST", f"/api/v1/knowledge/{knowledge_id}/file/add",
+            json={"file_id": file_id},
+        )
+
+    def create_tool(self, tool_id: str, name: str, content: str, description: str = "") -> dict[str, Any]:
+        """Register a Python tool in Open WebUI's toolkit (the Tools page).
+
+        ``content`` must be a complete toolkit module: a module docstring with
+        ``name:``/``description:``/``category:`` frontmatter and a ``Tools``
+        class whose public methods are the tools (type hints + docstrings).
+        Open WebUI executes the code server-side and introspects the class to
+        build the spec, so invalid content is rejected with a 400.
+        """
+        return self.request(
+            "POST", "/api/v1/tools/create",
+            json={
+                "id": tool_id,
+                "name": name,
+                "content": content,
+                "meta": {"description": description, "manifest": {}},
+            },
+        )
+
+    def tools(self) -> list[dict[str, Any]]:
+        """Every tool registered in Open WebUI's toolkit, as plain dicts."""
+        payload = self.request("GET", "/api/v1/tools/")
+        return _as_list(payload)
+
+    def upload_file(self, filename: str, content: bytes, content_type: str = "text/markdown") -> dict[str, Any]:
+        """Upload a raw file to Open WebUI's file store. Returns the file row (has ``id``).
+
+        Uses multipart/form-data, which the JSON-only ``request`` helper cannot do.
+        """
+        if self._token is None:
+            self.sign_in()
+        url = f"{self.base_url}/api/v1/files/"
+        files = {"file": (filename, content, content_type)}
+        try:
+            response = httpx.post(
+                url, files=files,
+                headers={"Authorization": f"Bearer {self._token}"},
+                timeout=_TIMEOUT,
+            )
+        except httpx.HTTPError as exc:
+            raise ChatAPIError(f"Could not reach Open WebUI at {url}: {exc}") from exc
+        if response.status_code >= 400:
+            raise ChatAPIError(f"POST /api/v1/files/ failed ({response.status_code}): {response.text[:300]}")
+        try:
+            return response.json()
+        except (jsonlib.JSONDecodeError, UnicodeDecodeError) as exc:
+            raise ChatAPIError(
+                f"POST /api/v1/files/ returned non-JSON content ({response.status_code})."
+            ) from exc
+
     def list_models(self) -> list[str]:
         """Every model id Open WebUI currently registers, as plain strings.
 

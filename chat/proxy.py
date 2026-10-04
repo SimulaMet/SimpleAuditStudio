@@ -195,6 +195,19 @@ class _Handler(BaseHTTPRequestHandler):
             self._serve_embed_css(admin=_is_admin(self.headers.get("Cookie", "")))
             return
 
+        # The subpath fork's KnowledgeBase "Back" button hard-navigates to
+        # the root-relative /workspace/knowledge (a missed ${base} prefix in
+        # the fork build). 308 it onto the subpath so the browser re-requests
+        # the in-base URL (the SPA's client router reload-loops on an
+        # out-of-base one) and the chat branch below answers it.
+        if self.command == "GET" and path.startswith("/workspace/"):
+            self.send_response(308)
+            self.send_header("Location", subpath + self.path)
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+
         if path != subpath and not path.startswith(subpath + "/"):
             # Not chat: everything else is Studio's own site. Forward it as-is
             # to the internal web server — its middleware does the login
@@ -691,6 +704,13 @@ def _caddyfile(port: int, internal_port: int | None = None) -> str:
         "\t\t\trewrite /chat/authz",
         "\t\t\theader_up X-Forwarded-Method {method}",
         "\t\t\theader_up X-Forwarded-Uri {uri}",
+        # The authz call is a rewritten GET, so the page's ?embed=admin
+        # query never reaches Studio (rewrite /chat/authz drops the query
+        # context). Pass the embed flag as a header instead — authz stamps
+        # the session admin from it, which is what makes /chat/css-mask
+        # serve the admin skin (tab-bar mask) and /chat/loader-mask the
+        # directory-row mask. Empty unless this page carries it.
+        "\t\t\theader_up X-Studio-Embed {uri.query.embed}",
         "\t\t\t@good status 2xx",
         "\t\t\thandle_response @good {",
         "\t\t\t\trequest_header X-Studio-Email {rp.header.X-Studio-Email}",
@@ -706,6 +726,25 @@ def _caddyfile(port: int, internal_port: int | None = None) -> str:
         "\t\t\t# The iframe must be allowed to render it (OWUI sets it).",
         "\t\t\theader_down -X-Frame-Options",
         "\t\t}",
+        "\t}",
+        "",
+        # The subpath fork's KnowledgeBase "Back" button navigates to the
+        # root-relative /workspace/knowledge (a missed ${base} prefix in the
+        # fork build) — a hard GET that would 404 on Studio. Repair it here
+        # at the front door: 308 the browser onto the subpath, which
+        # re-enters the /chat/* handle below (forward-auth + OWUI) and lands
+        # on the collection list. A 308 (not an internal rewrite) because the
+        # SPA is built with base=/chat and its client router reload-loops on
+        # an out-of-base URL — the bar must show /chat/....
+        # The redir target MUST lead with a placeholder: Caddy's caddyfile
+        # parser misreads a leading '/' as a matcher (the status word then
+        # becomes the Location, and adapt still reports success). So the
+        # subpath is spelled {env.WEBUI_SUBPATH}{subpath} — the env
+        # placeholder expands empty because _start_caddy spawns Caddy with
+        # WEBUI_SUBPATH="". {http.request.uri} preserves the query string.
+        # Dead code once the fork is rebuilt with the ${base} prefix.
+        "\thandle /workspace/* {",
+        f"\t\tredir {{env.WEBUI_SUBPATH}}{chat.SUBPATH}{{http.request.uri}} 308",
         "\t}",
         "",
         "\t# Everything else -> Studio (Django). The subpath fork never emits",
@@ -796,9 +835,16 @@ def _start_caddy(port: int, internal_port: int) -> subprocess.Popen | None:
     _caddy_log_file = log
     log.write(f"\n--- caddy start (studio :{internal_port}) ---\n")
     log.flush()
+    # The Caddyfile's workspace back-nav repair spells its redirect target as
+    # {env.WEBUI_SUBPATH}{subpath} (a leading placeholder — see _caddyfile).
+    # The subpath itself comes from chat.SUBPATH, so the env placeholder must
+    # expand to nothing: spawn Caddy with WEBUI_SUBPATH cleared so a stray
+    # value in our environment can't prepend a second path segment.
+    caddy_env = {**os.environ, "WEBUI_SUBPATH": ""}
     process = subprocess.Popen(
         [binary, "run", "--config", str(config), "--adapter", "caddyfile"],
         stdout=log, stderr=subprocess.STDOUT, start_new_session=True,
+        env=caddy_env,
     )
     if not _caddy_ready(port):
         log.close()

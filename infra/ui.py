@@ -1868,7 +1868,8 @@ class ConnectionsView(ProjectMixin, TemplateView):
             label = post.get("model_display_name", "").strip() if single else ""
             desc = post.get("model_description", "").strip()[:DESCRIPTION_MAX] if single else ""
             existing = set(conn.models.values_list("model_id", flat=True))
-            new = [RegisteredModel(connection=conn, project=p, model_id=m, display_name=label or m, description=desc, enabled=True)
+            new = [RegisteredModel(connection=conn, project=p, model_id=m, display_name=label or m, description=desc,
+                                   enabled=True, created_by=request.user)
                    for m in dict.fromkeys(ids) if m not in existing]
             RegisteredModel.objects.bulk_create(new)
             skipped = len(set(ids)) - len(new)
@@ -2761,14 +2762,19 @@ class AgentResourcesView(ProjectMixin, TemplateView):
                 f"{section_url}"
                 f"?embed=admin&__studio_admin=1&t={int(time.time() * 1000)}{extra}"
             )
-            # "Upload directory" / "Sync directory" in the Knowledge modal
-            # use the File System Access API (showDirectoryPicker). The
-            # embed is same-origin (Caddy serves /chat/ from Studio's
-            # origin, so a picker is permitted even inside the frame) and
-            # was verified E2E in a real browser — so no top-level
-            # escape-hatch tab is needed. The plain /chat/workspace/
-            # knowledge page remains available directly for the same work
-            # outside the frame.
+            # The knowledge page also offers a button that opens the full
+            # workspace in a new tab. It points at the plain top-level
+            # section URL (no ?embed=admin), so the new tab loads the
+            # un-masked workspace where the File System Access API
+            # directory picker is definitely permitted and the user gets
+            # the full folder / directory-sync / bulk-upload experience.
+            # Knowledge only: Tools has no folder-upload flow.
+            if section == "knowledge":
+                ctx["directory_url"] = section_url
+                ctx["directory_url_enabled"] = True
+            else:
+                ctx["directory_url"] = None
+                ctx["directory_url_enabled"] = False
             ctx["chat_enabled"] = True
         else:
             ctx["iframe_src"] = None
@@ -2816,22 +2822,28 @@ def _sync_openwebui_resources(project, user):
 
     tool_count = 0
     try:
-        payload = api.request("GET", "/api/v1/functions/")
-        items = payload if isinstance(payload, list) else (payload.get("items") or payload.get("functions") or [])
+        # Tools (the /agents/tools/ page) are Open WebUI toolkit entries,
+        # served by /api/v1/tools — /api/v1/functions is for pipes/filters.
+        items = api.tools()
         for item in items:
             if not isinstance(item, dict):
                 continue
             name = item.get("name", "")
             if not name:
                 continue
+            meta = item.get("meta") if isinstance(item.get("meta"), dict) else {}
+            manifest = meta.get("manifest") if isinstance(meta.get("manifest"), dict) else {}
             external_id = item.get("id", "")
             Tool.objects.update_or_create(
                 project=project,
                 name=name,
                 defaults={
                     "external_id": external_id,
-                    "description": item.get("description") or "",
-                    "type": "custom" if item.get("kind") == "function" else "builtin",
+                    # List items carry no top-level description; the toolkit
+                    # description lives in the frontmatter manifest.
+                    "description": manifest.get("description") or meta.get("description") or "",
+                    # Toolkit tools are custom Python; builtins have no row.
+                    "type": "custom",
                 },
             )
             tool_count += 1
