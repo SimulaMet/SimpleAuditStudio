@@ -94,7 +94,12 @@ Method:
      tags + pinned `v*` tags). To tidy without building:
      `gh workflow run docker.yaml -R sushantgautam/open-webui -r main -f prune_only=true`.
      Note: untagged "versions" in the GitHub packages UI are the per-arch
-     leaf manifests of the multi-arch indexes — expected, not stale.
+     leaf manifests of the multi-arch indexes.
+     **NEVER delete untagged package versions** (via API or UI): on ghcr they
+     are live constituents of the multi-arch indexes, and deleting them
+     corrupts the indexes (observed 2026-10-04: 5 subpath indexes went 404
+     after such a delete; recovered by rebuilding + re-aliasing). The prune
+     job already handles this correctly.
    - Tag naming: the consumer tag family is `v<ver>-subpath[-variant]`
      (aliased from the build run's merge output via imagetools).
    - the subpath is BAKED at build time (svelte base + WEBUI_SUBPATH), so
