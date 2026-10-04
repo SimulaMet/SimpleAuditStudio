@@ -10,7 +10,14 @@ from django.test import Client, TestCase
 
 from accounts.models import ProjectMembership
 from chat.config import EMAIL_HEADER, NAME_HEADER, ROLE_HEADER, is_disabled
-from infra.tests.factories import MembershipFactory, ProjectFactory, UserFactory
+from infra.tests.factories import (
+    AgentFactory,
+    MembershipFactory,
+    ModelConnectionFactory,
+    ProjectFactory,
+    RegisteredModelFactory,
+    UserFactory,
+)
 
 
 class ChatSwitchTests(TestCase):
@@ -511,3 +518,74 @@ class ChatLoaderMaskTests(TestCase):
         # /workspace/* onto /chat/* (see the Caddyfile tests in
         # test_proxy.py), so there is no client-side navigation patch.
         self.assertNotIn("history.pushState", body)
+
+
+@patch("chat.config.ENABLED", True)
+class ChatAgentModelPickerTests(TestCase):
+    """Synced agents (OWUI workspace models) surface in the /ai/ model picker.
+
+    The picker is the visual surface for "which model is selected". A synced
+    agent's id (``studio.agent-<pk>``) is a workspace model, not a registered
+    model, so without the Agents group it had no checkbox and could never
+    show as selected — even though the iframe was correctly pinned.
+    """
+
+    def setUp(self):
+        self.project = ProjectFactory()
+        user = UserFactory(username="agent-picker")
+        MembershipFactory(user=user, project=self.project)
+        self.client = Client()
+        self.client.force_login(user)
+        conn = ModelConnectionFactory(project=self.project, name="OpenAI")
+        RegisteredModelFactory(connection=conn, project=self.project,
+                               display_name="GPT", model_id="gpt-4o")
+        # external_id is normally backfilled by the OWUI sync on save; in the
+        # test env (chat upstream not patched here) we set it directly.
+        self.agent = AgentFactory(project=self.project, name="Refund Agent",
+                                  external_id="studio.agent-1")
+
+    def test_synced_agent_appears_checked_when_pinned(self):
+        # Pin the agent through the real "Test in Chat" flow (which stashes
+        # the pin in the session server-side), then load /ai/.
+        page = self.client.get(f"/agents/{self.agent.id}/test-chat/")
+        self.assertRedirects(page, "/ai/", fetch_redirect_response=False)
+        page = self.client.get("/ai/")
+        # The agent renders under its own group, as a checked checkbox.
+        self.assertContains(page, ">Agents<")
+        self.assertContains(
+            page, f'value="{self.agent.external_id}" checked')
+        # And the iframe is pinned to the same id.
+        self.assertContains(
+            page, f'src="/chat?models={self.agent.external_id}&amp;temporary-chat=true"')
+
+    def test_synced_agent_appears_without_a_pin(self):
+        # No pin — the agent still shows in the picker (unchecked) so a user
+        # can select it.
+        page = self.client.get("/ai/")
+        self.assertContains(page, ">Agents<")
+        self.assertContains(page, f'value="{self.agent.external_id}"')
+        self.assertNotContains(page, f'value="{self.agent.external_id}" checked')
+
+    def test_unsynced_agent_is_not_listed(self):
+        # An agent without an external_id (never pushed to OWUI) has no
+        # workspace model, so it must not appear in the picker.
+        unsynced = AgentFactory(project=self.project, name="Draft Agent")
+        page = self.client.get("/ai/")
+        self.assertNotContains(page, f'value="{unsynced.external_id}"')
+        # The synced agent from setUp still shows, confirming the filter works.
+        self.assertContains(page, f'value="{self.agent.external_id}"')
+
+    def test_disabled_agent_is_not_listed(self):
+        self.agent.enabled = False
+        self.agent.save()
+        page = self.client.get("/ai/")
+        self.assertNotContains(page, f'value="{self.agent.external_id}"')
+
+    def test_agent_not_listed_from_another_project(self):
+        from infra.tests.factories import AgentFactory
+
+        other = ProjectFactory()
+        other_agent = AgentFactory(project=other, name="Elsewhere",
+                                   external_id="studio.agent-99")
+        page = self.client.get("/ai/")
+        self.assertNotContains(page, f'value="{other_agent.external_id}"')
