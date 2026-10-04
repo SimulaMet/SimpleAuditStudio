@@ -71,23 +71,41 @@ Method:
 4. Run the evidence bar (1-6).
 5. Update this file's drift table with the outcome.
 6. Publish to the fork (so the tag image is pullable):
-   - push the port to `main` (force-push — main is the functional head only;
-     CI-only commits like ci/ are appended on top, not squashed):
+   - push the port to `main` (force-push — main = functional head + CI
+     housekeeping commits appended on top):
      `git push -f fork HEAD:main`
-   - re-point the tag at PRISTINE <new-sha> and push a same-named BRANCH at
-     the pristine SHA: `git push fork <new-sha>:refs/heads/vX.Y.Z` +
-     `git push -f fork vX.Y.Z` (tag) — the branch gives docker.yaml a
-     checkout that carries the GHCR_TOKEN fallback login.
-   - dispatch the plain tag/branch build:
+   - make a PUBLISH branch = pristine upstream + fork CI plumbing ONLY:
+     `git checkout -b publish-vNEW <new-sha>`
+     `git checkout <main-tip> -- .github/workflows/docker.yaml .github/workflows/release-pypi.yml FORK.md`
+     `git commit -am "ci: subpath-aware docker.yaml + fork infra (pristine base)"`
+     `git push fork publish-vNEW:refs/heads/vNEW` (buildable branch)
+     `git push -f fork vNEW` (tag = pristine sha)
+   - dispatch the plain build:
      `gh workflow run docker.yaml -R sushantgautam/open-webui -r vX.Y.Z`
      (concurrency group is per-ref: pushing to main cancels main docker runs
-     but never the tag/branch ones).
+     but never the tag/branch ones; the publish branch must carry the
+     docker.yaml with the GHCR_TOKEN login fallback, or every push
+     permission-denies on ghcr).
+   - Publishing is **GHCR-only** — the upstream `copy-to-dockerhub` job is
+     removed from the fork's docker.yaml and must stay removed.
+   - The fork's docker.yaml is **dispatch-only** (no push trigger) with a
+     `prune_only` input and an auto-`prune` job: every publish deletes stale
+     package versions (keeps this run's `git-<sha7>[-variant][-subpath]`
+     tags + pinned `v*` tags). To tidy without building:
+     `gh workflow run docker.yaml -R sushantgautam/open-webui -r main -f prune_only=true`.
+     Note: untagged "versions" in the GitHub packages UI are the per-arch
+     leaf manifests of the multi-arch indexes — expected, not stale.
+   - Tag naming: the consumer tag family is `v<ver>-subpath[-variant]`
+     (aliased from the build run's merge output via imagetools).
    - the subpath is BAKED at build time (svelte base + WEBUI_SUBPATH), so
-     `-subpath` images come from a dispatch WITH the input:
-     `gh workflow run docker.yaml -R sushantgautam/open-webui -r <ref> -f webui_subpath=/chat`
-     (tags get a `-subpath` suffix automatically). Alternative: build locally
-     and push, then `docker buildx imagetools create -t <ref>-subpath
-     <ref>-<arch>` (what was done for v0.11.4-subpath).
+     `-subpath` images must be built from a ref that carries the functional
+     subpath code (e.g. `main`) — NOT the pristine publish branch:
+     `gh workflow run docker.yaml -R sushantgautam/open-webui -r main -f webui_subpath=/chat`
+     (tags get a `-subpath` suffix automatically, e.g. `main-subpath`).
+     For a version-pinned `-subpath` image: build locally (build.sh, arm64)
+     + `docker push`, then alias with
+     `docker buildx imagetools create -t <registry>:<ver>-subpath
+     <registry>:<ver>-<arch>` (what was done for v0.11.4-subpath).
 
 If step 2's porting cost exceeds a day's work, STOP and report — do not
 half-port; staying on the proven base is the fallback.
