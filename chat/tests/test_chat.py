@@ -424,6 +424,29 @@ class ChatCssMaskTests(TestCase):
         expected = (Path(__file__).resolve().parents[1] / "embed_admin.css").read_bytes()
         self.assertEqual(resp.content, expected)
 
+    def test_embed_admin_header_stamps_the_session_and_serves_admin_css(self):
+        # Caddy mode: the forward-auth call is a rewritten GET, so the page's
+        # ?embed=admin never arrives as a query — Caddy passes it as
+        # X-Studio-Embed instead. This is the path that delivers the admin
+        # skin (tab-bar mask) to the workspace iframes.
+        self._admin = UserFactory(username="css-admin-header")
+        MembershipFactory(user=self._admin, project=self.project,
+                          role=ProjectMembership.Role.ADMIN)
+        from pathlib import Path
+        base = Path(__file__).resolve().parents[1]
+        # A missing/other header stamps nothing -> the plain skin.
+        self.client.force_login(self._admin)
+        self.client.get("/chat/authz", HTTP_X_STUDIO_EMBED="not-admin")
+        plain = (base / "embed.css").read_bytes()
+        self.assertEqual(self.client.get("/chat/css-mask").content, plain)
+        # The admin header stamps the session, so the follow-up css-mask gets
+        # the admin skin.
+        self.client.force_login(self._admin)
+        resp = self.client.get("/chat/authz", HTTP_X_STUDIO_EMBED="admin")
+        self.assertEqual(resp.status_code, 200)
+        expected = (base / "embed_admin.css").read_bytes()
+        self.assertEqual(self.client.get("/chat/css-mask").content, expected)
+
     def test_regular_user_gets_plain_css_even_with_stale_flag(self):
         user = UserFactory(username="css-plain")
         MembershipFactory(user=user, project=self.project,
@@ -463,12 +486,28 @@ class ChatLoaderMaskTests(TestCase):
         self.assertEqual(resp.status_code, 200)
 
     def test_script_self_gates_on_embed_admin(self):
-        # The bytes must carry the gate: non-admin pages (plain /chat/, the
-        # top-level /chat/workspace bulk-upload page) load the same file and
-        # must keep their full menu.
+        # The bytes must carry the gate: non-admin pages (plain /chat/) load
+        # the same file and must keep their full menu.
         body = (Path(__file__).resolve().parents[1]
                 / "embed_admin.js").read_text(encoding="utf-8")
-        self.assertIn('get("embed") !== "admin"', body)
-        # And the directory rows are the masked targets.
+        self.assertIn('params.get("embed") === "admin"', body)
+        self.assertIn("isTopLevelKnowledge", body)
+        # The top-level /chat/workspace/knowledge pages (the folder-upload
+        # home the Studio button opens) are masked too — Access List row and
+        # branding — ...
+        self.assertIn('"/workspace/knowledge"', body)
+        self.assertIn("'Access List'", body)
+        # ... but the directory rows stay visible there: that mask is
+        # embed-only, so folder bulk upload has one canonical place.
+        self.assertIn("if (!isAdminEmbed) {", body)
         self.assertIn("'Upload directory'", body)
         self.assertIn("'Sync directory'", body)
+        # OWUI's per-collection Access Control (button + modal) is hidden
+        # in every Studio surface — access is managed in Studio, not OWUI.
+        self.assertIn("maskAccessControl", body)
+        self.assertIn("Access Control", body)
+        # The fork's unprefixed Back navigation (goto('/workspace/knowledge'))
+        # is repaired at the front door, not here: Caddy rewrites
+        # /workspace/* onto /chat/* (see the Caddyfile tests in
+        # test_proxy.py), so there is no client-side navigation patch.
+        self.assertNotIn("history.pushState", body)

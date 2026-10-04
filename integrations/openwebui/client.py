@@ -56,30 +56,34 @@ class OpenWebUIAdapter:
         return self._api.knowledge_bases()
 
     def list_tools(self) -> list[dict[str, Any]]:
-        """All tools/functions registered in OpenWebUI.
+        """All toolkit tools registered in OpenWebUI.
 
-        OpenWebUI exposes functions via ``/api/v1/functions/``.
+        Toolkit tools (the Tools page) are served by ``/api/v1/tools/``;
+        ``/api/v1/functions/`` is for pipes/filters/actions and would miss
+        real tools. Their description lives in ``meta.manifest`` (the
+        frontmatter of the module docstring).
         """
         try:
-            payload = self._api.request("GET", "/api/v1/functions/")
+            items = self._api.tools()
         except ChatAPIError:
             return []
-        if isinstance(payload, dict):
-            items = payload.get("items") or payload.get("functions") or []
-        elif isinstance(payload, list):
-            items = payload
-        else:
-            items = []
-        return [
-            {
-                "id": item.get("id", ""),
-                "name": item.get("name", ""),
-                "description": item.get("description", ""),
-                "kind": item.get("kind", "function"),
-            }
-            for item in items
-            if isinstance(item, dict)
-        ]
+        out = []
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            meta = item.get("meta") if isinstance(item.get("meta"), dict) else {}
+            manifest = meta.get("manifest") if isinstance(meta.get("manifest"), dict) else {}
+            out.append(
+                {
+                    "id": item.get("id", ""),
+                    "name": item.get("name", ""),
+                    "description": manifest.get("description")
+                    or meta.get("description")
+                    or "",
+                    "kind": "tool",
+                }
+            )
+        return out
 
     # --- agent configuration ------------------------------------------------
 

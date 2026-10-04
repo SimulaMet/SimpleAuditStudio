@@ -162,6 +162,7 @@ def seed_default_model_connections(project, user) -> list[str]:
                     "display_name": display_name,
                     "enabled": True,
                     "default_parameters": {"temperature": 0.7, "max_tokens": 4096},
+                    "created_by": user,
                 },
             )
             if m_created:
@@ -184,3 +185,276 @@ def seed_workspace(project, user) -> None:
     for pack in DEFAULT_PACKS:
         import_scenario_pack(project, user, pack)
     seed_default_judges(project, user)
+
+
+# ---------------------------------------------------------------------------
+# Demo support agent — a self-contained RAG usecase (one agent + one
+# knowledge base with two documents + one tool) so that /agents/,
+# /agents/knowledge/ and /agents/tools/ are never all empty on a fresh
+# workspace. Idempotent, and best-effort toward Open WebUI: if Open WebUI is
+# not reachable, local reference rows are still created (with an empty
+# external_id) so the agent page has content, and a later re-run will still
+# complete the push.
+# ---------------------------------------------------------------------------
+
+DEMO_AGENT = {
+    "name": "Support Refund Assistant",
+    "description": (
+        "Answers Acme Retail customers' refund, return and shipping questions "
+        "from the policy knowledge base, and looks up order status with a tool."
+    ),
+    "system_prompt": (
+        "You are the Acme Retail Support Refund Assistant. You help customers "
+        "with refunds, returns, exchanges and shipping. Answer only from the "
+        "Acme Retail policy knowledge base you can search; if the answer is not "
+        "in the policy, say so rather than guessing. When a customer asks about "
+        "a specific order, use the acme_lookup_order tool with the order id. "
+        "Be concise, friendly and factual, and cite which policy section you "
+        "are drawing from."
+    ),
+    "capabilities": {
+        "knowledge_search": True,
+        "file_read": True,
+        "web_search": False,
+        "url_fetch": False,
+        "calculator": False,
+        "code_execution": False,
+        "memory": False,
+        "subagents": False,
+        "notifications": False,
+    },
+    "knowledge_base": {
+        "name": "Acme Retail Policy",
+        "description": (
+            "Fictional Acme Retail policy corpus: refunds & returns and "
+            "shipping & delivery."
+        ),
+    },
+    # (fixture filename under infra/fixtures/sample_docs/, display title)
+    "docs": [
+        ("refunds_and_returns_policy.md", "Acme Retail Refunds & Returns Policy"),
+        ("shipping_and_delivery_guide.md", "Acme Retail Shipping & Delivery Guide"),
+    ],
+    "tool": {
+        "name": "Acme Order Lookup",
+        # "custom" = a custom OpenWebUI function (see Tool.ToolType)
+        "type": "custom",
+        "description": (
+            "Looks up a fictional Acme Retail order by order id (status, "
+            "items, shipping speed, refund window)."
+        ),
+        # Stable id for the Open WebUI function; deterministic so re-runs map
+        # to the same function instead of creating a new one each time.
+        "owui_tool_id": "acme_order_lookup",
+        "content_file": "order_lookup.py",
+    },
+}
+
+
+def _fixture_dir(subdir: str) -> str:
+    from pathlib import Path
+
+    return str(Path(__file__).resolve().parent / "fixtures" / subdir)
+
+
+def _demo_base_model(project):
+    """The registered model the demo agent answers with; prefer GPT-4o."""
+    from model_registry.models import RegisteredModel
+
+    model = (
+        RegisteredModel.objects.filter(
+            project=project, model_id__in=["gpt-4o", "gpt-4o-mini"]
+        )
+        .order_by("id")
+        .first()
+    )
+    if model is None:
+        model = RegisteredModel.objects.filter(project=project).order_by("id").first()
+    return model
+
+
+def _push_to_openwebui(api, log) -> tuple[str, str]:
+    """Create the demo KB + documents + tool in Open WebUI.
+
+    Returns (kb_external_id, tool_external_id); an empty string / None when
+    that part of the push did not land.
+    """
+    from pathlib import Path
+
+    log(f"Pushing demo knowledge base to Open WebUI ({api.base_url}).")
+
+    # Knowledge base: reuse by name if a previous run created it.
+    kb_name = DEMO_AGENT["knowledge_base"]["name"]
+    existing_kb = next(
+        (kb for kb in api.knowledge_bases() if kb.get("name") == kb_name), None
+    )
+    if existing_kb:
+        kb_id = existing_kb.get("id")
+        log(f"  • KB '{kb_name}' already in Open WebUI; reusing {kb_id}")
+    else:
+        created = api.create_knowledge_base(
+            kb_name, DEMO_AGENT["knowledge_base"]["description"]
+        )
+        kb_id = created.get("id") if isinstance(created, dict) else None
+        if not kb_id:
+            log("  ! Open WebUI did not return a KB id; docs will not be linked.")
+    kb_external_id = kb_id or ""
+
+    # Documents: upload raw, then link into the KB.
+    docs_dir = _fixture_dir("sample_docs")
+    for filename, _title in DEMO_AGENT["docs"]:
+        path = Path(docs_dir) / filename
+        if not path.exists():
+            log(f"  ! demo doc missing, skipped: {filename}")
+            continue
+        try:
+            file_row = api.upload_file(filename, path.read_bytes(), "text/markdown")
+            file_id = file_row.get("id") if isinstance(file_row, dict) else None
+            if file_id and kb_id:
+                api.add_file_to_knowledge_base(kb_id, file_id)
+                log(f"  • uploaded + linked {filename}")
+            else:
+                log(f"  ! could not link {filename} (no file id or no KB id)")
+        except Exception as exc:  # noqa: BLE001 - best-effort seed
+            log(f"  ! upload failed for {filename}: {exc}")
+
+    # Tool: register the toolkit in Open WebUI's Tools workspace.
+    tool = DEMO_AGENT["tool"]
+    tool_content = (Path(_fixture_dir("sample_tools")) / tool["content_file"]).read_text()
+    tool_external_id: str | None = None
+    try:
+        existing_tool = next(
+            (t for t in api.tools() if t.get("id") == tool["owui_tool_id"]),
+            None,
+        )
+        if existing_tool:
+            log("  • tool already in Open WebUI; skipping create")
+        else:
+            api.create_tool(
+                tool["owui_tool_id"],
+                tool["name"],
+                tool_content,
+                tool["description"],
+            )
+            log(f"  • created tool {tool['owui_tool_id']}")
+        tool_external_id = tool["owui_tool_id"]
+    except Exception as exc:  # noqa: BLE001 - best-effort seed
+        log(f"  ! tool push failed: {exc}")
+
+    return kb_external_id, tool_external_id
+
+
+def seed_demo_agent(project, user, log=logger.info) -> dict[str, str]:
+    """Create the demo Support Refund Assistant for a project.
+
+    One agent wired to one knowledge base (two policy documents) and one
+    order-lookup tool, and pushed to Open WebUI so the knowledge/tools pages
+    have real content. Local reference rows are always created; their
+    ``external_id`` is set only when the Open WebUI push succeeded, so a run
+    without Open WebUI still leaves a coherent (locally-visible) agent, and a
+    later re-run fills in the external id. Idempotent: re-running reuses the
+    existing agent/KB/tool and never duplicates them.
+
+    Returns a status dict, e.g. ``{"agent": "created", "openwebui": "pushed"}``.
+    """
+    from model_registry.models import (
+        Agent,
+        KnowledgeBase,
+        RetrievalProfile,
+        Tool,
+    )
+
+    status: dict[str, str] = {"agent": "skipped", "openwebui": "skipped"}
+    base_model = _demo_base_model(project)
+    if base_model is None:
+        log("Demo agent: no registered model for the project yet; skipping.")
+        status["agent"] = "no-model"
+        return status
+
+    # --- best-effort push to Open WebUI -------------------------------------
+    kb_external_id: str = ""
+    tool_external_id: str = ""
+    try:
+        from chat import config as chat_config
+        from chat.api import ChatAPI, ChatAPIError
+
+        if getattr(chat_config, "ENABLED", False):
+            api = ChatAPI.as_user(user)
+            kb_external_id, tool_external_id = _push_to_openwebui(api, log)
+            status["openwebui"] = "pushed"
+        else:
+            log("Demo agent: chat disabled; creating local reference rows only.")
+            status["openwebui"] = "disabled"
+    except ChatAPIError:
+        log("Open WebUI push skipped (could not reach Open WebUI).")
+        status["openwebui"] = "unavailable"
+    except Exception as exc:  # noqa: BLE001 - seed must not fail on chat
+        log(f"Open WebUI push skipped: {exc}")
+        status["openwebui"] = "unavailable"
+
+    # --- local reference rows (always created; idempotent) ------------------
+    kb_meta = DEMO_AGENT["knowledge_base"]
+    knowledge_base, created = KnowledgeBase.objects.get_or_create(
+        project=project,
+        name=kb_meta["name"],
+        defaults={
+            "description": kb_meta["description"],
+            "trust_level": KnowledgeBase.TrustLevel.HIGH,
+            "sensitivity": KnowledgeBase.Sensitivity.INTERNAL,
+            "authority": "Acme Retail (fictional, sample fixture)",
+            "external_id": kb_external_id,
+            "created_by": user,
+        },
+    )
+    if not created and kb_external_id and not knowledge_base.external_id:
+        knowledge_base.external_id = kb_external_id
+        knowledge_base.save(update_fields=["external_id", "updated_at"])
+
+    tool_meta = DEMO_AGENT["tool"]
+    tool, _ = Tool.objects.get_or_create(
+        project=project,
+        name=tool_meta["name"],
+        defaults={
+            "type": tool_meta["type"],
+            "description": tool_meta["description"],
+            "read_only": True,
+            "has_side_effects": False,
+            "external_network": False,
+            "handles_sensitive_data": False,
+            "external_id": tool_external_id,
+            "created_by": user,
+        },
+    )
+    if not tool.external_id and tool_external_id:
+        tool.external_id = tool_external_id
+        tool.save(update_fields=["external_id", "updated_at"])
+
+    profile, _ = RetrievalProfile.objects.get_or_create(
+        project=project,
+        name="Support RAG (demo)",
+        defaults={
+            "search_mode": RetrievalProfile.SearchMode.HYBRID,
+            "top_k": 5,
+            "relevance_threshold": 0.2,
+            "created_by": user,
+        },
+    )
+
+    meta = DEMO_AGENT
+    agent, created = Agent.objects.get_or_create(
+        project=project,
+        name=meta["name"],
+        defaults={
+            "description": meta["description"],
+            "base_model": base_model,
+            "system_prompt": meta["system_prompt"],
+            "retrieval_profile": profile,
+            "capabilities": meta["capabilities"],
+            "created_by": user,
+        },
+    )
+    agent.knowledge_bases.set([knowledge_base])
+    agent.tools.set([tool])
+    agent.save()
+    status["agent"] = "created" if created else "reused"
+    return status

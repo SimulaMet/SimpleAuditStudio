@@ -87,6 +87,13 @@
 			# Forward the original method and URI (they get rewritten above).
 			header_up X-Forwarded-Method {method}
 			header_up X-Forwarded-Uri {uri}
+			# The rewrite above drops the page's query from the auth call,
+			# so the ?embed=admin flag (admin workspace iframes only) rides
+			# here as a header. Studio's /chat/authz stamps the session
+			# admin from it; that is what makes /chat/static/custom.css
+			# (css-mask) serve the admin skin with the tab-bar mask.
+			# Client-forged values are stripped at site level.
+			header_up X-Studio-Embed {uri.query.embed}
 
 			# On success, set the trusted identity headers on the original
 			# request. Client-forged values were already stripped at site
@@ -106,6 +113,21 @@
 			}
 		}
 		reverse_proxy open-webui:{$SIMPLEAUDIT_CHAT_UPSTREAM_PORT:8080}
+	}
+
+	# The subpath fork's KnowledgeBase "Back" button navigates to the
+	# root-relative /workspace/knowledge (a missed ${base} prefix in the fork
+	# build) — a hard GET that would 404 on Studio. Repair it at the front
+	# door: 308 the browser onto the subpath, which re-enters the /chat/*
+	# handle (forward-auth + OWUI) and lands on the collection list. A 308
+	# (not an internal rewrite) because the SPA is built with base=/chat and
+	# its client router reload-loops on an out-of-base URL. The target must
+	# lead with a placeholder (the env prefix): Caddy's caddyfile parser
+	# misreads a leading '/' as a matcher. {http.request.uri} preserves the
+	# query string. Dead code once the fork is rebuilt with the ${base}
+	# prefix.
+	handle /workspace/* {
+		redir {env.WEBUI_SUBPATH:/chat}{http.request.uri} 308
 	}
 
 	# Everything else -> Studio (Django). The subpath fork never emits

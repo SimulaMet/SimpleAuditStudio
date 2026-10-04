@@ -59,11 +59,13 @@ class _StubOpenWebUI(BaseHTTPRequestHandler):
     """Echoes the identity it was given, and sets a session token cookie."""
 
     protocol_version = "HTTP/1.1"
+    last_path = None
 
     def log_message(self, *args):
         pass
 
     def do_GET(self):
+        type(self).last_path = self.path
         body = json.dumps({
             "email": self.headers.get(config.EMAIL_HEADER),
             "role": self.headers.get(config.ROLE_HEADER),
@@ -177,6 +179,7 @@ class ProxyTests(SimpleTestCase):
         proxy._identity_cache.clear()
         proxy._admin_marker.clear()
         _StubStudio.calls = 0
+        _StubOpenWebUI.last_path = None
 
     def test_a_signed_in_browser_is_identified(self):
         response = httpx.get(f"{self.url}/chat/api/config", headers={"Cookie": VALID_COOKIE})
@@ -209,6 +212,23 @@ class ProxyTests(SimpleTestCase):
                              headers={"Cookie": VALID_COOKIE})
         self.assertEqual(response.status_code, 200)
         self.assertEqual(_StubStudio.last_path, "/studio-page/")
+
+    def test_unprefixed_workspace_path_is_redirected_onto_the_subpath(self):
+        """The fork's KB "Back" button hard-navigates to root-relative
+        /workspace/knowledge. The front door 308s it onto /chat/ (the
+        pure-Python twin of the Caddyfile's handle /workspace/* redir) so
+        the browser re-requests the in-base URL and reaches OWUI's
+        collection list instead of Studio's 404."""
+        response = httpx.get(f"{self.url}/workspace/knowledge",
+                             headers={"Cookie": VALID_COOKIE},
+                             follow_redirects=False)
+        self.assertEqual(response.status_code, 308)
+        self.assertEqual(response.headers["location"], "/chat/workspace/knowledge")
+        # The in-base URL the redirect points at is served by Open WebUI.
+        in_base = httpx.get(f"{self.url}/chat/workspace/knowledge",
+                            headers={"Cookie": VALID_COOKIE})
+        self.assertEqual(in_base.status_code, 200)
+        self.assertEqual(_StubOpenWebUI.last_path, "/chat/workspace/knowledge")
 
     def test_one_browsers_session_never_reaches_another(self):
         """The proxy must remember nothing between requests.
@@ -541,6 +561,10 @@ class CaddyfileTests(SimpleTestCase):
         self.assertIn("rewrite /chat/authz", text)
         self.assertIn("127.0.0.1:8124", text)
         self.assertIn("@good status 2xx", text)
+        # The rewritten auth call drops the page query, so the embed flag
+        # (admin workspace iframes) rides as a header — without it authz
+        # never stamps the session and css-mask serves the plain skin.
+        self.assertIn("header_up X-Studio-Embed {uri.query.embed}", text)
         self.assertIn("request_header X-Studio-Email {rp.header.X-Studio-Email}",
                       text)
         self.assertIn("@signedout status 401", text)
@@ -583,6 +607,22 @@ class CaddyfileTests(SimpleTestCase):
         for route in proxy._BRANDED_ASSETS:
             self.assertIn(f"handle {route} {{", text)
 
+    def test_caddyfile_repairs_unprefixed_workspace_back_nav(self):
+        # The fork's KnowledgeBase "Back" button GETs /workspace/knowledge
+        # (root-relative, a missed ${base} prefix in the fork build). The
+        # front door must 308 it onto the subpath — a redirect, not an
+        # internal rewrite, because the SPA's client router reload-loops on
+        # an out-of-base URL. The redir target must lead with a placeholder
+        # ({env.WEBUI_SUBPATH}, expanded empty at spawn): a leading '/'
+        # would be misparsed by caddy's caddyfile parser as a matcher, and
+        # adapt would still report success.
+        text = proxy._caddyfile(8123, 8124)
+        self.assertIn("handle /workspace/* {", text)
+        self.assertIn(
+            f"redir {{env.WEBUI_SUBPATH}}{config.SUBPATH}{{http.request.uri}} 308",
+            text,
+        )
+
     def test_caddyfile_is_valid_after_adapt_when_caddy_exists(self):
         if proxy._caddy_binary() is None:
             self.skipTest("no caddy binary on this platform")
@@ -597,7 +637,34 @@ class CaddyfileTests(SimpleTestCase):
                 capture_output=True, text=True, check=False,
             )
         self.assertEqual(proc.returncode, 0, proc.stderr)
-        json.loads(proc.stdout)    # valid JSON = a loadable config
+        cfg = json.loads(proc.stdout)   # valid JSON = a loadable config
+        # adapt exits 0 even when the redir target is misparsed as a matcher
+        # (a leading '/'), so verify the workspace back-nav actually compiles
+        # to a 308 redirect — not a bogus 302 with the status word as the
+        # Location.
+        workspace_redirects = []
+        for server in cfg["apps"]["http"]["servers"].values():
+            for route in server.get("routes", []):
+                matched_paths = [
+                    p for m in route.get("match", []) for p in m.get("path", [])
+                ]
+                if not any(p.startswith("/workspace/") for p in matched_paths):
+                    continue
+                for handler in route.get("handle", []):
+                    for sub in handler.get("routes", []):
+                        for inner in sub.get("handle", []):
+                            if inner.get("handler") == "static_response":
+                                workspace_redirects.append(inner)
+        self.assertEqual(len(workspace_redirects), 1, workspace_redirects)
+        self.assertEqual(
+            workspace_redirects[0]["status_code"], 308,
+            workspace_redirects[0],
+        )
+        expected = "{env.WEBUI_SUBPATH}" + config.SUBPATH + "{http.request.uri}"
+        self.assertEqual(
+            workspace_redirects[0]["headers"].get("Location"), [expected],
+            workspace_redirects[0],
+        )
 
     def test_stop_caddy_is_idempotent(self):
         proxy.stop_caddy()

@@ -1,4 +1,5 @@
 """Tests for the /agents/knowledge/ and /agents/tools/ iframe pages."""
+import re
 from unittest import mock
 
 from django.test import TestCase
@@ -50,30 +51,42 @@ class AgentResourcesViewTest(TestCase):
         self.assertIn("__studio_admin=1", resp.content.decode())
         self.assertIn("Tools", resp.content.decode())
 
-    def test_knowledge_page_needs_no_folder_upload_escape_hatch(self):
-        # "Upload directory" / "Sync directory" in the Knowledge modal use the
-        # File System Access API (showDirectoryPicker). The embed is
-        # same-origin (Caddy serves /chat/ from Studio's origin), so the picker
-        # works inside the frame and no top-level escape-hatch tab is needed.
+    def test_knowledge_offers_full_workspace_link(self):
+        # The knowledge page offers a button that opens the full workspace in a
+        # new tab — the plain section URL (no query string), where the File
+        # System Access API directory picker is guaranteed to work. Assert on
+        # the button anchor itself, not the whole page: the page also renders
+        # the iframe (whose src carries ?embed=admin) and the site footer
+        # (which has its own target="_blank" links), so whole-page substring
+        # checks would be too broad.
         user = _member(self.project)
         self._login(user)
         resp = self.client.get("/agents/knowledge/")
         html = resp.content.decode()
-        self.assertNotIn("Folders, directory sync", html)
-        # The escape hatch was an anchor (target="_blank") to a top-level
-        # workspace/knowledge URL. It must be gone. (The iframe src still
-        # references workspace/knowledge — that is the embed itself, with no
-        # target attribute.)
-        self.assertNotIn('href="/workspace/knowledge"', html)
-        self.assertNotIn('href="/chat/workspace/knowledge"', html)
+        self.assertIn("Folders, directory sync", html)
+        anchors = re.findall(r"<a\s[^>]*>", html, re.DOTALL)
+        button = next((a for a in anchors if "Opens the full Knowledge workspace" in a), None)
+        self.assertIsNotNone(button, "expected the full-workspace button anchor")
+        self.assertIn("target=\"_blank\"", button)
+        # Plain section URL with no query string (unlike the iframe src, which
+        # carries ?embed=admin&...).
+        href = re.search(r'href="([^"]*)"', button).group(1)
+        self.assertTrue(href.rstrip("/").endswith("/workspace/knowledge"), href)
+        self.assertNotIn("?", href)
+        self.assertNotIn("create=1", href)
 
-    def test_tools_page_has_no_full_workspace_link(self):
-        # No section offers a top-level full-workspace tab (see the knowledge
-        # test above for why none is needed).
+    def test_tools_does_not_offer_full_workspace_link(self):
+        # Tools has no folder-upload flow, so no full-workspace button. The
+        # check is on the button anchor, not target="_blank" across the page
+        # (the site footer always renders such links).
         user = _member(self.project)
         self._login(user)
         resp = self.client.get("/agents/tools/")
-        self.assertNotIn("Open full workspace", resp.content.decode())
+        html = resp.content.decode()
+        self.assertNotIn("Folders, directory sync", html)
+        self.assertIsNone(
+            next((a for a in re.findall(r"<a\s[^>]*>", html, re.DOTALL) if "Opens the full" in a), None)
+        )
 
     def test_view_is_login_protected(self):
         resp = self.client.get("/agents/tools/")

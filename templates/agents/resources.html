@@ -12,6 +12,15 @@
 </div>
 
 {% if chat_enabled %}
+{% if section == 'knowledge' and directory_url_enabled %}
+<div class="mb-2">
+  <a href="{{ directory_url }}" target="_blank" rel="noopener"
+     title="Opens the full Knowledge workspace in a new tab"
+     class="inline-flex items-center gap-1.5 rounded-md border border-gray-700 bg-gray-800 px-2.5 py-1 text-xs text-gray-200 hover:bg-gray-700 transition-colors">
+    📁 Folders, directory sync &amp; bulk upload &nearr;
+  </a>
+</div>
+{% endif %}
 <iframe class="resources-frame w-full rounded-xl border border-gray-800 bg-white"
         src="{{ iframe_src }}"></iframe>
 {% else %}

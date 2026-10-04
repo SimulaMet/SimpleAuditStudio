@@ -35,10 +35,11 @@ def authz(request):
     user = request.user
     if not user.is_authenticated:
         return HttpResponse(status=401)
-    # The admin pages' iframe URL carries embed=admin. Caddy forwards it as
-    # X-Studio-Embed on the forward-auth call (the query may or may not survive
-    # the authz rewrite), so accept either; both are stripped/overwritten
-    # upstream, so a client cannot forge them.
+    # The admin pages' iframe URL carries embed=admin. The forward-auth call
+    # is a rewritten GET, so the query never reaches this endpoint; Caddy
+    # passes the flag as X-Studio-Embed instead (see the Caddyfile). Both
+    # sources are stripped/overwritten before reaching OWUI, so a client
+    # cannot forge them.
     if (
         request.GET.get("embed") == "admin"
         or request.headers.get("X-Studio-Embed") == "admin"
@@ -83,11 +84,12 @@ def loader_mask(request):
     <script> — and SvelteKit hydration comes from the separate entry/start
     bundle, so Caddy (local dev + docker) intercepts /chat/static/loader.js
     and Studio answers here with chat/embed_admin.js. The script
-    self-gates on the PAGE URL carrying ?embed=admin, so it only masks the
-    admin workspace iframes (Knowledge, Tools); plain /chat/ and the
-    top-level /chat/workspace pages load the same bytes, see no flag, and
-    keep their full menu. no-store, because the script follows this repo,
-    not its URL.
+    self-gates on the PAGE URL: ?embed=admin masks the admin workspace
+    iframes (Knowledge, Tools); top-level /chat/workspace/knowledge pages
+    (the folder-upload home Studio links to) get the Access List + branding
+    masks but keep the directory rows. Plain /chat/ and other pages load
+    the same bytes, see no flag, and keep their full menu. no-store,
+    because the script follows this repo, not its URL.
     """
     if not config.ENABLED:
         raise Http404
