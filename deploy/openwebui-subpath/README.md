@@ -123,12 +123,18 @@ re-passes. Distribution context (fork, ghcr.io, pip caveats): [`DESIGN.md`](./DE
 
 ## Status
 
-**Built, E2E-verified, and published (2026-10-04).** `subpath.patch` is now
-the v0.11.4 port (123 files) pinned to `8bd8b4f`; the fork
-`github.com/sushantgautam/open-webui` ships `main` = v0.11.4 + subpath with
-CI publishing to ghcr.io (root on push, `-subpath` on `webui_subpath`
-dispatch). Not yet wired into `docker-compose.yml`: the cutover from the
-current cross-origin iframe model to this single-origin model is a deployment
-decision (which OWUI version to pin, SSO cookie handling under
-the shared origin, and retiring `Caddyfile.chat` + the embedded proxy path).
-Approve that and it can be connected to `docker-compose.yml`.
+**Built, E2E-verified, published, and wired in (2026-10-04).**
+`subpath.patch` is the v0.11.4 port (123 files) pinned to `8bd8b4f`; the fork
+`github.com/sushantgautam/open-webui` ships `main` = v0.11.4 + subpath with CI
+publishing to ghcr.io (root on push, `-subpath` on `webui_subpath` dispatch).
+
+The cutover is done: `docker-compose.yml` pulls
+`ghcr.io/sushantgautam/open-webui:v0.11.4-subpath` (set `WEBUI_SUBPATH=/chat`),
+`chat-proxy` (Caddy, no profile) is the **only published port** and runs
+`Caddyfile.subpath`, Studio's wrapper page moved to `/ai/`, and
+`Caddyfile.chat` + the separate cross-origin port are retired. Embedded
+(no-Docker) mode runs the same Caddy forward-auth — the bundled `caddyserver`
+wheel (all platforms, incl. Windows) with a pure-Python fallback when the
+binary cannot be located — on its own port.
+Both modes' `/static/custom.css` requests go to Studio's `/chat/css-mask`,
+which serves the admin skin per session (no Caddy-side state).

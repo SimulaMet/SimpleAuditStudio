@@ -139,6 +139,12 @@ services:
       # fresh `docker compose up` work turnkey. Set HATCHET_API_KEY in .env to
       # override with an explicit token for the auth-enabled image.
       HATCHET_TOKEN_FILE: /config/authdisabled-token
+      # Server-side model/knowledge sync must reach Open WebUI at its /chat
+      # subpath on the internal network (the default 127.0.0.1:8080 is the
+      # web container's own loopback — unreachable from inside). Harmless
+      # while chat is off: the sync only runs when SIMPLEAUDIT_CHAT is on,
+      # and by then the open-webui compose name resolves.
+      SIMPLEAUDIT_CHAT_UPSTREAM: http://open-webui:8080/chat
     volumes:
       - hatchet_config:/config:ro
     depends_on:
@@ -146,8 +152,7 @@ services:
         condition: service_healthy
       hatchet-server:
         condition: service_healthy
-    ports:
-      - "8000:8000"
+    # No published port: chat-proxy (Caddy) is the front door on :8000.
     # Single-line sh -c so the argument list is unambiguous (a folded YAML block
     # previously broke the flag parsing). Migrate + idempotent bootstrap +
     # idempotent seed (scenario packs + models + demo audits) + static
@@ -168,23 +173,31 @@ services:
     restart: unless-stopped
 
   # Chat module — ON by default. .env carries both switches (SIMPLEAUDIT_CHAT=docker
-  # so the web service serves /chat/, COMPOSE_PROFILES=chat so these two
-  # containers are part of a plain `docker compose up -d`); comment them out to
-  # leave chat out entirely. See infra/chat.py.
+  # so the web service serves /ai/ + /chat/authz, COMPOSE_PROFILES=chat so the
+  # open-webui container joins a plain `docker compose up -d`); comment them out
+  # to leave chat out entirely. See chat/config.py.
   #
-  # Open WebUI deliberately publishes NO port: chat-proxy is the only route to
-  # it, because it trusts the identity headers on any request it receives.
+  # Single-origin model: chat-proxy (Caddy) is the ONLY published port and fronts
+  # both Studio and Open WebUI. Open WebUI publishes NO port: chat-proxy is the
+  # only route to it, because it trusts the identity headers on any request it
+  # receives (a forged X-Studio-Role: admin would be instant takeover).
+  #
+  # The image is the subpath fork (deploy/openwebui-subpath/build.sh): built with
+  # WEBUI_SUBPATH=/chat so it serves its whole app AT /chat. chat-proxy must
+  # forward /chat/* WITHOUT stripping the prefix (see the Caddyfile header).
   open-webui:
     profiles: ["chat"]
-    image: ${OPEN_WEBUI_IMAGE:-ghcr.io/open-webui/open-webui:main}
+    image: ${OPEN_WEBUI_IMAGE:-ghcr.io/sushantgautam/open-webui:v0.11.4-subpath}
     environment:
+      WEBUI_SUBPATH: /chat
       WEBUI_AUTH_TRUSTED_EMAIL_HEADER: X-Studio-Email
       WEBUI_AUTH_TRUSTED_NAME_HEADER: X-Studio-Name
       WEBUI_AUTH_TRUSTED_ROLE_HEADER: X-Studio-Role
       ENABLE_SIGNUP: "false"
       # Nothing in this stack serves Ollama; Open WebUI polls it otherwise.
       ENABLE_OLLAMA_API: "false"
-      WEBUI_URL: ${SIMPLEAUDIT_CHAT_URL:-http://localhost:8801}
+      # Same origin as Studio; the browser reaches it at /chat/ via chat-proxy.
+      WEBUI_URL: ${SIMPLEAUDIT_STUDIO_URL:-http://localhost:8000}/chat/
       # The image entrypoint is start.sh (no `open-webui` CLI on PATH); it reads
       # HOST/PORT and launches uvicorn itself.
       HOST: "0.0.0.0"
@@ -204,26 +217,29 @@ services:
       - open_webui_data:/app/backend/data
     restart: unless-stopped
 
+  # The single published port for the whole stack, in EVERY configuration:
+  # Studio at /, its wrapper at /ai/, and — with the chat profile — Open WebUI
+  # at /chat/. Without the profile the /chat/* rules simply 502 (no upstream);
+  # Studio 404s /chat/ and /ai/ anyway because SIMPLEAUDIT_CHAT is off.
+  # No depends_on on open-webui on purpose: a dependency would force the chat
+  # container up in a no-chat deployment.
   chat-proxy:
-    profiles: ["chat"]
     image: ${CADDY_IMAGE:-caddy:2-alpine}
     environment:
+      STUDIO_PORT: ${STUDIO_PORT:-8000}
       STUDIO_URL: ${SIMPLEAUDIT_STUDIO_URL:-http://localhost:8000}
-      SIMPLEAUDIT_CHAT_PROXY_PORT: ${SIMPLEAUDIT_CHAT_PROXY_PORT:-8801}
       SIMPLEAUDIT_CHAT_UPSTREAM_PORT: ${SIMPLEAUDIT_CHAT_UPSTREAM_PORT:-8080}
       STUDIO_UPSTREAM: web:8000
     volumes:
-      - ./deploy/compose/Caddyfile.chat:/etc/caddy/Caddyfile:ro
-      # Served as Open WebUI's /static/custom.css (see Caddyfile.chat) so the
-      # iframe hides the chat-history sidebar.
-      - ./chat/embed.css:/etc/caddy/embed/static/custom.css:ro
-      # Served as Open WebUI's favicon (see Caddyfile.chat).
-      - ./static/logo.svg:/etc/caddy/branding/logo.svg:ro
+      - ./deploy/openwebui-subpath/Caddyfile.subpath:/etc/caddy/Caddyfile:ro
+      # (custom.css is no longer mounted: Caddyfile.subpath reverse-proxies
+      # /chat/static/custom.css to Studio's /chat/css-mask, which picks the
+      # admin vs plain mask from the session.)
     ports:
-      - "${SIMPLEAUDIT_CHAT_PROXY_PORT:-8801}:${SIMPLEAUDIT_CHAT_PROXY_PORT:-8801}"
+      - "${STUDIO_PORT:-8000}:8000"
     depends_on:
-      - open-webui
-      - web
+      web:
+        condition: service_healthy
     restart: unless-stopped
 
 volumes:

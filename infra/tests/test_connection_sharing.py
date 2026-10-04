@@ -146,18 +146,18 @@ class ConnectionsPageSharingTests(TestCase):
 
     def test_chat_icon_links_to_the_chat_handoff(self):
         # With chat enabled, each model row offers a chat icon that goes
-        # through /chat/with/<connection>/<model> (which validates the model
+        # through /ai/with/<connection>/<model> (which validates the model
         # server-side). The connection id disambiguates the same model id
         # registered under more than one connection.
         with mock.patch("chat.config.ENABLED", True):
             page = self._page_as(self.owner_user, self.owner_ws)
-        self.assertContains(page, f'/chat/with/{self.conn.id}/{self.model.model_id}')
+        self.assertContains(page, f'/ai/with/{self.conn.id}/{self.model.model_id}')
         self.assertContains(page, "Open a chat with")
 
     def test_chat_icon_hidden_when_chat_is_disabled(self):
         with mock.patch("chat.config.ENABLED", False):
             page = self._page_as(self.owner_user, self.owner_ws)
-        self.assertNotContains(page, "/chat/with/")
+        self.assertNotContains(page, "/ai/with/")
 
     def test_owner_sees_edit_controls(self):
         page = self._page_as(self.owner_user, self.owner_ws)

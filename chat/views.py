@@ -4,6 +4,8 @@ Everything about *why* it works this way is in chat/config.py.
 """
 from __future__ import annotations
 
+import time
+from pathlib import Path
 from urllib.parse import urlencode
 
 from django.http import Http404, HttpResponse
@@ -22,15 +24,55 @@ def authz(request):
     200 with the trusted headers when signed in, 401 otherwise. The proxy copies
     the headers onto the upstream request and turns a 401 into a redirect to
     Studio's login page.
+
+    ``?embed=admin`` (set by Studio's admin pages in their iframe URL) marks the
+    session admin for EMBED_ADMIN_FLAG_TTL, so the css_mask request that
+    follows — which carries the session cookie but not the query flag — gets
+    the admin embed assets.
     """
     if not config.ENABLED:
         raise Http404
     user = request.user
     if not user.is_authenticated:
         return HttpResponse(status=401)
+    # The admin pages' iframe URL carries embed=admin. Caddy forwards it as
+    # X-Studio-Embed on the forward-auth call (the query may or may not survive
+    # the authz rewrite), so accept either; both are stripped/overwritten
+    # upstream, so a client cannot forge them.
+    if (
+        request.GET.get("embed") == "admin"
+        or request.headers.get("X-Studio-Embed") == "admin"
+    ):
+        request.session["studio_chat_embed_admin"] = (
+            time.time() + config.EMBED_ADMIN_FLAG_TTL
+        )
     response = HttpResponse(status=200)
     for header, value in config.identity(user).items():
         response[header] = value
+    return response
+
+
+def css_mask(request):
+    """The embed skin Open WebUI loads as /static/custom.css (both chat modes).
+
+    Serves embed_admin.css while the session carries a live admin flag stamped
+    by authz (from the admin pages' iframe URL), embed.css for everyone else —
+    including anonymous. The flag expires after EMBED_ADMIN_FLAG_TTL so a one-
+    time workspace visit doesn't re-skin a later plain chat view. no-store,
+    because the choice follows the session, not its URL.
+    """
+    if not config.ENABLED:
+        raise Http404
+    flag = request.session.get("studio_chat_embed_admin")
+    is_admin = bool(
+        request.user.is_authenticated
+        and isinstance(flag, (int, float))
+        and flag > time.time()
+    )
+    filename = "embed_admin.css" if is_admin else "embed.css"
+    path = Path(__file__).resolve().parent / filename
+    response = HttpResponse(path.read_bytes(), content_type="text/css")
+    response["Cache-Control"] = "no-store"
     return response
 
 

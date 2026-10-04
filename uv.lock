@@ -224,6 +224,20 @@ wheels = [
 ]
 
 [[package]]
+name = "caddyserver"
+version = "2.11.7"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/0f/33/d250d97d6bc7362f8647084c5e386f831b33f9b2a712e6fe20566aaff3e5/caddyserver-2.11.7.tar.gz", hash = "sha256:5ac1ee609f480f1236067470fba17050c04ef573aef8be09628057f497820ca9", size = 7868, upload-time = "2026-10-04T12:52:38.564Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/a6/04/c1227e3748ed2d2179d887e3b37fb416f6178dda67cae24b541da522e3d8/caddyserver-2.11.7-py3-none-macosx_11_0_arm64.whl", hash = "sha256:0dc21608bb89b176866a23a8ea736699b2c93e9951a01c3a3de4eccb6bd02e0b", size = 50202890, upload-time = "2026-10-04T12:52:09.419Z" },
+    { url = "https://files.pythonhosted.org/packages/39/ba/23d14aa8d7b6647f1063850298117949be62d5164d49489a0ba39b48ca93/caddyserver-2.11.7-py3-none-macosx_11_0_x86_64.whl", hash = "sha256:17c74b7386fc0a5f749dce3d5b1acf672194104f971cdb17ef3a45d003360ae3", size = 53464089, upload-time = "2026-10-04T12:52:14.709Z" },
+    { url = "https://files.pythonhosted.org/packages/3a/74/49f2ca8adb799e07770022866d942a2c3612a2fc7358ab62d53ef2a24c82/caddyserver-2.11.7-py3-none-manylinux2014_aarch64.musllinux_1_1_aarch64.whl", hash = "sha256:c74c1b9b8f392145568a6a4b17141946275bd14b0351e6f83aeab78ec79f25a8", size = 48439156, upload-time = "2026-10-04T12:52:19.273Z" },
+    { url = "https://files.pythonhosted.org/packages/a5/80/b445c1a463a5e0a89e964f660682fca44e7f1b0539d916f95192874429f0/caddyserver-2.11.7-py3-none-manylinux2014_x86_64.musllinux_1_1_x86_64.whl", hash = "sha256:0eb5a1e23ac5a9fdf17571996f967ff0cf7bbd4143d12ed78f2862a88293e9ed", size = 51961714, upload-time = "2026-10-04T12:52:25.137Z" },
+    { url = "https://files.pythonhosted.org/packages/0b/2d/f5f38d2459fae99a1b6298eb6109088489b80999ec53f9c209e36b0b4551/caddyserver-2.11.7-py3-none-win_amd64.whl", hash = "sha256:d9600bf109e83ce773cbaccaa829eeeca7222e963c5fc1a0337b07e863163ba8", size = 53167804, upload-time = "2026-10-04T12:52:30.649Z" },
+    { url = "https://files.pythonhosted.org/packages/f4/9a/b0a67fee0228d2e11ad8374b49681e70aa92f6bc50ddbacff1f1e9b53579/caddyserver-2.11.7-py3-none-win_arm64.whl", hash = "sha256:18c6052e2b0967c3fa2db407e1cdccc35efa1b523ecc1bab19ab545b97f6fa85", size = 48911036, upload-time = "2026-10-04T12:52:36.03Z" },
+]
+
+[[package]]
 name = "certifi"
 version = "2026.7.22"
 source = { registry = "https://pypi.org/simple" }
@@ -2413,6 +2427,7 @@ name = "simpleaudit-studio"
 version = "0.5.3"
 source = { virtual = "." }
 dependencies = [
+    { name = "caddyserver" },
     { name = "cronsim" },
     { name = "django" },
     { name = "djangorestframework" },
@@ -2451,6 +2466,7 @@ server = [
 
 [package.metadata]
 requires-dist = [
+    { name = "caddyserver", specifier = ">=2.11.7" },
     { name = "cronsim", specifier = "==2.7" },
     { name = "django", specifier = "==5.2.4" },
     { name = "djangorestframework", specifier = "==3.16.0" },
