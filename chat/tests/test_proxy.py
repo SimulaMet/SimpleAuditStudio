@@ -739,3 +739,66 @@ class OtlpEnvTests(SimpleTestCase):
         # through verbatim.
         env = self._spawn_env(endpoint="http://collector:4318/otlp/v1/traces")
         self.assertEqual(env["OTEL_EXPORTER_OTLP_ENDPOINT"], "http://collector:4318/otlp/v1/traces")
+
+
+class SubpathPinPatchTests(SimpleTestCase):
+    """The OWUI wheel only honours ?model=/?models= on its own root path;
+    under the /chat subpath the pin is dropped unless the built frontend's
+    gate is widened. _patch_owui_subpath_pin does that idempotently."""
+
+    UNPATCHED = (
+        'const C=jd.subscribe(async He=>{'
+        '(He.url.pathname==="/"||He.url.pathname.startsWith("/folders/"))'
+        "&&(await jt(),vr()),ta()})"
+    )
+    PATCHED = (
+        'const C=jd.subscribe(async He=>{'
+        '(He.url.pathname==="/"||He.url.pathname==="/chat/"'
+        '||He.url.pathname.startsWith("/chat/folders/"))'
+        "&&(await jt(),vr()),ta()})"
+    )
+
+    def _frontend(self, tmp, chunks):
+        frontend = Path(tmp) / "frontend"
+        dest = frontend / "_app" / "immutable" / "chunks"
+        dest.mkdir(parents=True)
+        for name, text in chunks.items():
+            (dest / name).write_text(text)
+        return frontend
+
+    def test_patches_the_gate_once(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            frontend = self._frontend(tmp, {"C.js": self.UNPATCHED})
+            self.assertTrue(proxy._patch_owui_subpath_pin(frontend))
+            self.assertEqual((frontend / "_app/immutable/chunks/C.js").read_text(),
+                             self.PATCHED)
+
+    def test_is_idempotent(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            frontend = self._frontend(tmp, {"C.js": self.UNPATCHED})
+            self.assertTrue(proxy._patch_owui_subpath_pin(frontend))
+            self.assertFalse(proxy._patch_owui_subpath_pin(frontend))
+            self.assertEqual((frontend / "_app/immutable/chunks/C.js").read_text(),
+                             self.PATCHED)
+
+    def test_ignores_chunks_without_the_gate(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            # Mentions /folders/ but has no subscribe gate: must be skipped.
+            distractor = 'var x="/folders/"; var y="pathname==\\"/\\"";'
+            frontend = self._frontend(tmp, {"D.js": distractor})
+            self.assertFalse(proxy._patch_owui_subpath_pin(frontend))
+            self.assertEqual(
+                (frontend / "_app/immutable/chunks/D.js").read_text(), distractor)
+
+    def test_missing_chunks_dir_is_a_noop(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertFalse(proxy._patch_owui_subpath_pin(Path(tmp)))
+
+    def test_ambiguous_build_is_left_alone(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            # Two gates in one chunk: a build we don't recognise — refuse.
+            double = self.UNPATCHED + " " + self.UNPATCHED
+            frontend = self._frontend(tmp, {"C.js": double})
+            self.assertFalse(proxy._patch_owui_subpath_pin(frontend))
+            self.assertEqual(
+                (frontend / "_app/immutable/chunks/C.js").read_text(), double)
