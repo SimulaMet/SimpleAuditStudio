@@ -211,8 +211,10 @@ def main() -> None:
         try:
             chat_process = start_chat(chat_proxy, web_port)
         except (OSError, RuntimeError) as exc:
-            # No open-webui to run, a taken port, a failed spawn: chat is one
-            # part of the stack, so the rest still comes up without it.
+            # No open-webui to run, a taken port, a failed spawn, or no Caddy
+            # binary: chat is one part of the stack, so the rest still comes
+            # up without it.
+            chat_proxy.stop_open_webui()
             print(f"⚠️  Chat could not start ({exc}); continuing without it.")
             print("   Skip it with --disable-chat.\n")
         else:

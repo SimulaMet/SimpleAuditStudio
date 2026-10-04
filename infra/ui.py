@@ -2756,8 +2756,8 @@ class AgentResourcesView(ProjectMixin, TemplateView):
             # embed=admin: the document load is a same-origin GET that reaches
             # /chat/authz (via Caddy forward-auth), which stamps the session so
             # the follow-up /static/custom.css load (css_mask) returns the admin
-            # skin. Replaces the old __studio_admin=1 query marker, which only
-            # the pure-Python proxy could see (a Caddy route has no query).
+            # skin. Replaces the old __studio_admin=1 query marker, which the
+            # Caddy forward-auth rewrite dropped from the auth call.
             ctx["iframe_src"] = (
                 f"{section_url}"
                 f"?embed=admin&__studio_admin=1&t={int(time.time() * 1000)}{extra}"

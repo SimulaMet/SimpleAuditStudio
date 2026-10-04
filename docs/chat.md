@@ -45,8 +45,8 @@ The only remaining cross-process hop is that Caddy injects the identity headers
 — Open WebUI's trusted-header mode requires a proxy in front, and that proxy
 must be the only route to Open WebUI (see Security below). Both modes use the
 same Caddy forward-auth: docker mode ships it as a compose service; embedded
-mode runs the bundled `caddyserver` wheel (all platforms) and falls back to a
-pure-Python handler when no binary is present.
+mode runs the bundled `caddyserver` wheel (all platforms) and fails loudly at
+startup if its binary is missing (a broken install).
 
 ## Hiding the sidebar in the iframe
 
@@ -96,8 +96,7 @@ the host, so Studio moves to `:8001` and Caddy takes `:8000`. The front door
 is the same Caddyfile in both — docker mode ships
 `deploy/openwebui-subpath/Caddyfile.subpath` as a compose service, embedded
 mode generates the equivalent in `chat/proxy.py` from the bundled `caddyserver`
-wheel (all platforms) and falls back to a pure-Python handler when no binary is
-present.
+wheel (all platforms).
 
 Django remains the only authority on identity; nothing outside it reads sessions
 or user tables. Open WebUI creates its account on the first request per user and

@@ -34,8 +34,8 @@ Modes (``SIMPLEAUDIT_CHAT``):
               so the browser sees one port, exactly like docker. The front
               door is the bundled Caddy binary (caddyserver wheel, all
               platforms) — the same Caddyfile shape as
-              deploy/openwebui-subpath/Caddyfile.subpath — with a pure-Python
-              fallback (chat.proxy) when the binary cannot be located.
+              deploy/openwebui-subpath/Caddyfile.subpath. A missing binary
+              (a broken install) fails the front door at startup.
     docker    Caddy (this compose) does forward-auth; Studio only serves the
               /ai/ wrapper page, the admin iframes and /chat/authz
     off       the URLs 404 and nothing starts — also "disabled", "false", "no",
