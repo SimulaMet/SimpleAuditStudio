@@ -225,7 +225,28 @@ class ChatView(TemplateView):
                 {"id": f"{prefix}.{m.model_id}", "name": m.display_name, "has_key": m.has_key}
                 for m in conn.models.filter(enabled=True)
             )
+        # Synced agents are pinnable too — a saved ``studio.agent-<pk>``
+        # preference must survive here instead of being silently dropped.
+        models.extend(self._agent_models())
         return models
+
+    def _agent_models(self):
+        """Synced agents as picker entries.
+
+        Only agents already pushed to Open WebUI (non-empty ``external_id``)
+        are pinnable — their OWUI workspace-model id (``studio.agent-<pk>``)
+        is what the ``?models=`` param must name.
+        """
+        from model_registry.models import Agent
+
+        project = getattr(self.request, "project", None)
+        if project is None:
+            return []
+        return [
+            {"id": a.external_id, "name": a.name, "has_key": True}
+            for a in Agent.objects.filter(project=project, enabled=True)
+            if a.external_id
+        ]
 
     def _chat_model_groups(self):
         """The models the top-bar picker offers, grouped by connection."""
@@ -246,6 +267,9 @@ class ChatView(TemplateView):
             ]
             if models:
                 groups.append({"connection": conn.name, "models": models})
+        agents = self._agent_models()
+        if agents:
+            groups.append({"connection": "Agents", "models": agents})
         return groups
 
     def _resolve_default_model(self):
