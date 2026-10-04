@@ -49,14 +49,27 @@ def _data_dir() -> str:
 
 
 def _pid_alive(pid: int) -> bool:
-    """Return True if a process with this PID exists (signal 0 probe)."""
+    """Return True if a real (non-zombie) process with this PID exists.
+
+    A zombie still answers ``signal 0`` but is dead and pending reaping.
+    Treating it as alive strands a stale pid file, so a leftover Caddy/Open
+    WebUI would never be cleaned up and a fresh one's pid would never be
+    recorded. We therefore also require the process to be in a live state.
+    """
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
         return False
     except PermissionError:
         return True
-    return True
+    try:
+        state = subprocess.run(
+            ["ps", "-o", "state=", "-p", str(pid)],
+            capture_output=True, text=True, timeout=5, check=False,
+        ).stdout.strip().upper()
+    except (FileNotFoundError, subprocess.SubprocessError, OSError):
+        return True    # can't tell; assume alive (original behaviour)
+    return not state.startswith("Z")
 
 
 def _orphaned(ppid: int) -> bool:

@@ -36,6 +36,7 @@ class _StubStudio(BaseHTTPRequestHandler):
         # cookies, and an exact match would quietly answer 401 to a request that
         # really does carry the session.
         type(self).calls += 1
+        type(self).last_path = self.path
         signed_in = VALID_COOKIE in (self.headers.get("Cookie") or "")
         self.send_response(200 if signed_in else 401)
         if signed_in:
@@ -49,6 +50,9 @@ class _StubStudio(BaseHTTPRequestHandler):
         self.send_header("Set-Cookie", "csrftoken=abc; Path=/")
         self.send_header("Content-Length", "0")
         self.end_headers()
+
+    def do_POST(self):
+        self.do_GET()
 
 
 class _StubOpenWebUI(BaseHTTPRequestHandler):
@@ -128,15 +132,33 @@ def _serve(handler):
 
 
 class ProxyTests(SimpleTestCase):
+    """The pure-Python front door: /chat/* to Open WebUI, the rest to Studio.
+
+    The stubs mirror the production topology — Open WebUI is the subpath
+    build, so its stub is reached at /chat/... on the front door's port, and
+    everything else is proxied to the (stub) Studio web server.
+    """
+
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
+        # These tests exercise the pure-Python handler on an ephemeral port;
+        # never let the real Caddy front door take over (class lifetime
+        # mismatch). The Caddy path is covered by the E2E harness.
+        cls.no_caddy = patch.object(proxy, "_caddy_binary", lambda: None)
+        cls.no_caddy.start()
+        # Grab a free port for the front door (serve() binds config.PUBLIC_PORT).
+        probe = socket.socket()
+        probe.bind(("127.0.0.1", 0))
+        cls.public_port = probe.getsockname()[1]
+        probe.close()
         cls.studio = _serve(_StubStudio)
         cls.upstream = _serve(_StubOpenWebUI)
-        cls.upstream_url = f"http://127.0.0.1:{cls.upstream.server_address[1]}"
+        # UPSTREAM includes the subpath, like both production modes.
+        cls.upstream_url = f"http://127.0.0.1:{cls.upstream.server_address[1]}/chat"
         cls.patcher = patch.object(config, "UPSTREAM", cls.upstream_url)
         cls.patcher.start()
-        cls.port_patcher = patch.object(config, "PROXY_PORT", 0)
+        cls.port_patcher = patch.object(config, "PUBLIC_PORT", cls.public_port)
         cls.port_patcher.start()
         cls.server = proxy.serve(cls.studio.server_address[1])
         cls.url = f"http://127.0.0.1:{cls.server.server_address[1]}"
@@ -148,6 +170,7 @@ class ProxyTests(SimpleTestCase):
         cls.upstream.shutdown()
         cls.port_patcher.stop()
         cls.patcher.stop()
+        cls.no_caddy.stop()
         super().tearDownClass()
 
     def setUp(self):
@@ -156,7 +179,7 @@ class ProxyTests(SimpleTestCase):
         _StubStudio.calls = 0
 
     def test_a_signed_in_browser_is_identified(self):
-        response = httpx.get(f"{self.url}/api/config", headers={"Cookie": VALID_COOKIE})
+        response = httpx.get(f"{self.url}/chat/api/config", headers={"Cookie": VALID_COOKIE})
         self.assertEqual(response.json()["email"], "ada@example.com")
         self.assertEqual(response.json()["role"], "admin")
 
@@ -168,16 +191,24 @@ class ProxyTests(SimpleTestCase):
         rather than replace ours, and the upstream reads whichever comes first.
         """
         for name in (config.EMAIL_HEADER, config.EMAIL_HEADER.lower(), config.EMAIL_HEADER.upper()):
-            response = httpx.get(f"{self.url}/api/config", headers={
+            response = httpx.get(f"{self.url}/chat/api/config", headers={
                 "Cookie": VALID_COOKIE, name: "evil@example.com",
             }).json()
             self.assertEqual(response["email"], "ada@example.com", name)
             self.assertEqual(response["identity_headers_seen"], 1, name)
 
     def test_a_signed_out_browser_gets_a_way_back_not_the_chat(self):
-        response = httpx.get(self.url, follow_redirects=False)
+        response = httpx.get(f"{self.url}/chat/", follow_redirects=False)
         self.assertIn("Sign in to Studio", response.text)
         self.assertIn("top.location", response.text)   # breaks out of the iframe
+
+    def test_non_chat_paths_go_to_studio_not_open_webui(self):
+        """The front door only owns /chat/*: the rest of the site is Studio's
+        own web server (stub here), reached on the internal port."""
+        response = httpx.get(f"{self.url}/studio-page/",
+                             headers={"Cookie": VALID_COOKIE})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(_StubStudio.last_path, "/studio-page/")
 
     def test_one_browsers_session_never_reaches_another(self):
         """The proxy must remember nothing between requests.
@@ -186,10 +217,10 @@ class ProxyTests(SimpleTestCase):
         signed-in user: an httpx client keeps a cookie jar, so Studio's sessionid
         and Open WebUI's token were stored and replayed for whoever asked next.
         """
-        signed_in = httpx.get(f"{self.url}/api/config", headers={"Cookie": VALID_COOKIE})
+        signed_in = httpx.get(f"{self.url}/chat/api/config", headers={"Cookie": VALID_COOKIE})
         self.assertEqual(signed_in.json()["email"], "ada@example.com")
 
-        anonymous = httpx.get(f"{self.url}/api/config")
+        anonymous = httpx.get(f"{self.url}/chat/api/config")
         self.assertIn("Sign in to Studio", anonymous.text)
 
     def test_the_leak_is_what_the_test_above_would_catch(self):
@@ -200,8 +231,8 @@ class ProxyTests(SimpleTestCase):
         """
         shared = httpx.Client(transport=proxy._Handler.transport, follow_redirects=False)
         with patch.object(proxy._Handler, "client", lambda self: shared):
-            httpx.get(f"{self.url}/api/config", headers={"Cookie": VALID_COOKIE})
-            anonymous = httpx.get(f"{self.url}/api/config")
+            httpx.get(f"{self.url}/chat/api/config", headers={"Cookie": VALID_COOKIE})
+            anonymous = httpx.get(f"{self.url}/chat/api/config")
         self.assertEqual(anonymous.json()["email"], "ada@example.com",
                          "the shared client no longer leaks — has httpx changed?")
 
@@ -214,32 +245,32 @@ class ProxyTests(SimpleTestCase):
         self.assertEqual(dict(handler.client().cookies), {})
 
     def test_the_upstreams_cookies_are_not_kept_either(self):
-        httpx.get(f"{self.url}/api/config", headers={"Cookie": VALID_COOKIE})
-        second = httpx.get(f"{self.url}/api/config", headers={"Cookie": VALID_COOKIE})
+        httpx.get(f"{self.url}/chat/api/config", headers={"Cookie": VALID_COOKIE})
+        second = httpx.get(f"{self.url}/chat/api/config", headers={"Cookie": VALID_COOKIE})
         self.assertNotIn("someones-jwt", second.json()["cookie_seen"] or "")
 
     def test_a_page_load_asks_studio_once_not_once_per_asset(self):
         """Open WebUI pulls dozens of assets; each one asking Django would show."""
         for _ in range(5):
-            httpx.get(f"{self.url}/api/config", headers={"Cookie": VALID_COOKIE})
+            httpx.get(f"{self.url}/chat/api/config", headers={"Cookie": VALID_COOKIE})
         self.assertEqual(_StubStudio.calls, 1)
 
     def test_the_answer_stops_being_used_once_it_is_old(self):
         """Otherwise a sign-out would never take effect."""
         with patch.object(proxy, "IDENTITY_TTL", 0.05):
-            httpx.get(f"{self.url}/api/config", headers={"Cookie": VALID_COOKIE})
+            httpx.get(f"{self.url}/chat/api/config", headers={"Cookie": VALID_COOKIE})
             time.sleep(0.1)
-            httpx.get(f"{self.url}/api/config", headers={"Cookie": VALID_COOKIE})
+            httpx.get(f"{self.url}/chat/api/config", headers={"Cookie": VALID_COOKIE})
         self.assertEqual(_StubStudio.calls, 2)
 
     def test_the_cache_can_be_turned_off(self):
         with patch.object(proxy, "IDENTITY_TTL", 0):
             for _ in range(3):
-                httpx.get(f"{self.url}/api/config", headers={"Cookie": VALID_COOKIE})
+                httpx.get(f"{self.url}/chat/api/config", headers={"Cookie": VALID_COOKIE})
         self.assertEqual(_StubStudio.calls, 3)
 
     def test_the_frame_blocking_header_is_removed(self):
-        response = httpx.get(f"{self.url}/api/config", headers={"Cookie": VALID_COOKIE})
+        response = httpx.get(f"{self.url}/chat/api/config", headers={"Cookie": VALID_COOKIE})
         self.assertNotIn("x-frame-options", response.headers)
 
     def test_the_embed_stylesheet_comes_from_studio_not_the_upstream(self):
@@ -250,7 +281,7 @@ class ProxyTests(SimpleTestCase):
         lives in this repo and survives Open WebUI upgrades. It is a static
         asset, so it must not require a signed-in browser.
         """
-        response = httpx.get(f"{self.url}/static/custom.css")
+        response = httpx.get(f"{self.url}/chat/static/custom.css")
         self.assertEqual(response.status_code, 200)
         self.assertIn("text/css", response.headers["Content-Type"])
         self.assertIn("#sidebar", response.text)
@@ -266,10 +297,10 @@ class ProxyTests(SimpleTestCase):
         browser (cookie) for a short window.
         """
         # 1. The initial document request carries the marker.
-        httpx.get(f"{self.url}/workspace/knowledge?__studio_admin=1",
+        httpx.get(f"{self.url}/chat/workspace/knowledge?__studio_admin=1",
                   headers={"Cookie": VALID_COOKIE})
         # 2. The page's own CSS request (no query) now gets the admin sheet.
-        response = httpx.get(f"{self.url}/static/custom.css",
+        response = httpx.get(f"{self.url}/chat/static/custom.css",
                              headers={"Cookie": VALID_COOKIE})
         self.assertEqual(response.status_code, 200)
         self.assertIn("text/css", response.headers["Content-Type"])
@@ -279,15 +310,15 @@ class ProxyTests(SimpleTestCase):
 
     def test_no_marker_serves_the_chat_stylesheet(self):
         """Without the marker, /static/custom.css is still chat/embed.css."""
-        httpx.get(f"{self.url}/workspace/knowledge", headers={"Cookie": VALID_COOKIE})
-        response = httpx.get(f"{self.url}/static/custom.css",
+        httpx.get(f"{self.url}/chat/workspace/knowledge", headers={"Cookie": VALID_COOKIE})
+        response = httpx.get(f"{self.url}/chat/static/custom.css",
                              headers={"Cookie": VALID_COOKIE})
         self.assertEqual(response.status_code, 200)
         self.assertIn("#sidebar", response.text)
         self.assertNotIn("#workspace-container", response.text)
 
     def test_open_webui_favicon_comes_from_studio_without_auth(self):
-        response = httpx.get(f"{self.url}/static/favicon-32x32.svg")
+        response = httpx.get(f"{self.url}/chat/static/favicon-32x32.svg")
         expected = (Path(proxy.__file__).resolve().parents[1] / "static" / "logo.svg").read_bytes()
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.headers["Content-Type"], "image/svg+xml")
@@ -319,7 +350,7 @@ class ProxyTests(SimpleTestCase):
         )
         with self._tunnel_upstream(reply):
             response = httpx.get(
-                f"{self.url}/ws",
+                f"{self.url}/chat/ws",
                 headers={
                     "Cookie": VALID_COOKIE,
                     "Connection": "Upgrade",
@@ -351,7 +382,7 @@ class ProxyTests(SimpleTestCase):
             ("127.0.0.1", self.server.server_address[1]), timeout=10
         ) as client:
             client.sendall(
-                b"GET /ws HTTP/1.1\r\n"
+                b"GET /chat/ws HTTP/1.1\r\n"
                 b"Host: 127.0.0.1\r\n"
                 b"Connection: Upgrade\r\n"
                 b"Upgrade: websocket\r\n"
@@ -416,11 +447,19 @@ class PidFileTests(SimpleTestCase):
         self.tmp = Path(self._tmp.name)
         self.file_patcher = patch.object(proxy, "pid_file", lambda: self.tmp / "open-webui.pid")
         self.file_patcher.start()
+        # These tests only exercise pid-file bookkeeping, not the launch.
+        self.interp_patcher = patch.object(
+            proxy, "_locate_owui_interpreter", lambda home: "/usr/bin/env python")
+        self.interp_patcher.start()
+        self.secret_patcher = patch.object(proxy, "_secret_key", lambda home: "test-key")
+        self.secret_patcher.start()
         self._process = proxy._process
         proxy._process = None
 
     def tearDown(self):
         proxy._process = self._process
+        self.interp_patcher.stop()
+        self.secret_patcher.stop()
         self.file_patcher.stop()
         self._tmp.cleanup()
         super().tearDown()
@@ -482,6 +521,87 @@ class PidFileTests(SimpleTestCase):
         self.assertTrue(file.exists())
 
 
+class CaddyfileTests(SimpleTestCase):
+    """The generated front-door Caddyfile: a mirror of
+    deploy/openwebui-subpath/Caddyfile.subpath on loopback ports."""
+
+    def test_caddyfile_has_the_proven_auth_block(self):
+        text = proxy._caddyfile(8123, 8124)
+        # Front door on the public port, no TLS, no admin API.
+        self.assertIn(":8123 {", text)
+        self.assertIn("auto_https off", text)
+        self.assertIn("admin off", text)
+        # Forgery defense at site level, before anything else.
+        self.assertIn("request_header -X-Studio-Email", text)
+        self.assertIn("request_header -X-Studio-Name", text)
+        self.assertIn("request_header -X-Studio-Role", text)
+        # The forward-auth: GET to Studio /chat/authz, identity copied on 2xx,
+        # 302 to login on 401 — inside the terminal handle (ordering).
+        self.assertIn("method GET", text)
+        self.assertIn("rewrite /chat/authz", text)
+        self.assertIn("127.0.0.1:8124", text)
+        self.assertIn("@good status 2xx", text)
+        self.assertIn("request_header X-Studio-Email {rp.header.X-Studio-Email}",
+                      text)
+        self.assertIn("@signedout status 401", text)
+        # The signed-out 302 points at the browser-visible public origin.
+        self.assertIn("redir http://localhost:8123/login/ 302", text)
+        # The embed sheet: /chat/static/custom.css -> Studio's session-aware mask.
+        self.assertIn("handle /chat/static/custom.css {", text)
+        self.assertIn("rewrite /chat/css-mask", text)
+        # Branded favicons from Studio's static/ (keys are subpath-relative).
+        self.assertIn(f"handle {config.SUBPATH}/static/favicon.svg {{", text)
+        self.assertIn("root *", text)
+        self.assertIn("rewrite * /logo.svg", text)
+        self.assertIn("file_server", text)
+        # The OWUI proxy keeps the /chat path as-is (no strip) and lets the
+        # iframe render it. `handle` (not `handle_path`) = no prefix strip.
+        self.assertNotIn("handle_path", text)
+        self.assertIn("header_down -X-Frame-Options", text)
+        self.assertIn(f"handle {config.SUBPATH}/* {{", text)
+        # Everything else falls through to Studio on the internal port.
+        self.assertIn("handle {\n\t\treverse_proxy 127.0.0.1:8124", text)
+
+    def test_caddyfile_owui_target_is_upstream_without_path(self):
+        """OWUI is reached at its host:port only — the request path already
+        carries /chat, exactly like the compose file's open-webui:8080."""
+        text = proxy._caddyfile(8123, 8124)
+        host, port = proxy.chat_upstream_base().replace("http://", "").split(":")
+        target = f"reverse_proxy {host}:{port} {{"
+        self.assertIn(target, text)
+        # The auth + css-mask + fallback blocks all point at the internal
+        # Studio port, never at the OWUI port.
+        self.assertEqual(text.count(f"reverse_proxy 127.0.0.1:8124"), 3)
+        self.assertEqual(text.count(target), 1)
+
+    def test_caddyfile_every_branded_route_has_a_handle(self):
+        text = proxy._caddyfile(8123, 8124)
+        # Keys are subpath-relative, so the handle routes are absolute.
+        for route in proxy._BRANDED_ASSETS:
+            self.assertIn(f"handle {route} {{", text)
+
+    def test_caddyfile_is_valid_after_adapt_when_caddy_exists(self):
+        if proxy._caddy_binary() is None:
+            self.skipTest("no caddy binary on this platform")
+        import json
+        import subprocess
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "Caddyfile"
+            path.write_text(proxy._caddyfile(8123, 8124))
+            proc = subprocess.run(
+                [proxy._caddy_binary(), "adapt", "--config", str(path),
+                 "--adapter", "caddyfile"],
+                capture_output=True, text=True,
+            )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        json.loads(proc.stdout)    # valid JSON = a loadable config
+
+    def test_stop_caddy_is_idempotent(self):
+        proxy.stop_caddy()
+        proxy.stop_caddy()
+        self.assertIsNone(proxy._caddy_process)
+
+
 class OtlpEnvTests(SimpleTestCase):
     """When OTLP is enabled, Open WebUI is pointed at Studio's listener."""
 
@@ -492,9 +612,17 @@ class OtlpEnvTests(SimpleTestCase):
         proxy._process = None
         self._pid_patcher = patch.object(proxy, "pid_file", lambda: self.tmp / "open-webui.pid")
         self._pid_patcher.start()
+        # These tests only exercise the OTLP environment, not the launch.
+        self._interp_patcher = patch.object(
+            proxy, "_locate_owui_interpreter", lambda home: "/usr/bin/env python")
+        self._interp_patcher.start()
+        self._secret_patcher = patch.object(proxy, "_secret_key", lambda home: "test-key")
+        self._secret_patcher.start()
 
     def tearDown(self):
         self._pid_patcher.stop()
+        self._interp_patcher.stop()
+        self._secret_patcher.stop()
         proxy._process = self._process
         self._tmp.cleanup()
         super().tearDown()

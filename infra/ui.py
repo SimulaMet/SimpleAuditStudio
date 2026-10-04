@@ -2710,19 +2710,20 @@ class AgentsView(ProjectMixin, TemplateView):
 class AgentResourcesView(ProjectMixin, TemplateView):
     """Restricted-iframe resource manager.
 
-    Embeds Open WebUI's workspace admin (Knowledge / Tools) in an iframe,
-    masked to the target section by chat/embed_admin.css. The iframe points at
-    the chat proxy with the ?__studio_admin=1 marker so the proxy serves the
-    admin sheet. Studio never writes here; the pull-sync keeps local models
-    fresh.
+    Embeds Open WebUI's workspace admin (Knowledge / Tools) in a same-origin
+    iframe under /chat/ (the subpath build), masked to the target section by
+    chat/embed_admin.css. Studio never writes here; the pull-sync keeps local
+    models fresh.
     """
 
     template_name = "agents/resources.html"
 
-    # section -> Open WebUI workspace route (verified against the live instance)
+    # section -> Open WebUI workspace route RELATIVE to the /chat base
+    # (verified against the live instance). The base comes from
+    # chat.config.public_url(), so no leading slash here.
     SECTIONS = {
-        "knowledge": "/workspace/knowledge",
-        "tools": "/workspace/tools",
+        "knowledge": "workspace/knowledge",
+        "tools": "workspace/tools",
     }
     DEFAULT_SECTION = "knowledge"
 
@@ -2738,28 +2739,36 @@ class AgentResourcesView(ProjectMixin, TemplateView):
         from chat import config as chat_config
         if getattr(chat_config, "ENABLED", False):
             base = chat_config.public_url(self.request)
+            if base.endswith("/"):
+                base = base.rstrip("/")
             # Per-render nonce: the Open WebUI SPA shell is a static document
             # that browsers cache with heuristic freshness. A cached document
-            # never reaches the chat proxy, so the ?__studio_admin=1 marker is
+            # never reaches the proxy, so the ?__studio_admin=1 marker is
             # never registered and the frame falls back to the chat
             # stylesheet (workspace tab bar re-exposed). A fresh URL per page
-            # render guarantees the marker request actually goes to the proxy.
+            # render guarantees the marker request actually goes out.
             # The SPA ignores unknown query params (path-based routing).
             import time
             create = self.request.GET.get("create") == "1"
             extra = "&create=1" if create else ""
+            section_url = f"{base}/{self.SECTIONS[section]}"
+            # embed=admin: the document load is a same-origin GET that reaches
+            # /chat/authz (via Caddy forward-auth), which stamps the session so
+            # the follow-up /static/custom.css load (css_mask) returns the admin
+            # skin. Replaces the old __studio_admin=1 query marker, which only
+            # the pure-Python proxy could see (a Caddy route has no query).
             ctx["iframe_src"] = (
-                f"{base}{self.SECTIONS[section]}"
-                f"?__studio_admin=1&t={int(time.time() * 1000)}{extra}"
+                f"{section_url}"
+                f"?embed=admin&__studio_admin=1&t={int(time.time() * 1000)}{extra}"
             )
             # "Upload directory" in the Knowledge create/edit modal uses the
             # File System Access API (showDirectoryPicker), which browsers only
-            # allow in a top-level or same-origin frame. The embed is a
-            # cross-origin subframe, so that one button throws a SecurityError
-            # here. Offer a top-level tab on the same origin (the shared Studio
-            # cookie authenticates it), where the picker is permitted.
+            # allow in a top-level or same-origin frame. The embed is now
+            # same-origin, so the picker also works inside the frame; the
+            # top-level tab is kept as a convenience (the shared Studio
+            # cookie authenticates it).
             if section == "knowledge":
-                ctx["directory_url"] = f"{base}{self.SECTIONS[section]}"
+                ctx["directory_url"] = section_url
                 ctx["directory_url_enabled"] = True
             else:
                 ctx["directory_url"] = None
