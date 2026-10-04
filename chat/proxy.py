@@ -27,7 +27,6 @@ from __future__ import annotations
 import atexit
 import logging
 import os
-import re
 import secrets
 import shutil
 import signal
@@ -1100,77 +1099,24 @@ OWUI_WHEEL_URL = os.environ.get(
 )
 OWUI_PACKAGE = os.environ.get("SIMPLEAUDIT_CHAT_PACKAGE", "open-webui")
 
-# The v0.11.4-subpath frontend only applies its URL params (?model= / ?models=
-# / ?temporary-chat=) and the first-run chat setup when the browser is on the
-# app's own root ("/") or a "/folders/..." route. Under the subpath the embed
-# iframe loads at "/chat/", so that init never runs and a pinned model is
-# silently dropped. The one-line fix widens that gate to also match the
-# subpath root and folders route. The gate in the minified bundle is anchored
-# without its build-specific variable name; note "||" must be escaped or the
-# pattern degenerates into an empty alternation:
-_OWUI_PIN_GATE_RE = re.compile(
-    r'([A-Za-z_$][\w$]*)\.url\.pathname==="/"\|\|\1\.url\.pathname\.startsWith\("/folders/"\)'
-)
+
+def _wheel_marker(managed: Path) -> Path:
+    """Records which wheel URL built the managed venv (written at build time)."""
+    return managed / ".studio-wheel-url"
 
 
-def _patch_owui_subpath_pin(frontend_dir: Path) -> bool:
-    """Widen the OWUI model-pin gate to the subpath, in the built frontend.
+def _managed_venv_matches_wheel(managed: Path) -> bool:
+    """True when the managed venv was built from the currently pinned wheel.
 
-    Returns True when the gate was patched, False when it was already applied
-    or the expected chunk/gate was absent (a different wheel build). Never
-    raises: a missing build is a no-op, not a startup failure.
-    """
-    chunks = frontend_dir / "_app" / "immutable" / "chunks"
-    if not chunks.is_dir():
-        return False
-    subpath = chat.SUBPATH
-    root = f'"{subpath}/"'
-    folders = f'"{subpath}/folders/"'
-    patched_marker = f"pathname=={root}"
-    for js in chunks.glob("*.js"):
-        try:
-            text = js.read_text()
-        except OSError:
-            continue
-        if '/folders/"' not in text or patched_marker in text:
-            continue  # not the chat chunk, or the fix is already in place
-        matches = _OWUI_PIN_GATE_RE.findall(text)
-        if len(matches) != 1:
-            continue  # ambiguous or different build: don't guess
-        var = matches[0]
-        replacement = (
-            f'{var}.url.pathname==="/"||{var}.url.pathname==={root}'
-            f'||{var}.url.pathname.startsWith({folders})'
-        )
-        try:
-            js.write_text(_OWUI_PIN_GATE_RE.sub(replacement, text, count=1))
-            logger.info("Patched OWUI subpath model-pin gate in %s", js.name)
-            return True
-        except OSError:
-            logger.warning("Could not patch OWUI subpath pin in %s", js.name, exc_info=True)
-            return False
-    return False
-
-
-def _patch_owui_frontend(py: str) -> None:
-    """Re-apply the subpath pin fix to the OWUI package an interpreter runs.
-
-    Runs at interpreter-resolution time so the edit survives a managed-venv
-    rebuild (which reinstalls the wheel). Best-effort: any lookup failure is
-    logged and swallowed — the server still starts, it just may ignore pins.
+    Without this, a venv built from an older release of the same package name
+    (and thus importable) would be reused forever, silently pinned to the old
+    frontend. A missing marker (venv predating this check) also counts as a
+    mismatch, so every existing machine rebuilds exactly once.
     """
     try:
-        pkg_dir = subprocess.run(
-            [py, "-c",
-             "import open_webui, os; print(os.path.dirname(open_webui.__file__))"],
-            capture_output=True, text=True, timeout=30, check=False,
-        )
-        if pkg_dir.returncode != 0:
-            logger.warning("Could not locate the open_webui package for %s", py)
-            return
-        _patch_owui_subpath_pin(Path(pkg_dir.stdout.strip()) / "frontend")
-    except Exception:  # a patch hiccup must never block OWUI startup
-        logger.warning("Could not patch the OWUI subpath pin for %s", py, exc_info=True)
+        return _wheel_marker(managed).read_text().strip() == OWUI_WHEEL_URL
+    except OSError:
+        return False
 
 
 def _owui_venv_dir() -> Path:
@@ -1222,7 +1168,7 @@ def _locate_owui_interpreter(home: Path) -> str:
     managed = _owui_venv_dir()
     managed_py = managed / "bin" / "python"
     if managed_py.exists():
-        if _probe_interpreter(str(managed_py)):
+        if _probe_interpreter(str(managed_py)) and _managed_venv_matches_wheel(managed):
             return str(managed_py)
         logger.warning("Stale Open WebUI venv at %s; rebuilding it", managed)
         shutil.rmtree(managed, ignore_errors=True)
@@ -1239,6 +1185,7 @@ def _locate_owui_interpreter(home: Path) -> str:
                 check=True, capture_output=True, timeout=900,
             )
             if _probe_interpreter(str(managed_py)):
+                _wheel_marker(managed).write_text(OWUI_WHEEL_URL)
                 return str(managed_py)
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as exc:
             raise RuntimeError(
@@ -1308,7 +1255,6 @@ def _spawn(home: Path, studio_port: int | None = None) -> subprocess.Popen:
         argv = command.split()
     else:
         py = _locate_owui_interpreter(home)
-        _patch_owui_frontend(py)
         argv = [py, "-m", "uvicorn", "open_webui.main:app",
                 "--host", host, "--port", str(port),
                 "--forwarded-allow-ips", "*"]
