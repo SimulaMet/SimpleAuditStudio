@@ -86,43 +86,155 @@ class OpenWebUIAdapter:
         return out
 
     # --- agent configuration ------------------------------------------------
+    #
+    # OpenWebUI's "agent" primitive is a workspace *model* entry: a model id
+    # that inherits a base model and carries ``meta.knowledge`` (the attached
+    # knowledge bases). Studio agents are therefore materialized as such
+    # entries — created/updated on every Studio create/edit, and readable via
+    # ``agent_remote`` for the detail page. OpenWebUI is the source of truth
+    # for the live config; Studio keeps the row + ``external_id`` as the
+    # durable, audit-relevant reference.
 
-    def create_or_update_agent(self, agent: Agent) -> dict[str, Any]:
-        """Push an Agent's configuration to OpenWebUI.
+    AGENT_MODEL_PREFIX = "studio.agent"
 
-        OpenWebUI does not have a native "agent" concept in all versions, so
-        this maps the Agent onto the closest available primitives:
-        - The model is selected via the connection/model push (already done
-          by ``chat.sync``).
-        - Knowledge bases are referenced by their OpenWebUI ids.
-        - Tools are referenced by their OpenWebUI function ids.
-        - The system prompt and retrieval settings are stored in the agent's
-          metadata for the chat layer to consume at execution time.
+    def agent_model_id(self, agent: Agent) -> str:
+        """The deterministic OpenWebUI model id for a Studio agent.
 
-        Returns a dict with the OpenWebUI-side identifiers.
+        ``studio.agent-<pk>``: stable across renames, unique per agent, and
+        the ``-<pk>`` suffix keeps it distinct from base model ids.
         """
-        model = agent.base_model
-        conn = model.connection
-        prefix = chat_model_prefix(conn)
-        openwebui_model_id = f"{prefix}.{model.model_id}"
+        return f"{self.AGENT_MODEL_PREFIX}-{agent.pk}"
 
-        kb_ids = [
-            kb.external_id
+    def agent_base_model_id(self, agent: Agent) -> str:
+        """The OpenWebUI id of the agent's base (pushed) model."""
+        model = agent.base_model
+        return f"{chat_model_prefix(model.connection)}.{model.model_id}"
+
+    def _knowledge_refs(self, agent: Agent) -> list[dict[str, Any]]:
+        """``meta.knowledge`` entries: file-shaped refs to the agent's KBs.
+
+        The OpenWebUI chat runtime reads ``meta.knowledge`` at completion time
+        and treats each ``{"id", "name", "type": "file"}`` entry as a
+        knowledge source. KBs without an OpenWebUI id are not linkable yet.
+        """
+        return [
+            {"id": kb.external_id, "name": kb.name, "type": "file"}
             for kb in agent.knowledge_bases.all()
             if kb.external_id
         ]
 
-        tool_ids = [
-            tool.external_id
-            for tool in agent.tools.all()
-            if tool.external_id
-        ]
+    def push_agent(self, agent: Agent) -> dict[str, Any]:
+        """Create or update the agent's OpenWebUI model entry.
 
-        # Build the configuration payload. In a full OpenWebUI deployment this
-        # would call a specific "create agent" endpoint. For now we return the
-        # resolved identifiers so the chat layer can use them.
-        config = {
-            "model_id": openwebui_model_id,
+        Idempotent: create when ``external_id`` is empty, update when it is
+        set, and recover a stale create (entry deleted in OpenWebUI) by
+        recreating. Backfills ``agent.external_id`` on success.
+
+        Returns ``{"status": "created"|"updated"|"unchanged"}``. Raises
+        ``OpenWebUIAdapterError`` on failure — callers must treat sync as
+        best-effort and surface it without breaking the Studio request.
+        """
+        model_id = self.agent_model_id(agent)
+        base_model_id = self.agent_base_model_id(agent)
+        knowledge = self._knowledge_refs(agent)
+        description = agent.system_prompt or agent.description or agent.name
+
+        try:
+            if agent.external_id:
+                try:
+                    self._api.update_workspace_model(
+                        model_id, agent.name, base_model_id=base_model_id,
+                        description=description, knowledge=knowledge,
+                    )
+                    status = "updated"
+                except ChatAPIError as exc:
+                    # A 404 means the entry vanished in OpenWebUI — recreate
+                    # it with the same deterministic id.
+                    if "404" not in str(exc) and "not found" not in str(exc).lower():
+                        raise
+                    self._api.create_workspace_model(
+                        model_id, agent.name, base_model_id=base_model_id,
+                        description=description, knowledge=knowledge,
+                    )
+                    status = "created"
+            else:
+                try:
+                    self._api.create_workspace_model(
+                        model_id, agent.name, base_model_id=base_model_id,
+                        description=description, knowledge=knowledge,
+                    )
+                    status = "created"
+                except ChatAPIError as exc:
+                    if "already registered" not in str(exc).lower():
+                        raise
+                    # Someone (an earlier crashed run) already created it.
+                    self._api.update_workspace_model(
+                        model_id, agent.name, base_model_id=base_model_id,
+                        description=description, knowledge=knowledge,
+                    )
+                    status = "updated"
+        except ChatAPIError as exc:
+            raise OpenWebUIAdapterError(
+                f"Could not sync agent '{agent.name}' to OpenWebUI: {exc}"
+            ) from exc
+
+        if agent.external_id != model_id:
+            agent.external_id = model_id
+            agent.save(update_fields=["external_id", "updated_at"])
+
+        logger.info(
+            "Agent '%s' synced to OpenWebUI model %s (%s)",
+            agent.name, model_id, status,
+        )
+        return {"status": status, "model_id": model_id}
+
+    def agent_remote(self, agent: Agent) -> dict[str, Any] | None:
+        """Fetch the live OpenWebUI config for an agent, or None.
+
+        ``None`` means "no live view" (no entry yet, OpenWebUI down, or the
+        entry was removed there) — callers fall back to the local cached row.
+        """
+        if not agent.external_id:
+            return None
+        try:
+            item = self._api.get_workspace_model(agent.external_id)
+        except ChatAPIError:
+            return None
+        if not isinstance(item, dict):
+            return None
+        meta = item.get("meta") if isinstance(item.get("meta"), dict) else {}
+        return {
+            "model_id": item.get("id", ""),
+            "name": item.get("name", ""),
+            "base_model_id": item.get("base_model_id"),
+            "description": meta.get("description") or "",
+            "knowledge": meta.get("knowledge") or [],
+            "is_active": item.get("is_active", True),
+        }
+
+    def delete_agent(self, agent: Agent) -> None:
+        """Delete the agent's OpenWebUI model entry (best-effort, never raises)."""
+        if not agent.external_id:
+            return
+        try:
+            self._api.delete_workspace_model(agent.external_id)
+        except ChatAPIError as exc:
+            logger.warning(
+                "Agent '%s': OpenWebUI model delete failed (%s); local row deleted anyway.",
+                agent.name, exc,
+            )
+
+    def resolve_agent_config(self, agent: Agent) -> dict[str, Any]:
+        """The resolved execution config (used by the chat layer).
+
+        Kept as a separate, side-effect-free read so the execution path never
+        triggers a push.
+        """
+        kb_ids = [kb.external_id for kb in agent.knowledge_bases.all() if kb.external_id]
+        tool_ids = [tool.external_id for tool in agent.tools.all() if tool.external_id]
+        return {
+            "model_id": agent.external_id or self.agent_model_id(agent),
+            "base_model_id": self.agent_base_model_id(agent),
             "system_prompt": agent.system_prompt,
             "knowledge_base_ids": kb_ids,
             "tool_ids": tool_ids,
@@ -134,20 +246,28 @@ class OpenWebUIAdapter:
             "capabilities": agent.capabilities,
         }
 
-        logger.info(
-            "Agent %s configured: model=%s kbs=%d tools=%d",
-            agent.name, openwebui_model_id, len(kb_ids), len(tool_ids),
-        )
-        return config
+    # Backward-compatible alias: the old name implied push without one.
+    def create_or_update_agent(self, agent: Agent) -> dict[str, Any]:
+        """Sync the agent to OpenWebUI and return its execution config."""
+        self.push_agent(agent)
+        return self.resolve_agent_config(agent)
 
     def run_agent(self, agent: Agent, messages: list[dict[str, str]], *, session_id: str | None = None) -> dict[str, Any]:
         """Execute a conversation through OpenWebUI using the agent's config.
 
         This is the execution path: Studio → adapter → OpenWebUI runtime.
         The messages are standard chat format ``[{"role": ..., "content": ...}]``.
+
+        Side-effect-free: it resolves the agent's model entry but never
+        pushes. When the agent has a synced OpenWebUI model entry that id is
+        used (its ``meta.knowledge`` gives the RAG context); otherwise the
+        raw base model id is used with explicit knowledge/tool ids.
         """
-        config = self.create_or_update_agent(agent)
-        model_id = config["model_id"]
+        config = self.resolve_agent_config(agent)
+        if agent.external_id:
+            model_id = agent.external_id
+        else:
+            model_id = config["base_model_id"]
 
         payload: dict[str, Any] = {
             "model": model_id,

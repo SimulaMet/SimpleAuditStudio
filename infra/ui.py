@@ -2782,6 +2782,25 @@ class AgentResourcesView(ProjectMixin, TemplateView):
         return ctx
 
 
+def _sync_agent_form_result(request, agent):
+    """Push a form-created/edited agent to Open WebUI (best-effort).
+
+    Chat disabled → silent no-op. Sync failed → an error message is shown so
+    the user knows the agent exists locally but is not live in chat yet
+    (re-editing retries the push).
+    """
+    from model_registry.services import sync_agent_to_openwebui
+
+    if not chat_enabled():
+        return
+    if sync_agent_to_openwebui(agent, request.user) == "skipped":
+        messages.error(
+            request,
+            f"Agent '{agent.name}' saved locally, but Open WebUI sync failed — "
+            "edit the agent again to retry.",
+        )
+
+
 def _sync_openwebui_resources(project, user):
     """Pull knowledge bases and tools from OpenWebUI into local models.
 
@@ -2901,6 +2920,12 @@ class AgentDetailView(ProjectMixin, TemplateView):
         # Gate the "+ New" deep links: without the chat proxy there is no
         # embedded workspace to create in.
         ctx["chat_enabled"] = chat_enabled()
+        # Live Open WebUI model entry (None when unsynced or OWUI is down).
+        if agent is not None and chat_enabled():
+            from model_registry.services import agent_live_openwebui
+            ctx["openwebui_live"] = agent_live_openwebui(agent, self.request.user)
+        else:
+            ctx["openwebui_live"] = None
         ctx["retrieval_profiles"] = RetrievalProfile.objects.filter(project=project)
         ctx["capability_options"] = [
             {"key": "knowledge_search", "label": "Knowledge Search"},
@@ -2965,6 +2990,7 @@ class AgentDetailView(ProjectMixin, TemplateView):
                 caps[cap] = request.POST.get(cap) == "on"
             agent.capabilities = caps
             agent.save()
+            _sync_agent_form_result(request, agent)
             messages.success(request, f"Agent '{name}' updated.")
         else:
             caps = {}
@@ -2989,6 +3015,7 @@ class AgentDetailView(ProjectMixin, TemplateView):
             agent.tools.set(
                 Tool.objects.filter(pk__in=request.POST.getlist("tools"), project=project)
             )
+            _sync_agent_form_result(request, agent)
             messages.success(request, f"Agent '{name}' created.")
 
         return redirect("agent_detail", agent_id=agent.id)
@@ -3003,12 +3030,14 @@ class AgentDeleteView(ProjectMixin, View):
 
     def post(self, request, agent_id):
         from model_registry.models import Agent
+        from model_registry.services import delete_agent_from_openwebui
 
         agent = Agent.objects.filter(pk=agent_id, project=request.project).first()
         if not agent:
             messages.error(request, "Agent not found.")
             return redirect("agents")
         name = agent.name
+        delete_agent_from_openwebui(agent)
         agent.delete()
         messages.success(request, f"Agent '{name}' deleted.")
         return redirect("agents")
@@ -3026,10 +3055,17 @@ class AgentTestChatView(ProjectMixin, View):
         if not agent:
             messages.error(request, "Agent not found.")
             return redirect("agents")
-        # Pin the agent's model in the session and redirect to chat
+        # Pin the agent's model in the session and redirect to chat. A synced
+        # agent pins its Open WebUI model entry, so the chat runs the agent's
+        # base model *and* its attached knowledge bases; an unsynced one pins
+        # the raw base model (the ?models= pin only matches ids Open WebUI
+        # knows, so an unsynced agent id would silently fall back to default).
         conn = agent.base_model.connection
-        model_id = agent.base_model.model_id
-        request.session["chat_pinned_model"] = f"{conn.id}.{model_id}"
+        if agent.external_id:
+            model_id = agent.external_id
+        else:
+            model_id = f"{conn.id}.{agent.base_model.model_id}"
+        request.session["chat_pinned_model"] = model_id
         request.session["chat_agent_id"] = agent.id
         return redirect("chat")
 
