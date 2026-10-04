@@ -81,7 +81,13 @@ class RegisteredModel(models.Model):
     capabilities = models.JSONField(default=dict, blank=True)
     default_parameters = models.JSONField(default=dict, blank=True)
     enabled = models.BooleanField(default=True)
+    # Who registered the model (null for seeded defaults created at bootstrap).
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="registered_models_created",
+    )
     created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
         db_table = "core_registered_model"
@@ -215,6 +221,10 @@ class RetrievalProfile(models.Model):
     relevance_threshold = models.FloatField(null=True, blank=True)
     bm25_weight = models.FloatField(null=True, blank=True)
     full_context = models.BooleanField(default=False)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="retrieval_profiles_created",
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -270,6 +280,10 @@ class KnowledgeBase(models.Model):
     valid_from = models.DateTimeField(null=True, blank=True)
     valid_until = models.DateTimeField(null=True, blank=True)
     enabled = models.BooleanField(default=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="knowledge_bases_created",
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -315,6 +329,10 @@ class Tool(models.Model):
     external_network = models.BooleanField(default=False)
     handles_sensitive_data = models.BooleanField(default=False)
     enabled = models.BooleanField(default=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="tools_created",
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

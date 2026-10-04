@@ -58,7 +58,7 @@ def bootstrap_admin_and_default_project(
     default_description = "Public common workspaces visible to all users, used for demo"
     project, created = Project.objects.get_or_create(
         slug=slug,
-        defaults={"name": project_name, "description": default_description},
+        defaults={"name": project_name, "description": default_description, "created_by": user},
     )
     if not created and not project.description:
         project.description = default_description
@@ -66,7 +66,7 @@ def bootstrap_admin_and_default_project(
     ProjectMembership.objects.get_or_create(
         project=project,
         user=user,
-        defaults={"role": ProjectMembership.Role.ADMIN},
+        defaults={"role": ProjectMembership.Role.ADMIN, "created_by": user},
     )
     if created:
         from infra.seed import seed_workspace
@@ -91,7 +91,9 @@ def grant_default_project(user) -> Project | None:
     project = Project.objects.filter(slug=DEFAULT_PROJECT_SLUG).first()
     if project:
         ProjectMembership.objects.get_or_create(
-            project=project, user=user, defaults={"role": ProjectMembership.Role.VIEWER}
+            project=project,
+            user=user,
+            defaults={"role": ProjectMembership.Role.VIEWER, "created_by": user},
         )
     return project
 
@@ -159,8 +161,13 @@ def create_workspace(*, user, name: str, description: str = "") -> Project:
         candidate = base_slug if attempt == 0 else f"{base_slug}-{attempt + 1}"
         try:
             with transaction.atomic():
-                project = Project.objects.create(name=clean_name, slug=candidate, description=(description or "").strip())
-                ProjectMembership.objects.create(project=project, user=user, role=ProjectMembership.Role.ADMIN)
+                project = Project.objects.create(
+                    name=clean_name, slug=candidate, description=(description or "").strip(),
+                    created_by=user,
+                )
+                ProjectMembership.objects.create(
+                    project=project, user=user, role=ProjectMembership.Role.ADMIN, created_by=user
+                )
         except IntegrityError:
             if attempt == 4:
                 raise StableAPIError(detail="A workspace with this name already exists.", code="workspace_name_conflict", http_status=409)

@@ -41,7 +41,7 @@ def retrieval_profiles(request):
 
     serializer = RetrievalProfileSerializer(data=request.data)
     serializer.is_valid(raise_exception=True)
-    profile = serializer.save(project=project)
+    profile = serializer.save(project=project, created_by=request.user)
     return Response(RetrievalProfileSerializer(profile).data, status=status.HTTP_201_CREATED)
 
 
@@ -79,7 +79,7 @@ def knowledge_bases(request):
 
     serializer = KnowledgeBaseSerializer(data=request.data)
     serializer.is_valid(raise_exception=True)
-    kb = serializer.save(project=project)
+    kb = serializer.save(project=project, created_by=request.user)
     return Response(KnowledgeBaseSerializer(kb).data, status=status.HTTP_201_CREATED)
 
 
@@ -117,7 +117,7 @@ def tools(request):
 
     serializer = ToolSerializer(data=request.data)
     serializer.is_valid(raise_exception=True)
-    tool = serializer.save(project=project)
+    tool = serializer.save(project=project, created_by=request.user)
     return Response(ToolSerializer(tool).data, status=status.HTTP_201_CREATED)
 
 
