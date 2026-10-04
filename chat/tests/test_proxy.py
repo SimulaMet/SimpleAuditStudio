@@ -571,7 +571,7 @@ class CaddyfileTests(SimpleTestCase):
         self.assertIn(target, text)
         # The auth + css-mask + fallback blocks all point at the internal
         # Studio port, never at the OWUI port.
-        self.assertEqual(text.count(f"reverse_proxy 127.0.0.1:8124"), 3)
+        self.assertEqual(text.count("reverse_proxy 127.0.0.1:8124"), 3)
         self.assertEqual(text.count(target), 1)
 
     def test_caddyfile_every_branded_route_has_a_handle(self):
@@ -591,7 +591,7 @@ class CaddyfileTests(SimpleTestCase):
             proc = subprocess.run(
                 [proxy._caddy_binary(), "adapt", "--config", str(path),
                  "--adapter", "caddyfile"],
-                capture_output=True, text=True,
+                capture_output=True, text=True, check=False,
             )
         self.assertEqual(proc.returncode, 0, proc.stderr)
         json.loads(proc.stdout)    # valid JSON = a loadable config

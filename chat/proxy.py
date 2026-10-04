@@ -283,7 +283,7 @@ class _Handler(BaseHTTPRequestHandler):
                 self.close_connection = True
                 self.end_headers()
 
-                if html and is_admin_doc:
+                if html and admin_doc:
                     # Buffer the (small, content-hashed SPA shell) so Studio's
                     # mask is injected inline; the external /static/custom.css
                     # link cannot be relied on to carry it.
@@ -1053,9 +1053,9 @@ def _probe_interpreter(py: str) -> bool:
     """True when this interpreter can import the subpath Open WebUI wheel."""
     try:
         result = subprocess.run(
-            [py, "-c", "import open_webui, importlib.metadata as m; "
-                       "m.version('open_webui')"],
-            capture_output=True, timeout=30,
+            [py, "-c", ("import open_webui, importlib.metadata as m; "
+                        "m.version('open_webui')")],
+            capture_output=True, timeout=30, check=False,
         )
         return result.returncode == 0
     except (OSError, subprocess.TimeoutExpired):

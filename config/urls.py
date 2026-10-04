@@ -252,7 +252,8 @@ urlpatterns = [
 # /chat/ by Caddy (the subpath build); Studio owns /ai/ — the wrapper page with
 # the model-picker bar — plus /chat/authz, the forward-auth endpoint Caddy
 # calls. All 404 unless SIMPLEAUDIT_CHAT is set. See chat/config.py.
-from chat.views import authz as _chat_authz, css_mask as _chat_css_mask  # noqa: E402
+from chat.views import authz as _chat_authz
+from chat.views import css_mask as _chat_css_mask
 
 urlpatterns += [
     path("ai/", include("chat.urls")),
