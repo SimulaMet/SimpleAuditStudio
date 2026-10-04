@@ -2761,18 +2761,14 @@ class AgentResourcesView(ProjectMixin, TemplateView):
                 f"{section_url}"
                 f"?embed=admin&__studio_admin=1&t={int(time.time() * 1000)}{extra}"
             )
-            # "Upload directory" in the Knowledge create/edit modal uses the
-            # File System Access API (showDirectoryPicker), which browsers only
-            # allow in a top-level or same-origin frame. The embed is now
-            # same-origin, so the picker also works inside the frame; the
-            # top-level tab is kept as a convenience (the shared Studio
-            # cookie authenticates it).
-            if section == "knowledge":
-                ctx["directory_url"] = section_url
-                ctx["directory_url_enabled"] = True
-            else:
-                ctx["directory_url"] = None
-                ctx["directory_url_enabled"] = False
+            # "Upload directory" / "Sync directory" in the Knowledge modal
+            # use the File System Access API (showDirectoryPicker). The
+            # embed is same-origin (Caddy serves /chat/ from Studio's
+            # origin, so a picker is permitted even inside the frame) and
+            # was verified E2E in a real browser — so no top-level
+            # escape-hatch tab is needed. The plain /chat/workspace/
+            # knowledge page remains available directly for the same work
+            # outside the frame.
             ctx["chat_enabled"] = True
         else:
             ctx["iframe_src"] = None
