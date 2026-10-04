@@ -50,24 +50,26 @@ class AgentResourcesViewTest(TestCase):
         self.assertIn("__studio_admin=1", resp.content.decode())
         self.assertIn("Tools", resp.content.decode())
 
-    def test_knowledge_offers_full_workspace_link(self):
-        # Folder / directory-sync upload uses the File System Access API,
-        # blocked in the cross-origin embed, so the knowledge page must offer a
-        # top-level tab (no admin marker, no nonce) where it is permitted.
+    def test_knowledge_page_needs_no_folder_upload_escape_hatch(self):
+        # "Upload directory" / "Sync directory" in the Knowledge modal use the
+        # File System Access API (showDirectoryPicker). The embed is
+        # same-origin (Caddy serves /chat/ from Studio's origin), so the picker
+        # works inside the frame and no top-level escape-hatch tab is needed.
         user = _member(self.project)
         self._login(user)
         resp = self.client.get("/agents/knowledge/")
         html = resp.content.decode()
-        self.assertIn("Folders, directory sync", html)
-        self.assertIn('target="_blank"', html)
-        # The link points at the plain full page — the href is
-        # ".../workspace/knowledge" with no query string at all (unlike the
-        # iframe src, which carries ?__studio_admin=1&t=).
-        self.assertIn("/workspace/knowledge\"", html)
-        self.assertNotIn("?create=1", html)
+        self.assertNotIn("Folders, directory sync", html)
+        # The escape hatch was an anchor (target="_blank") to a top-level
+        # workspace/knowledge URL. It must be gone. (The iframe src still
+        # references workspace/knowledge — that is the embed itself, with no
+        # target attribute.)
+        self.assertNotIn('href="/workspace/knowledge"', html)
+        self.assertNotIn('href="/chat/workspace/knowledge"', html)
 
-    def test_tools_does_not_offer_full_workspace_link(self):
-        # Tools has no folder-upload flow, so no full-workspace escape hatch.
+    def test_tools_page_has_no_full_workspace_link(self):
+        # No section offers a top-level full-workspace tab (see the knowledge
+        # test above for why none is needed).
         user = _member(self.project)
         self._login(user)
         resp = self.client.get("/agents/tools/")
