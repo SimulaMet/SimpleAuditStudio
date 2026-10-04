@@ -1,17 +1,38 @@
 /* Studio admin embed masking script.
  *
- * Injected inline by the chat proxy into Open WebUI HTML documents that are
- * marked ?__studio_admin=1 (workspace embeds: Knowledge, Tools). The
- * stylesheet chat/embed_admin.css cannot express these rules in pure CSS
+ * Two delivery paths, one file, both modes:
+ *  - Embedded (pure-Python proxy): the proxy inlines this into Open WebUI
+ *    HTML documents marked ?__studio_admin=1 (workspace embeds).
+ *  - Caddy (local dev + docker): Studio serves this file as the subpath
+ *    build's otherwise-empty static/loader.js (the SPA's first <script>),
+ *    via a Caddy handle -> /chat/loader-mask. The 0-byte loader.js ships in
+ *    the subpath build and SvelteKit hydration comes from the separate
+ *    entry/start bundle, so replacing it is safe.
+ *
+ * The stylesheet chat/embed_admin.css cannot express these rules in pure CSS
  * (the targets are identified by text content, and :text-is() is not a real
  * CSS selector), so the masking lives here.
  *
- * Reads from disk per marked-document request, so edits apply on the next
- * page load without a server restart (the proxy is not StatReloader-managed).
- * Keep this file browser-safe and dependency-free: it runs in the Open WebUI
- * origin, where Studio owns no other assets.
+ * The whole script self-gates on the PAGE URL carrying embed=admin. Studio's
+ * admin workspace iframes always load with ?embed=admin; plain /chat/ and the
+ * top-level /chat/workspace pages do not, and must keep the full menu (upload
+ * / sync directory, Access List, branding). Reading from disk per request,
+ * edits apply on the next page load without a server restart (the proxy and
+ * views are not StatReloader-managed). Keep this file browser-safe and
+ * dependency-free: it runs in the Open WebUI origin, where Studio owns no
+ * other assets.
  */
 (function () {
+  // Caddy mode fetches loader.js with NO query, so gate on the page's own
+  // query string (the script runs in the page context, `defer`). Only
+  // Studio's admin workspace embeds carry embed=admin.
+  try {
+    if (new URLSearchParams(window.location.search).get("embed") !== "admin") {
+      return;
+    }
+  } catch (e) {
+    return;
+  }
   // No hover tooltip: the browser shows the frame's document title when the
   // pointer sits on the iframe, and Open WebUI names its pages "Open WebUI
   // <section>". Pin the title empty so nothing shows. The <title> element
@@ -82,12 +103,12 @@
     }
   }
   function maskUploadMenu() {
-    // "Upload directory" and "Sync directory" use the File System Access API
-    // (showDirectoryPicker), which browsers only allow in a top-level or
-    // same-origin frame. This embed is a cross-origin subframe, so those two
-    // rows would throw a SecurityError. They live in the full workspace (linked
-    // from the Studio page), so hide the rows here and keep the rest of the "+"
-    // menu (Upload files, New directory, Add webpage, Add text content).
+    // "Upload directory" and "Sync directory" live in the full workspace,
+    // which Studio opens top-level at /chat/workspace/knowledge (same
+    // origin). The in-frame "+" menu keeps its file-level entries (Upload
+    // files, New directory, Add webpage, Add text content); the two
+    // directory rows are hidden here so the embed stays the quick path and
+    // folder bulk-upload has one canonical place.
     var rows = document.querySelectorAll('button');
     for (var i = 0; i < rows.length; i++) {
       var t = rows[i].textContent.trim();

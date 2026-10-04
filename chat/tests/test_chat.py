@@ -3,6 +3,7 @@
 Run:
     SIMPLEAUDIT_LOCAL_SQLITE=1 uv run manage.py test chat
 """
+from pathlib import Path
 from unittest.mock import patch
 
 from django.test import Client, TestCase
@@ -34,6 +35,8 @@ class ChatDisabledTests(TestCase):
         client.force_login(user)
         self.assertEqual(client.get("/ai/").status_code, 404)
         self.assertEqual(client.get("/chat/authz").status_code, 404)
+        self.assertEqual(client.get("/chat/css-mask").status_code, 404)
+        self.assertEqual(client.get("/chat/loader-mask").status_code, 404)
 
     def test_no_sidebar_entry_when_off(self):
         user = UserFactory(username="off-nav")
@@ -433,3 +436,39 @@ class ChatCssMaskTests(TestCase):
         resp = self.client.get("/chat/css-mask")
         expected = (Path(__file__).resolve().parents[1] / "embed.css").read_bytes()
         self.assertEqual(resp.content, expected)
+
+
+@patch("chat.config.ENABLED", True)
+class ChatLoaderMaskTests(TestCase):
+    """/chat/loader-mask: the embed mask script Caddy proxies to as
+    /chat/static/loader.js (the subpath build's otherwise-empty first
+    <script>). One file for everyone; the client-side ?embed=admin gate
+    decides who gets masked."""
+
+    def test_serves_the_mask_script(self):
+        resp = self.client.get("/chat/loader-mask")
+        self.assertEqual(resp.status_code, 200)
+        expected = (Path(__file__).resolve().parents[1]
+                    / "embed_admin.js").read_bytes()
+        self.assertEqual(resp.content, expected)
+        self.assertEqual(resp["Cache-Control"], "no-store")
+        self.assertEqual(resp["Content-Type"], "text/javascript")
+
+    def test_anonymous_also_gets_the_script(self):
+        # The script self-gates on the PAGE URL's embed=admin query, so the
+        # endpoint needs no auth: a signed-out browser that opens an admin
+        # workspace URL is redirected to /chat/authz -> login before it ever
+        # runs the mask, and an anonymous plain /chat/ page never masks.
+        resp = self.client.get("/chat/loader-mask")
+        self.assertEqual(resp.status_code, 200)
+
+    def test_script_self_gates_on_embed_admin(self):
+        # The bytes must carry the gate: non-admin pages (plain /chat/, the
+        # top-level /chat/workspace bulk-upload page) load the same file and
+        # must keep their full menu.
+        body = (Path(__file__).resolve().parents[1]
+                / "embed_admin.js").read_text(encoding="utf-8")
+        self.assertIn('get("embed") !== "admin"', body)
+        # And the directory rows are the masked targets.
+        self.assertIn("'Upload directory'", body)
+        self.assertIn("'Sync directory'", body)

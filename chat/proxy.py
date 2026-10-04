@@ -621,8 +621,9 @@ def _caddyfile(port: int, internal_port: int | None = None) -> str:
     Same routing as the proven file: /chat/* (NO prefix strip — the subpath
     build serves its socket at the full path /chat/ws/socket.io) goes through
     the in-handle forward-auth to Studio's /chat/authz and then to Open WebUI;
-    /chat/static/custom.css is intercepted and rewritten to /chat/css-mask
-    first; everything else falls through to Studio.
+    /chat/static/custom.css and /chat/static/loader.js are intercepted first
+    and rewritten to /chat/css-mask and /chat/loader-mask; everything else
+    falls through to Studio.
 
     Auth lives INSIDE the /chat/* handle block on purpose: Caddy sorts
     top-level routes by directive order, so a top-level auth would run after
@@ -654,6 +655,15 @@ def _caddyfile(port: int, internal_port: int | None = None) -> str:
         "\thandle /chat/static/custom.css {",
         f"\t\treverse_proxy {studio} {{",
         "\t\t\trewrite /chat/css-mask",
+        "\t\t}",
+        "\t}",
+        # Studio's embed mask script: the subpath build's otherwise-empty
+        # loader.js (the SPA's first <script>) becomes chat/embed_admin.js
+        # (loader_mask). The script self-gates on the page URL carrying
+        # embed=admin, so only the admin workspace iframes are masked.
+        "\thandle /chat/static/loader.js {",
+        f"\t\treverse_proxy {studio} {{",
+        "\t\t\trewrite /chat/loader-mask",
         "\t\t}",
         "\t}",
         "",

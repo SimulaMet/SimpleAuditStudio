@@ -76,6 +76,27 @@ def css_mask(request):
     return response
 
 
+def loader_mask(request):
+    """The embed mask Open WebUI loads as /static/loader.js (Caddy mode).
+
+    The subpath build ships a 0-byte static/loader.js — the SPA's first
+    <script> — and SvelteKit hydration comes from the separate entry/start
+    bundle, so Caddy (local dev + docker) intercepts /chat/static/loader.js
+    and Studio answers here with chat/embed_admin.js. The script
+    self-gates on the PAGE URL carrying ?embed=admin, so it only masks the
+    admin workspace iframes (Knowledge, Tools); plain /chat/ and the
+    top-level /chat/workspace pages load the same bytes, see no flag, and
+    keep their full menu. no-store, because the script follows this repo,
+    not its URL.
+    """
+    if not config.ENABLED:
+        raise Http404
+    path = Path(__file__).resolve().parent / "embed_admin.js"
+    response = HttpResponse(path.read_bytes(), content_type="text/javascript")
+    response["Cache-Control"] = "no-store"
+    return response
+
+
 def chat_with(request, connection_id, model_id):
     """Hand off from /connections/ to the chat, pinned to one model.
 
