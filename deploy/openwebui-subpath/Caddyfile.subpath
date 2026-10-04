@@ -52,6 +52,19 @@
 		}
 	}
 
+	# Studio's chat embed mask script: the subpath build's static/loader.js
+	# is a 0-byte no-op (the SPA's first <script>; SvelteKit hydration comes
+	# from the separate entry/start bundle). Caddy intercepts it and proxies
+	# it to Studio's /chat/loader-mask, which serves chat/embed_admin.js. The
+	# script self-gates on the PAGE URL carrying ?embed=admin, so only the
+	# admin workspace iframes (Knowledge, Tools) are masked; plain /chat/ and
+	# the top-level /chat/workspace pages keep their full menu.
+	handle /chat/static/loader.js {
+		reverse_proxy {$STUDIO_UPSTREAM:web:8000} {
+			rewrite /chat/loader-mask
+		}
+	}
+
 	# Subpath Open WebUI. `handle` (NOT handle_path) = no prefix strip.
 	#
 	# The first handler is the forward-auth to Studio's /chat/authz, in the

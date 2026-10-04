@@ -549,6 +549,9 @@ class CaddyfileTests(SimpleTestCase):
         # The embed sheet: /chat/static/custom.css -> Studio's session-aware mask.
         self.assertIn("handle /chat/static/custom.css {", text)
         self.assertIn("rewrite /chat/css-mask", text)
+        # The embed mask script: the subpath build's empty loader.js -> Studio.
+        self.assertIn("handle /chat/static/loader.js {", text)
+        self.assertIn("rewrite /chat/loader-mask", text)
         # Branded favicons from Studio's static/ (keys are subpath-relative).
         self.assertIn(f"handle {config.SUBPATH}/static/favicon.svg {{", text)
         self.assertIn("root *", text)
@@ -569,9 +572,9 @@ class CaddyfileTests(SimpleTestCase):
         host, port = proxy.chat_upstream_base().replace("http://", "").split(":")
         target = f"reverse_proxy {host}:{port} {{"
         self.assertIn(target, text)
-        # The auth + css-mask + fallback blocks all point at the internal
-        # Studio port, never at the OWUI port.
-        self.assertEqual(text.count("reverse_proxy 127.0.0.1:8124"), 3)
+        # The auth + css-mask + loader-mask + fallback blocks all point at
+        # the internal Studio port, never at the OWUI port.
+        self.assertEqual(text.count("reverse_proxy 127.0.0.1:8124"), 4)
         self.assertEqual(text.count(target), 1)
 
     def test_caddyfile_every_branded_route_has_a_handle(self):
