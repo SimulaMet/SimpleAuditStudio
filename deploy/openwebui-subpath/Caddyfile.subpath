@@ -1,0 +1,59 @@
+# =============================================================================
+# SimpleAudit Studio — single-origin chat routing (subpath Open WebUI)
+#
+# This is the NEW routing shape enabled by the subpath fork built via
+# deploy/openwebui-subpath/build.sh. It replaces the current cross-origin
+# iframe model (Caddyfile.chat on :8801) with one origin / one port:
+#
+#   https://studio.example.com
+#     ├── /chat/...   -> Open WebUI (subpath build, served AT /chat)
+#     └── everything  -> Studio (Django)
+#
+# THE CRITICAL DETAIL (verified empirically): use `handle`, NOT `handle_path`.
+#   handle_path /chat/*  => strips the prefix and forwards /foo, but the
+#                           subpath fork serves its socket at the FULL path
+#                           /chat/ws/socket.io (engineio matches the raw path,
+#                           not root_path-relative) -> the socket 404s.
+#   handle /chat/*       => forwards /chat/foo as-is, which is exactly what
+#                           a WEBUI_SUBPATH=/chat build expects.
+#
+# This file is provided for reference / cutover. It is NOT wired into
+# docker-compose.yml until the subpath image is promoted and you approve the
+# deployment change (see README.md "Deploying").
+# =============================================================================
+{
+	auto_https off
+	admin off
+}
+
+:{$SIMPLEAUDIT_CHAT_PROXY_PORT:8801} {
+	# Never let a client supply its own identity.
+	request_header -X-Studio-Email
+	request_header -X-Studio-Name
+	request_header -X-Studio-Role
+
+	# Ask Studio who the browser is; Studio signs the result into the trusted
+	# headers the subpath Open WebUI reads (same /chat/authz endpoint the
+	# existing forward-auth proxy uses).
+	forward_auth {$STUDIO_UPSTREAM:web:8000} {
+		uri /chat/authz
+		copy_headers X-Studio-Email X-Studio-Name X-Studio-Role
+
+		# Signed out: send the browser to Studio rather than a bare 401.
+		@signedout status 401
+		handle_response @signedout {
+			redir {$STUDIO_URL:http://localhost:8000}/chat/ 302
+		}
+	}
+
+	# Subpath Open WebUI. `handle` (NOT handle_path) = no prefix strip.
+	handle /chat/* {
+		reverse_proxy open-webui:{$SIMPLEAUDIT_CHAT_UPSTREAM_PORT:8080}
+	}
+
+	# Everything else -> Studio (Django). The subpath fork never emits
+	# root-relative refs, so nothing from OWUI falls through here.
+	handle {
+		reverse_proxy {$STUDIO_UPSTREAM:web:8000}
+	}
+}
