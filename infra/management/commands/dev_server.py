@@ -313,12 +313,13 @@ class Command(BaseCommand):
             self.stdout.write("   Studio is usable right away; /ai/ (chat) works once it is ready.")
         try:
             process = chat_proxy.start_open_webui(internal_port)
+            chat_proxy.serve(internal_port)
         except (OSError, RuntimeError) as exc:
             self.stdout.write(self.style.WARNING(
                 f"\n⚠️  Chat could not start ({exc}); continuing without it.\n"
             ))
+            chat_proxy.stop_open_webui()
             return None
-        chat_proxy.serve(internal_port)
 
         def report():
             if chat_proxy.wait_until_ready(process):

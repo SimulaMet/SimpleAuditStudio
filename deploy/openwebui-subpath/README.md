@@ -134,7 +134,6 @@ The cutover is done: `docker-compose.yml` pulls
 `Caddyfile.subpath`, Studio's wrapper page moved to `/ai/`, and
 `Caddyfile.chat` + the separate cross-origin port are retired. Embedded
 (no-Docker) mode runs the same Caddy forward-auth — the bundled `caddyserver`
-wheel (all platforms, incl. Windows) with a pure-Python fallback when the
-binary cannot be located — on its own port.
+wheel (all platforms, incl. Windows) — on its own port.
 Both modes' `/static/custom.css` requests go to Studio's `/chat/css-mask`,
 which serves the admin skin per session (no Caddy-side state).
