@@ -52,6 +52,8 @@ ENV PATH="/app/.venv/bin:$PATH"
 # it, and the postgres driver is an optional extra not installed in this image.
 ENV SIMPLEAUDIT_MINIMAL=1 \
     PORT=7860 \
+    SIMPLEAUDIT_CHAT_PUBLIC_PORT=7860 \
+    SIMPLEAUDIT_CHAT_INTERNAL_PORT=8001 \
     SIMPLEAUDIT_DATA_DIR=/data \
     DJANGO_SECRET_KEY=hf-space-demo-secret-key-change-in-production \
     DJANGO_DEBUG=false \
