@@ -114,7 +114,6 @@
                  class="rounded border-gray-600 bg-surface-overlay text-accent focus:ring-accent/50">
           <span>{{ kb.name }}</span>
           {% if kb.description %}<span class="text-[10px] text-gray-500 truncate max-w-[12rem]">{{ kb.description }}</span>{% endif %}
-          {% if kb.trust_level %}<span class="text-[10px] text-gray-500">({{ kb.get_trust_level_display }})</span>{% endif %}
         </label>
         {% endfor %}
         <div data-filter-empty class="hidden px-2.5 py-2 text-xs text-gray-500">No matches.</div>
