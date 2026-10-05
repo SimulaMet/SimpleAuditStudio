@@ -1868,7 +1868,8 @@ class ConnectionsView(ProjectMixin, TemplateView):
             label = post.get("model_display_name", "").strip() if single else ""
             desc = post.get("model_description", "").strip()[:DESCRIPTION_MAX] if single else ""
             existing = set(conn.models.values_list("model_id", flat=True))
-            new = [RegisteredModel(connection=conn, project=p, model_id=m, display_name=label or m, description=desc, enabled=True)
+            new = [RegisteredModel(connection=conn, project=p, model_id=m, display_name=label or m, description=desc,
+                                   enabled=True, created_by=request.user)
                    for m in dict.fromkeys(ids) if m not in existing]
             RegisteredModel.objects.bulk_create(new)
             skipped = len(set(ids)) - len(new)
@@ -2710,19 +2711,20 @@ class AgentsView(ProjectMixin, TemplateView):
 class AgentResourcesView(ProjectMixin, TemplateView):
     """Restricted-iframe resource manager.
 
-    Embeds Open WebUI's workspace admin (Knowledge / Tools) in an iframe,
-    masked to the target section by chat/embed_admin.css. The iframe points at
-    the chat proxy with the ?__studio_admin=1 marker so the proxy serves the
-    admin sheet. Studio never writes here; the pull-sync keeps local models
-    fresh.
+    Embeds Open WebUI's workspace admin (Knowledge / Tools) in a same-origin
+    iframe under /chat/ (the subpath build), masked to the target section by
+    chat/embed_admin.css. Studio never writes here; the pull-sync keeps local
+    models fresh.
     """
 
     template_name = "agents/resources.html"
 
-    # section -> Open WebUI workspace route (verified against the live instance)
+    # section -> Open WebUI workspace route RELATIVE to the /chat base
+    # (verified against the live instance). The base comes from
+    # chat.config.public_url(), so no leading slash here.
     SECTIONS = {
-        "knowledge": "/workspace/knowledge",
-        "tools": "/workspace/tools",
+        "knowledge": "workspace/knowledge",
+        "tools": "workspace/tools",
     }
     DEFAULT_SECTION = "knowledge"
 
@@ -2738,28 +2740,37 @@ class AgentResourcesView(ProjectMixin, TemplateView):
         from chat import config as chat_config
         if getattr(chat_config, "ENABLED", False):
             base = chat_config.public_url(self.request)
+            if base.endswith("/"):
+                base = base.rstrip("/")
             # Per-render nonce: the Open WebUI SPA shell is a static document
             # that browsers cache with heuristic freshness. A cached document
-            # never reaches the chat proxy, so the ?__studio_admin=1 marker is
+            # never reaches the proxy, so the ?__studio_admin=1 marker is
             # never registered and the frame falls back to the chat
             # stylesheet (workspace tab bar re-exposed). A fresh URL per page
-            # render guarantees the marker request actually goes to the proxy.
+            # render guarantees the marker request actually goes out.
             # The SPA ignores unknown query params (path-based routing).
             import time
             create = self.request.GET.get("create") == "1"
             extra = "&create=1" if create else ""
+            section_url = f"{base}/{self.SECTIONS[section]}"
+            # embed=admin: the document load is a same-origin GET that reaches
+            # /chat/authz (via Caddy forward-auth), which stamps the session so
+            # the follow-up /static/custom.css load (css_mask) returns the admin
+            # skin. Replaces the old __studio_admin=1 query marker, which the
+            # Caddy forward-auth rewrite dropped from the auth call.
             ctx["iframe_src"] = (
-                f"{base}{self.SECTIONS[section]}"
-                f"?__studio_admin=1&t={int(time.time() * 1000)}{extra}"
+                f"{section_url}"
+                f"?embed=admin&__studio_admin=1&t={int(time.time() * 1000)}{extra}"
             )
-            # "Upload directory" in the Knowledge create/edit modal uses the
-            # File System Access API (showDirectoryPicker), which browsers only
-            # allow in a top-level or same-origin frame. The embed is a
-            # cross-origin subframe, so that one button throws a SecurityError
-            # here. Offer a top-level tab on the same origin (the shared Studio
-            # cookie authenticates it), where the picker is permitted.
+            # The knowledge page also offers a button that opens the full
+            # workspace in a new tab. It points at the plain top-level
+            # section URL (no ?embed=admin), so the new tab loads the
+            # un-masked workspace where the File System Access API
+            # directory picker is definitely permitted and the user gets
+            # the full folder / directory-sync / bulk-upload experience.
+            # Knowledge only: Tools has no folder-upload flow.
             if section == "knowledge":
-                ctx["directory_url"] = f"{base}{self.SECTIONS[section]}"
+                ctx["directory_url"] = section_url
                 ctx["directory_url_enabled"] = True
             else:
                 ctx["directory_url"] = None
@@ -2769,6 +2780,25 @@ class AgentResourcesView(ProjectMixin, TemplateView):
             ctx["iframe_src"] = None
             ctx["chat_enabled"] = False
         return ctx
+
+
+def _sync_agent_form_result(request, agent):
+    """Push a form-created/edited agent to Open WebUI (best-effort).
+
+    Chat disabled → silent no-op. Sync failed → an error message is shown so
+    the user knows the agent exists locally but is not live in chat yet
+    (re-editing retries the push).
+    """
+    from model_registry.services import sync_agent_to_openwebui
+
+    if not chat_enabled():
+        return
+    if sync_agent_to_openwebui(agent, request.user) == "skipped":
+        messages.error(
+            request,
+            f"Agent '{agent.name}' saved locally, but Open WebUI sync failed — "
+            "edit the agent again to retry.",
+        )
 
 
 def _sync_openwebui_resources(project, user):
@@ -2797,36 +2827,58 @@ def _sync_openwebui_resources(project, user):
             external_id = item.get("id", "")
             if not external_id:
                 continue
-            KnowledgeBase.objects.update_or_create(
-                project=project,
-                external_id=external_id,
-                defaults={
-                    "name": item.get("name") or external_id,
-                    "description": item.get("description") or "",
-                },
-            )
+            name = item.get("name") or external_id
+            description = item.get("description") or ""
+            # Two-step upsert: external_id is OWUI's stable identity; name is
+            # the local identity used by the seed before external_id is known.
+            # 1) match on external_id (handles renames in OWUI),
+            # 2) match on name (handles seeded rows with external_id=""),
+            # 3) create.
+            existing = KnowledgeBase.objects.filter(
+                project=project, external_id=external_id
+            ).first()
+            if existing is None:
+                existing = KnowledgeBase.objects.filter(
+                    project=project, name=name
+                ).first()
+            if existing is not None:
+                existing.name = name
+                existing.external_id = external_id
+                existing.description = description
+                existing.save(update_fields=["name", "external_id", "description", "updated_at"])
+            else:
+                KnowledgeBase.objects.create(
+                    project=project, name=name,
+                    external_id=external_id, description=description,
+                )
             kb_count += 1
     except ChatAPIError:
         pass
 
     tool_count = 0
     try:
-        payload = api.request("GET", "/api/v1/functions/")
-        items = payload if isinstance(payload, list) else (payload.get("items") or payload.get("functions") or [])
+        # Tools (the /agents/tools/ page) are Open WebUI toolkit entries,
+        # served by /api/v1/tools — /api/v1/functions is for pipes/filters.
+        items = api.tools()
         for item in items:
             if not isinstance(item, dict):
                 continue
             name = item.get("name", "")
             if not name:
                 continue
+            meta = item.get("meta") if isinstance(item.get("meta"), dict) else {}
+            manifest = meta.get("manifest") if isinstance(meta.get("manifest"), dict) else {}
             external_id = item.get("id", "")
             Tool.objects.update_or_create(
                 project=project,
                 name=name,
                 defaults={
                     "external_id": external_id,
-                    "description": item.get("description") or "",
-                    "type": "custom" if item.get("kind") == "function" else "builtin",
+                    # List items carry no top-level description; the toolkit
+                    # description lives in the frontmatter manifest.
+                    "description": manifest.get("description") or meta.get("description") or "",
+                    # Toolkit tools are custom Python; builtins have no row.
+                    "type": "custom",
                 },
             )
             tool_count += 1
@@ -2884,6 +2936,12 @@ class AgentDetailView(ProjectMixin, TemplateView):
         # Gate the "+ New" deep links: without the chat proxy there is no
         # embedded workspace to create in.
         ctx["chat_enabled"] = chat_enabled()
+        # Live Open WebUI model entry (None when unsynced or OWUI is down).
+        if agent is not None and chat_enabled():
+            from model_registry.services import agent_live_openwebui
+            ctx["openwebui_live"] = agent_live_openwebui(agent, self.request.user)
+        else:
+            ctx["openwebui_live"] = None
         ctx["retrieval_profiles"] = RetrievalProfile.objects.filter(project=project)
         ctx["capability_options"] = [
             {"key": "knowledge_search", "label": "Knowledge Search"},
@@ -2948,6 +3006,7 @@ class AgentDetailView(ProjectMixin, TemplateView):
                 caps[cap] = request.POST.get(cap) == "on"
             agent.capabilities = caps
             agent.save()
+            _sync_agent_form_result(request, agent)
             messages.success(request, f"Agent '{name}' updated.")
         else:
             caps = {}
@@ -2972,6 +3031,7 @@ class AgentDetailView(ProjectMixin, TemplateView):
             agent.tools.set(
                 Tool.objects.filter(pk__in=request.POST.getlist("tools"), project=project)
             )
+            _sync_agent_form_result(request, agent)
             messages.success(request, f"Agent '{name}' created.")
 
         return redirect("agent_detail", agent_id=agent.id)
@@ -2986,12 +3046,14 @@ class AgentDeleteView(ProjectMixin, View):
 
     def post(self, request, agent_id):
         from model_registry.models import Agent
+        from model_registry.services import delete_agent_from_openwebui
 
         agent = Agent.objects.filter(pk=agent_id, project=request.project).first()
         if not agent:
             messages.error(request, "Agent not found.")
             return redirect("agents")
         name = agent.name
+        delete_agent_from_openwebui(agent)
         agent.delete()
         messages.success(request, f"Agent '{name}' deleted.")
         return redirect("agents")
@@ -3009,10 +3071,17 @@ class AgentTestChatView(ProjectMixin, View):
         if not agent:
             messages.error(request, "Agent not found.")
             return redirect("agents")
-        # Pin the agent's model in the session and redirect to chat
+        # Pin the agent's model in the session and redirect to chat. A synced
+        # agent pins its Open WebUI model entry, so the chat runs the agent's
+        # base model *and* its attached knowledge bases; an unsynced one pins
+        # the raw base model (the ?models= pin only matches ids Open WebUI
+        # knows, so an unsynced agent id would silently fall back to default).
         conn = agent.base_model.connection
-        model_id = agent.base_model.model_id
-        request.session["chat_pinned_model"] = f"{conn.id}.{model_id}"
+        if agent.external_id:
+            model_id = agent.external_id
+        else:
+            model_id = f"{conn.id}.{agent.base_model.model_id}"
+        request.session["chat_pinned_model"] = model_id
         request.session["chat_agent_id"] = agent.id
         return redirect("chat")
 

@@ -1,0 +1,14 @@
+diff --git a/Dockerfile b/Dockerfile
+index 14d7ceaa..9828ce46 100644
+--- a/Dockerfile
++++ b/Dockerfile
+@@ -36,6 +36,9 @@ WORKDIR /app
+ # to store git revision in build
+ RUN apk add --no-cache git
+ 
++# The SvelteKit/Vite production build OOMs at Node's ~2GB default heap.
++ENV NODE_OPTIONS="--max-old-space-size=6144"
++
+ COPY package.json package-lock.json ./
+ RUN npm ci --force
+ 

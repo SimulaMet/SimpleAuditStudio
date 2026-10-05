@@ -21,6 +21,7 @@ from infra.seed import (
     import_scenario_pack,
     seed_default_judges,
     seed_default_model_connections,
+    seed_demo_agent,
 )
 
 logger = logging.getLogger(__name__)
@@ -49,6 +50,10 @@ class Command(BaseCommand):
         parser.add_argument(
             "--skip-demo-audits", action="store_true",
             help="Skip seeding demo audit runs from fixture",
+        )
+        parser.add_argument(
+            "--skip-demo-agent", action="store_true",
+            help="Skip creating the demo support agent (knowledge base + tool)",
         )
 
     def handle(self, *args, **options):
@@ -82,10 +87,25 @@ class Command(BaseCommand):
         for message in seed_default_judges(project, user):
             self.stdout.write(f"  {message}")
 
+        if not options["skip_demo_agent"]:
+            self._seed_demo_agent(project, user)
+
         if not options["skip_demo_audits"]:
             self._seed_demo_audits(project, user)
 
         self.stdout.write(self.style.SUCCESS("Seed complete."))
+
+    def _seed_demo_agent(self, project, user) -> None:
+        """Create the demo support agent (KB + docs + tool), best-effort toward Open WebUI."""
+        try:
+            status = seed_demo_agent(project, user)
+        except Exception as exc:  # noqa: BLE001 - seed must not fail on chat
+            self.stderr.write(self.style.WARNING(f"Demo agent seed skipped: {exc}"))
+            return
+        self.stdout.write(
+            f"  {'✓' if status['agent'] in ('created', 'reused') else '⏭'} demo agent "
+            f"({status['agent']}, open webui: {status['openwebui']})"
+        )
 
     def _seed_demo_audits(self, project, user) -> None:
         """Seed demo audit runs from pre-recorded fixture (idempotent)."""

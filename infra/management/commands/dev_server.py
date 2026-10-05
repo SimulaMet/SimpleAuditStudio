@@ -81,6 +81,37 @@ def _sync_chat_models() -> str:
     return f"Synced {result['pushed']} model connection(s) to chat{kept}."
 
 
+def _backfill_demo_chat() -> str:
+    """Finish pushing demo KB/tool rows that seeded before the chat existed.
+
+    ``setup_local`` seeds the demo rows while Open WebUI is down, so they are
+    local-only (empty ``external_id``) and the OWUI-backed /agents/knowledge/
+    and /agents/tools/ pages look empty. Once the chat is ready, this completes
+    the push for the bootstrap project. Never raises (the backfill itself
+    swallows errors); reports nothing when there is nothing to backfill.
+    """
+    try:
+        from django.contrib.auth import get_user_model
+
+        from accounts.models import Project
+        from infra.seed import backfill_demo_chat_resources
+
+        user = get_user_model().objects.order_by("id").first()
+        project = Project.objects.order_by("id").first()
+        if user is None or project is None:
+            return ""
+        counts = backfill_demo_chat_resources(project, user)
+        if not any(counts.values()):
+            return ""
+        labels = {"agents": "agent", "knowledge_bases": "knowledge base(s)", "tools": "tool(s)"}
+        return "Backfilled demo resources into chat: " + ", ".join(
+            f"{counts[k]} {labels[k]}" for k in labels if counts[k]
+        )
+    except Exception as exc:  # noqa: BLE001 - runs in a startup thread; log, don't crash
+        logger.info("Demo chat backfill skipped: %s", exc)
+        return ""
+
+
 class Command(BaseCommand):
     help = "Run the local dev web server + Hatchet worker together."
 
@@ -177,10 +208,17 @@ class Command(BaseCommand):
             runtime.effective_chat_mode(os.environ.get("SIMPLEAUDIT_MODE", "dev")),
         )
 
-        # Optional chat (Open WebUI + its forward-auth proxy). Only starts when
+        # With chat on, the front door (Caddy) owns the public port and the
+        # web server binds the internal port instead; Caddy proxies the rest
+        # of the site to it. Same topology as the docker deployment.
+        from chat import config as _chat_config
+
+        web_port = _chat_config.INTERNAL_PORT if _chat_config.ENABLED else options["port"]
+
+        # Optional chat (Open WebUI + its front door). Only starts when
         # SIMPLEAUDIT_CHAT is enabled; a failed start never blocks the rest of
         # the stack, mirroring the uvx CLI.
-        chat_process = self.start_chat_if_enabled(options["port"])
+        chat_process = self.start_chat_if_enabled(options["port"], web_port)
 
         # Zero-Docker mode: spin up embedded Hatchet (sidecar + embedded Postgres)
         # and point the worker's shared client at it. Setting _CLIENT directly
@@ -217,13 +255,13 @@ class Command(BaseCommand):
         if not options["no_reload"]:
             import subprocess
 
-            cmd = [sys.executable, sys.argv[0], "runserver", f"0.0.0.0:{options['port']}"]
-            self.stdout.write(self.style.NOTICE(f"Starting web server at http://localhost:{options['port']} (auto-reload on) ..."))
+            cmd = [sys.executable, sys.argv[0], "runserver", f"0.0.0.0:{web_port}"]
+            self.stdout.write(self.style.NOTICE(f"Starting web server at http://localhost:{web_port} (auto-reload on) ..."))
             web_proc = subprocess.Popen(cmd)
             time.sleep(2)  # give the reloader + server a moment to bind
         else:
-            addr = f"0.0.0.0:{options['port']}"
-            self.stdout.write(self.style.NOTICE(f"Starting web server at http://localhost:{options['port']} (auto-reload off) ..."))
+            addr = f"0.0.0.0:{web_port}"
+            self.stdout.write(self.style.NOTICE(f"Starting web server at http://localhost:{web_port} (auto-reload off) ..."))
             web_proc = None
             web_thread = threading.Thread(
                 target=lambda: call_command("runserver", addr, use_reloader=False),
@@ -234,7 +272,7 @@ class Command(BaseCommand):
 
         username = os.environ.get("BOOTSTRAP_USERNAME", "studio")
         chat_line = (
-            f"   Chat:       http://localhost:{options['port']}/chat/\n"
+            f"   Chat:       http://localhost:{options['port']}/ai/\n"
             if chat_process is not None
             else ""
         )
@@ -282,11 +320,13 @@ class Command(BaseCommand):
             self._stop_web(web_proc)
             self._stop_chat()
 
-    def start_chat_if_enabled(self, port: int):
-        """Start Open WebUI + its forward-auth proxy when SIMPLEAUDIT_CHAT is on.
+    def start_chat_if_enabled(self, public_port: int, internal_port: int):
+        """Start Open WebUI + its front door when SIMPLEAUDIT_CHAT is on.
 
-        Mirrors the uvx CLI: chat is one part of the stack, so a failed start
-        (no open-webui, a taken port, a failed spawn) never blocks the rest.
+        ``public_port`` is the one port the browser sees (the front door);
+        ``internal_port`` is where the web server listens while the front door
+        is up. Mirrors the uvx CLI: chat is one part of the stack, so a failed
+        start (no wheel, a taken port, a failed spawn) never blocks the rest.
         Returns the Open WebUI process, or None when chat is off or failed.
         """
         from chat import config as chat_config
@@ -299,22 +339,26 @@ class Command(BaseCommand):
         self.stdout.write(self.style.NOTICE("Starting chat (Open WebUI)..."))
         if chat_proxy.is_first_run():
             self.stdout.write(self.style.WARNING(
-                "   First start downloads it (~1 GB via uvx) and can take a few minutes."
+                "   First start installs the subpath wheel and can take a few minutes."
             ))
-            self.stdout.write("   Studio is usable right away; /chat/ works once the download finishes.")
+            self.stdout.write("   Studio is usable right away; /ai/ (chat) works once it is ready.")
         try:
-            process = chat_proxy.start_open_webui(port)
+            process = chat_proxy.start_open_webui(internal_port)
+            chat_proxy.serve(internal_port)
         except (OSError, RuntimeError) as exc:
             self.stdout.write(self.style.WARNING(
                 f"\n⚠️  Chat could not start ({exc}); continuing without it.\n"
             ))
+            chat_proxy.stop_open_webui()
             return None
-        chat_proxy.serve(port)
 
         def report():
             if chat_proxy.wait_until_ready(process):
-                print(f"\n✅ Chat is ready — http://localhost:{port}/chat/", flush=True)
+                print(f"\n✅ Chat is ready — http://localhost:{public_port}/ai/", flush=True)
                 print(f"   {_sync_chat_models()}\n", flush=True)
+                backfilled = _backfill_demo_chat()
+                if backfilled:
+                    print(f"   {backfilled}", flush=True)
             elif process.poll() is not None:
                 print(f"\n⚠️  Chat stopped (exit {process.returncode}). Studio is unaffected.", flush=True)
                 print(f"   What happened: {chat_proxy.log_path()}\n", flush=True)

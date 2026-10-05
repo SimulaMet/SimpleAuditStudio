@@ -1,0 +1,138 @@
+# =============================================================================
+# SimpleAudit Studio — single-origin chat routing (subpath Open WebUI)
+#
+# The routing shape enabled by the subpath fork built via
+# deploy/openwebui-subpath/build.sh (published as
+# ghcr.io/sushantgautam/open-webui:v0.11.4-subpath). It replaces the old
+# cross-origin iframe model (Caddyfile.chat on :8801) with one origin / one
+# port:
+#
+#   https://studio.example.com
+#     ├── /chat/...   -> Open WebUI (subpath build, served AT /chat)
+#     ├── /ai/...     -> Studio's wrapper page (model-picker bar + iframe of /chat/)
+#     └── everything  -> Studio (Django)
+#
+# Only THIS container publishes a port. Studio (web) and Open WebUI publish
+# none — everything the browser sees goes through here.
+#
+# THE CRITICAL DETAIL (verified empirically): use `handle`, NOT `handle_path`.
+#   handle_path /chat/*  => strips the prefix and forwards /foo, but the
+#                           subpath fork serves its socket at the FULL path
+#                           /chat/ws/socket.io (engineio matches the raw path,
+#                           not root_path-relative) -> the socket 404s.
+#   handle /chat/*       => forwards /chat/foo as-is, which is exactly what
+#                           a WEBUI_SUBPATH=/chat build expects.
+#
+# =============================================================================
+{
+	auto_https off
+	admin off
+}
+
+:{$STUDIO_PORT:8000} {
+	# Never let a client supply its own identity.
+	request_header -X-Studio-Email
+	request_header -X-Studio-Name
+	request_header -X-Studio-Role
+
+	# Studio's /ai/ iframe points at the bare subpath with query params
+	# (/chat?models=...). `handle /chat/*` does NOT match a bare /chat, so
+	# send it to /chat/ (query preserved) before route selection.
+	rewrite /chat /chat/
+
+	# Studio's chat embed stylesheet: the subpath build requests
+	# /chat/static/custom.css on every page. Caddy intercepts it (before the
+	# /chat/* proxy) and proxies it to Studio's /chat/css-mask, which serves
+	# chat/embed.css normally and chat/embed_admin.css for an admin's iframe
+	# session (stamped by /chat/authz when the page loads with ?embed=admin).
+	# The session cookie rides the request, so no Caddy-side state is needed.
+	handle /chat/static/custom.css {
+		reverse_proxy {$STUDIO_UPSTREAM:web:8000} {
+			rewrite /chat/css-mask
+		}
+	}
+
+	# Studio's chat embed mask script: the subpath build's static/loader.js
+	# is a 0-byte no-op (the SPA's first <script>; SvelteKit hydration comes
+	# from the separate entry/start bundle). Caddy intercepts it and proxies
+	# it to Studio's /chat/loader-mask, which serves chat/embed_admin.js. The
+	# script self-gates on the PAGE URL carrying ?embed=admin, so only the
+	# admin workspace iframes (Knowledge, Tools) are masked; plain /chat/ and
+	# the top-level /chat/workspace pages keep their full menu.
+	handle /chat/static/loader.js {
+		reverse_proxy {$STUDIO_UPSTREAM:web:8000} {
+			rewrite /chat/loader-mask
+		}
+	}
+
+	# Subpath Open WebUI. `handle` (NOT handle_path) = no prefix strip.
+	#
+	# The first handler is the forward-auth to Studio's /chat/authz, in the
+	# EXPANDED form (reverse_proxy + handle_response) — verified end-to-end:
+	# Studio's identity headers are set onto the request and survive to OWUI,
+	# forged client values are stripped at site level before this runs, and a
+	# 401 from authz redirects the browser to the Studio login. The auth call
+	# lives INSIDE this handle block on purpose: Caddy sorts top-level routes
+	# by directive order (forward_auth=11, request_header=12, handle=46,
+	# reverse_proxy=47), so a top-level auth middleware runs AFTER the
+	# site-level header strip and a top-level reverse_proxy auth runs AFTER
+	# this terminal handle — both orderings silently break. In a subroute,
+	# handlers run in file order, so auth runs first, then OWUI.
+	handle /chat/* {
+		reverse_proxy {$STUDIO_UPSTREAM:web:8000} {
+			# Always GET, so the incoming request's body is not consumed.
+			method GET
+			# Point at the Studio auth endpoint.
+			rewrite /chat/authz
+			# Forward the original method and URI (they get rewritten above).
+			header_up X-Forwarded-Method {method}
+			header_up X-Forwarded-Uri {uri}
+			# The rewrite above drops the page's query from the auth call,
+			# so the ?embed=admin flag (admin workspace iframes only) rides
+			# here as a header. Studio's /chat/authz stamps the session
+			# admin from it; that is what makes /chat/static/custom.css
+			# (css-mask) serve the admin skin with the tab-bar mask.
+			# Client-forged values are stripped at site level.
+			header_up X-Studio-Embed {uri.query.embed}
+
+			# On success, set the trusted identity headers on the original
+			# request. Client-forged values were already stripped at site
+			# level, and the placeholder is empty unless Studio signed it.
+			@good status 2xx
+			handle_response @good {
+				request_header X-Studio-Email {rp.header.X-Studio-Email}
+				request_header X-Studio-Name {rp.header.X-Studio-Name}
+				request_header X-Studio-Role {rp.header.X-Studio-Role}
+			}
+
+			# Signed out: send the browser to the Studio login, not a bare 401
+			# and not to /chat/ itself (that would just re-auth and bounce).
+			@signedout status 401
+			handle_response @signedout {
+				redir {$STUDIO_URL:http://localhost:8000}/login/ 302
+			}
+		}
+		reverse_proxy open-webui:{$SIMPLEAUDIT_CHAT_UPSTREAM_PORT:8080}
+	}
+
+	# The subpath fork's KnowledgeBase "Back" button navigates to the
+	# root-relative /workspace/knowledge (a missed ${base} prefix in the fork
+	# build) — a hard GET that would 404 on Studio. Repair it at the front
+	# door: 308 the browser onto the subpath, which re-enters the /chat/*
+	# handle (forward-auth + OWUI) and lands on the collection list. A 308
+	# (not an internal rewrite) because the SPA is built with base=/chat and
+	# its client router reload-loops on an out-of-base URL. The target must
+	# lead with a placeholder (the env prefix): Caddy's caddyfile parser
+	# misreads a leading '/' as a matcher. {http.request.uri} preserves the
+	# query string. Dead code once the fork is rebuilt with the ${base}
+	# prefix.
+	handle /workspace/* {
+		redir {env.WEBUI_SUBPATH:/chat}{http.request.uri} 308
+	}
+
+	# Everything else -> Studio (Django). The subpath fork never emits
+	# root-relative refs, so nothing from OWUI falls through here.
+	handle {
+		reverse_proxy {$STUDIO_UPSTREAM:web:8000}
+	}
+}

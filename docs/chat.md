@@ -1,13 +1,18 @@
 # Chat (Open WebUI)
 
-A module that embeds [Open WebUI](https://openwebui.com) in Studio at `/chat/`,
-signed in as the Studio user. It lives in one Django app, `chat/`:
+A module that embeds [Open WebUI](https://openwebui.com) in Studio, signed in
+as the Studio user — on **one origin, one port**. Studio's wrapper page
+(model-picker bar + iframe) lives at `/ai/`; Open WebUI itself serves its whole
+app at `/chat/` on the same origin, via the subpath fork
+([`deploy/openwebui-subpath/`](../deploy/openwebui-subpath/README.md), built
+with `WEBUI_SUBPATH=/chat`). It lives in one Django app, `chat/`:
 
 ```
 chat/
   config.py          what the module is configured to do, and who you are
-  views.py urls.py   the iframe page and /chat/authz
-  proxy.py           the forward-auth proxy + Open WebUI's lifecycle (embedded)
+  views.py urls.py   the /ai/ wrapper page, /chat/authz, /chat/css-mask
+  proxy.py           embedded front door (bundled Caddy, Python fallback)
+                     + Open WebUI's lifecycle
   api.py             talking to Open WebUI's API, both directions
   management/        sync_chat_models, chat_knowledge
   templates/ tests/
@@ -16,26 +21,53 @@ chat/
 It is part of the bundle the local one-liner starts
 and of the Compose deployment `.env.example` describes, and it can be left out
 entirely: with `SIMPLEAUDIT_CHAT` set to `off` (or `disabled`, `false`, `no`,
-`0`) or unset in a deployment that does not set it, `/chat/` and `/chat/authz`
+`0`) or unset in a deployment that does not set it, `/ai/` and `/chat/authz`
 return 404, the sidebar has no Chat entry, and nothing extra runs.
 
-## Why it is an iframe, not a sub-path
+## Why one origin, and how the subpath works
 
-Open WebUI serves from the root of an origin only. It has no base-path setting,
-and its HTML references `/static`, `/api` and `/ws` absolutely, so proxying it
-under `https://studio/chat/` serves a broken page. It therefore gets its own
-origin (a port locally, a host in production) which Studio embeds.
+Upstream Open WebUI serves from the root of an origin only — proxying it under
+`https://studio/chat/` serves a broken page. So Studio runs a small fork
+rebased on pinned upstream tags, built with a base path:
+
+- the fork's SvelteKit build is configured with `paths.base` and its
+  `goto()`/`href`/static-asset references all respect `WEBUI_SUBPATH=/chat`,
+  so every browser-visible URL carries the `/chat/` prefix (HTML, `/_app`,
+  `/static`, `/api`, the Socket.IO websocket at `/chat/ws/socket.io`);
+- Caddy (the single published port) routes `/chat/*` **without stripping the
+  prefix** — the build expects to be served at `/chat`; stripping breaks the
+  websocket (verified empirically);
+- the browser sees one origin, the session cookie rides along in the same-origin
+  iframe, and Caddy's `forward_auth` against `/chat/authz` injects the trusted
+  identity headers.
+
+The only remaining cross-process hop is that Caddy injects the identity headers
+— Open WebUI's trusted-header mode requires a proxy in front, and that proxy
+must be the only route to Open WebUI (see Security below). Both modes use the
+same Caddy forward-auth: docker mode ships it as a compose service; embedded
+mode runs the bundled `caddyserver` wheel (all platforms) and fails loudly at
+startup if its binary is missing (a broken install).
 
 ## Hiding the sidebar in the iframe
 
 Open WebUI has no embed mode, but its app shell loads `/static/custom.css` on
-every page. The proxy answers that one request with [chat/embed.css](../chat/embed.css)
-instead of forwarding it, so the iframe renders without the chat-history
-sidebar (both its collapsed rail and expanded panel are hidden; the chat fills
-the width). The rule lives in
-this repo, not in a copy of Open WebUI, so it survives upgrades. Both modes
-serve the same file: the Python proxy reads it directly, and the Caddy config
-mounts it read-only. To change what the iframe shows, edit `chat/embed.css`.
+every page. The front door intercepts that one request and hands it to
+Studio's `/chat/css-mask` instead of forwarding it, so the iframe renders
+without the chat-history sidebar (both its collapsed rail and expanded panel
+are hidden; the chat fills the width). The rule lives in
+this repo, not in a copy of Open WebUI, so it survives upgrades in both modes
+— in docker mode Caddy proxies the request to Studio; in embedded mode the
+bundled Caddy (or the Python fallback handler) does the same.
+
+The endpoint is session-aware: Studio's admin pages (Knowledge, Tools) load
+their iframe with `?embed=admin`, which `/chat/authz` stamps into the session;
+the `/static/custom.css` load that follows then gets
+[chat/embed_admin.css](../chat/embed_admin.css) — which shows only the target
+workspace section, with no Open WebUI tab bar — while everyone else (including
+the plain `/ai/` chat) gets
+[chat/embed.css](../chat/embed.css). The flag expires after ~30s so a
+workspace visit doesn't re-skin a later plain chat view. To change what the
+iframe shows, edit those files.
 
 ## How sign-on works
 
@@ -44,15 +76,27 @@ in HTTP headers. A proxy in front of it decides that identity by asking Studio,
 using the standard forward-auth contract.
 
 ```
-browser ──► proxy (:8801)
+browser ──► front door (Caddy :8000 in both modes — the only published port)
               │  strips any client-supplied X-Studio-* header
               │
               ├──► Studio  GET /chat/authz   (browser cookies forwarded)
-              │       401 -> proxy redirects the browser to Studio
+              │       401 -> 302 the browser to /login/
               │       200 -> X-Studio-Email, X-Studio-Name, X-Studio-Role
               │
-              └──► Open WebUI (127.0.0.1:8080, no published port)
+              ├──► /chat/*  → Open WebUI (internal :8080, at /chat; no strip)
+              │
+              └──► everything else → Studio app (internal :8001)
 ```
+
+Both modes share this exact topology: **Caddy** is the single published port,
+Open WebUI sits at `/chat` on an internal `:8080`, and Studio the app sits
+behind the front door. In docker mode each is its own container (Studio on
+`web:8000`, the Caddy service publishing `:8000`); in embedded mode they share
+the host, so Studio moves to `:8001` and Caddy takes `:8000`. The front door
+is the same Caddyfile in both — docker mode ships
+`deploy/openwebui-subpath/Caddyfile.subpath` as a compose service, embedded
+mode generates the equivalent in `chat/proxy.py` from the bundled `caddyserver`
+wheel (all platforms).
 
 Django remains the only authority on identity; nothing outside it reads sessions
 or user tables. Open WebUI creates its account on the first request per user and
@@ -70,9 +114,10 @@ Role mapping (`X-Studio-Role`, applied on every sign-in):
 **Open WebUI must be reachable only from the proxy.** It believes the headers on
 any request it receives, so a client that can connect to it directly can send
 `X-Studio-Role: admin` and take over the instance. Embedded mode binds it to
-loopback; the compose profile publishes no port for it. Both the Python proxy and
-the Caddy config strip client-supplied `X-Studio-*` headers before adding their
-own — if you put your own proxy in front, it must do the same.
+loopback; the compose profile publishes no port for it. Every front door — the
+docker Caddy, the embedded bundled Caddy, and the embedded Python fallback —
+strips client-supplied `X-Studio-*` headers before adding its own; if you put
+your own proxy in front, it must do the same.
 
 ## Local (no Docker)
 
@@ -81,21 +126,34 @@ uvx simpleaudit-studio                 # chat is part of the bundle
 uvx simpleaudit-studio --disable-chat  # leave it out
 ```
 
-Starts Open WebUI (via `open-webui` if installed, otherwise `uvx`) on
-127.0.0.1:8080, plus the forward-auth proxy from `infra/chat_proxy.py` on :8801.
-Open WebUI's data lives beside Studio's, in `~/.simpleaudit-studio/openwebui/`,
-and it runs from that folder so its signing key stays there too.
+Starts Open WebUI on 127.0.0.1:8080 (at `/chat`), Studio the app on 127.0.0.1:8001,
+and the front door — the bundled Caddy binary (the `caddyserver` wheel, all
+platforms) with the same forward-auth Caddyfile the docker deployment runs — on
+**:8000**, the single published port. That Caddyfile is generated by
+`chat/proxy.py` and logged to `openwebui/caddy.log`; if the binary cannot be
+located, `chat/proxy.py` falls back to its built-in Python handler instead, which
+serves the same routes. Because everything sits behind one origin, the `/ai/`
+page's iframe points at the same-origin `/chat`.
+
+Open WebUI is launched the way the fork wheel expects: `uvicorn open_webui.main:app`
+with `FROM_INIT_PY=true` and `WEBUI_SUBPATH=/chat` (the `open-webui serve` entry
+point double-prefixes the base path, so it is not used). Interpreter resolution is
+pluggable — a venv with the fork wheel wins, then the current one, then a
+managed one — so you can point the front door at a prebuilt wheel without
+re-downloading. Open WebUI's data lives beside Studio's, in
+`~/.simpleaudit-studio/openwebui/`, and it runs from that folder so its signing
+key stays there too.
 
 The CLI reports what it is doing: it says when chat is starting, warns on a first
-run that Open WebUI is being downloaded (~1 GB via `uvx`, a few minutes), prints
-where its data and log live, and prints one line when `/chat/` is actually ready
-— or why it stopped. Open WebUI's own output goes to `openwebui/server.log`, not
-the console. Studio and the worker come up while all this happens.
+run that Open WebUI is being downloaded (a few minutes), prints where its data and
+log live, and prints one line when the chat is actually ready — or why it stopped.
+Open WebUI's own output goes to `openwebui/server.log`, not the console. Studio
+and the worker come up while all this happens.
 
-`open-webui serve` ignores `HOST`/`PORT` and defaults to **0.0.0.0**:8080, so
-Studio passes `--host`/`--port` explicitly. If you override the command with
-`SIMPLEAUDIT_CHAT_CMD`, pass those flags yourself — binding it to all interfaces
-is what the warning above is about.
+The frontend binds to loopback by default (`--host 127.0.0.1`); only the Caddy
+front door on `:8000` is meant to be reachable. If you override the command with
+`SIMPLEAUDIT_CHAT_CMD`, pass the host/port yourself — binding Open WebUI to all
+interfaces is what the Security section is warning about.
 
 Open WebUI is managed like the embedded Hatchet engine: one instance per Studio
 process, started in its own process group, and stopped on the way out — by the
@@ -133,9 +191,8 @@ already ships with both switches enabled:
 
 ```bash
 # .env
-SIMPLEAUDIT_CHAT=docker                        # web serves /chat/
-COMPOSE_PROFILES=chat                          # the two chat containers start
-SIMPLEAUDIT_CHAT_URL=http://localhost:8801     # what the browser opens
+SIMPLEAUDIT_CHAT=docker                        # web serves /ai/ + /chat/authz
+COMPOSE_PROFILES=chat                          # the open-webui container starts
 SIMPLEAUDIT_STUDIO_URL=http://localhost:8000   # where signed-out users are sent
 
 docker compose up -d
@@ -145,25 +202,25 @@ To run Compose without chat, set `SIMPLEAUDIT_CHAT=off` and comment out
 `COMPOSE_PROFILES=chat` (or remove `chat` from it), then `docker compose up -d`
 again. (`.env` files that predate this default need the two lines added.)
 
-The two switches are independent, and setting only `SIMPLEAUDIT_CHAT` gives a
-`/chat/` page with nothing behind it.
+The two switches are independent, and setting only `SIMPLEAUDIT_CHAT` gives an
+`/ai/` page with nothing behind it.
 
-This runs `open-webui` (no published port) behind `chat-proxy`, a Caddy container
-configured by [deploy/compose/Caddyfile.chat](../deploy/compose/Caddyfile.chat).
-Studio itself only serves the iframe page and `/chat/authz`.
-
-On separate hostnames (`studio.example.com` / `chat.example.com`), set
-`SESSION_COOKIE_DOMAIN=.example.com` so the proxy receives Studio's session
-cookie. Different registrable domains will not work.
+`chat-proxy` — a Caddy container configured by
+[deploy/openwebui-subpath/Caddyfile.subpath](../deploy/openwebui-subpath/Caddyfile.subpath)
+— is the **only published port** (`:8000`), in every configuration: it fronts
+Studio, Studio's `/ai/` wrapper, and (with the chat profile) the subpath
+`open-webui` container (no published port). `SIMPLEAUDIT_CHAT_URL` is left
+unset: the iframe loads the same-origin `/chat/`.
 
 ## Settings
 
 | Variable                        | Default                  | Meaning                                    |
 |---------------------------------|--------------------------|--------------------------------------------|
 | `SIMPLEAUDIT_CHAT`              | `embedded` (CLI), unset elsewhere | `embedded`, `docker`, or `off`/`disabled`/`false`/`no`/`0` |
-| `SIMPLEAUDIT_CHAT_URL`          | `http://localhost:8801`  | the origin the iframe loads                |
-| `SIMPLEAUDIT_CHAT_UPSTREAM`     | `http://127.0.0.1:8080`  | where Open WebUI listens                   |
-| `SIMPLEAUDIT_CHAT_PROXY_PORT`   | `8801`                   | the proxy's port (both modes)              |
+| `SIMPLEAUDIT_CHAT_URL`          | unset → same-origin `/chat` | full URL only for a legacy own-origin deployment |
+| `SIMPLEAUDIT_CHAT_UPSTREAM`     | `http://127.0.0.1:8080/chat` | where Open WebUI listens (docker: `http://open-webui:8080/chat`) |
+| `SIMPLEAUDIT_CHAT_PUBLIC_PORT`  | `8000`                   | the front door's (Caddy) port — the only published one, both modes |
+| `SIMPLEAUDIT_CHAT_INTERNAL_PORT`| `8001`                   | where Studio the app listens behind the front door |
 | `SIMPLEAUDIT_CHAT_UPSTREAM_PORT`| `8080`                   | Open WebUI's port (docker mode)            |
 | `SIMPLEAUDIT_STUDIO_URL`        | `http://localhost:8000`  | where signed-out users are sent (docker)   |
 | `SIMPLEAUDIT_CHAT_CMD`          | auto                     | command that starts Open WebUI             |
@@ -271,11 +328,34 @@ A connection's registered models become that provider's `model_ids` in Open
 WebUI, so chat offers what Studio registered. A connection with no registered
 models is left unrestricted.
 
+### Agents, knowledge bases and tools
+
+Studio's `/agents/` resources stay thin references: the durable config lives
+in Studio, and the executable copy lives in Open WebUI. Every create/update
+pushes to Open WebUI (best-effort, after the Studio row is saved), and every
+delete propagates:
+
+- **Agents** become *workspace model* entries (`studio.agent-<pk>`) that
+  inherit the base connection model and attach the agent's knowledge bases
+  via the model's `meta.knowledge`. Chat "Test in Chat" pins that entry.
+- **Knowledge bases** and **tools** are created/renamed in Open WebUI's own
+  knowledge base and toolkit stores; the local row keeps the returned id in
+  `external_id` for listing. Tool *source code* is never stored in Studio —
+  Open WebUI owns it, and a metadata-only Studio edit re-pushes the untouched
+  remote source.
+
+The sync is best-effort: a down Open WebUI is logged, not fatal, and the next
+edit retries. The agent
+detail page and `GET /api/agents/<id>/` (`openwebui_live`) show the live
+Open WebUI entry, falling back to the cached Studio row when it is
+unreachable. When chat is disabled everything is a no-op and Studio works
+standalone.
+
 ## Removing it
 
 Set `SIMPLEAUDIT_CHAT=disabled`, or pass `--disable-chat` to the CLI.
 
-To drop the code, delete the `chat/` app and `deploy/compose/Caddyfile.chat`,
+To drop the code, delete the `chat/` app and `deploy/openwebui-subpath/`,
 then remove its four references: `"chat"` in `INSTALLED_APPS`, the `chat/` route
 in `config/urls.py`, the Chat entry in `infra/context_processors.py`, the
 `--chat` flag in `simpleaudit_studio/cli.py`, and the `chat` profile in
