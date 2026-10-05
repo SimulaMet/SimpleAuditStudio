@@ -501,7 +501,11 @@ def backfill_demo_chat_resources(project, user) -> dict[str, int]:
         kb_missing = kb is not None and not kb.external_id
         tool_missing = tool is not None and not tool.external_id
         agent_missing = agent is not None and not agent.external_id
-        if not (kb_missing or tool_missing or agent_missing):
+        # An existing external id only proves that the workspace model was
+        # created once.  Its base model can still be stale after a Studio-side
+        # agent re-point (for example, from OpenAI to a custom provider), so
+        # the agent itself must be reconciled whenever chat becomes ready.
+        if not (kb_missing or tool_missing or agent is not None):
             return counts
 
         from model_registry.services import sync_agent_to_openwebui
@@ -519,10 +523,9 @@ def backfill_demo_chat_resources(project, user) -> dict[str, int]:
                 tool.external_id = tool_external_id
                 tool.save(update_fields=["external_id", "updated_at"])
                 counts["tools"] += 1
-        # Agent last: re-push when its links were missing just now too, so the
-        # OWUI model is (re)wired to the now-present KB/tool.
-        if agent_missing or kb_missing or tool_missing:
-            # Pushed last so the OWUI model is (re)wired to the KB/tool links.
+        # Agent last: always reconcile it when present.  This repairs stale
+        # base_model_id values as well as missing KB/tool links.
+        if agent is not None:
             result = sync_agent_to_openwebui(agent, user)
             if result in {"created", "updated"}:
                 agent.refresh_from_db()
