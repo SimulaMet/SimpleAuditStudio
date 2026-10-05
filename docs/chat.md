@@ -358,6 +358,9 @@ admin-only retrieval endpoints and never sends stored provider secrets to the
 browser. Normal users only receive the agent-scoped Retrieval Profile. Studio
 also records that profile in the synced Open WebUI model metadata for audit and
 integration consumers; Open WebUI's own RAG engine remains globally configured.
+Agent edit pages show a safe live projection of those global settings for
+context. When an audit targets an agent, the same projection is frozen into
+the run's `agent_config_snapshot`; it contains no provider credentials.
 
 ## Removing it
 

@@ -119,6 +119,7 @@ def frozen_agent(run: AuditRun) -> dict | None:
         "knowledge_bases": snap.get("knowledge_bases", []),
         "tools": snap.get("tools", []),
         "retrieval_profile": snap.get("retrieval_profile"),
+        "server_rag": snap.get("server_rag"),
         "capabilities": snap.get("capabilities", []),
         "metadata": snap.get("metadata", {}),
     }
@@ -264,7 +265,16 @@ def create_audit_run(
         trace_config = {"mode": "studio", "target_id": target_id or ""} if target_id else {}
 
     now = timezone.now()
-    agent_snapshot = agent.config_snapshot() if agent is not None else None
+    agent_snapshot = None
+    if agent is not None:
+        server_rag = None
+        try:
+            from integrations.openwebui.client import OpenWebUIAdapter
+
+            server_rag = OpenWebUIAdapter.for_admin().safe_rag_settings()
+        except Exception:  # noqa: BLE001 - a down chat service must not block freezing local inputs
+            logger.warning("Could not freeze Open WebUI RAG settings for agent %s", agent.id)
+        agent_snapshot = agent.config_snapshot(server_rag=server_rag)
     return AuditRun.objects.create(
         project=project,
         name=name.strip(),

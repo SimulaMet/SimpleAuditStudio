@@ -45,6 +45,50 @@ class OpenWebUIAdapter:
         api = ChatAPI.as_user(user)
         return cls(api)
 
+    @classmethod
+    def for_admin(cls) -> OpenWebUIAdapter:
+        """Use Studio's Open WebUI administrator for instance settings."""
+        from django.contrib.auth import get_user_model
+
+        user = get_user_model().objects.filter(is_superuser=True, is_active=True).order_by("id").first()
+        if user is None:
+            raise OpenWebUIAdapterError("No active Studio superuser is available for Open WebUI admin access.")
+        return cls.for_user(user)
+
+    def safe_rag_settings(self) -> dict[str, Any]:
+        """Return the non-secret global RAG settings useful to agent authors.
+
+        Open WebUI owns and enforces these values globally. This projection is
+        deliberately small so it is safe to show to ordinary Studio users and
+        freeze into audit metadata.
+        """
+        rag = self._api.retrieval_config()
+        embedding = self._api.embedding_config()
+        return {
+            "embedding_engine": embedding.get("RAG_EMBEDDING_ENGINE", ""),
+            "embedding_model": embedding.get("RAG_EMBEDDING_MODEL", ""),
+            "embedding_batch_size": embedding.get("RAG_EMBEDDING_BATCH_SIZE"),
+            "async_embedding": embedding.get("ENABLE_ASYNC_EMBEDDING"),
+            "text_splitter": rag.get("TEXT_SPLITTER", ""),
+            "tokenizer_model": rag.get("RAG_TOKENIZER_MODEL", ""),
+            "chunk_size": rag.get("CHUNK_SIZE"),
+            "chunk_overlap": rag.get("CHUNK_OVERLAP"),
+            "chunk_min_size_target": rag.get("CHUNK_MIN_SIZE_TARGET"),
+            "markdown_header_splitter": rag.get("ENABLE_MARKDOWN_HEADER_TEXT_SPLITTER"),
+            "top_k": rag.get("TOP_K"),
+            "hybrid_search": rag.get("ENABLE_RAG_HYBRID_SEARCH"),
+            "bm25_weight": rag.get("HYBRID_BM25_WEIGHT"),
+            "reranking_engine": rag.get("RAG_RERANKING_ENGINE", ""),
+            "reranking_model": rag.get("RAG_RERANKING_MODEL", ""),
+            "reranker_top_k": rag.get("TOP_K_RERANKER"),
+            "relevance_threshold": rag.get("RELEVANCE_THRESHOLD"),
+            "full_context": rag.get("RAG_FULL_CONTEXT"),
+            "bypass_embedding_and_retrieval": rag.get("BYPASS_EMBEDDING_AND_RETRIEVAL"),
+            "content_extraction_engine": rag.get("CONTENT_EXTRACTION_ENGINE", ""),
+            "pdf_loader_mode": rag.get("PDF_LOADER_MODE", ""),
+            "pdf_extract_images": rag.get("PDF_EXTRACT_IMAGES"),
+        }
+
     # --- read operations ---------------------------------------------------
 
     def list_models(self) -> list[str]:
