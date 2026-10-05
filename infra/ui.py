@@ -482,6 +482,141 @@ class AdminView(SuperuserRequiredMixin, TemplateView):
         return super().get_context_data(**kw)
 
 
+class OpenWebUIRAGSettingsView(SuperuserRequiredMixin, TemplateView):
+    """Superuser-only editor for Open WebUI's instance-wide RAG settings."""
+
+    template_name = "admin/rag_settings.html"
+
+    RAG_FIELDS = {
+        "RAG_TEMPLATE": "text",
+        "TOP_K": "int",
+        "BYPASS_EMBEDDING_AND_RETRIEVAL": "bool",
+        "RAG_FULL_CONTEXT": "bool",
+        "ENABLE_RAG_HYBRID_SEARCH": "bool",
+        "ENABLE_RAG_HYBRID_SEARCH_ENRICHED_TEXTS": "bool",
+        "TOP_K_RERANKER": "int",
+        "RELEVANCE_THRESHOLD": "float",
+        "HYBRID_BM25_WEIGHT": "float",
+        "CONTENT_EXTRACTION_ENGINE": "text",
+        "PDF_EXTRACT_IMAGES": "bool",
+        "PDF_LOADER_MODE": "text",
+        "RAG_RERANKING_MODEL": "text",
+        "RAG_RERANKING_ENGINE": "text",
+        "RAG_RERANKING_BATCH_SIZE": "int",
+        "RAG_EXTERNAL_RERANKER_URL": "text",
+        "RAG_EXTERNAL_RERANKER_TIMEOUT": "int",
+        "TEXT_SPLITTER": "text",
+        "RAG_TOKENIZER_MODEL": "text",
+        "ENABLE_MARKDOWN_HEADER_TEXT_SPLITTER": "bool",
+        "CHUNK_SIZE": "int",
+        "CHUNK_MIN_SIZE_TARGET": "int",
+        "CHUNK_OVERLAP": "int",
+        "FILE_MAX_SIZE": "text",
+        "FILE_MAX_COUNT": "text",
+        "ALLOWED_FILE_EXTENSIONS": "csv",
+    }
+
+    @staticmethod
+    def _value(raw: str | None, kind: str):
+        if kind == "bool":
+            return raw == "on"
+        if raw is None or raw == "":
+            return None
+        if kind == "int":
+            return int(raw)
+        if kind == "float":
+            return float(raw)
+        if kind == "csv":
+            return [item.strip() for item in raw.split(",") if item.strip()]
+        return raw
+
+    @classmethod
+    def _form_payload(cls, request):
+        payload = {}
+        for field, kind in cls.RAG_FIELDS.items():
+            value = cls._value(request.POST.get(field), kind)
+            if value is not None:
+                payload[field] = value
+        return payload
+
+    @staticmethod
+    def _safe_context(rag: dict, embedding: dict) -> dict:
+        """Remove provider credentials before settings reach the browser."""
+        safe_rag = dict(rag)
+        for key in (
+            "DATALAB_MARKER_API_KEY", "EXTERNAL_DOCUMENT_LOADER_API_KEY",
+            "DOCLING_API_KEY", "DOCUMENT_INTELLIGENCE_KEY", "MISTRAL_OCR_API_KEY",
+            "MINERU_API_KEY", "RAG_EXTERNAL_RERANKER_API_KEY",
+        ):
+            safe_rag.pop(key, None)
+        safe_embedding = dict(embedding)
+        for provider in ("openai_config", "ollama_config", "azure_openai_config"):
+            config = safe_embedding.get(provider)
+            if isinstance(config, dict):
+                safe_embedding[provider] = {
+                    key: ("********" if key == "key" and value else value)
+                    for key, value in config.items()
+                }
+        return {"rag": safe_rag, "embedding": safe_embedding}
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context.update({"settings_error": None, "settings": {}})
+        try:
+            from chat.api import ChatAPI
+
+            api = ChatAPI.as_user(self.request.user)
+            context["settings"] = self._safe_context(
+                api.retrieval_config(), api.embedding_config()
+            )
+            context["rag"] = context["settings"]["rag"]
+            context["embedding"] = context["settings"]["embedding"]
+        except Exception as exc:  # noqa: BLE001 - upstream availability is optional
+            context["settings_error"] = str(exc)
+        return context
+
+    def post(self, request, *args, **kwargs):
+        try:
+            from chat.api import ChatAPI
+
+            api = ChatAPI.as_user(request.user)
+            api.update_retrieval_config(self._form_payload(request))
+
+            embedding = {
+                "RAG_EMBEDDING_ENGINE": request.POST.get("RAG_EMBEDDING_ENGINE", ""),
+                "RAG_EMBEDDING_MODEL": request.POST.get("RAG_EMBEDDING_MODEL", ""),
+                "RAG_EMBEDDING_BATCH_SIZE": self._value(
+                    request.POST.get("RAG_EMBEDDING_BATCH_SIZE"), "int"
+                ),
+                "ENABLE_ASYNC_EMBEDDING": request.POST.get("ENABLE_ASYNC_EMBEDDING") == "on",
+                "RAG_EMBEDDING_CONCURRENT_REQUESTS": self._value(
+                    request.POST.get("RAG_EMBEDDING_CONCURRENT_REQUESTS"), "int"
+                ),
+            }
+            provider = {}
+            for name, form_name in (
+                ("openai_config", "RAG_OPENAI"),
+                ("ollama_config", "RAG_OLLAMA"),
+                ("azure_openai_config", "RAG_AZURE_OPENAI"),
+            ):
+                values = {}
+                for suffix in ("BASE_URL", "API_KEY", "API_VERSION"):
+                    value = request.POST.get(f"{form_name}_{suffix}", "").strip()
+                    if value and not (suffix == "API_KEY" and value == "********"):
+                        values[{"BASE_URL": "url", "API_KEY": "key", "API_VERSION": "version"}[suffix]] = value
+                if values:
+                    provider[name] = values
+            embedding.update(provider)
+            if embedding["RAG_EMBEDDING_ENGINE"] and embedding["RAG_EMBEDDING_MODEL"]:
+                api.update_embedding_config(embedding)
+            messages.success(request, "Open WebUI RAG settings saved.")
+        except (ValueError, TypeError) as exc:
+            messages.error(request, f"Invalid RAG setting: {exc}")
+        except Exception as exc:  # noqa: BLE001 - surface upstream failures in UI
+            messages.error(request, f"Could not save Open WebUI RAG settings: {exc}")
+        return redirect("openwebui_rag_settings")
+
+
 # ─── Profile ─────────────────────────────────────────────────────────────────
 
 

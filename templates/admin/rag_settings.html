@@ -1,0 +1,95 @@
+{% extends "base.html" %}
+{% block title %}Open WebUI RAG — SimpleAudit{% endblock %}
+{% block content %}
+<div class="max-w-4xl">
+  <div class="flex items-center justify-between mb-5">
+    <div>
+      <h1 class="text-lg font-semibold text-gray-100">Open WebUI RAG settings</h1>
+      <p class="text-sm text-gray-500 mt-1">Instance-wide document retrieval settings. Superusers only.</p>
+    </div>
+    <a href="{% url 'admin_settings' %}" class="text-xs text-gray-400 hover:text-white">← Admin settings</a>
+  </div>
+
+  {% if settings_error %}
+  <div class="mb-5 rounded-lg border border-amber-800/60 bg-amber-900/20 px-4 py-3 text-sm text-amber-300">
+    Open WebUI settings are unavailable: {{ settings_error }}
+  </div>
+  {% endif %}
+
+  <form method="post" class="space-y-5">
+    {% csrf_token %}
+
+    <fieldset class="bg-surface-raised rounded-xl border border-gray-800 p-4 space-y-4">
+      <legend class="px-2 text-xs font-semibold text-gray-300 uppercase tracking-wide">Embedding</legend>
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+        {% include "admin/_rag_text.html" with name="RAG_EMBEDDING_ENGINE" label="Embedding engine" value=embedding.RAG_EMBEDDING_ENGINE placeholder="ollama, openai, azure_openai" %}
+        {% include "admin/_rag_text.html" with name="RAG_EMBEDDING_MODEL" label="Embedding model" value=embedding.RAG_EMBEDDING_MODEL placeholder="sentence-transformers/all-MiniLM-L6-v2" %}
+        {% include "admin/_rag_number.html" with name="RAG_EMBEDDING_BATCH_SIZE" label="Embedding batch size" value=embedding.RAG_EMBEDDING_BATCH_SIZE %}
+        {% include "admin/_rag_number.html" with name="RAG_EMBEDDING_CONCURRENT_REQUESTS" label="Concurrent requests" value=embedding.RAG_EMBEDDING_CONCURRENT_REQUESTS %}
+      </div>
+      <label class="flex items-center gap-2 text-sm text-gray-300">
+        <input type="checkbox" name="ENABLE_ASYNC_EMBEDDING" {% if embedding.ENABLE_ASYNC_EMBEDDING %}checked{% endif %} class="rounded border-gray-600 bg-surface-overlay text-accent">
+        Enable asynchronous embedding
+      </label>
+      <p class="text-xs text-gray-500">Provider API keys are write-only here. Leave a key blank to keep the existing key.</p>
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+        {% include "admin/_rag_text.html" with name="RAG_OPENAI_BASE_URL" label="OpenAI-compatible embedding URL" value=embedding.openai_config.url placeholder="https://…" %}
+        {% include "admin/_rag_text.html" with name="RAG_OPENAI_API_KEY" label="OpenAI embedding API key" value=embedding.openai_config.key type="password" placeholder="Leave blank to keep" %}
+        {% include "admin/_rag_text.html" with name="RAG_OLLAMA_BASE_URL" label="Ollama embedding URL" value=embedding.ollama_config.url placeholder="http://ollama:11434" %}
+        {% include "admin/_rag_text.html" with name="RAG_OLLAMA_API_KEY" label="Ollama API key" value=embedding.ollama_config.key type="password" placeholder="Leave blank to keep" %}
+        {% include "admin/_rag_text.html" with name="RAG_AZURE_OPENAI_BASE_URL" label="Azure OpenAI embedding URL" value=embedding.azure_openai_config.url placeholder="https://…" %}
+        {% include "admin/_rag_text.html" with name="RAG_AZURE_OPENAI_API_KEY" label="Azure OpenAI API key" value=embedding.azure_openai_config.key type="password" placeholder="Leave blank to keep" %}
+        {% include "admin/_rag_text.html" with name="RAG_AZURE_OPENAI_API_VERSION" label="Azure API version" value=embedding.azure_openai_config.version placeholder="2024-02-15-preview" %}
+      </div>
+    </fieldset>
+
+    <fieldset class="bg-surface-raised rounded-xl border border-gray-800 p-4 space-y-4">
+      <legend class="px-2 text-xs font-semibold text-gray-300 uppercase tracking-wide">Retrieval</legend>
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+        {% include "admin/_rag_number.html" with name="TOP_K" label="Top K" value=rag.TOP_K %}
+        {% include "admin/_rag_number.html" with name="TOP_K_RERANKER" label="Reranker Top K" value=rag.TOP_K_RERANKER %}
+        {% include "admin/_rag_number.html" with name="RELEVANCE_THRESHOLD" label="Relevance threshold" value=rag.RELEVANCE_THRESHOLD step="0.01" %}
+        {% include "admin/_rag_number.html" with name="HYBRID_BM25_WEIGHT" label="BM25 weight" value=rag.HYBRID_BM25_WEIGHT step="0.01" %}
+        {% include "admin/_rag_text.html" with name="RAG_RERANKING_ENGINE" label="Reranking engine" value=rag.RAG_RERANKING_ENGINE placeholder="" %}
+        {% include "admin/_rag_text.html" with name="RAG_RERANKING_MODEL" label="Reranking model" value=rag.RAG_RERANKING_MODEL placeholder="" %}
+      </div>
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-2 text-sm text-gray-300">
+        {% include "admin/_rag_checkbox.html" with name="RAG_FULL_CONTEXT" label="Full context mode" checked=rag.RAG_FULL_CONTEXT %}
+        {% include "admin/_rag_checkbox.html" with name="BYPASS_EMBEDDING_AND_RETRIEVAL" label="Bypass embedding and retrieval" checked=rag.BYPASS_EMBEDDING_AND_RETRIEVAL %}
+        {% include "admin/_rag_checkbox.html" with name="ENABLE_RAG_HYBRID_SEARCH" label="Hybrid/BM25 search" checked=rag.ENABLE_RAG_HYBRID_SEARCH %}
+        {% include "admin/_rag_checkbox.html" with name="ENABLE_RAG_HYBRID_SEARCH_ENRICHED_TEXTS" label="Enrich hybrid-search text" checked=rag.ENABLE_RAG_HYBRID_SEARCH_ENRICHED_TEXTS %}
+      </div>
+      <label class="block text-xs text-gray-400">RAG template
+        <textarea name="RAG_TEMPLATE" rows="5" class="mt-1 w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm text-gray-100 font-mono">{{ rag.RAG_TEMPLATE|default:'' }}</textarea>
+      </label>
+    </fieldset>
+
+    <fieldset class="bg-surface-raised rounded-xl border border-gray-800 p-4 space-y-4">
+      <legend class="px-2 text-xs font-semibold text-gray-300 uppercase tracking-wide">Chunking and files</legend>
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+        {% include "admin/_rag_text.html" with name="TEXT_SPLITTER" label="Text splitter" value=rag.TEXT_SPLITTER placeholder="character, token" %}
+        {% include "admin/_rag_text.html" with name="RAG_TOKENIZER_MODEL" label="Tokenizer model" value=rag.RAG_TOKENIZER_MODEL placeholder="Optional" %}
+        {% include "admin/_rag_number.html" with name="CHUNK_SIZE" label="Chunk size" value=rag.CHUNK_SIZE %}
+        {% include "admin/_rag_number.html" with name="CHUNK_OVERLAP" label="Chunk overlap" value=rag.CHUNK_OVERLAP %}
+        {% include "admin/_rag_number.html" with name="CHUNK_MIN_SIZE_TARGET" label="Minimum chunk size" value=rag.CHUNK_MIN_SIZE_TARGET %}
+        {% include "admin/_rag_text.html" with name="CONTENT_EXTRACTION_ENGINE" label="Content extraction engine" value=rag.CONTENT_EXTRACTION_ENGINE placeholder="Default" %}
+        {% include "admin/_rag_text.html" with name="PDF_LOADER_MODE" label="PDF loader mode" value=rag.PDF_LOADER_MODE placeholder="page" %}
+        {% include "admin/_rag_text.html" with name="FILE_MAX_SIZE" label="Maximum file size" value=rag.FILE_MAX_SIZE placeholder="" %}
+        {% include "admin/_rag_text.html" with name="FILE_MAX_COUNT" label="Maximum file count" value=rag.FILE_MAX_COUNT placeholder="" %}
+      </div>
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-2 text-sm text-gray-300">
+        {% include "admin/_rag_checkbox.html" with name="ENABLE_MARKDOWN_HEADER_TEXT_SPLITTER" label="Markdown header splitting" checked=rag.ENABLE_MARKDOWN_HEADER_TEXT_SPLITTER %}
+        {% include "admin/_rag_checkbox.html" with name="PDF_EXTRACT_IMAGES" label="Extract images from PDFs" checked=rag.PDF_EXTRACT_IMAGES %}
+      </div>
+      <label class="block text-xs text-gray-400">Allowed file extensions (comma-separated)
+        <input type="text" name="ALLOWED_FILE_EXTENSIONS" value="{{ rag.ALLOWED_FILE_EXTENSIONS|join:', ' }}" class="mt-1 w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm text-gray-100" placeholder="pdf, md, txt, docx">
+      </label>
+    </fieldset>
+
+    <div class="flex items-center gap-3">
+      <button type="submit" class="px-4 py-2 rounded-lg bg-accent text-white text-sm font-medium hover:bg-accent-hover">Save RAG settings</button>
+      <span class="text-xs text-amber-400">Changing the embedding model requires re-indexing existing knowledge bases.</span>
+    </div>
+  </form>
+</div>
+{% endblock %}

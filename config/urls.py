@@ -37,6 +37,7 @@ from infra.ui import (
     MonitorDetailView,
     MonitorsView,
     NewExperimentView,
+    OpenWebUIRAGSettingsView,
     OTLPCredentialCreateView,
     OTLPCredentialRotateView,
     ProfileView,
@@ -177,6 +178,7 @@ urlpatterns = [
     path("auth/workos/verify/", WorkOSVerifyView.as_view(), name="workos_verify"),
     path("workspaces/", WorkspacesView.as_view(), name="workspaces"),
     path("admin-settings/", AdminView.as_view(), name="admin_settings"),
+    path("admin-settings/rag/", OpenWebUIRAGSettingsView.as_view(), name="openwebui_rag_settings"),
     path("profile/", ProfileView.as_view(), name="profile"),
     path("health/", HealthView.as_view(), name="health"),
     path("experiments/new/", NewExperimentView.as_view(), name="new_experiment"),
@@ -273,4 +275,3 @@ if otlp_config.ENABLED:
         path("api/otlp/credentials/create/", otlp_views.create_credential, name="otlp-credentials-create"),
         path("api/otlp/credentials/<int:cred_id>/revoke/", otlp_views.revoke_credential, name="otlp-credentials-revoke"),
     ]
-
