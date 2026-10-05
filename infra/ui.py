@@ -442,12 +442,18 @@ class AdminView(SuperuserRequiredMixin, TemplateView):
 
     template_name = "admin.html"
 
+    def dispatch(self, request, *args, **kwargs):
+        # Keep Knowledge & Retrieval inside the existing tabbed admin surface.
+        if request.GET.get("tab") == "knowledge" or request.POST.get("tab") == "knowledge":
+            return KnowledgeRetrievalSettingsView.as_view()(request, *args, **kwargs)
+        return super().dispatch(request, *args, **kwargs)
+
     def get_context_data(self, **kw):
         from accounts.models import Project, User
         from accounts.services import admin_stats_payload, workspace_has_content
 
         tab = self.request.GET.get("tab", "overview")
-        if tab not in ("overview", "workspaces", "users"):
+        if tab not in ("overview", "workspaces", "users", "knowledge"):
             tab = "overview"
 
         stats = admin_stats_payload()
@@ -482,8 +488,8 @@ class AdminView(SuperuserRequiredMixin, TemplateView):
         return super().get_context_data(**kw)
 
 
-class OpenWebUIRAGSettingsView(SuperuserRequiredMixin, TemplateView):
-    """Superuser-only editor for Open WebUI's instance-wide RAG settings."""
+class KnowledgeRetrievalSettingsView(SuperuserRequiredMixin, TemplateView):
+    """Superuser-only editor for instance-wide knowledge retrieval settings."""
 
     template_name = "admin/rag_settings.html"
 
@@ -609,12 +615,12 @@ class OpenWebUIRAGSettingsView(SuperuserRequiredMixin, TemplateView):
             embedding.update(provider)
             if embedding["RAG_EMBEDDING_ENGINE"] and embedding["RAG_EMBEDDING_MODEL"]:
                 api.update_embedding_config(embedding)
-            messages.success(request, "Open WebUI RAG settings saved.")
+            messages.success(request, "Knowledge and retrieval settings saved.")
         except (ValueError, TypeError) as exc:
             messages.error(request, f"Invalid RAG setting: {exc}")
         except Exception as exc:  # noqa: BLE001 - surface upstream failures in UI
-            messages.error(request, f"Could not save Open WebUI RAG settings: {exc}")
-        return redirect("openwebui_rag_settings")
+            messages.error(request, f"Could not save knowledge and retrieval settings: {exc}")
+        return redirect(f"{reverse('admin_settings')}?tab=knowledge")
 
 
 # ─── Profile ─────────────────────────────────────────────────────────────────
@@ -2931,7 +2937,7 @@ def _sync_agent_form_result(request, agent):
     if sync_agent_to_openwebui(agent, request.user) == "skipped":
         messages.error(
             request,
-            f"Agent '{agent.name}' saved locally, but Open WebUI sync failed — "
+            f"Agent '{agent.name}' saved locally, but chat sync failed — "
             "edit the agent again to retry.",
         )
 

@@ -1,18 +1,25 @@
 {% extends "base.html" %}
-{% block title %}Open WebUI RAG — SimpleAudit{% endblock %}
+{% block title %}Knowledge &amp; Retrieval — SimpleAudit{% endblock %}
 {% block content %}
 <div class="max-w-4xl">
   <div class="flex items-center justify-between mb-5">
     <div>
-      <h1 class="text-lg font-semibold text-gray-100">Open WebUI RAG settings</h1>
+      <h1 class="text-lg font-semibold text-gray-100">Knowledge &amp; Retrieval</h1>
       <p class="text-sm text-gray-500 mt-1">Instance-wide document retrieval settings. Superusers only.</p>
     </div>
     <a href="{% url 'admin_settings' %}" class="text-xs text-gray-400 hover:text-white">← Admin settings</a>
   </div>
 
+  <div class="flex gap-1 mb-5 border-b border-gray-800">
+    <a href="{% url 'admin_settings' %}" class="px-3 py-2 text-sm rounded-t-lg text-gray-400 hover:text-gray-200">Overview</a>
+    <a href="{% url 'admin_settings' %}?tab=workspaces" class="px-3 py-2 text-sm rounded-t-lg text-gray-400 hover:text-gray-200">Workspaces</a>
+    <a href="{% url 'admin_settings' %}?tab=users" class="px-3 py-2 text-sm rounded-t-lg text-gray-400 hover:text-gray-200">Users</a>
+    <a href="{% url 'admin_settings' %}?tab=knowledge" class="px-3 py-2 text-sm rounded-t-lg bg-accent/15 text-accent font-medium border-b-2 border-accent">Knowledge &amp; Retrieval</a>
+  </div>
+
   {% if settings_error %}
   <div class="mb-5 rounded-lg border border-amber-800/60 bg-amber-900/20 px-4 py-3 text-sm text-amber-300">
-    Open WebUI settings are unavailable: {{ settings_error }}
+    Knowledge and retrieval settings are unavailable: {{ settings_error }}
   </div>
   {% endif %}
 
@@ -87,7 +94,8 @@
     </fieldset>
 
     <div class="flex items-center gap-3">
-      <button type="submit" class="px-4 py-2 rounded-lg bg-accent text-white text-sm font-medium hover:bg-accent-hover">Save RAG settings</button>
+      <input type="hidden" name="tab" value="knowledge">
+      <button type="submit" class="px-4 py-2 rounded-lg bg-accent text-white text-sm font-medium hover:bg-accent-hover">Save settings</button>
       <span class="text-xs text-amber-400">Changing the embedding model requires re-indexing existing knowledge bases.</span>
     </div>
   </form>

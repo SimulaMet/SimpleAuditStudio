@@ -27,9 +27,9 @@
     </fieldset>
 
     {% if agent and chat_enabled %}
-    <!-- Open WebUI sync status (live entry fetched on page load) -->
+    <!-- Chat sync status (live entry fetched on page load) -->
     <fieldset class="bg-surface-raised rounded-xl border border-gray-800 p-4">
-      <legend class="px-2 text-xs font-semibold text-gray-300 uppercase tracking-wide">Open WebUI</legend>
+      <legend class="px-2 text-xs font-semibold text-gray-300 uppercase tracking-wide">Chat availability</legend>
       {% if agent.external_id %}
         {% if openwebui_live %}
         <p class="text-xs text-gray-300">
@@ -43,20 +43,20 @@
         {% else %}
         <p class="text-xs text-amber-400">
           ⚠ Registered in Studio as <code class="font-mono text-[11px]">{{ agent.external_id }}</code>,
-          but the Open WebUI entry is not reachable right now. Save the agent to retry the sync.
+          but the chat entry is not reachable right now. Save the agent to retry the sync.
         </p>
         {% endif %}
       {% else %}
-      <p class="text-xs text-gray-500">Not synced to Open WebUI yet — saving this agent will create its model entry there.</p>
+      <p class="text-xs text-gray-500">Not available in chat yet — saving this agent will publish it there.</p>
       {% endif %}
     </fieldset>
     {% endif %}
 
     {% if openwebui_rag %}
-    <!-- Read-only global RAG context. Open WebUI remains the source of truth. -->
+    <!-- Read-only global retrieval context. The platform setting remains authoritative. -->
     <fieldset class="bg-surface-raised rounded-xl border border-gray-800 p-4">
-      <legend class="px-2 text-xs font-semibold text-gray-300 uppercase tracking-wide">Global RAG configuration</legend>
-      <p class="text-xs text-gray-500 mb-3">Configured by a platform admin in Open WebUI. These values apply to all agents; this page does not edit them.</p>
+      <legend class="px-2 text-xs font-semibold text-gray-300 uppercase tracking-wide">Global retrieval configuration</legend>
+      <p class="text-xs text-gray-500 mb-3">Configured by a platform admin. These values apply to all agents; this page does not edit them.</p>
       <div class="grid grid-cols-2 md:grid-cols-4 gap-x-4 gap-y-2 text-xs">
         <div><span class="text-gray-500">Embedding</span><div class="text-gray-200 truncate" title="{{ openwebui_rag.embedding_model }}">{{ openwebui_rag.embedding_engine|default:"local" }} · {{ openwebui_rag.embedding_model|default:"default" }}</div></div>
         <div><span class="text-gray-500">Splitter</span><div class="text-gray-200">{{ openwebui_rag.text_splitter|default:"default" }}</div></div>
@@ -111,7 +111,7 @@
       <div class="flex items-center gap-2">
         <input type="search" data-filter placeholder="Search knowledge bases…" aria-label="Search knowledge bases"
                class="flex-1 px-2.5 py-1.5 rounded-lg bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-2 focus:ring-accent/50">
-        <button type="button" data-sync-btn class="shrink-0 px-2 py-1.5 rounded-lg bg-surface-overlay border border-gray-700 text-[11px] text-gray-400 hover:text-white hover:border-gray-500 transition-colors" title="Pull latest from OpenWebUI">
+        <button type="button" data-sync-btn class="shrink-0 px-2 py-1.5 rounded-lg bg-surface-overlay border border-gray-700 text-[11px] text-gray-400 hover:text-white hover:border-gray-500 transition-colors" title="Pull latest resources">
           ⟳ Sync
         </button>
       </div>
@@ -130,7 +130,7 @@
         <div data-filter-empty class="hidden px-2.5 py-2 text-xs text-gray-500">No matches.</div>
       </div>
       {% else %}
-      <p class="text-xs text-gray-500">No knowledge bases yet. Click <strong>Sync</strong> to pull from OpenWebUI.</p>
+      <p class="text-xs text-gray-500">No knowledge bases yet. Click <strong>Sync</strong> to pull the latest resources.</p>
       {% endif %}
     </fieldset>
 
@@ -164,7 +164,7 @@
       <div class="flex items-center gap-2">
         <input type="search" data-filter placeholder="Search tools…" aria-label="Search tools"
                class="flex-1 px-2.5 py-1.5 rounded-lg bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-2 focus:ring-accent/50">
-        <button type="button" data-sync-btn class="shrink-0 px-2 py-1.5 rounded-lg bg-surface-overlay border border-gray-700 text-[11px] text-gray-400 hover:text-white hover:border-gray-500 transition-colors" title="Pull latest from OpenWebUI">
+        <button type="button" data-sync-btn class="shrink-0 px-2 py-1.5 rounded-lg bg-surface-overlay border border-gray-700 text-[11px] text-gray-400 hover:text-white hover:border-gray-500 transition-colors" title="Pull latest resources">
           ⟳ Sync
         </button>
       </div>
@@ -184,7 +184,7 @@
         <div data-filter-empty class="hidden px-2.5 py-2 text-xs text-gray-500">No matches.</div>
       </div>
       {% else %}
-      <p class="text-xs text-gray-500">No tools yet. Click <strong>Sync</strong> to pull from OpenWebUI.</p>
+      <p class="text-xs text-gray-500">No tools yet. Click <strong>Sync</strong> to pull the latest resources.</p>
       {% endif %}
     </fieldset>
 

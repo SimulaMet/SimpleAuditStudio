@@ -351,11 +351,11 @@ Open WebUI entry, falling back to the cached Studio row when it is
 unreachable. When chat is disabled everything is a no-op and Studio works
 standalone.
 
-Open WebUI's instance-wide RAG configuration is separate from agent config.
+Instance-wide knowledge and retrieval configuration is separate from agent config.
 Superusers can edit the supported document, embedding, chunking, retrieval,
-and reranking settings at `/admin-settings/rag/`; the page uses Open WebUI's
-admin-only retrieval endpoints and never sends stored provider secrets to the
-browser. Normal users only receive the agent-scoped Retrieval Profile. Studio
+and reranking settings at `/admin-settings/?tab=knowledge`. The page is
+superuser-only and never sends stored provider secrets to the browser. Normal
+users only receive the agent-scoped Retrieval Profile. Studio
 also records that profile in the synced Open WebUI model metadata for audit and
 integration consumers; Open WebUI's own RAG engine remains globally configured.
 Agent edit pages show a safe live projection of those global settings for
