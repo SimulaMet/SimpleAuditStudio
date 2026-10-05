@@ -8,6 +8,16 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
+# These connections only adapt Studio agents into Open WebUI-compatible model
+# references. Agents have their own page and picker section, so they are not
+# user-managed provider connections.
+INTERNAL_AGENT_CONNECTION_NAMES = frozenset({"Open WebUI Agent", "Open WebUI Agents"})
+
+
+def is_internal_agent_connection(connection) -> bool:
+    """Whether a connection is an implementation detail for a Studio agent."""
+    return connection.name in INTERNAL_AGENT_CONNECTION_NAMES
+
 # Quick-start presets for the connection form: (key, label, provider, base URL, key hint).
 PROVIDER_PRESETS = [
     ("openai", "OpenAI", "openai", "https://api.openai.com/v1", "OPENAI_API_KEY"),

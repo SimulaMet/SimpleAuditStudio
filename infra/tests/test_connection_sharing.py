@@ -159,6 +159,21 @@ class ConnectionsPageSharingTests(TestCase):
             page = self._page_as(self.owner_user, self.owner_ws)
         self.assertNotContains(page, "/ai/with/")
 
+    def test_internal_agent_connection_is_not_listed(self):
+        internal = ModelConnectionFactory(
+            project=self.owner_ws, name="Open WebUI Agents",
+        )
+        RegisteredModelFactory(
+            connection=internal, project=self.owner_ws,
+            display_name="Support Refund Assistant",
+            model_id="studio.agent-1",
+        )
+
+        page = self._page_as(self.owner_user, self.owner_ws)
+
+        self.assertNotContains(page, "Open WebUI Agents")
+        self.assertNotContains(page, "studio.agent-1")
+
     def test_owner_sees_edit_controls(self):
         page = self._page_as(self.owner_user, self.owner_ws)
         self.assertContains(page, f'data-conn-open="{self.conn.id}"')
