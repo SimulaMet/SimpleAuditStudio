@@ -214,6 +214,75 @@ def default_retrieval_settings() -> dict:
     }
 
 
+# These names mirror Open WebUI's workspace-model metadata.  Keep the
+# allowlist deliberately small and explicit: an unknown checkbox must never
+# become an accidental runtime permission.
+AGENT_MODEL_CAPABILITY_OPTIONS = (
+    ("citations", "Citations", "Show source citations for retrieved context."),
+    ("file_upload", "File uploads", "Allow users to upload files in chat."),
+    ("vision", "Vision", "Allow image input when the base model supports it."),
+    ("web_search", "Web search", "Allow this agent to use the configured web-search service."),
+    ("image_generation", "Image generation", "Allow image-generation requests."),
+    ("code_interpreter", "Code interpreter", "Allow sandboxed code execution."),
+    ("terminal", "Terminal", "Allow terminal access when enabled by Open WebUI."),
+)
+
+AGENT_BUILTIN_TOOL_OPTIONS = (
+    ("time", "Time & calculation", "Allow time and calculation helpers."),
+    ("memory", "Memory", "Allow the model to read or update user memory."),
+    ("chats", "Chat history", "Allow access to the user's previous chats."),
+    ("web_search", "Web search", "Allow the builtin web-search tool."),
+    ("image_generation", "Image generation", "Allow the builtin image-generation tool."),
+    ("code_interpreter", "Code interpreter", "Allow the builtin code-interpreter tool."),
+    ("task_management", "Task management", "Allow task-management tools."),
+    ("subagents", "Sub-agents", "Allow delegated sub-agent tools."),
+)
+
+# Open WebUI categories that Studio intentionally does not expose. They are
+# still sent as disabled so an Open WebUI default cannot silently enable them.
+AGENT_HIDDEN_BUILTIN_TOOL_KEYS = (
+    "knowledge", "files", "notes", "channels", "notifications", "calendar", "automations",
+)
+
+
+def default_agent_capabilities() -> dict:
+    """Safe Open WebUI-aligned defaults for a newly created agent."""
+    model = {key: False for key, _label, _help in AGENT_MODEL_CAPABILITY_OPTIONS}
+    model.update({"file_context": False, "citations": True})
+    builtin_tools = {
+        key: False for key, _label, _help in AGENT_BUILTIN_TOOL_OPTIONS
+    }
+    builtin_tools.update({key: False for key in AGENT_HIDDEN_BUILTIN_TOOL_KEYS})
+    return {
+        "model": model,
+        "builtin_tools": builtin_tools,
+    }
+
+
+def normalized_agent_capabilities(value: dict | None) -> dict:
+    """Return the new capability shape, tolerating pre-migration rows."""
+    defaults = default_agent_capabilities()
+    value = value if isinstance(value, dict) else {}
+    if "model" in value or "builtin_tools" in value:
+        for section in defaults:
+            incoming = value.get(section)
+            if isinstance(incoming, dict):
+                allowed = (
+                    {key for key, _label, _help in AGENT_MODEL_CAPABILITY_OPTIONS}
+                    if section == "model"
+                    else {key for key, _label, _help in AGENT_BUILTIN_TOOL_OPTIONS}
+                )
+                defaults[section].update({
+                    key: bool(val) for key, val in incoming.items() if key in allowed
+                })
+        return defaults
+
+    # Legacy rows used Studio-only names. Do not reinterpret those names as
+    # Open WebUI permissions; an existing agent must be explicitly reviewed
+    # and saved before any of these capabilities can be enabled.
+    return defaults
+
+
 class KnowledgeBase(models.Model):
     """Studio-side reference to an OpenWebUI knowledge base.
 

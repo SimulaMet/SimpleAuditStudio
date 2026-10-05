@@ -1,4 +1,6 @@
 """Tests for the Super Admin page (server-rendered, /admin-settings/)."""
+from unittest import mock
+
 from django.test import Client, TestCase
 
 from infra.tests.factories import (
@@ -61,6 +63,76 @@ class AdminPageAccessTest(TestCase):
         resp = self.client.get("/admin-settings/?tab=bogus")
         self.assertEqual(resp.status_code, 200)
         self.assertContains(resp, "Per-workspace usage")
+
+    @mock.patch("chat.api.ChatAPI.as_user")
+    def test_web_search_tab_reads_and_updates_openwebui(self, as_user):
+        admin = superuser()
+        api = as_user.return_value
+        api.retrieval_config.return_value = {
+            "ENABLE_WEB_SEARCH": False,
+            "WEB_SEARCH_ENGINE": "duckduckgo",
+            "WEB_SEARCH_RESULT_COUNT": 5,
+            "WEB_SEARCH_DOMAIN_FILTER_LIST": ["example.com"],
+        }
+        login(self.client, admin)
+
+        resp = self.client.get("/admin-settings/?tab=web-search")
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, "duckduckgo")
+
+        resp = self.client.post("/admin-settings/", {
+            "tab": "web-search",
+            "ENABLE_WEB_SEARCH": "on",
+            "WEB_SEARCH_ENGINE": "brave",
+            "WEB_SEARCH_RESULT_COUNT": "3",
+            "WEB_SEARCH_DOMAIN_FILTER_LIST": "example.com, docs.example.com",
+        })
+        self.assertEqual(resp.status_code, 302)
+        api.update_retrieval_config.assert_called_once_with({
+            "ENABLE_WEB_SEARCH": True,
+            "WEB_SEARCH_ENGINE": "brave",
+            "WEB_SEARCH_RESULT_COUNT": 3,
+            "WEB_SEARCH_DOMAIN_FILTER_LIST": ["example.com", "docs.example.com"],
+        })
+
+    @mock.patch("chat.api.ChatAPI.as_user")
+    def test_subagent_tab_reads_and_updates_openwebui(self, as_user):
+        admin = superuser()
+        api = as_user.return_value
+        api.subagents_config.return_value = {
+            "ENABLE_SUBAGENTS": False,
+            "SUBAGENTS_BACKGROUND_ENABLED": False,
+            "SUBAGENTS_MAX_CONCURRENT": 20,
+            "SUBAGENTS_MAX_ASYNC": 20,
+            "SUBAGENTS_MAX_ITERATIONS": 30,
+            "SUBAGENTS_MAX_OUTPUT": 30000,
+            "SUBAGENTS_SYSTEM_PROMPT": "",
+        }
+        login(self.client, admin)
+
+        resp = self.client.get("/admin-settings/?tab=sub-agents")
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, "Execution limits")
+
+        resp = self.client.post("/admin-settings/", {
+            "tab": "sub-agents",
+            "ENABLE_SUBAGENTS": "on",
+            "SUBAGENTS_MAX_CONCURRENT": "4",
+            "SUBAGENTS_MAX_ASYNC": "2",
+            "SUBAGENTS_MAX_ITERATIONS": "10",
+            "SUBAGENTS_MAX_OUTPUT": "10000",
+            "SUBAGENTS_SYSTEM_PROMPT": "Stay concise.",
+        })
+        self.assertEqual(resp.status_code, 302)
+        api.update_subagents_config.assert_called_once_with({
+            "ENABLE_SUBAGENTS": True,
+            "SUBAGENTS_BACKGROUND_ENABLED": False,
+            "SUBAGENTS_MAX_CONCURRENT": 4,
+            "SUBAGENTS_MAX_ASYNC": 2,
+            "SUBAGENTS_MAX_ITERATIONS": 10,
+            "SUBAGENTS_MAX_OUTPUT": 10000,
+            "SUBAGENTS_SYSTEM_PROMPT": "Stay concise.",
+        })
 
 
 class AdminPageStatsTest(TestCase):

@@ -5,12 +5,7 @@
 <p class="text-sm text-gray-500 mb-5">Platform administration. Stats show aggregate counts only — workspace content is not exposed here.</p>
 
 <!-- Tabs -->
-<div class="flex gap-1 mb-5 border-b border-gray-800">
-  <a href="/admin-settings/" class="px-3 py-2 text-sm rounded-t-lg {% if tab == 'overview' %}bg-accent/15 text-accent font-medium border-b-2 border-accent{% else %}text-gray-400 hover:text-gray-200{% endif %}">Overview</a>
-  <a href="/admin-settings/?tab=workspaces" class="px-3 py-2 text-sm rounded-t-lg {% if tab == 'workspaces' %}bg-accent/15 text-accent font-medium border-b-2 border-accent{% else %}text-gray-400 hover:text-gray-200{% endif %}">Workspaces</a>
-  <a href="/admin-settings/?tab=users" class="px-3 py-2 text-sm rounded-t-lg {% if tab == 'users' %}bg-accent/15 text-accent font-medium border-b-2 border-accent{% else %}text-gray-400 hover:text-gray-200{% endif %}">Users</a>
-  <a href="{% url 'admin_settings' %}?tab=knowledge" class="px-3 py-2 text-sm rounded-t-lg {% if tab == 'knowledge' %}bg-accent/15 text-accent font-medium border-b-2 border-accent{% else %}text-gray-400 hover:text-gray-200{% endif %}">Knowledge &amp; Retrieval</a>
-</div>
+{% include "admin/_tabs.html" %}
 
 <p id="admin-error" class="hidden mb-4 px-4 py-3 rounded-lg text-sm bg-red-900/30 border border-red-800 text-red-300"></p>
 

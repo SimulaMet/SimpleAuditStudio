@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block title %}Sub-agents — SimpleAudit{% endblock %}
+{% block content %}
+<div class="max-w-none">
+  <div class="mb-5">
+    <h1 class="text-lg font-semibold text-gray-100">Sub-agents</h1>
+    <p class="mt-1 text-sm text-gray-500">Global delegated-agent settings for Open WebUI.</p>
+  </div>
+  {% include "admin/_tabs.html" %}
+  {% if settings_error %}<div role="alert" class="alert alert-warning mt-5 text-sm">Sub-agent settings are unavailable: {{ settings_error }}</div>{% endif %}
+  <form method="post" class="mt-5 space-y-6">
+    {% csrf_token %}
+    <fieldset class="space-y-4 rounded-xl border border-gray-800 bg-surface-raised p-4">
+      <legend class="px-2 text-xs font-semibold uppercase tracking-wide text-gray-300">Service access</legend>
+      <p class="text-xs text-gray-500">Sub-agents create additional model calls. Keep this off unless an agent explicitly needs delegation.</p>
+      <div class="space-y-2">
+        <label class="flex items-start gap-2 text-sm text-gray-300" title="Global Open WebUI feature gate."><input type="checkbox" name="ENABLE_SUBAGENTS" {% if subagents.ENABLE_SUBAGENTS %}checked{% endif %} class="checkbox checkbox-sm mt-0.5"><span><span class="block text-gray-200">Enable sub-agents</span><span class="block text-xs text-gray-500">Agents also need the Sub-agents permission.</span></span></label>
+        <label class="flex items-start gap-2 text-sm text-gray-300" title="Allow delegated work to continue without waiting in the parent chat."><input type="checkbox" name="SUBAGENTS_BACKGROUND_ENABLED" {% if subagents.SUBAGENTS_BACKGROUND_ENABLED %}checked{% endif %} class="checkbox checkbox-sm mt-0.5"><span><span class="block text-gray-200">Allow background delegation</span><span class="block text-xs text-gray-500">Background work returns later instead of blocking the parent chat.</span></span></label>
+      </div>
+    </fieldset>
+    <fieldset class="space-y-4 rounded-xl border border-gray-800 bg-surface-raised p-4">
+      <legend class="px-2 text-xs font-semibold uppercase tracking-wide text-gray-300">Execution limits</legend>
+      <p class="text-xs text-gray-500">Limits protect workers and bound cost. Some concurrency limits apply after restart.</p>
+      <div class="grid grid-cols-1 gap-4 md:grid-cols-2">
+        <label class="block text-xs text-gray-400" title="Foreground sub-agents allowed at once.">Foreground concurrency<input type="number" min="-1" name="SUBAGENTS_MAX_CONCURRENT" value="{{ subagents.SUBAGENTS_MAX_CONCURRENT|default:'' }}" class="mt-1 w-full rounded-lg border border-gray-700 bg-surface-overlay px-3 py-2 text-sm text-gray-100"><span class="mt-1 block text-[11px] text-gray-600">Use -1 only for unlimited.</span></label>
+        <label class="block text-xs text-gray-400" title="Background sub-agents allowed at once.">Background concurrency<input type="number" min="-1" name="SUBAGENTS_MAX_ASYNC" value="{{ subagents.SUBAGENTS_MAX_ASYNC|default:'' }}" class="mt-1 w-full rounded-lg border border-gray-700 bg-surface-overlay px-3 py-2 text-sm text-gray-100"><span class="mt-1 block text-[11px] text-gray-600">Use -1 only for unlimited.</span></label>
+        <label class="block text-xs text-gray-400" title="Tool-call loops allowed per delegated task.">Maximum iterations<input type="number" min="1" name="SUBAGENTS_MAX_ITERATIONS" value="{{ subagents.SUBAGENTS_MAX_ITERATIONS|default:'' }}" class="mt-1 w-full rounded-lg border border-gray-700 bg-surface-overlay px-3 py-2 text-sm text-gray-100"></label>
+        <label class="block text-xs text-gray-400" title="Maximum characters returned to the parent chat.">Maximum output characters<input type="number" min="1" name="SUBAGENTS_MAX_OUTPUT" value="{{ subagents.SUBAGENTS_MAX_OUTPUT|default:'' }}" class="mt-1 w-full rounded-lg border border-gray-700 bg-surface-overlay px-3 py-2 text-sm text-gray-100"></label>
+      </div>
+    </fieldset>
+    <fieldset class="space-y-4 rounded-xl border border-gray-800 bg-surface-raised p-4">
+      <legend class="px-2 text-xs font-semibold uppercase tracking-wide text-gray-300">System instructions</legend>
+      <p class="text-xs text-gray-500">Optional instructions added to every delegated sub-agent.</p>
+      <textarea name="SUBAGENTS_SYSTEM_PROMPT" rows="5" placeholder="Optional global instructions…" class="w-full rounded-lg border border-gray-700 bg-surface-overlay px-3 py-2 text-sm text-gray-100 font-mono">{{ subagents.SUBAGENTS_SYSTEM_PROMPT|default:'' }}</textarea>
+    </fieldset>
+    <div class="flex flex-wrap items-center gap-3"><input type="hidden" name="tab" value="sub-agents"><button type="submit" class="rounded-lg bg-accent px-4 py-2 text-sm font-medium text-white hover:bg-accent-hover">Save settings</button><span class="text-xs text-amber-400">Delegation adds model calls and can change final answers.</span></div>
+  </form>
+</div>
+{% endblock %}

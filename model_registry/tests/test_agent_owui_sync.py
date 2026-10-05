@@ -91,6 +91,34 @@ class ChatDisabledNoOpTest(_ChatDisabledBase):
 
 
 class AgentSyncTest(_SyncBase):
+    def test_pushes_openwebui_capabilities_and_builtin_tools(self):
+        api = self._mock_chat()
+        agent = AgentFactory(
+            project=self.project,
+            capabilities={
+                "model": {"file_context": True, "web_search": False},
+                "builtin_tools": {"memory": False, "notifications": True},
+            },
+        )
+        agent.external_id = f"studio.agent-{agent.pk}"
+        agent.save(update_fields=["external_id"])
+        agent.knowledge_bases.add(
+            KnowledgeBaseFactory(project=self.project, external_id="owui-kb-1")
+        )
+
+        resp = self._api(f"/api/agents/{agent.id}/", "put", {
+            "name": agent.name,
+            "base_model": agent.base_model.id,
+        })
+
+        self.assertEqual(resp.status_code, 200)
+        metadata = api.update_workspace_model.call_args.kwargs["metadata"]
+        self.assertTrue(metadata["capabilities"]["file_context"])
+        self.assertFalse(metadata["capabilities"]["web_search"])
+        self.assertFalse(metadata["builtinTools"]["knowledge"])
+        self.assertFalse(metadata["builtinTools"]["memory"])
+        self.assertFalse(metadata["builtinTools"]["notifications"])
+
     def test_pushes_agent_retrieval_settings_as_studio_metadata(self):
         api = self._mock_chat()
         settings = {"search_mode": "hybrid", "top_k": 9, "rerank_enabled": True, "full_context": True}
