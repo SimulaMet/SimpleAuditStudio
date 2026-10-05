@@ -6,7 +6,7 @@ from django.test import TestCase
 
 from accounts.models import ProjectMembership
 from infra.tests.factories import ProjectFactory, UserFactory
-from model_registry.models import KnowledgeBase
+from model_registry.models import KnowledgeBase, Tool
 
 
 def _member(project, *, is_admin=True):
@@ -103,6 +103,7 @@ class AgentResourcesViewTest(TestCase):
         from infra.ui import _sync_openwebui_resources
 
         user = _member(self.project)
+        self._login(user)
         seeded = KnowledgeBase.objects.create(
             project=self.project, name="Acme Retail Policy", external_id=""
         )
@@ -147,6 +148,42 @@ class AgentResourcesViewTest(TestCase):
         kb = KnowledgeBase.objects.get(pk=seeded.pk)
         self.assertEqual(kb.name, "New Name")
         self.assertEqual(kb.external_id, "owui-kb-1")
+
+    def test_agent_picker_uses_openwebui_resource_visibility(self):
+        """Private OWUI resources do not leak through Studio's local rows."""
+        user = _member(self.project)
+        self._login(user)
+        visible = KnowledgeBase.objects.create(
+            project=self.project, name="Public KB", external_id="kb-public"
+        )
+        KnowledgeBase.objects.create(
+            project=self.project, name="Private KB", external_id="kb-private"
+        )
+        visible_tool = Tool.objects.create(
+            project=self.project, name="Public Tool", external_id="tool-public"
+        )
+        Tool.objects.create(
+            project=self.project, name="Private Tool", external_id="tool-private"
+        )
+
+        api = mock.Mock()
+        api.knowledge_bases.return_value = [
+            {"id": "kb-public", "name": "Public KB", "description": ""}
+        ]
+        api.tools.return_value = [{"id": "tool-public", "name": "Public Tool"}]
+        with mock.patch("chat.api.ChatAPI.as_user", return_value=api):
+            response = self.client.get("/agents/new/")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(visible, response.context["knowledge_bases"])
+        self.assertNotIn(
+            KnowledgeBase.objects.get(external_id="kb-private"),
+            response.context["knowledge_bases"],
+        )
+        self.assertIn(visible_tool, response.context["tools"])
+        self.assertNotIn(
+            Tool.objects.get(external_id="tool-private"), response.context["tools"]
+        )
 
 
 class AgentResourcesNavTest(TestCase):

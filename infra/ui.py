@@ -2888,6 +2888,44 @@ def _sync_openwebui_resources(project, user):
     return kb_count, tool_count
 
 
+def _visible_openwebui_resource_ids(user):
+    """Return the Open WebUI resources readable by ``user``.
+
+    Open WebUI applies its own ACLs to these list endpoints.  Studio keeps
+    local rows for audit metadata, but must not use those rows as an ACL
+    cache: a resource can be made private or moved to another group in the
+    embedded Open WebUI workspace.
+    """
+    from chat import config as chat_config
+
+    if not chat_config.ENABLED:
+        return None, None
+
+    from chat.api import ChatAPI, ChatAPIError
+
+    try:
+        api = ChatAPI.as_user(user)
+        knowledge_ids = {
+            item.get("id")
+            for item in api.knowledge_bases()
+            if item.get("id")
+        }
+        tool_ids = {
+            item.get("id")
+            for item in api.tools()
+            if isinstance(item, dict) and item.get("id")
+        }
+    except ChatAPIError as exc:
+        # Keep the local picker usable when Open WebUI is temporarily down.
+        # The iframe itself still fails closed through the chat proxy.
+        logger.warning("Could not read Open WebUI resource visibility for %s: %s", user, exc)
+        return None, None
+    except Exception:
+        logger.exception("Unexpected Open WebUI resource visibility error for %s", user)
+        return None, None
+    return knowledge_ids, tool_ids
+
+
 class AgentSyncView(ProjectMixin, View):
     """POST /agents/sync/ — pull KBs and tools from OpenWebUI into local models."""
 
@@ -2929,10 +2967,28 @@ class AgentDetailView(ProjectMixin, TemplateView):
         # Auto-sync from OpenWebUI so the picker lists are always fresh.
         _sync_openwebui_resources(project, self.request.user)
 
+        # The local rows are metadata references, not an authorization source.
+        # Filter Open WebUI-backed rows using the current user's actual list
+        # visibility.  Rows without an external id are local/seeded resources
+        # and remain available to the workspace.
+        visible_kb_ids, visible_tool_ids = _visible_openwebui_resource_ids(
+            self.request.user
+        )
+
         ctx["agent"] = agent
         ctx["models"] = RegisteredModel.objects.filter(project=project, enabled=True).select_related("connection")
-        ctx["knowledge_bases"] = KnowledgeBase.objects.filter(project=project, enabled=True)
+        ctx["knowledge_bases"] = KnowledgeBase.objects.filter(
+            project=project, enabled=True
+        )
         ctx["tools"] = Tool.objects.filter(project=project, enabled=True)
+        if visible_kb_ids is not None:
+            ctx["knowledge_bases"] = ctx["knowledge_bases"].filter(
+                Q(external_id="") | Q(external_id__in=visible_kb_ids)
+            )
+        if visible_tool_ids is not None:
+            ctx["tools"] = ctx["tools"].filter(
+                Q(external_id="") | Q(external_id__in=visible_tool_ids)
+            )
         # Gate the "+ New" deep links: without the chat proxy there is no
         # embedded workspace to create in.
         ctx["chat_enabled"] = chat_enabled()

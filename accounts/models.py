@@ -22,6 +22,9 @@ class User(AbstractUser):
 
     # Stable WorkOS AuthKit user id; null for locally-created accounts.
     workos_user_id = models.CharField(max_length=64, unique=True, null=True, blank=True)
+    # Open WebUI's local user id, populated by the chat access reconciler.
+    # This is an integration cache; Django remains the identity authority.
+    openwebui_user_id = models.CharField(max_length=64, unique=True, null=True, blank=True)
     # Per-user UI preferences (e.g. dashboard column layout). Keys are
     # whitelisted by the preference endpoint; values are small JSON.
     preferences = models.JSONField(default=dict, blank=True)
@@ -58,6 +61,9 @@ class Project(models.Model):
         settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
         related_name="created_projects",
     )
+    # Open WebUI group ids used to project workspace membership and ACLs.
+    openwebui_group_id = models.CharField(max_length=64, unique=True, null=True, blank=True)
+    openwebui_admin_group_id = models.CharField(max_length=64, unique=True, null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -96,6 +102,5 @@ class ProjectMembership(models.Model):
 
     def __str__(self) -> str:
         return f"{self.user.username} -> {self.project.slug}:{self.role}"
-
 
 

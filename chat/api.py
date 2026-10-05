@@ -137,6 +137,43 @@ class ChatAPI:
             "OLLAMA_API_CONFIGS": current.get("OLLAMA_API_CONFIGS") or {},
         })
 
+    # --- groups / access grants --------------------------------------------
+    def create_group(self, name: str, description: str, *, data: dict | None = None, meta: dict | None = None) -> dict[str, Any]:
+        return self.request("POST", "/api/v1/groups/create", json={
+            "name": name, "description": description, "data": data or {}, "meta": meta or {},
+        })
+
+    def list_groups(self) -> list[dict[str, Any]]:
+        payload = self.request("GET", "/api/v1/groups/")
+        return payload if isinstance(payload, list) else []
+
+    def get_group(self, group_id: str) -> dict[str, Any]:
+        return self.request("GET", f"/api/v1/groups/id/{group_id}")
+
+    def update_group(self, group_id: str, name: str, description: str, *, data: dict | None = None, meta: dict | None = None) -> dict[str, Any]:
+        return self.request("POST", f"/api/v1/groups/id/{group_id}/update", json={
+            "name": name, "description": description, "data": data or {}, "meta": meta or {},
+        })
+
+    def group_user_ids(self, group_id: str) -> list[str]:
+        payload = self.request("GET", f"/api/v1/groups/id/{group_id}/export")
+        return list(payload.get("user_ids") or []) if isinstance(payload, dict) else []
+
+    def add_group_users(self, group_id: str, user_ids: list[str]) -> dict[str, Any]:
+        return self.request("POST", f"/api/v1/groups/id/{group_id}/users/add", json={"user_ids": user_ids})
+
+    def remove_group_users(self, group_id: str, user_ids: list[str]) -> dict[str, Any]:
+        return self.request("POST", f"/api/v1/groups/id/{group_id}/users/remove", json={"user_ids": user_ids})
+
+    def update_model_access(self, model_id: str, access_grants: list[dict[str, str]], *, name: str | None = None) -> Any:
+        return self.request("POST", "/api/v1/models/model/access/update", json={
+            "id": model_id, "name": name or model_id, "access_grants": access_grants,
+        })
+
+    def update_current_user_settings(self, settings: dict[str, Any]) -> Any:
+        """Patch the signed-in user's Open WebUI settings."""
+        return self.request("POST", "/api/v1/users/user/settings/update", json=settings)
+
     # --- pull: Open WebUI knowledge -> Studio -------------------------------
     def knowledge_bases(self) -> list[dict[str, Any]]:
         """Every knowledge base this user can read, as plain dicts."""

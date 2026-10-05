@@ -58,6 +58,9 @@ def push_now(payloads: list[dict] | None = None) -> dict[str, int]:
     # load and an empty section in Open WebUI's settings.
     api.disable_ollama()
     _reconcile_model_ids(api, pushed)
+    from chat.access_sync import reconcile_safely
+
+    reconcile_safely()
     return result
 
 
