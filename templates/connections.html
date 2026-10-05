@@ -64,8 +64,17 @@
         {% if conn.can_edit %}
         <button type="button" data-write data-discover="{{ conn.id }}" title="List the models this server offers and pick ones to add"
                 class="px-2.5 py-1 rounded-lg text-xs text-gray-300 bg-surface-overlay hover:text-white">+ Models</button>
-        {% if otlp_enabled %}
-        <button type="button" data-write data-otlp="{{ conn.id }}" title="Generate an OTLP credential so this target can push traces to Studio"
+          {% if otlp_enabled %}
+          {% if conn.otlp_credential %}
+          <label class="inline-flex items-center gap-1.5 text-[11px] text-gray-400" title="Allow this target to export OTLP traces to Studio; tracing controls appear in New Experiment when enabled.">
+            <input type="checkbox" data-otlp-toggle data-credential-id="{{ conn.otlp_credential.id }}"
+                   {% if conn.otlp_credential.enabled %}checked{% endif %} class="toggle toggle-xs">
+            <span>OTLP traces</span>
+          </label>
+          {% else %}
+          <span class="text-[11px] text-gray-600" title="Tracing is disabled until an OTLP credential is issued.">OTLP disabled</span>
+          {% endif %}
+          <button type="button" data-write data-otlp="{{ conn.id }}" title="Generate an OTLP credential so this target can push traces to Studio"
                 class="px-2.5 py-1 rounded-lg text-xs text-gray-300 bg-surface-overlay hover:text-white">OTLP</button>
         {% endif %}
         <button type="button" data-write data-conn-open="{{ conn.id }}" title="Edit connection" aria-label="Edit connection {{ conn.name }}"
@@ -550,6 +559,25 @@
     otlpResult.classList.remove('hidden');
   }
   document.addEventListener('click', e => { const b = e.target.closest('[data-otlp]'); if (b) openOtlp(b.dataset.otlp); });
+  document.addEventListener('change', async e => {
+    const toggle = e.target.closest('[data-otlp-toggle]');
+    if (!toggle) return;
+    const enabled = toggle.checked;
+    toggle.disabled = true;
+    try {
+      const resp = await fetch('{% url "otlp_credential_toggle" %}', {
+        method: 'POST', headers: { 'X-CSRFToken': csrfToken() },
+        body: new URLSearchParams({ credential_id: toggle.dataset.credentialId, enabled: enabled ? '1' : '0' }),
+      });
+      const data = await resp.json();
+      if (!resp.ok) throw new Error(data.error || `HTTP ${resp.status}`);
+    } catch (err) {
+      toggle.checked = !enabled;
+      alert(`Could not update OTLP tracing: ${err.message}`);
+    } finally {
+      toggle.disabled = false;
+    }
+  });
   $('#otlp-issue').addEventListener('click', async () => {
     const connId = otlpDialog.dataset.connId, mode = $('#otlp-mode').value;
     const btn = $('#otlp-issue'); btn.disabled = true; btn.textContent = 'Issuing…';

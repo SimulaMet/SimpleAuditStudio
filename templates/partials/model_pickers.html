@@ -21,30 +21,38 @@ Field names match the single-select partial so one-run posts look the same.
       <input type="search" data-filter placeholder="Search models…" aria-label="Search {{ label|lower }} choices"
              class="w-full mb-1.5 px-2.5 py-1.5 rounded-lg bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-2 focus:ring-accent/50">
       <div data-filter-list class="h-60 overflow-y-auto rounded-lg border border-gray-800 bg-surface-overlay/40 divide-y divide-gray-800/60">
-        {% if role == "target" and agents %}
+        {% if agent_models %}
         <p data-filter-group="agents" class="px-2.5 pt-2 pb-1 text-[10px] uppercase tracking-wide text-gray-600 flex items-center gap-1.5">
           <span>Agents</span>
           <span class="normal-case px-1 py-0.5 rounded bg-gray-800 text-gray-500" title="Agent = model + knowledge bases + tools + retrieval">this workspace</span>
         </p>
-        {% for agent in agents %}
+        {% for model in agent_models %}
         <div data-filter-item data-group="agents" class="flex items-center gap-2 px-2.5 py-1.5 text-sm hover:bg-surface-overlay">
-          <label class="flex items-start gap-2 min-w-0 flex-1 cursor-pointer" title="Base: {{ agent.base_model.display_name }}{% if agent.knowledge_bases.count %} · {{ agent.knowledge_bases.count }} KB{% endif %}{% if agent.tools.count %} · {{ agent.tools.count }} tools{% endif %}">
-            <input type="checkbox" name="agent_id" value="{{ agent.id }}" class="mt-0.5 accent-emerald-500"
-                   {% if sel.agent_id == agent.id|stringformat:"s" %}checked{% endif %}>
+          <label class="flex items-start gap-2 min-w-0 flex-1 cursor-pointer" title="Agent: {{ model.agent.name }} · Base: {{ model.agent.base_model.display_name }}">
+            {% if role == "target" %}
+            <input type="checkbox" name="agent_id" value="{{ model.agent.id }}" class="mt-0.5 accent-emerald-500"
+                   {% if sel.agent_id == model.agent.id|stringformat:"s" %}checked{% endif %}>
+            {% else %}
+            <input type="checkbox" name="{{ role }}_model" value="{{ model.id }}" class="mt-0.5 accent-emerald-500"
+                   {% if model.id|stringformat:"d" in chosen %}checked{% endif %}>
+            {% endif %}
             <span class="min-w-0">
-              <span class="text-gray-200 block truncate">{{ agent.name }}</span>
-              <span class="text-[11px] text-gray-500 block truncate">{{ agent.base_model.display_name }}{% if agent.knowledge_bases.count %} · {{ agent.knowledge_bases.count }} KB{% endif %}{% if agent.tools.count %} · {{ agent.tools.count }} tools{% endif %}</span>
+              <span class="text-gray-200 block truncate">{{ model.agent.name }}</span>
+              <span class="text-[11px] text-gray-500 block truncate">{{ model.model_id }} · {{ model.agent.base_model.display_name }}</span>
             </span>
           </label>
+          {% if role == "target" and model.has_otlp %}
           <label class="flex items-center gap-1 text-[10px] text-gray-500 cursor-pointer shrink-0" title="Collect OTLP spans from this agent. Uncheck to use its /v1 response as a plain model response.">
-            <input type="checkbox" name="agent_trace_{{ agent.id }}" value="1" {% if sel.agent_id != agent.id|stringformat:"s" or sel.agent_trace|default:True %}checked{% endif %} class="accent-gray-500">
+            <input type="hidden" name="agent_trace_{{ model.agent.id }}" value="0">
+            <input type="checkbox" name="agent_trace_{{ model.agent.id }}" value="1" {% if sel.agent_id != model.agent.id|stringformat:"s" or sel.agent_trace|default:True %}checked{% endif %} class="accent-gray-500">
             <span>trace</span>
           </label>
+          {% endif %}
         </div>
         {% endfor %}
         {% endif %}
         {% for conn in connections %}
-          {% if conn.models.all %}
+          {% if conn.model_list %}
           <p data-filter-group="{{ conn.pk }}" title="{% if conn.description %}{{ conn.description }}{% else %}{{ conn.share_label }}{% endif %}"
              class="px-2.5 pt-2 pb-1 text-[10px] uppercase tracking-wide text-gray-600 flex items-center gap-1.5">
             <span>{{ conn.name }}</span>
@@ -54,7 +62,7 @@ Field names match the single-select partial so one-run posts look the same.
             <span class="normal-case px-1 py-0.5 rounded bg-gray-800 text-gray-500" title="{{ conn.share_label }}">this workspace</span>
             {% endif %}
           </p>
-          {% for m in conn.models.all %}
+          {% for m in conn.model_list %}
           <label data-filter-item data-group="{{ conn.pk }}"{% if m.description %} title="{{ m.description }}"{% endif %} class="flex items-start gap-2 px-2.5 py-1.5 text-sm cursor-pointer hover:bg-surface-overlay">
             <input type="checkbox" name="{{ role }}_model" value="{{ m.id }}" class="mt-0.5 accent-[currentColor]"
                    {% if m.id|stringformat:"d" in chosen %}checked{% endif %}>
@@ -63,6 +71,13 @@ Field names match the single-select partial so one-run posts look the same.
               <span class="text-[11px] text-gray-500 block truncate">{{ m.model_id }}{% if not m.has_key %} · <span class="text-yellow-500">no key set</span>{% endif %}</span>
               {% if m.description %}<span class="text-[11px] text-gray-500/80 italic block truncate">{{ m.description }}</span>{% endif %}
             </span>
+            {% if role == "target" and conn.has_otlp %}
+            <span class="flex items-center gap-1 text-[10px] text-gray-500 shrink-0" title="Collect OTLP spans for this target.">
+              <input type="hidden" name="target_trace_{{ m.id }}" value="0">
+              <input type="checkbox" name="target_trace_{{ m.id }}" value="1" checked class="accent-gray-500">
+              <span>trace</span>
+            </span>
+            {% endif %}
           </label>
           {% endfor %}
           {% endif %}

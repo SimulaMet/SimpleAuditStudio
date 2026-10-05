@@ -50,6 +50,27 @@
         </div>
         <label class="flex cursor-pointer items-start gap-3 text-sm text-gray-300"><input type="checkbox" name="ENABLE_ASYNC_EMBEDDING" {% if embedding.ENABLE_ASYNC_EMBEDDING %}checked{% endif %} class="toggle toggle-sm mt-0.5"><span><span class="block font-medium text-gray-200">Enable asynchronous embedding</span><span class="block text-xs text-gray-500">Process multiple document chunks without blocking the request.</span></span></label>
         <div role="note" class="alert alert-info text-xs">Provider keys are write-only here. Leave a key blank to keep the existing key.</div>
+        <div class="rounded-lg border border-amber-800/60 bg-amber-900/10 p-3">
+          <div class="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h3 class="text-sm font-medium text-gray-200">Existing knowledge indexes</h3>
+              <p class="mt-1 text-xs text-gray-500">Changing the embedding model does not rebuild existing vectors automatically.</p>
+              {% if last_reindex %}
+              <p class="mt-2 text-xs {% if last_reindex.status == 'failed' %}text-red-300{% elif last_reindex.status == 'succeeded' %}text-emerald-300{% else %}text-amber-300{% endif %}">
+                Last re-index: {{ last_reindex.status|title }} · {{ last_reindex.started_at|date:"Y-m-d H:i T" }} · {{ last_reindex.embedding_model|default:"default model" }}
+                {% if last_reindex.total != None %} · {{ last_reindex.success|default:0 }}/{{ last_reindex.total }} knowledge bases{% endif %}
+              </p>
+              {% else %}
+              <p class="mt-2 text-xs text-gray-500">No Studio-triggered re-index has been recorded.</p>
+              {% endif %}
+            </div>
+            <button type="submit" name="action" value="reindex" class="btn btn-sm btn-warning" onclick="return confirm('Re-index all existing knowledge bases? This may take a while.');">Re-index existing knowledge</button>
+          </div>
+          {% if last_reindex.status == 'succeeded' and reindex_matches_current == False %}
+          <p class="mt-2 text-xs text-amber-300">The embedding settings changed after this re-index. Run it again to rebuild vectors with the current model.</p>
+          {% endif %}
+          {% if last_reindex.status == 'failed' and last_reindex.error %}<p class="mt-2 text-xs text-red-300">{{ last_reindex.error }}</p>{% endif %}
+        </div>
       </div>
     </fieldset>
 

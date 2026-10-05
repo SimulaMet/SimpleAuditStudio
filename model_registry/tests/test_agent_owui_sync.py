@@ -21,7 +21,7 @@ from infra.tests.factories import (
     ToolFactory,
     UserFactory,
 )
-from model_registry.models import Agent, KnowledgeBase, Tool
+from model_registry.models import Agent, KnowledgeBase, RegisteredModel, Tool
 
 
 class _SyncBase(TestCase):
@@ -154,6 +154,10 @@ class AgentSyncTest(_SyncBase):
         self.assertEqual(resp.status_code, 201)
         agent = Agent.objects.get(name="Synced Agent")
         self.assertEqual(agent.external_id, f"studio.agent-{agent.pk}")
+        agent_model = RegisteredModel.objects.get(
+            project=self.project, model_id=agent.external_id
+        )
+        self.assertEqual(agent_model.display_name, "Synced Agent")
         api.create_workspace_model.assert_called_once()
         call = api.create_workspace_model.call_args
         self.assertEqual(call.args[0], f"studio.agent-{agent.pk}")

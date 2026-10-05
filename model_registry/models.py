@@ -196,6 +196,35 @@ class OTLPCredential(models.Model):
         return self.username or self.target_id
 
 
+class KnowledgeReindex(models.Model):
+    """Record the last instance-wide knowledge vector rebuild requested by Studio."""
+
+    class Status(models.TextChoices):
+        RUNNING = "running", "Running"
+        SUCCEEDED = "succeeded", "Succeeded"
+        FAILED = "failed", "Failed"
+
+    status = models.CharField(max_length=20, choices=Status.choices)
+    started_at = models.DateTimeField()
+    completed_at = models.DateTimeField(null=True, blank=True)
+    embedding_engine = models.CharField(max_length=100, blank=True, default="")
+    embedding_model = models.CharField(max_length=250, blank=True, default="")
+    total = models.PositiveIntegerField(null=True, blank=True)
+    success = models.PositiveIntegerField(null=True, blank=True)
+    error = models.TextField(blank=True, default="")
+    requested_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="knowledge_reindexes",
+    )
+
+    class Meta:
+        db_table = "core_knowledge_reindex"
+        ordering = ["-started_at"]
+
+
 # ---------------------------------------------------------------------------
 # Agent configuration domain
 # ---------------------------------------------------------------------------

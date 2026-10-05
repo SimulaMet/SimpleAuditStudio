@@ -587,6 +587,10 @@ class KnowledgeRetrievalSettingsView(SuperuserRequiredMixin, TemplateView):
         context["tab"] = "knowledge"
         context["admin_tabs"] = _admin_settings_tabs()
         context.update({"settings_error": None, "settings": {}})
+        from model_registry.models import KnowledgeReindex
+
+        context["last_reindex"] = KnowledgeReindex.objects.first()
+        context["reindex_matches_current"] = None
         try:
             from chat.api import ChatAPI
 
@@ -596,15 +600,55 @@ class KnowledgeRetrievalSettingsView(SuperuserRequiredMixin, TemplateView):
             )
             context["rag"] = context["settings"]["rag"]
             context["embedding"] = context["settings"]["embedding"]
+            if context["last_reindex"]:
+                current = context["embedding"]
+                context["reindex_matches_current"] = (
+                    context["last_reindex"].embedding_engine
+                    == str(current.get("RAG_EMBEDDING_ENGINE") or "")
+                    and context["last_reindex"].embedding_model
+                    == str(current.get("RAG_EMBEDDING_MODEL") or "")
+                )
         except Exception as exc:  # noqa: BLE001 - upstream availability is optional
             context["settings_error"] = str(exc)
         return context
 
     def post(self, request, *args, **kwargs):
         try:
+            from django.utils import timezone
+
             from chat.api import ChatAPI
+            from model_registry.models import KnowledgeReindex
 
             api = ChatAPI.as_user(request.user)
+
+            if request.POST.get("action") == "reindex":
+                embedding = api.embedding_config()
+                reindex = KnowledgeReindex.objects.create(
+                    status=KnowledgeReindex.Status.RUNNING,
+                    started_at=timezone.now(),
+                    embedding_engine=str(embedding.get("RAG_EMBEDDING_ENGINE") or ""),
+                    embedding_model=str(embedding.get("RAG_EMBEDDING_MODEL") or ""),
+                    requested_by=request.user,
+                )
+                try:
+                    result = api.reindex_knowledge()
+                    if isinstance(result, dict):
+                        reindex.total = result.get("total")
+                        reindex.success = result.get("success")
+                    reindex.status = KnowledgeReindex.Status.SUCCEEDED
+                    reindex.completed_at = timezone.now()
+                    reindex.save(update_fields=[
+                        "status", "completed_at", "total", "success"
+                    ])
+                    messages.success(request, "Knowledge bases re-indexed successfully.")
+                except Exception as exc:  # noqa: BLE001 - surface upstream failures in UI
+                    reindex.status = KnowledgeReindex.Status.FAILED
+                    reindex.completed_at = timezone.now()
+                    reindex.error = str(exc)
+                    reindex.save(update_fields=["status", "completed_at", "error"])
+                    messages.error(request, f"Knowledge re-index failed: {exc}")
+                return redirect(f"{reverse('admin_settings')}?tab=knowledge")
+
             api.update_retrieval_config(self._form_payload(request))
 
             embedding = {
@@ -632,7 +676,7 @@ class KnowledgeRetrievalSettingsView(SuperuserRequiredMixin, TemplateView):
                 if values:
                     provider[name] = values
             embedding.update(provider)
-            if embedding["RAG_EMBEDDING_ENGINE"] and embedding["RAG_EMBEDDING_MODEL"]:
+            if embedding["RAG_EMBEDDING_MODEL"]:
                 api.update_embedding_config(embedding)
             messages.success(request, "Knowledge and retrieval settings saved.")
         except (ValueError, TypeError) as exc:
@@ -881,7 +925,7 @@ def _design_selection(post=None, clone=None) -> dict:
             "judge_model": post.getlist("judge_model"),
             "judge": post.getlist("judge"),
             "agent_id": agent_id,
-            "agent_trace": (post.get(f"agent_trace_{agent_id}") or "").strip() == "1" if agent_id else True,
+            "agent_trace": "1" in post.getlist(f"agent_trace_{agent_id}") if agent_id else True,
         }
     if clone:
         # Clone pins the cloned run's exact version.
@@ -1001,16 +1045,39 @@ class NewExperimentView(ProjectMixin, TemplateView):
         for conn in connections:
             conn.share_label = connection_share_label(conn)
             conn.is_shared = conn.project_id != p.id
-        # Enabled agents in this workspace, offered as an alternative target.
-        from model_registry.models import Agent
+        # Synced OpenWebUI agents are represented by one internal registered
+        # model. Keep them out of ordinary provider groups; the picker renders
+        # the same rows under Agents for target, auditor, and judge roles.
+        from model_registry.models import Agent, OTLPCredential, RegisteredModel
 
-        agents = list(
-            Agent.objects.filter(project=p, enabled=True).select_related("base_model", "base_model__connection")
+        agent_rows = list(
+            Agent.objects.filter(project=p, enabled=True)
+            .select_related("base_model", "base_model__connection")
         )
+        agent_by_external_id = {a.external_id: a for a in agent_rows if a.external_id}
+        agent_models = list(
+            RegisteredModel.objects.filter(
+                project=p, enabled=True, model_id__in=agent_by_external_id
+            ).select_related("connection")
+        )
+        otlp_connection_ids = set(
+            OTLPCredential.objects.filter(
+                project=p, enabled=True, connection_id__in=[c.id for c in connections]
+            ).values_list("connection_id", flat=True)
+        )
+        for conn in connections:
+            conn.has_otlp = conn.id in otlp_connection_ids
+            conn.model_list = [
+                m for m in conn.models.all()
+                if not m.model_id.startswith("studio.agent-")
+            ]
+        for model in agent_models:
+            model.agent = agent_by_external_id[model.model_id]
+            model.has_otlp = model.connection_id in otlp_connection_ids
         kw.update(
             sets=sets,
             connections=connections,
-            agents=agents,
+            agent_models=agent_models,
             model_roles=[
                 ("target", "Target", "The model under test.", sel["target"]),
                 ("auditor", "Auditor", "Plays the user and probes the target.", sel["auditor"]),
@@ -1092,7 +1159,7 @@ class NewExperimentView(ProjectMixin, TemplateView):
                         n_repetitions_override=run_spec["n_repetitions"],
                         gen_config_override=run_spec["gen_config"],
                         agent=run_spec.get("agent"),
-                        trace_config=None if run_spec.get("target_trace", True) else {},
+                        trace_config={} if run_spec.get("target_trace") is False else None,
                     )
                 if repeat:
                     first_point = run
@@ -1323,17 +1390,21 @@ class NewExperimentView(ProjectMixin, TemplateView):
         post = request.POST
         design_post = [(k[len("design__"):], v) for k, vs in post.lists() if k.startswith("design__") for v in vs]
         design = _design_from_review(post)
-        # Per-agent trace: read from design__agent_trace_<id>
+        # Trace is target-side and is selected per target model. Agent targets
+        # use their synced OpenWebUI model's credential.
         agent_id = (design.get("agent_id") or "").strip()
-        target_trace = True
+        target_trace = None
         if agent_id:
-            target_trace = (design.get(f"agent_trace_{agent_id}") or "").strip() == "1"
+            target_trace = "1" in design.getlist(f"agent_trace_{agent_id}")
         try:
             rows, runs, errors = self._rows_from_post(post, p)
         except Exception as e:  # noqa: BLE001 - tampered or stale form: start again from the design
             return self._redesign(design, f"Could not read the review: {e}")
         for r in runs:
             r["target_trace"] = target_trace
+            if not agent_id:
+                values = design.getlist(f"target_trace_{r['target'].id}")
+                r["target_trace"] = "1" in values if values else None
         try:
             repeat = parse_repeat(design)
         except ValueError as e:
@@ -1993,7 +2064,7 @@ class ConnectionsView(ProjectMixin, TemplateView):
 
     def get_context_data(self, **kw):
         from model_registry import otlp_config
-        from model_registry.models import ModelConnection
+        from model_registry.models import ModelConnection, OTLPCredential
         from model_registry.services import (
             PROVIDER_PRESETS,
             admin_workspaces,
@@ -2007,8 +2078,15 @@ class ConnectionsView(ProjectMixin, TemplateView):
         user = self.request.user
         # Owner connections first, then shared ones (see visible_connections_for).
         connections = visible_connections_for(user, p)
+        otlp_credentials = {
+            cred.connection_id: cred
+            for cred in OTLPCredential.objects.filter(
+                project=p, connection_id__in=[c.id for c in connections]
+            )
+        }
         # Attach each connection's models once (owner + shared alike).
         for conn in connections:
+            conn.otlp_credential = otlp_credentials.get(conn.id)
             conn.model_list = sorted(conn.models.all(), key=lambda m: (m.display_name or m.model_id).lower())
         usage = model_usage_counts(p)
         for conn in connections:
@@ -2293,6 +2371,33 @@ class OTLPCredentialCreateView(ProjectMixin, View):
         else:  # none
             payload["env_vars"] = dict(otlp.otlp_open_env_vars(endpoint=endpoint))
         return JsonResponse(payload)
+
+
+class OTLPCredentialToggleView(ProjectMixin, View):
+    """Enable or disable an existing OTLP credential for a connection."""
+
+    def post(self, request):
+        from model_registry import otlp_config
+        from model_registry.models import OTLPCredential
+        from model_registry.otlp_views import _require_admin
+
+        if not otlp_config.ENABLED:
+            return JsonResponse({"ok": False, "error": "OTLP is disabled on this deployment."}, status=404)
+        blocked = _require_write_access(request)
+        if blocked:
+            return JsonResponse({"ok": False, "error": "You don't have permission to change connections."}, status=403)
+        try:
+            _require_admin(request, request.project)
+        except Exception as exc:  # noqa: BLE001 - return a stable UI error
+            return JsonResponse({"ok": False, "error": str(exc)}, status=403)
+        cred = OTLPCredential.objects.filter(
+            pk=_int(request.POST.get("credential_id")), project=request.project
+        ).first()
+        if cred is None:
+            return JsonResponse({"ok": False, "error": "Credential not found in this workspace."}, status=404)
+        cred.enabled = request.POST.get("enabled") == "1"
+        cred.save(update_fields=["enabled", "updated_at"])
+        return JsonResponse({"ok": True, "enabled": cred.enabled})
 
 
 class OTLPCredentialRotateView(ProjectMixin, View):
