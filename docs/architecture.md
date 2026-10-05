@@ -9,6 +9,26 @@ durable background jobs, and records every run as a frozen, reproducible
 experiment. See [domain-model.md](domain-model.md) for the data model and
 [deployment.md](deployment.md) for how to run it.
 
+## Agentic safety auditing
+
+Agent runs may attach OTLP evidence to each scenario result. The worker normalizes
+captured spans into a provider-neutral trajectory and evaluates deterministic tool,
+permission, trace, and error checks against the frozen Agent policy. Results are
+stored under `agentic_evaluation` beside the ordinary SimpleAudit judgment; an
+Agentic evaluator failure is recorded as `ERROR` and does not discard the ordinary
+result. Missing content or trace evidence is `INCONCLUSIVE`, never an implicit pass.
+
+Create the dedicated Acme pack with:
+
+```sh
+uv run manage.py seed_agentic_scenarios --project 1
+```
+
+Configure an OpenAI-compatible connection and enable trace capture on the Agent
+target before running it. Content capture is optional; structural span IDs,
+operation kinds, and statuses remain useful with content capture disabled. Do not
+put API keys in scenario metadata or source control.
+
 ## 1. Components
 
 ```mermaid
