@@ -458,3 +458,83 @@ def seed_demo_agent(project, user, log=logger.info) -> dict[str, str]:
     agent.save()
     status["agent"] = "created" if created else "reused"
     return status
+
+
+def backfill_demo_chat_resources(project, user) -> dict[str, int]:
+    """Push the seeded demo agent, KB and tool to Open WebUI (chat startup).
+
+    ``setup_local`` seeds the demo rows while Open WebUI is not up, so they are
+    local-only (empty ``external_id``) and the OWUI-backed /agents/,
+    /agents/knowledge/ and /agents/tools/ pages look empty. When the chat stack
+    becomes ready, this completes the push, idempotently: rows already synced
+    are skipped, a row whose earlier push partially failed is re-pushed (the
+    pushes reuse existing OWUI entries by name/id, so nothing is duplicated),
+    and each ``external_id`` is backfilled on success.
+
+    Order matters: the agent is pushed last, because ``push_agent`` reads the
+    KB/tool ``external_id``s to wire them into the agent's OWUI model. A demo
+    agent that was already pushed before its KB/tool were is re-pushed (it is
+    an update) so the links land.
+
+    Never raises. Returns ``{"agents": n, "knowledge_bases": k, "tools": m}``
+    (zeros when chat is disabled, nothing is missing, or Open WebUI is
+    unreachable).
+    """
+    counts = {"agents": 0, "knowledge_bases": 0, "tools": 0}
+    try:
+        from chat import config as chat_config
+
+        if not getattr(chat_config, "ENABLED", False):
+            return counts
+        from chat.api import ChatAPI, ChatAPIError
+        from model_registry.models import Agent, KnowledgeBase, Tool
+
+        kb = KnowledgeBase.objects.filter(
+            project=project, name=DEMO_AGENT["knowledge_base"]["name"]
+        ).first()
+        tool = Tool.objects.filter(
+            project=project, name=DEMO_AGENT["tool"]["name"]
+        ).first()
+        agent = Agent.objects.filter(
+            project=project, name=DEMO_AGENT["name"]
+        ).first()
+        kb_missing = kb is not None and not kb.external_id
+        tool_missing = tool is not None and not tool.external_id
+        agent_missing = agent is not None and not agent.external_id
+        if not (kb_missing or tool_missing or agent_missing):
+            return counts
+
+        from model_registry.services import sync_agent_to_openwebui
+
+        api = ChatAPI.as_user(user)
+        if kb_missing or tool_missing:
+            # One push per call: it reuses existing OWUI entries by name/id, so
+            # a partial earlier push completes here instead of duplicating.
+            kb_external_id, tool_external_id = _push_to_openwebui(api, logger.info)
+            if kb_missing and kb_external_id:
+                kb.external_id = kb_external_id
+                kb.save(update_fields=["external_id", "updated_at"])
+                counts["knowledge_bases"] += 1
+            if tool_missing and tool_external_id:
+                tool.external_id = tool_external_id
+                tool.save(update_fields=["external_id", "updated_at"])
+                counts["tools"] += 1
+        # Agent last: re-push when its links were missing just now too, so the
+        # OWUI model is (re)wired to the now-present KB/tool.
+        if agent_missing or kb_missing or tool_missing:
+            # Pushed last so the OWUI model is (re)wired to the KB/tool links.
+            result = sync_agent_to_openwebui(agent, user)
+            if result in {"created", "updated"}:
+                agent.refresh_from_db()
+                # Count only a genuine backfill (id empty → set). A re-wire of
+                # an already-synced agent keeps its links current without being
+                # reported as a new backfill.
+                if agent_missing and agent.external_id:
+                    counts["agents"] += 1
+        return counts
+    except ChatAPIError:
+        logger.info("Demo chat backfill skipped (could not reach Open WebUI).")
+        return counts
+    except Exception as exc:  # noqa: BLE001 - startup must not fail on chat
+        logger.info("Demo chat backfill skipped: %s", exc)
+        return counts

@@ -81,6 +81,37 @@ def _sync_chat_models() -> str:
     return f"Synced {result['pushed']} model connection(s) to chat{kept}."
 
 
+def _backfill_demo_chat() -> str:
+    """Finish pushing demo KB/tool rows that seeded before the chat existed.
+
+    ``setup_local`` seeds the demo rows while Open WebUI is down, so they are
+    local-only (empty ``external_id``) and the OWUI-backed /agents/knowledge/
+    and /agents/tools/ pages look empty. Once the chat is ready, this completes
+    the push for the bootstrap project. Never raises (the backfill itself
+    swallows errors); reports nothing when there is nothing to backfill.
+    """
+    try:
+        from django.contrib.auth import get_user_model
+
+        from accounts.models import Project
+        from infra.seed import backfill_demo_chat_resources
+
+        user = get_user_model().objects.order_by("id").first()
+        project = Project.objects.order_by("id").first()
+        if user is None or project is None:
+            return ""
+        counts = backfill_demo_chat_resources(project, user)
+        if not any(counts.values()):
+            return ""
+        labels = {"agents": "agent", "knowledge_bases": "knowledge base(s)", "tools": "tool(s)"}
+        return "Backfilled demo resources into chat: " + ", ".join(
+            f"{counts[k]} {labels[k]}" for k in labels if counts[k]
+        )
+    except Exception as exc:  # noqa: BLE001 - runs in a startup thread; log, don't crash
+        logger.info("Demo chat backfill skipped: %s", exc)
+        return ""
+
+
 class Command(BaseCommand):
     help = "Run the local dev web server + Hatchet worker together."
 
@@ -325,6 +356,9 @@ class Command(BaseCommand):
             if chat_proxy.wait_until_ready(process):
                 print(f"\n✅ Chat is ready — http://localhost:{public_port}/ai/", flush=True)
                 print(f"   {_sync_chat_models()}\n", flush=True)
+                backfilled = _backfill_demo_chat()
+                if backfilled:
+                    print(f"   {backfilled}", flush=True)
             elif process.poll() is not None:
                 print(f"\n⚠️  Chat stopped (exit {process.returncode}). Studio is unaffected.", flush=True)
                 print(f"   What happened: {chat_proxy.log_path()}\n", flush=True)

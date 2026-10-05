@@ -6,7 +6,7 @@ from django.core.management import call_command
 from django.test import TestCase
 
 from accounts.models import Project
-from infra.seed import DEMO_AGENT, seed_demo_agent
+from infra.seed import DEMO_AGENT, backfill_demo_chat_resources, seed_demo_agent
 from infra.tests.factories import (
     ProjectFactory,
     RegisteredModelFactory,
@@ -193,3 +193,151 @@ class SeedPlatformDemoAgentTests(TestCase):
             )
 
         self.assertEqual(Agent.objects.filter(project=self.project, name=DEMO_AGENT["name"]).count(), 0)
+
+
+class SeedDemoAgentBackfillTests(TestCase):
+    """Cold start: chat-off seed leaves local rows; chat startup backfills OWUI.
+
+    Mirrors the fresh-install flow: ``setup_local`` (chat disabled) creates the
+    demo rows without external ids, then ``manage.py dev`` brings Open WebUI
+    up and ``backfill_demo_chat_resources`` completes the push so the
+    OWUI-backed /agents/knowledge/ and /agents/tools/ pages are not empty.
+    """
+
+    def setUp(self):
+        self.user, self.project, self.model = _project_with_model()
+
+    def _patched_api(self):
+        api = mock.Mock()
+        api.knowledge_bases.return_value = []
+        api.create_knowledge_base.return_value = {"id": "kb-backfill"}
+        api.upload_file.side_effect = lambda name, content, ct: {"id": f"file-{name}"}
+        api.tools.return_value = []
+        return api
+
+    def _seed_with_chat_off(self):
+        with mock.patch("chat.config.ENABLED", False):
+            seed_demo_agent(self.project, self.user)
+
+    def _kb(self):
+        return KnowledgeBase.objects.get(
+            project=self.project, name=DEMO_AGENT["knowledge_base"]["name"]
+        )
+
+    def _tool(self):
+        return Tool.objects.get(project=self.project, name=DEMO_AGENT["tool"]["name"])
+
+    def _agent(self):
+        return Agent.objects.get(project=self.project, name=DEMO_AGENT["name"])
+
+    def test_backfills_agent_kb_and_tool_ids(self):
+        self._seed_with_chat_off()
+        self.assertEqual(self._kb().external_id, "")
+        self.assertEqual(self._tool().external_id, "")
+        self.assertEqual(self._agent().external_id, "")
+
+        api = self._patched_api()
+        with mock.patch("chat.config.ENABLED", True), mock.patch(
+            "chat.api.ChatAPI.as_user", return_value=api
+        ):
+            counts = backfill_demo_chat_resources(self.project, self.user)
+
+        self.assertEqual(counts, {"agents": 1, "knowledge_bases": 1, "tools": 1})
+        self.assertEqual(self._kb().external_id, "kb-backfill")
+        self.assertEqual(self._tool().external_id, DEMO_AGENT["tool"]["owui_tool_id"])
+        agent = self._agent()
+        self.assertEqual(agent.external_id, f"studio.agent-{agent.pk}")
+        # One push per call: KB created once, two docs uploaded, tool once, and
+        # the agent's workspace model created once.
+        api.create_knowledge_base.assert_called_once()
+        self.assertEqual(api.upload_file.call_count, 2)
+        api.create_tool.assert_called_once()
+        api.create_workspace_model.assert_called_once()
+        # The agent is pushed AFTER its KB/tool ids were backfilled, so its
+        # OWUI model is wired to the KB.
+        self.assertEqual(
+            api.create_workspace_model.call_args.kwargs["knowledge"],
+            [{"id": "kb-backfill", "name": DEMO_AGENT["knowledge_base"]["name"], "type": "file"}],
+        )
+
+    def test_rewires_agent_when_only_it_was_pushed(self):
+        # The agent was pushed (has an id) but its KB/tool were not — the common
+        # "edited the agent in the UI" state. Backfill must push the KB/tool and
+        # re-push the agent so the links land.
+        self._seed_with_chat_off()
+        agent = self._agent()
+        agent.external_id = f"studio.agent-{agent.pk}"
+        agent.save()
+
+        api = self._patched_api()
+        with mock.patch("chat.config.ENABLED", True), mock.patch(
+            "chat.api.ChatAPI.as_user", return_value=api
+        ):
+            counts = backfill_demo_chat_resources(self.project, self.user)
+
+        self.assertEqual(counts, {"agents": 0, "knowledge_bases": 1, "tools": 1})
+        # Agent already had an id -> update path, and it is re-wired to the KB.
+        api.update_workspace_model.assert_called_once()
+        api.create_workspace_model.assert_not_called()
+        self.assertEqual(
+            api.update_workspace_model.call_args.kwargs["knowledge"],
+            [{"id": "kb-backfill", "name": DEMO_AGENT["knowledge_base"]["name"], "type": "file"}],
+        )
+
+    def test_idempotent_no_repush_when_ids_present(self):
+        self._seed_with_chat_off()
+        kb = self._kb()
+        kb.external_id = "kb-1"
+        kb.save()
+        tool = self._tool()
+        tool.external_id = DEMO_AGENT["tool"]["owui_tool_id"]
+        tool.save()
+        agent = self._agent()
+        agent.external_id = f"studio.agent-{agent.pk}"
+        agent.save()
+
+        api = mock.Mock()
+        with mock.patch("chat.config.ENABLED", True), mock.patch(
+            "chat.api.ChatAPI.as_user", return_value=api
+        ) as as_user:
+            counts = backfill_demo_chat_resources(self.project, self.user)
+
+        self.assertEqual(
+            counts, {"agents": 0, "knowledge_bases": 0, "tools": 0}
+        )
+        # All ids present -> early return before any OWUI call; nothing is
+        # re-pushed, so no duplicates.
+        as_user.assert_not_called()
+        api.create_knowledge_base.assert_not_called()
+        api.create_tool.assert_not_called()
+        api.create_workspace_model.assert_not_called()
+
+    def test_noop_when_chat_disabled(self):
+        self._seed_with_chat_off()
+        with mock.patch("chat.config.ENABLED", False):
+            counts = backfill_demo_chat_resources(self.project, self.user)
+
+        self.assertEqual(counts, {"agents": 0, "knowledge_bases": 0, "tools": 0})
+        self.assertEqual(self._kb().external_id, "")
+        self.assertEqual(self._tool().external_id, "")
+        self.assertEqual(self._agent().external_id, "")
+
+    def test_unreachable_openwebui_never_raises_and_retries_later(self):
+        from chat.api import ChatAPIError
+
+        self._seed_with_chat_off()
+        with mock.patch("chat.config.ENABLED", True), mock.patch(
+            "chat.api.ChatAPI.as_user", side_effect=ChatAPIError("no route to host")
+        ):
+            counts = backfill_demo_chat_resources(self.project, self.user)
+        self.assertEqual(counts, {"agents": 0, "knowledge_bases": 0, "tools": 0})
+        self.assertEqual(self._kb().external_id, "")
+
+        # A later chat-ready moment completes the push.
+        api = self._patched_api()
+        with mock.patch("chat.config.ENABLED", True), mock.patch(
+            "chat.api.ChatAPI.as_user", return_value=api
+        ):
+            counts = backfill_demo_chat_resources(self.project, self.user)
+        self.assertEqual(counts, {"agents": 1, "knowledge_bases": 1, "tools": 1})
+        self.assertEqual(self._kb().external_id, "kb-backfill")
