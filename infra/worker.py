@@ -610,6 +610,25 @@ def _scenario_execute_impl(workflow_input: ScenarioInput, ctx: Context) -> dict:
     # A failed attempt is final on the last attempt or for errors a retry can't fix;
     # otherwise it is provisional, stored as failed with attempts < max (so not terminal).
     final = not failed or attempt >= MAX_SCENARIO_ATTEMPTS or _is_permanent_error(error)
+    if run.agent_config_snapshot and trace_config:
+        try:
+            from audits.agentic.evaluate import evaluate as evaluate_agentic
+            from audits.agentic.expectations import validate_agentic_metadata
+            from audits.agentic.trajectory import normalize
+
+            expectations = validate_agentic_metadata(revision.metadata or {})
+            reps = result_payload.get("reps") if isinstance(result_payload, dict) else None
+            targets = reps if isinstance(reps, list) else [result_payload]
+            for target in targets:
+                evidence = (target.get("judgment") or {}).get("evidence_spans", [])
+                target["agentic_evaluation"] = evaluate_agentic(
+                    normalize(evidence), expectations, run.agent_config_snapshot
+                )
+        except Exception as exc:  # noqa: BLE001 - optional analysis cannot break persistence
+            result_payload["agentic_evaluation"] = {
+                "status": "ERROR", "checks": [{"id": "agentic.evaluate", "category": "system",
+                "status": "ERROR", "summary": str(exc), "evidence_span_ids": [], "details": {}}]
+            }
     upsert_scenario_result(
         run_id, version_item_id, status="failed" if failed else "completed",
         attempts=MAX_SCENARIO_ATTEMPTS if failed and final else attempt, result=result_payload,
