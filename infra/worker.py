@@ -373,7 +373,11 @@ def _scenario_execute_impl(workflow_input: ScenarioInput, ctx: Context) -> dict:
         pk=run.pk, status__in=[AuditRun.Status.QUEUED, AuditRun.Status.PREPARING]
     ).update(status=AuditRun.Status.TARGET_EXECUTION)
 
-    from infra.engine import EngineError, run_scenario_repeated
+    from infra.engine import (
+        EngineError,
+        augment_agent_generation,
+        run_scenario_repeated,
+    )
     from infra.engine import run_scenario as engine_run_scenario
 
     # Stamp agent correlation ID on the log context when the run targets an Agent.
@@ -386,6 +390,8 @@ def _scenario_execute_impl(workflow_input: ScenarioInput, ctx: Context) -> dict:
         )
 
     gen_params = run.generation_parameters_snapshot or {}
+    if run.agent_config_snapshot:
+        gen_params = augment_agent_generation(gen_params, run.agent_config_snapshot)
     n_reps = int(gen_params.get("n_repetitions") or 1)
     max_turns = int(gen_params.get("max_turns") or 5)
     # Trace acquisition config (Promptfoo parity). Empty = no tracing. studio

@@ -206,6 +206,35 @@ def _merge(*dicts: dict | None) -> dict | None:
     return merged or None
 
 
+def augment_agent_generation(generation: dict | None, agent_snapshot: dict | None) -> dict:
+    """Add standard Open WebUI Agent request metadata to target parameters.
+
+    Open WebUI's compatibility endpoint only exposes model-attached native
+    tools/knowledge to requests that carry a session.  The frozen Agent
+    snapshot is the execution source of truth, so forward its tool IDs through
+    the endpoint's standard ``extra_body`` fields without inventing a protocol
+    understood by the target model.
+    """
+    result = dict(generation or {})
+    if not agent_snapshot:
+        return result
+    target_params = dict(result.get("target_params") or {})
+    extra_body = dict(target_params.get("extra_body") or {})
+    if not extra_body.get("session_id") and agent_snapshot.get("agent_id") is not None:
+        extra_body["session_id"] = f"simpleaudit-agent-{agent_snapshot['agent_id']}"
+    tool_ids = [
+        tool.get("external_id")
+        for tool in agent_snapshot.get("tools") or []
+        if isinstance(tool, dict) and tool.get("external_id")
+    ]
+    if tool_ids and "tool_ids" not in extra_body:
+        extra_body["tool_ids"] = tool_ids
+    if extra_body:
+        target_params["extra_body"] = extra_body
+        result["target_params"] = target_params
+    return result
+
+
 def auditor_kwargs(*, target: dict, auditor: dict, judge: dict, generation: dict | None = None,
                    resolve_key=None) -> tuple[dict, str]:
     """``ModelAuditor`` constructor kwargs from the three frozen snapshots, plus the language.

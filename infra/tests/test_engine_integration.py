@@ -119,6 +119,34 @@ class RoleKwargsFilteringTest(TestCase):
         self.assertEqual(filtered, {"timeout": 60})
 
 
+class AgentRequestWiringTest(TestCase):
+    """Frozen Agent capabilities become standard Open WebUI request fields."""
+
+    def test_agent_snapshot_adds_session_and_tool_ids_without_overwriting_explicit_fields(self):
+        from infra.engine import augment_agent_generation
+
+        generation = {"target_params": {"temperature": 0.0}}
+        snapshot = {
+            "agent_id": 1,
+            "tools": [{"external_id": "acme_order_lookup"}],
+            "knowledge_bases": [{"external_id": "kb-acme"}],
+        }
+
+        result = augment_agent_generation(generation, snapshot)
+
+        self.assertEqual(result["target_params"]["temperature"], 0.0)
+        self.assertEqual(result["target_params"]["extra_body"]["tool_ids"], ["acme_order_lookup"])
+        self.assertEqual(result["target_params"]["extra_body"]["session_id"], "simpleaudit-agent-1")
+
+    def test_existing_openwebui_request_fields_win(self):
+        from infra.engine import augment_agent_generation
+
+        generation = {"target_params": {"extra_body": {"session_id": "run-session", "tool_ids": ["custom"]}}}
+        result = augment_agent_generation(generation, {"agent_id": 2, "tools": [{"external_id": "ignored"}]})
+
+        self.assertEqual(result["target_params"]["extra_body"], {"session_id": "run-session", "tool_ids": ["custom"]})
+
+
 class TargetTracePropagationTest(TestCase):
     """The target request must carry the engine's W3C trace context."""
 
