@@ -284,7 +284,7 @@ class SeedDemoAgentBackfillTests(TestCase):
             [{"id": "kb-backfill", "name": DEMO_AGENT["knowledge_base"]["name"], "type": "file"}],
         )
 
-    def test_idempotent_no_repush_when_ids_present(self):
+    def test_reconciles_existing_agent_when_ids_present(self):
         self._seed_with_chat_off()
         kb = self._kb()
         kb.external_id = "kb-1"
@@ -302,15 +302,14 @@ class SeedDemoAgentBackfillTests(TestCase):
         ) as as_user:
             counts = backfill_demo_chat_resources(self.project, self.user)
 
-        self.assertEqual(
-            counts, {"agents": 0, "knowledge_bases": 0, "tools": 0}
-        )
-        # All ids present -> early return before any OWUI call; nothing is
-        # re-pushed, so no duplicates.
-        as_user.assert_not_called()
+        self.assertEqual(counts, {"agents": 0, "knowledge_bases": 0, "tools": 0})
+        # Existing ids do not guarantee that Open WebUI's base_model_id is
+        # current, so the workspace model is reconciled in-place.
+        self.assertEqual(as_user.call_count, 2)
+        as_user.assert_any_call(self.user)
         api.create_knowledge_base.assert_not_called()
         api.create_tool.assert_not_called()
-        api.create_workspace_model.assert_not_called()
+        api.update_workspace_model.assert_called_once()
 
     def test_noop_when_chat_disabled(self):
         self._seed_with_chat_off()
