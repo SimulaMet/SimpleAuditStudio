@@ -174,6 +174,31 @@ class ChatAPI:
         """Patch the signed-in user's Open WebUI settings."""
         return self.request("POST", "/api/v1/users/user/settings/update", json=settings)
 
+    # --- admin: server-side retrieval configuration ------------------------
+    def retrieval_config(self) -> dict[str, Any]:
+        """Read Open WebUI's server-side RAG/document configuration.
+
+        Open WebUI enforces admin access on this endpoint. Callers must use a
+        ChatAPI session for an Open WebUI administrator.
+        """
+        payload = self.request("GET", "/api/v1/retrieval/config")
+        return payload if isinstance(payload, dict) else {}
+
+    def embedding_config(self) -> dict[str, Any]:
+        """Read the server-side embedding configuration (admin-only)."""
+        payload = self.request("GET", "/api/v1/retrieval/embedding")
+        return payload if isinstance(payload, dict) else {}
+
+    def update_retrieval_config(self, config: dict[str, Any]) -> dict[str, Any]:
+        """Patch server-side RAG/document settings (admin-only)."""
+        payload = self.request("POST", "/api/v1/retrieval/config/update", json=config)
+        return payload if isinstance(payload, dict) else {}
+
+    def update_embedding_config(self, config: dict[str, Any]) -> dict[str, Any]:
+        """Update server-side embedding settings (admin-only)."""
+        payload = self.request("POST", "/api/v1/retrieval/embedding/update", json=config)
+        return payload if isinstance(payload, dict) else {}
+
     # --- pull: Open WebUI knowledge -> Studio -------------------------------
     def knowledge_bases(self) -> list[dict[str, Any]]:
         """Every knowledge base this user can read, as plain dicts."""
@@ -263,6 +288,7 @@ class ChatAPI:
         self, model_id: str, name: str, *, base_model_id: str | None = None,
         description: str = "", knowledge: list[dict[str, Any]] | None = None,
         params: dict[str, Any] | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Create a Studio agent as an Open WebUI workspace model entry.
 
@@ -274,6 +300,8 @@ class ChatAPI:
         meta: dict[str, Any] = {"description": description or None}
         if knowledge is not None:
             meta["knowledge"] = knowledge
+        if metadata:
+            meta.update(metadata)
         return self.request(
             "POST", "/api/v1/models/create",
             json={
@@ -289,11 +317,14 @@ class ChatAPI:
         self, model_id: str, name: str, *, base_model_id: str | None = None,
         description: str = "", knowledge: list[dict[str, Any]] | None = None,
         params: dict[str, Any] | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Update an existing workspace model entry (same shape as create)."""
         meta: dict[str, Any] = {"description": description or None}
         if knowledge is not None:
             meta["knowledge"] = knowledge
+        if metadata:
+            meta.update(metadata)
         return self.request(
             "POST", "/api/v1/models/model/update",
             json={

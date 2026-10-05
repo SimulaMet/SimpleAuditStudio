@@ -138,6 +138,14 @@ class OpenWebUIAdapter:
         base_model_id = self.agent_base_model_id(agent)
         knowledge = self._knowledge_refs(agent)
         description = agent.system_prompt or agent.description or agent.name
+        metadata = {
+            "simpleaudit": {
+                "retrieval_profile": (
+                    agent.retrieval_profile.config_dict()
+                    if agent.retrieval_profile else None
+                ),
+            },
+        }
 
         try:
             if agent.external_id:
@@ -145,6 +153,7 @@ class OpenWebUIAdapter:
                     self._api.update_workspace_model(
                         model_id, agent.name, base_model_id=base_model_id,
                         description=description, knowledge=knowledge,
+                        metadata=metadata,
                     )
                     status = "updated"
                 except ChatAPIError as exc:
@@ -155,6 +164,7 @@ class OpenWebUIAdapter:
                     self._api.create_workspace_model(
                         model_id, agent.name, base_model_id=base_model_id,
                         description=description, knowledge=knowledge,
+                        metadata=metadata,
                     )
                     status = "created"
             else:
@@ -162,6 +172,7 @@ class OpenWebUIAdapter:
                     self._api.create_workspace_model(
                         model_id, agent.name, base_model_id=base_model_id,
                         description=description, knowledge=knowledge,
+                        metadata=metadata,
                     )
                     status = "created"
                 except ChatAPIError as exc:
@@ -171,6 +182,7 @@ class OpenWebUIAdapter:
                     self._api.update_workspace_model(
                         model_id, agent.name, base_model_id=base_model_id,
                         description=description, knowledge=knowledge,
+                        metadata=metadata,
                     )
                     status = "updated"
         except ChatAPIError as exc:

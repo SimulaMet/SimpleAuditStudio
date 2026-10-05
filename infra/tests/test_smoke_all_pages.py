@@ -6,6 +6,8 @@ and view bugs before they reach a user's browser.
 Run:
     SIMPLEAUDIT_LOCAL_SQLITE=1 .venv/bin/python manage.py test infra.tests.test_smoke_all_pages
 """
+from unittest import mock
+
 from django.test import Client, TestCase
 
 from infra.tests.factories import (
@@ -99,6 +101,23 @@ class AllPagesSmokeTest(TestCase):
         self._ok("/admin-settings/?tab=workspaces", "Admin Workspaces")
         self._ok("/admin-settings/?tab=users", "Admin Users")
         self._ok(f"/admin-settings/?tab=workspaces&manage={self.project.id}", "Admin Members panel")
+
+    def test_openwebui_rag_settings_is_superuser_only(self):
+        self.user.is_superuser = True
+        self.user.is_staff = True
+        self.user.save()
+        self.client.login(username=self.user.username, password="testpass123")
+        api = mock.Mock()
+        api.retrieval_config.return_value = {"TOP_K": 5}
+        api.embedding_config.return_value = {
+            "RAG_EMBEDDING_MODEL": "all-MiniLM-L6-v2",
+            "openai_config": {"key": "secret"},
+        }
+        with mock.patch("chat.api.ChatAPI.as_user", return_value=api):
+            resp = self.client.get("/admin-settings/rag/")
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, "all-MiniLM-L6-v2")
+        self.assertNotContains(resp, "secret")
 
     def test_audit_detail(self):
         self._ok(f"/runs/{self.run.id}/", "Audit detail (single)")
