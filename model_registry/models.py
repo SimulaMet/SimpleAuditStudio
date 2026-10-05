@@ -201,53 +201,17 @@ class OTLPCredential(models.Model):
 # ---------------------------------------------------------------------------
 
 
-class RetrievalProfile(models.Model):
-    """Query-time retrieval settings shared across agents.
-
-    These are *query-time* knobs (top_k, rerank, threshold, …). Index-time
-    settings (embedding model, chunk size) belong to the KnowledgeBase.
-    """
-
-    class SearchMode(models.TextChoices):
-        SEMANTIC = "semantic", "Semantic"
-        HYBRID = "hybrid", "Hybrid (semantic + BM25)"
-
-    project = models.ForeignKey("accounts.Project", on_delete=models.CASCADE, related_name="retrieval_profiles")
-    name = models.CharField(max_length=250)
-    search_mode = models.CharField(max_length=20, choices=SearchMode.choices, default=SearchMode.SEMANTIC)
-    top_k = models.PositiveIntegerField(default=5)
-    rerank_enabled = models.BooleanField(default=False)
-    rerank_top_k = models.PositiveIntegerField(default=4)
-    relevance_threshold = models.FloatField(null=True, blank=True)
-    bm25_weight = models.FloatField(null=True, blank=True)
-    full_context = models.BooleanField(default=False)
-    created_by = models.ForeignKey(
-        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
-        related_name="retrieval_profiles_created",
-    )
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
-
-    class Meta:
-        db_table = "core_retrieval_profile"
-        constraints = [
-            models.UniqueConstraint(fields=["project", "name"], name="unique_retrieval_profile_name_per_project"),
-        ]
-        ordering = ["project__name", "name"]
-
-    def __str__(self) -> str:
-        return self.name
-
-    def config_dict(self) -> dict:
-        return {
-            "search_mode": self.search_mode,
-            "top_k": self.top_k,
-            "rerank_enabled": self.rerank_enabled,
-            "rerank_top_k": self.rerank_top_k,
-            "relevance_threshold": self.relevance_threshold,
-            "bm25_weight": self.bm25_weight,
-            "full_context": self.full_context,
-        }
+def default_retrieval_settings() -> dict:
+    """Default query-time retrieval settings stored directly on an agent."""
+    return {
+        "search_mode": "semantic",
+        "top_k": 5,
+        "rerank_enabled": False,
+        "rerank_top_k": 4,
+        "relevance_threshold": None,
+        "bm25_weight": None,
+        "full_context": False,
+    }
 
 
 class KnowledgeBase(models.Model):
@@ -368,9 +332,9 @@ class Agent(models.Model):
     external_id = models.CharField(max_length=255, blank=True, default="")
     knowledge_bases = models.ManyToManyField(KnowledgeBase, blank=True, related_name="agents")
     tools = models.ManyToManyField(Tool, blank=True, related_name="agents")
-    retrieval_profile = models.ForeignKey(
-        RetrievalProfile, on_delete=models.SET_NULL, null=True, blank=True, related_name="agents"
-    )
+    # Query-time retrieval settings are agent-scoped. Index-time settings
+    # (embedding model, chunking) remain instance-wide/knowledge-base-owned.
+    retrieval_settings = models.JSONField(default=default_retrieval_settings, blank=True)
     # Explicit capability flags: what the agent is *permitted* to do.
     capabilities = models.JSONField(default=dict, blank=True)
     metadata = models.JSONField(default=dict, blank=True)
@@ -395,7 +359,6 @@ class Agent(models.Model):
         Used by audit runs to freeze the configuration at execution time so
         historical runs remain reproducible.
         """
-        profile = self.retrieval_profile
         return {
             "agent_id": self.id,
             "name": self.name,
@@ -411,17 +374,7 @@ class Agent(models.Model):
                 self.knowledge_bases.values_list("id", "name", "external_id", "version")
             ),
             "tools": list(self.tools.values_list("id", "name", "type")),
-            "retrieval_profile": {
-                "id": profile.id,
-                "name": profile.name,
-                "search_mode": profile.search_mode,
-                "top_k": profile.top_k,
-                "rerank_enabled": profile.rerank_enabled,
-                "rerank_top_k": profile.rerank_top_k,
-                "relevance_threshold": profile.relevance_threshold,
-                "bm25_weight": profile.bm25_weight,
-                "full_context": profile.full_context,
-            } if profile else None,
+            "retrieval": self.retrieval_settings,
             # Read-only Open WebUI global RAG settings captured at audit-run
             # creation. The live source remains Open WebUI.
             "server_rag": server_rag,

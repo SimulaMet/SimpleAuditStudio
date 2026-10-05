@@ -5,20 +5,8 @@ from model_registry.models import (
     Agent,
     KnowledgeBase,
     RegisteredModel,
-    RetrievalProfile,
     Tool,
 )
-
-
-class RetrievalProfileSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = RetrievalProfile
-        fields = [
-            "id", "name", "search_mode", "top_k",
-            "rerank_enabled", "rerank_top_k", "relevance_threshold",
-            "bm25_weight", "full_context",
-        ]
-        read_only_fields = ["id"]
 
 
 class KnowledgeBaseSerializer(serializers.ModelSerializer):
@@ -70,17 +58,11 @@ class AgentSerializer(serializers.ModelSerializer):
         many=True,
         required=False,
     )
-    retrieval_profile = serializers.PrimaryKeyRelatedField(
-        queryset=RetrievalProfile.objects.all(),
-        required=False,
-        allow_null=True,
-    )
-
     class Meta:
         model = Agent
         fields = [
             "id", "name", "description", "base_model", "system_prompt",
-            "knowledge_bases", "tools", "retrieval_profile",
+            "knowledge_bases", "tools", "retrieval_settings",
             "capabilities", "metadata", "enabled", "external_id",
         ]
         read_only_fields = ["id", "external_id"]
@@ -101,11 +83,6 @@ class AgentSerializer(serializers.ModelSerializer):
                             raise serializers.ValidationError(
                                 {field: f"{item.name} does not belong to this workspace."}
                             )
-            profile = attrs.get("retrieval_profile")
-            if profile and profile.project_id != project.id:
-                raise serializers.ValidationError(
-                    {"retrieval_profile": "Retrieval profile must belong to the same workspace."}
-                )
         return attrs
 
 
@@ -114,14 +91,13 @@ class AgentDetailSerializer(AgentSerializer):
 
     base_model_name = serializers.CharField(source="base_model.display_name", read_only=True)
     connection_name = serializers.CharField(source="base_model.connection.name", read_only=True)
-    retrieval_profile_name = serializers.CharField(source="retrieval_profile.name", read_only=True)
     knowledge_base_names = serializers.SerializerMethodField()
     tool_names = serializers.SerializerMethodField()
     openwebui_live = serializers.SerializerMethodField()
 
     class Meta(AgentSerializer.Meta):
         fields = AgentSerializer.Meta.fields + [
-            "base_model_name", "connection_name", "retrieval_profile_name",
+            "base_model_name", "connection_name",
             "knowledge_base_names", "tool_names", "openwebui_live",
         ]
 

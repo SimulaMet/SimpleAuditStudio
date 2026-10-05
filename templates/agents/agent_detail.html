@@ -29,7 +29,15 @@
     {% if agent and chat_enabled %}
     <!-- Chat sync status (live entry fetched on page load) -->
     <fieldset class="bg-surface-raised rounded-xl border border-gray-800 p-4">
-      <legend class="px-2 text-xs font-semibold text-gray-300 uppercase tracking-wide">Chat availability</legend>
+      <legend class="px-2 text-xs font-semibold text-gray-300 uppercase tracking-wide flex items-center justify-between gap-4 w-full">
+        <span>Chat availability</span>
+        <a href="{% url 'agent_test_chat' agent.id %}" title="Open a chat with {{ agent.name }}"
+           aria-label="Chat with {{ agent.name }}"
+           class="inline-flex items-center gap-1.5 normal-case tracking-normal text-[11px] text-gray-400 hover:text-accent">
+          <svg class="w-3.5 h-3.5" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 1.5A6.5 6.5 0 0 0 1.5 8c0 1.1.27 2.15.75 3.08L1.5 14.5l3.55-.72A6.5 6.5 0 1 0 8 1.5Zm0 1.5a5 5 0 1 1-2.55 9.3l-.34-.18-2.06.42.43-1.98-.22-.34A5 5 0 0 1 8 3Z"/></svg>
+          Test in Chat
+        </a>
+      </legend>
       {% if agent.external_id %}
         {% if openwebui_live %}
         <p class="text-xs text-gray-300">
@@ -49,24 +57,6 @@
       {% else %}
       <p class="text-xs text-gray-500">Not available in chat yet — saving this agent will publish it there.</p>
       {% endif %}
-    </fieldset>
-    {% endif %}
-
-    {% if openwebui_rag %}
-    <!-- Read-only global retrieval context. The platform setting remains authoritative. -->
-    <fieldset class="bg-surface-raised rounded-xl border border-gray-800 p-4">
-      <legend class="px-2 text-xs font-semibold text-gray-300 uppercase tracking-wide">Global retrieval configuration</legend>
-      <p class="text-xs text-gray-500 mb-3">Configured by a platform admin. These values apply to all agents; this page does not edit them.</p>
-      <div class="grid grid-cols-2 md:grid-cols-4 gap-x-4 gap-y-2 text-xs">
-        <div><span class="text-gray-500">Embedding</span><div class="text-gray-200 truncate" title="{{ openwebui_rag.embedding_model }}">{{ openwebui_rag.embedding_engine|default:"local" }} · {{ openwebui_rag.embedding_model|default:"default" }}</div></div>
-        <div><span class="text-gray-500">Splitter</span><div class="text-gray-200">{{ openwebui_rag.text_splitter|default:"default" }}</div></div>
-        <div><span class="text-gray-500">Chunks</span><div class="text-gray-200">{{ openwebui_rag.chunk_size|default:"—" }} / {{ openwebui_rag.chunk_overlap|default:"—" }}</div></div>
-        <div><span class="text-gray-500">Top K</span><div class="text-gray-200">{{ openwebui_rag.top_k|default:"—" }}</div></div>
-        <div><span class="text-gray-500">Hybrid search</span><div class="text-gray-200">{% if openwebui_rag.hybrid_search %}On{% else %}Off{% endif %}</div></div>
-        <div><span class="text-gray-500">Reranking</span><div class="text-gray-200">{{ openwebui_rag.reranking_model|default:"Off" }}</div></div>
-        <div><span class="text-gray-500">Full context</span><div class="text-gray-200">{% if openwebui_rag.full_context %}On{% else %}Off{% endif %}</div></div>
-        <div><span class="text-gray-500">Extraction</span><div class="text-gray-200">{{ openwebui_rag.content_extraction_engine|default:"default" }}</div></div>
-      </div>
     </fieldset>
     {% endif %}
 
@@ -135,19 +125,50 @@
     </fieldset>
 
     <!-- Retrieval -->
+    {% if openwebui_rag %}
+    <!-- Read-only global retrieval context. The platform setting remains authoritative. -->
+    <fieldset class="bg-surface-raised rounded-xl border border-gray-800 p-4">
+      <legend class="px-2 text-xs font-semibold text-gray-300 uppercase tracking-wide">Global retrieval configuration</legend>
+      <p class="text-xs text-gray-500 mb-3">Configured by a platform admin. These values apply to all agents; this page does not edit them.</p>
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-x-4 gap-y-2 text-xs">
+        <div><span class="text-gray-500">Embedding</span><div class="text-gray-200 truncate" title="{{ openwebui_rag.embedding_model }}">{{ openwebui_rag.embedding_engine|default:"local" }} · {{ openwebui_rag.embedding_model|default:"default" }}</div></div>
+        <div><span class="text-gray-500">Splitter</span><div class="text-gray-200">{{ openwebui_rag.text_splitter|default:"default" }}</div></div>
+        <div><span class="text-gray-500">Chunks</span><div class="text-gray-200">{{ openwebui_rag.chunk_size|default:"—" }} / {{ openwebui_rag.chunk_overlap|default:"—" }}</div></div>
+        <div><span class="text-gray-500">Top K</span><div class="text-gray-200">{{ openwebui_rag.top_k|default:"—" }}</div></div>
+        <div><span class="text-gray-500">Hybrid search</span><div class="text-gray-200">{% if openwebui_rag.hybrid_search %}On{% else %}Off{% endif %}</div></div>
+        <div><span class="text-gray-500">Reranking</span><div class="text-gray-200">{{ openwebui_rag.reranking_model|default:"Off" }}</div></div>
+        <div><span class="text-gray-500">Full context</span><div class="text-gray-200">{% if openwebui_rag.full_context %}On{% else %}Off{% endif %}</div></div>
+        <div><span class="text-gray-500">Extraction</span><div class="text-gray-200">{{ openwebui_rag.content_extraction_engine|default:"default" }}</div></div>
+      </div>
+    </fieldset>
+    {% endif %}
+
     <fieldset class="bg-surface-raised rounded-xl border border-gray-800 p-4 space-y-4">
-      <legend class="px-2 text-xs font-semibold text-gray-300 uppercase tracking-wide">Retrieval Profile</legend>
-      <div>
-        <label for="retrieval_profile" class="block text-xs text-gray-400 mb-1">Profile</label>
-        <select id="retrieval_profile" name="retrieval_profile"
-                class="w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm text-gray-100 focus:outline-none focus:ring-2 focus:ring-accent/50">
-          <option value="">— Default (no profile) —</option>
-          {% for rp in retrieval_profiles %}
-          <option value="{{ rp.id }}" {% if agent and agent.retrieval_profile_id == rp.id %}selected{% endif %}>
-            {{ rp.name }} ({{ rp.get_search_mode_display }}, top {{ rp.top_k }})
-          </option>
-          {% endfor %}
-        </select>
+      <legend class="px-2 text-xs font-semibold text-gray-300 uppercase tracking-wide">Retrieval</legend>
+      <p class="text-xs text-gray-500">These query-time settings apply only to this agent. Embedding and chunking remain platform-wide.</p>
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <label class="block text-xs text-gray-400">Search mode
+          <select name="search_mode" class="mt-1 w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm text-gray-100">
+            <option value="semantic" {% if retrieval_settings.search_mode == 'semantic' %}selected{% endif %}>Semantic</option>
+            <option value="hybrid" {% if retrieval_settings.search_mode == 'hybrid' %}selected{% endif %}>Hybrid (semantic + BM25)</option>
+          </select>
+        </label>
+        <label class="block text-xs text-gray-400">Top K
+          <input type="number" min="1" name="top_k" value="{{ retrieval_settings.top_k }}" class="mt-1 w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm text-gray-100">
+        </label>
+        <label class="block text-xs text-gray-400">Rerank top K
+          <input type="number" min="1" name="rerank_top_k" value="{{ retrieval_settings.rerank_top_k }}" class="mt-1 w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm text-gray-100">
+        </label>
+        <label class="block text-xs text-gray-400">Relevance threshold
+          <input type="number" step="0.01" min="0" max="1" name="relevance_threshold" value="{{ retrieval_settings.relevance_threshold|default:'' }}" class="mt-1 w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm text-gray-100">
+        </label>
+        <label class="block text-xs text-gray-400">BM25 weight
+          <input type="number" step="0.01" min="0" max="1" name="bm25_weight" value="{{ retrieval_settings.bm25_weight|default:'' }}" class="mt-1 w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm text-gray-100">
+        </label>
+      </div>
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-2 text-sm text-gray-300">
+        <label class="flex items-center gap-2"><input type="checkbox" name="rerank_enabled" {% if retrieval_settings.rerank_enabled %}checked{% endif %} class="rounded border-gray-600 bg-surface-overlay text-accent"> Enable reranking</label>
+        <label class="flex items-center gap-2"><input type="checkbox" name="full_context" {% if retrieval_settings.full_context %}checked{% endif %} class="rounded border-gray-600 bg-surface-overlay text-accent"> Full context mode</label>
       </div>
     </fieldset>
 
@@ -218,11 +239,6 @@
       <button type="submit" class="px-4 py-2 rounded-lg bg-accent text-white text-sm font-medium hover:bg-accent-hover">
         {% if agent %}Save changes{% else %}Create agent{% endif %}
       </button>
-      {% if agent %}
-      <a href="{% url 'agent_test_chat' agent.id %}" class="px-4 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm text-gray-300 hover:text-white">
-        Test in Chat
-      </a>
-      {% endif %}
     </div>
   </form>
 </div>

@@ -18,7 +18,6 @@ from infra.tests.factories import (
     MembershipFactory,
     ProjectFactory,
     RegisteredModelFactory,
-    RetrievalProfileFactory,
     ToolFactory,
     UserFactory,
 )
@@ -92,23 +91,22 @@ class ChatDisabledNoOpTest(_ChatDisabledBase):
 
 
 class AgentSyncTest(_SyncBase):
-    def test_pushes_agent_retrieval_profile_as_studio_metadata(self):
+    def test_pushes_agent_retrieval_settings_as_studio_metadata(self):
         api = self._mock_chat()
-        profile = RetrievalProfileFactory(
-            project=self.project, top_k=9, rerank_enabled=True, full_context=True
-        )
-        agent = AgentFactory(project=self.project, retrieval_profile=profile)
+        settings = {"search_mode": "hybrid", "top_k": 9, "rerank_enabled": True, "full_context": True}
+        agent = AgentFactory(project=self.project, retrieval_settings=settings)
 
         resp = self._api(f"/api/agents/{agent.id}/", "put", {
             "name": agent.name,
             "base_model": agent.base_model.id,
-            "retrieval_profile": profile.id,
+            "retrieval_settings": settings,
         })
 
         self.assertEqual(resp.status_code, 200)
         pushed = api.create_workspace_model.call_args.kwargs["metadata"]
-        self.assertEqual(pushed["simpleaudit"]["retrieval_profile"]["top_k"], 9)
-        self.assertTrue(pushed["simpleaudit"]["retrieval_profile"]["rerank_enabled"])
+        self.assertEqual(pushed["simpleaudit"]["retrieval"]["top_k"], 9)
+        self.assertTrue(pushed["simpleaudit"]["retrieval"]["rerank_enabled"])
+        self.assertEqual(api.create_workspace_model.call_args.kwargs["params"], settings)
 
     def test_create_pushes_workspace_model_and_backfills_id(self):
         api = self._mock_chat()

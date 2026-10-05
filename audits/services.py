@@ -118,7 +118,7 @@ def frozen_agent(run: AuditRun) -> dict | None:
         "system_prompt": snap.get("system_prompt", ""),
         "knowledge_bases": snap.get("knowledge_bases", []),
         "tools": snap.get("tools", []),
-        "retrieval_profile": snap.get("retrieval_profile"),
+        "retrieval": snap.get("retrieval") or snap.get("retrieval_profile"),
         "server_rag": snap.get("server_rag"),
         "capabilities": snap.get("capabilities", []),
         "metadata": snap.get("metadata", {}),

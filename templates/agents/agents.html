@@ -34,8 +34,8 @@
       {% if agent.tools.count %}
       <span class="px-1.5 py-0.5 rounded bg-emerald-900/30 text-emerald-300 text-[10px]">{{ agent.tools.count }} tools</span>
       {% endif %}
-      {% if agent.retrieval_profile %}
-      <span class="px-1.5 py-0.5 rounded bg-amber-900/30 text-amber-300 text-[10px]">{{ agent.retrieval_profile.name }}</span>
+      {% if agent.retrieval_settings %}
+      <span class="px-1.5 py-0.5 rounded bg-amber-900/30 text-amber-300 text-[10px]">Retrieval: {{ agent.retrieval_settings.search_mode }}</span>
       {% endif %}
     </div>
     <div class="flex items-center gap-2 mt-3 pt-3 border-t border-gray-800">

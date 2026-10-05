@@ -13,7 +13,7 @@ from infra.tests.factories import (
     UserFactory,
 )
 from infra.tests.utils import PASSWORD, safe_env
-from model_registry.models import Agent, KnowledgeBase, RetrievalProfile, Tool
+from model_registry.models import Agent, KnowledgeBase, Tool
 
 
 def _project_with_model():
@@ -57,7 +57,7 @@ class SeedDemoAgentLocalTests(TestCase):
         tool_ids = list(agent.tools.values_list("id", flat=True))
         self.assertEqual(tool_ids, [tool.id])
 
-        self.assertEqual(RetrievalProfile.objects.filter(project=self.project).count(), 1)
+        self.assertEqual(agent.retrieval_settings["search_mode"], "hybrid")
 
     def test_is_idempotent(self):
         seed_demo_agent(self.project, self.user)
@@ -67,7 +67,7 @@ class SeedDemoAgentLocalTests(TestCase):
         self.assertEqual(Agent.objects.filter(project=self.project).count(), 1)
         self.assertEqual(KnowledgeBase.objects.filter(project=self.project).count(), 1)
         self.assertEqual(Tool.objects.filter(project=self.project).count(), 1)
-        self.assertEqual(RetrievalProfile.objects.filter(project=self.project).count(), 1)
+        self.assertEqual(Agent.objects.get(project=self.project).retrieval_settings["top_k"], 5)
 
     def test_skips_when_no_model_exists(self):
         self.model.delete()
