@@ -156,7 +156,7 @@ def _caddyfile(port: int, internal_port: int | None = None) -> str:
         "\trequest_header -X-Studio-Name",
         "\trequest_header -X-Studio-Role",
         "",
-        # Studio's /ai/ iframe points at the bare subpath with query params
+        # Studio's /playground/ iframe points at the bare subpath with query params
         # (/chat?models=...). `handle /chat/*` does NOT match a bare /chat,
         # so send it to /chat/ (query preserved) before route selection.
         "\trewrite /chat /chat/",

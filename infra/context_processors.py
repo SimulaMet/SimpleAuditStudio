@@ -117,9 +117,9 @@ def nav(request):
 
     admin = is_any_project_admin(user)
     path = request.path
-    # The wrapper page (model-picker bar + iframe of OWUI at /chat/) lives at
-    # /ai/ — OWUI itself owns /chat/ on this origin (subpath build).
-    entries = _NAV + ((("chat", "Chat", "💬", ("/ai/",), False, ()),) if chat_enabled() else ())
+    # The wrapper page (model-picker bar + iframe of the embedded service at
+    # /chat/) lives at /playground/.
+    entries = _NAV + ((("chat", "Playground", "💬", ("/playground/",), False, ()),) if chat_enabled() else ())
     items = [
         {
             "url": reverse(name),

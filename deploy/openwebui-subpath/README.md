@@ -131,7 +131,7 @@ publishing to ghcr.io (root on push, `-subpath` on `webui_subpath` dispatch).
 The cutover is done: `docker-compose.yml` pulls
 `ghcr.io/sushantgautam/open-webui:v0.11.4-subpath` (set `WEBUI_SUBPATH=/chat`),
 `chat-proxy` (Caddy, no profile) is the **only published port** and runs
-`Caddyfile.subpath`, Studio's wrapper page moved to `/ai/`, and
+`Caddyfile.subpath`, Studio's wrapper page moved to `/playground/`, and
 `Caddyfile.chat` + the separate cross-origin port are retired. Embedded
 (no-Docker) mode runs the same Caddy forward-auth — the bundled `caddyserver`
 wheel (all platforms, incl. Windows) — on its own port.

@@ -173,7 +173,7 @@ services:
     restart: unless-stopped
 
   # Chat module — ON by default. .env carries both switches (SIMPLEAUDIT_CHAT=docker
-  # so the web service serves /ai/ + /chat/authz, COMPOSE_PROFILES=chat so the
+  # so the web service serves /playground/ + /chat/authz, COMPOSE_PROFILES=chat so the
   # open-webui container joins a plain `docker compose up -d`); comment them out
   # to leave chat out entirely. See chat/config.py.
   #
@@ -218,9 +218,9 @@ services:
     restart: unless-stopped
 
   # The single published port for the whole stack, in EVERY configuration:
-  # Studio at /, its wrapper at /ai/, and — with the chat profile — Open WebUI
+  # Studio at /, its wrapper at /playground/, and — with the chat profile — the embedded chat
   # at /chat/. Without the profile the /chat/* rules simply 502 (no upstream);
-  # Studio 404s /chat/ and /ai/ anyway because SIMPLEAUDIT_CHAT is off.
+  # Studio 404s /chat/ and /playground/ anyway because SIMPLEAUDIT_CHAT is off.
   # No depends_on on open-webui on purpose: a dependency would force the chat
   # container up in a no-chat deployment.
   chat-proxy:

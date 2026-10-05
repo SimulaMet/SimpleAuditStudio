@@ -49,7 +49,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--disable-chat", "--no-chat", dest="disable_chat", action="store_true",
-        help="Do not run the bundled chat (Open WebUI); /ai/ stays unavailable",
+        help="Do not run the bundled chat; /playground/ stays unavailable",
     )
     parser.add_argument(
         "--no-browser", action="store_true",
@@ -205,7 +205,7 @@ def main() -> None:
         print("💬 Starting chat (Open WebUI)...")
         if chat_proxy.is_first_run():
             print("   First start installs the subpath wheel and can take a few minutes.")
-            print("   Studio is usable right away; /ai/ (chat) works once it is ready.")
+            print("   Studio is usable right away; /playground/ works once it is ready.")
         print(f"   Its data: {chat_proxy.home_dir()}")
         print(f"   Its log:  {chat_proxy.log_path()}")
         try:
@@ -236,7 +236,7 @@ def main() -> None:
     print(f"│   Login:      {username} / {password:<20s}│")
     print(f"│   API Docs:   http://localhost:{port}/api/schema/       │")
     if chat_process is not None:
-        print(f"│   Chat:       http://localhost:{port}/ai/               │")
+            print(f"│   Playground: http://localhost:{port}/playground/       │")
     print("│                                                         │")
     if args.mock:
         print("│   Models:     Built-in mock (simulated results)        │")
@@ -293,7 +293,7 @@ def start_chat(chat_proxy, internal_port: int):
     owns the public port (config.PUBLIC_PORT). Open WebUI takes minutes to be
     ready on a first run (its wheel is fetched, then it migrates its database),
     so the wait happens in a thread: Studio and the worker come up meanwhile,
-    and one line says when /ai/ (chat) is live.
+    and one line says when /playground/ is live.
     """
     process = chat_proxy.start_open_webui(internal_port)
     chat_proxy.serve(internal_port)
@@ -306,7 +306,7 @@ def start_chat(chat_proxy, internal_port: int):
         # flush: this lands minutes later, and stdout is block-buffered when the
         # CLI's output is a file or a pipe rather than a terminal.
         if chat_proxy.wait_until_ready(process):
-            print(f"\n✅ Chat is ready — http://localhost:{public_port}/ai/", flush=True)
+            print(f"\n✅ Playground is ready — http://localhost:{public_port}/playground/", flush=True)
             print(f"   {_sync_chat_models()}\n", flush=True)
             backfilled = _backfill_demo_chat()
             if backfilled:
