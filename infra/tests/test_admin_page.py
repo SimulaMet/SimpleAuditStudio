@@ -12,6 +12,7 @@ from infra.tests.factories import (
     UserFactory,
 )
 from infra.tests.utils import login, superuser
+from model_registry.models import KnowledgeReindex
 
 
 class AdminPageAccessTest(TestCase):
@@ -133,6 +134,47 @@ class AdminPageAccessTest(TestCase):
             "SUBAGENTS_MAX_OUTPUT": 10000,
             "SUBAGENTS_SYSTEM_PROMPT": "Stay concise.",
         })
+
+    @mock.patch("chat.api.ChatAPI.as_user")
+    def test_knowledge_settings_save_persists_local_embedding(self, as_user):
+        admin = superuser()
+        api = as_user.return_value
+        login(self.client, admin)
+
+        resp = self.client.post("/admin-settings/", {
+            "tab": "knowledge",
+            "RAG_EMBEDDING_ENGINE": "",
+            "RAG_EMBEDDING_MODEL": "all-MiniLM-L6-v2",
+        })
+
+        self.assertEqual(resp.status_code, 302)
+        api.update_embedding_config.assert_called_once()
+        self.assertEqual(
+            api.update_embedding_config.call_args.args[0]["RAG_EMBEDDING_ENGINE"], ""
+        )
+
+    @mock.patch("chat.api.ChatAPI.as_user")
+    def test_knowledge_reindex_records_completion(self, as_user):
+        admin = superuser()
+        api = as_user.return_value
+        api.embedding_config.return_value = {
+            "RAG_EMBEDDING_ENGINE": "",
+            "RAG_EMBEDDING_MODEL": "all-MiniLM-L6-v2",
+        }
+        api.reindex_knowledge.return_value = {"total": 3, "success": 3}
+        login(self.client, admin)
+
+        resp = self.client.post("/admin-settings/", {
+            "tab": "knowledge",
+            "action": "reindex",
+        })
+
+        self.assertEqual(resp.status_code, 302)
+        api.reindex_knowledge.assert_called_once_with()
+        reindex = KnowledgeReindex.objects.get()
+        self.assertEqual(reindex.status, KnowledgeReindex.Status.SUCCEEDED)
+        self.assertEqual(reindex.total, 3)
+        self.assertEqual(reindex.success, 3)
 
 
 class AdminPageStatsTest(TestCase):

@@ -199,6 +199,10 @@ class ChatAPI:
         payload = self.request("POST", "/api/v1/retrieval/embedding/update", json=config)
         return payload if isinstance(payload, dict) else {}
 
+    def reindex_knowledge(self) -> Any:
+        """Rebuild all Open WebUI knowledge-base document vectors (admin-only)."""
+        return self.request("POST", "/api/v1/knowledge/reindex")
+
     def subagents_config(self) -> dict[str, Any]:
         """Read Open WebUI's admin sub-agent configuration."""
         payload = self.request("GET", "/api/v1/configs/subagents")

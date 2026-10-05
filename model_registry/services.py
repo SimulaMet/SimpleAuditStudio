@@ -245,10 +245,59 @@ def sync_agent_to_openwebui(agent, user) -> str:
     try:
         adapter = _adapter_for(user)
         result = adapter.push_agent(agent)
+        _ensure_agent_model_reference(agent, user)
         return result["status"]
     except Exception:
         logger.exception("Agent '%s' Open WebUI sync failed", agent.name)
         return "skipped"
+
+
+def _ensure_agent_model_reference(agent, user) -> None:
+    """Register the synced OpenWebUI agent as one Studio picker model.
+
+    Agents are workspace models in OpenWebUI, but the audit design form works
+    with ``RegisteredModel`` rows. Keep one internal OpenWebUI-compatible
+    connection/model reference so the same agent can be selected as target,
+    auditor, or judge without exposing a second representation.
+    """
+    if not agent.external_id:
+        return
+    from chat import config as chat_config
+    from model_registry.models import ModelConnection, RegisteredModel
+
+    model = (
+        RegisteredModel.objects.select_related("connection")
+        .filter(project=agent.project, model_id=agent.external_id)
+        .first()
+    )
+    if model is not None:
+        if model.display_name != agent.name or not model.enabled:
+            model.display_name = agent.name
+            model.description = agent.description or "Synced Studio agent in OpenWebUI."
+            model.enabled = agent.enabled
+            model.save(update_fields=["display_name", "description", "enabled", "updated_at"])
+        return
+
+    connection, _ = ModelConnection.objects.get_or_create(
+        project=agent.project,
+        name="Open WebUI Agents",
+        defaults={
+            "provider": "openai",
+            "base_url": f"{chat_config.UPSTREAM}/api/v1",
+            "description": "Managed references for Studio agents synced to OpenWebUI.",
+            "enabled": True,
+            "created_by": user,
+        },
+    )
+    RegisteredModel.objects.create(
+        connection=connection,
+        project=agent.project,
+        model_id=agent.external_id,
+        display_name=agent.name,
+        description=agent.description or "Synced Studio agent in OpenWebUI.",
+        enabled=agent.enabled,
+        created_by=user,
+    )
 
 
 def agent_live_openwebui(agent, user) -> dict | None:

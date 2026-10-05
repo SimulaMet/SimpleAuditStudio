@@ -12,6 +12,7 @@ from django.utils import timezone
 
 from audits.models import AuditRun, Experiment
 from infra.tests.factories import (
+    AgentFactory,
     MembershipFactory,
     ModelConnectionFactory,
     ProjectFactory,
@@ -92,9 +93,23 @@ class _ExperimentBase(TestCase):
 
 class ExperimentFlowTests(_ExperimentBase):
     def test_design_page_renders_multi_pickers(self):
+        agent = AgentFactory(
+            project=self.project, base_model=self.t1, external_id="studio.agent-99"
+        )
+        agent_conn = ModelConnectionFactory(
+            project=self.project, name="Open WebUI Agents",
+            base_url="http://127.0.0.1:8080/chat/api/v1",
+        )
+        agent_model = RegisteredModelFactory(
+            connection=agent_conn, project=self.project,
+            model_id=agent.external_id, display_name=agent.name,
+        )
         page = self.client.get("/experiments/new/")
         self.assertContains(page, "New Experiment")
         self.assertContains(page, 'type="checkbox" name="target_model"')
+        self.assertContains(page, f'name="auditor_model" value="{agent_model.id}"')
+        self.assertContains(page, f'name="judge_model" value="{agent_model.id}"')
+        self.assertContains(page, f'name="agent_id" value="{agent.id}"')
         self.assertContains(page, 'name="scenario_version"')
 
     def test_single_combination_launches_directly(self):

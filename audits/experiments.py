@@ -75,7 +75,7 @@ def parse_design(post, project) -> dict:
     Raises DesignError with a user-facing message.
     """
     from judges.models import Judge, JudgeVersion
-    from model_registry.models import Agent, RegisteredModel
+    from model_registry.models import Agent, OTLPCredential, RegisteredModel
     from scenarios.models import ScenarioSet, ScenarioSetVersion
 
     # Scenario versions: explicit version ids ("scenario_version", several may
@@ -201,12 +201,39 @@ def parse_design(post, project) -> dict:
     if system_prompt:
         gen_config = {**(gen_config or {}), "system_prompt": system_prompt}
 
-    # Per-agent trace flag: "agent_trace_<id>" = "1" means collect OTLP spans.
-    # Absent (unchecked) = no trace. Default (no agent) = True (auto-detect).
+    enabled_otlp_connections = set(
+        OTLPCredential.objects.filter(
+            project=project,
+            enabled=True,
+            connection_id__in=[model.connection_id for model in models["target"]],
+        ).values_list("connection_id", flat=True)
+    )
+    target_trace_by_model = {
+        model.id: "1" in post.getlist(f"target_trace_{model.id}")
+        for model in models["target"]
+        if model.connection_id in enabled_otlp_connections
+    }
+
+    # Agent target trace flag: "agent_trace_<id>" = "1" means collect OTLP
+    # spans. An agent's OpenWebUI model has its own connection credential.
     if agent is not None:
-        target_trace = (post.get(f"agent_trace_{agent.id}") or "").strip() == "1"
+        agent_model = RegisteredModel.objects.filter(
+            project=project,
+            model_id=agent.external_id,
+        ).select_related("connection").first()
+        has_otlp = bool(
+            agent_model
+            and OTLPCredential.objects.filter(
+                project=project,
+                connection_id=agent_model.connection_id,
+                enabled=True,
+            ).exists()
+        )
+        target_trace = (
+            "1" in post.getlist(f"agent_trace_{agent.id}") if has_otlp else None
+        )
     else:
-        target_trace = True
+        target_trace = None
 
     return {
         "scenario_set": versions,
@@ -220,6 +247,7 @@ def parse_design(post, project) -> dict:
         "n_repetitions": n_reps if n_reps and n_reps > 1 else None,
         "gen_config": gen_config or None,
         "target_trace": target_trace,
+        "target_trace_by_model": target_trace_by_model,
     }
 
 
@@ -252,7 +280,12 @@ def expand(design: dict) -> list[dict]:
         spec["n_repetitions"] = design["n_repetitions"]
         spec["gen_config"] = design["gen_config"]
         spec["agent"] = design.get("agent")
-        spec["target_trace"] = design.get("target_trace", True)
+        if design.get("agent") is not None:
+            spec["target_trace"] = design.get("target_trace")
+        else:
+            spec["target_trace"] = design.get("target_trace_by_model", {}).get(
+                spec["target"].id
+            )
         specs.append(spec)
     return specs
 
@@ -272,7 +305,7 @@ def spec_to_run(spec: dict, name: str) -> dict:
         "language": spec["language"],
         "n_repetitions": spec["n_repetitions"],
         "gen_config": spec["gen_config"],
-        "target_trace": spec.get("target_trace", True),
+        "target_trace": spec.get("target_trace"),
     }
 
 
@@ -422,7 +455,7 @@ def launch_experiment(*, project, user, name: str, runs: list[dict], repeat: dic
                 gen_config_override=r["gen_config"],
                 experiment=experiment,
                 agent=r.get("agent"),
-                trace_config=None if r.get("target_trace", True) else {},
+                trace_config={} if r.get("target_trace") is False else None,
             )
             for r in runs
         ] if run_now else []
