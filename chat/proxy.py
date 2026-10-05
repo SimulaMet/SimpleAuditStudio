@@ -575,7 +575,7 @@ def start_open_webui(studio_port: int | None = None) -> subprocess.Popen:
 OWUI_WHEEL_URL = os.environ.get(
     "SIMPLEAUDIT_CHAT_WHEEL",
     "https://github.com/SushantGautam/open-webui/releases/download/"
-    "v0.11.4-subpath/open_webui-0.11.4-py3-none-any.whl",
+    "v0.11.4.1-subpath/open_webui-0.11.4.1-py3-none-any.whl",
 )
 OWUI_PACKAGE = os.environ.get("SIMPLEAUDIT_CHAT_PACKAGE", "open-webui")
 

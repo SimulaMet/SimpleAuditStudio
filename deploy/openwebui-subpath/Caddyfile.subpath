@@ -3,7 +3,7 @@
 #
 # The routing shape enabled by the subpath fork built via
 # deploy/openwebui-subpath/build.sh (published as
-# ghcr.io/sushantgautam/open-webui:v0.11.4-subpath). It replaces the old
+# ghcr.io/sushantgautam/open-webui:v0.11.4.1-subpath). It replaces the old
 # cross-origin iframe model (Caddyfile.chat on :8801) with one origin / one
 # port:
 #

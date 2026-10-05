@@ -25,7 +25,7 @@ TAG="${TAG:-simpleaudit/open-webui-subpath:chat}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PATCH_SUBPATH="$SCRIPT_DIR/subpath.patch"
-PATCH_HEAP="$SCRIPT_DIR/0002-node-build-heap.patch"
+PATCH_OTEL="$SCRIPT_DIR/0003-otel-wheel-dependencies.patch"
 
 # Validate subpath format (must match what the patch's env.py expects).
 if [[ -n "$SUBPATH" ]]; then
@@ -46,9 +46,9 @@ echo "==> Applying subpath patch..."
 git -C "$SRC" apply --check "$PATCH_SUBPATH"
 git -C "$SRC" apply "$PATCH_SUBPATH"
 
-echo "==> Applying Node build-heap patch..."
-git -C "$SRC" apply --check "$PATCH_HEAP"
-git -C "$SRC" apply "$PATCH_HEAP"
+echo "==> Adding OTel dependencies to wheel metadata..."
+git -C "$SRC" apply --check "$PATCH_OTEL"
+git -C "$SRC" apply "$PATCH_OTEL"
 
 echo "==> Building image ${TAG} (WEBUI_SUBPATH=${SUBPATH})..."
 # Build context is the checked-out tree; the patched Dockerfile is inside it.

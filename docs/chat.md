@@ -237,6 +237,11 @@ to `true`, Studio starts it with tracing enabled and pointed at Studio's own
 OTLP listener (`POST /otlp/v1/traces`), so the spans it emits land in the same
 place as any other target's — no separate collector needed.
 
+The Studio subpath build also carries Open WebUI's OTel runtime dependencies in
+its wheel metadata. This matters for embedded mode, which installs the wheel
+directly; Docker installs the same dependencies from Open WebUI's backend
+requirements files.
+
 It is off by default. When enabled it exports **unauthenticated** by default —
 no credentials are sent — which matches the listener's default fallback to an
 enabled `none` credential. The exporter is the standard OTel one, so the

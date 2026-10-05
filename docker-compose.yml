@@ -187,7 +187,7 @@ services:
   # forward /chat/* WITHOUT stripping the prefix (see the Caddyfile header).
   open-webui:
     profiles: ["chat"]
-    image: ${OPEN_WEBUI_IMAGE:-ghcr.io/sushantgautam/open-webui:v0.11.4-subpath}
+    image: ${OPEN_WEBUI_IMAGE:-ghcr.io/sushantgautam/open-webui:v0.11.4.1-subpath}
     environment:
       WEBUI_SUBPATH: /chat
       WEBUI_AUTH_TRUSTED_EMAIL_HEADER: X-Studio-Email
@@ -203,15 +203,15 @@ services:
       HOST: "0.0.0.0"
       PORT: ${SIMPLEAUDIT_CHAT_UPSTREAM_PORT:-8080}
       # Optional: export Open WebUI's spans to Studio's OTLP listener. Off by
-      # default — set SIMPLEAUDIT_CHAT_OTLP=true to enable. Open WebUI picks the
-      # HTTP exporter from OTEL_OTLP_SPAN_EXPORTER and appends /v1/traces to the
-      # endpoint, so the endpoint is the base URL (Studio's web origin). Exports
+      # default — set SIMPLEAUDIT_CHAT_OTLP=true to enable. Open WebUI passes
+      # OTEL_EXPORTER_OTLP_ENDPOINT to its HTTP exporter as-is, so this must be
+      # the full Studio ingestion URL. Exports
       # unauthenticated by default (matches an enabled "none" credential); for a
       # basic/bearer credential set OTEL_BASIC_AUTH_USERNAME / OTEL_BASIC_AUTH_PASSWORD.
       ENABLE_OTEL: ${SIMPLEAUDIT_CHAT_OTLP:-false}
       ENABLE_OTEL_TRACES: ${SIMPLEAUDIT_CHAT_OTLP:-false}
       OTEL_OTLP_SPAN_EXPORTER: "http"
-      OTEL_EXPORTER_OTLP_ENDPOINT: ${SIMPLEAUDIT_CHAT_OTLP_ENDPOINT:-http://web:8000}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${SIMPLEAUDIT_CHAT_OTLP_ENDPOINT:-http://web:8000/otlp/v1/traces}
       OTEL_SERVICE_NAME: ${SIMPLEAUDIT_CHAT_OTLP_SERVICE_NAME:-open-webui}
     volumes:
       - open_webui_data:/app/backend/data

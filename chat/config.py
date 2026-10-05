@@ -57,7 +57,7 @@ MODE = (os.environ.get("SIMPLEAUDIT_CHAT") or "").strip().lower()
 ENABLED = not is_disabled(MODE)
 
 #: The base path the Open WebUI subpath build serves at. Must match the
-#: WEBUI_SUBPATH baked into the image (v0.11.4-subpath -> /chat). Defined
+#: WEBUI_SUBPATH baked into the image (0.11.4.1-subpath -> /chat). Defined
 #: first: UPSTREAM below bakes it into the default.
 SUBPATH = os.environ.get("SIMPLEAUDIT_CHAT_SUBPATH", "/chat")
 if not SUBPATH.startswith("/"):

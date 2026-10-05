@@ -1,0 +1,25 @@
+diff --git a/pyproject.toml b/pyproject.toml
+index 0f67b1b..5ea1fe1 100644
+--- a/pyproject.toml
++++ b/pyproject.toml
+@@ -110,6 +110,20 @@ dependencies = [
+     "googleapis-common-protos==1.75.0",
+     "google-cloud-storage==3.9.0",
+ 
++    # OpenTelemetry is also required when this project is installed as a wheel.
++    "opentelemetry-api==1.42.1",
++    "opentelemetry-sdk==1.42.1",
++    "opentelemetry-exporter-otlp==1.42.1",
++    "opentelemetry-instrumentation==0.63b1",
++    "opentelemetry-instrumentation-fastapi==0.63b1",
++    "opentelemetry-instrumentation-sqlalchemy==0.63b1",
++    "opentelemetry-instrumentation-redis==0.63b1",
++    "opentelemetry-instrumentation-requests==0.63b1",
++    "opentelemetry-instrumentation-logging==0.63b1",
++    "opentelemetry-instrumentation-httpx==0.63b1",
++    "opentelemetry-instrumentation-aiohttp-client==0.63b1",
++    "opentelemetry-instrumentation-system-metrics==0.63b1",
++
+     "azure-identity==1.25.3",
+     "azure-storage-blob==12.29.0",
+ 
