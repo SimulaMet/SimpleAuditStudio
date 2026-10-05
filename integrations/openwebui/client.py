@@ -168,6 +168,14 @@ class OpenWebUIAdapter:
             if kb.external_id
         ]
 
+    def _tool_ids(self, agent: Agent) -> list[str]:
+        """External OpenWebUI tool ids enabled by the agent's workspace model."""
+        return [
+            tool.external_id
+            for tool in agent.tools.all()
+            if tool.external_id
+        ]
+
     def push_agent(self, agent: Agent) -> dict[str, Any]:
         """Create or update the agent's OpenWebUI model entry.
 
@@ -182,6 +190,7 @@ class OpenWebUIAdapter:
         model_id = self.agent_model_id(agent)
         base_model_id = self.agent_base_model_id(agent)
         knowledge = self._knowledge_refs(agent)
+        tool_ids = self._tool_ids(agent)
         retrieval = agent.retrieval_settings or {}
         capabilities = normalized_agent_capabilities(agent.capabilities)
         # Knowledge context is derived from Studio's attached knowledge bases;
@@ -191,6 +200,9 @@ class OpenWebUIAdapter:
         metadata = {
             "capabilities": capabilities["model"],
             "builtinTools": capabilities["builtin_tools"],
+            # OpenWebUI reads this from the workspace model to pre-enable
+            # the selected tools in iframe/workspace chat.
+            "toolIds": tool_ids,
             "simpleaudit": {
                 "retrieval": agent.retrieval_settings,
             },
