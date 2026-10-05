@@ -102,7 +102,7 @@ class AllPagesSmokeTest(TestCase):
         self._ok("/admin-settings/?tab=users", "Admin Users")
         self._ok(f"/admin-settings/?tab=workspaces&manage={self.project.id}", "Admin Members panel")
 
-    def test_openwebui_rag_settings_is_superuser_only(self):
+    def test_knowledge_retrieval_settings_is_superuser_only(self):
         self.user.is_superuser = True
         self.user.is_staff = True
         self.user.save()
@@ -114,7 +114,7 @@ class AllPagesSmokeTest(TestCase):
             "openai_config": {"key": "secret"},
         }
         with mock.patch("chat.api.ChatAPI.as_user", return_value=api):
-            resp = self.client.get("/admin-settings/rag/")
+            resp = self.client.get("/admin-settings/?tab=knowledge")
         self.assertEqual(resp.status_code, 200)
         self.assertContains(resp, "all-MiniLM-L6-v2")
         self.assertNotContains(resp, "secret")
