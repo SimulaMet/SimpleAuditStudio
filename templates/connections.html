@@ -65,15 +65,6 @@
         <button type="button" data-write data-discover="{{ conn.id }}" title="List the models this server offers and pick ones to add"
                 class="px-2.5 py-1 rounded-lg text-xs text-gray-300 bg-surface-overlay hover:text-white">+ Models</button>
           {% if otlp_enabled %}
-          {% if conn.otlp_credential %}
-          <span data-otlp-state="{{ conn.id }}" class="text-[11px] {% if conn.otlp_credential.enabled %}text-emerald-400{% else %}text-gray-600{% endif %}"
-                title="{{ conn.otlp_credential.get_auth_mode_display }}{% if not conn.otlp_credential.enabled %} — disabled{% endif %}">
-            OTLP credential · Auth mode:
-            {% if conn.otlp_credential.enabled %}{{ conn.otlp_credential.get_auth_mode_display }}{% else %}Disabled{% endif %}
-          </span>
-          {% else %}
-          <span data-otlp-state="{{ conn.id }}" class="text-[11px] text-gray-600" title="Tracing is disabled until an OTLP credential is issued.">OTLP credential · Auth mode: Disabled</span>
-          {% endif %}
           <button type="button" data-write data-otlp="{{ conn.id }}" title="Generate an OTLP credential so this target can push traces to Studio"
                 class="px-2.5 py-1 rounded-lg text-xs text-gray-300 bg-surface-overlay hover:text-white">OTLP</button>
         {% endif %}
@@ -556,15 +547,6 @@
     otlpDialog.dataset.connId = connId;
     otlpDialog.showModal();
   }
-  function updateOtlpState(connId, mode, enabled) {
-    const state = document.querySelector(`[data-otlp-state="${connId}"]`);
-    if (!state) return;
-    state.textContent = enabled
-      ? `OTLP credential · Auth mode: ${mode === 'none' ? 'None (open)' : mode === 'basic' ? 'Basic Auth' : 'Bearer Token'}`
-      : 'OTLP credential · Auth mode: Disabled';
-    state.classList.toggle('text-emerald-400', enabled);
-    state.classList.toggle('text-gray-600', !enabled);
-  }
   function showOtlpResult(env, secret) {
     otlpEnv.textContent = env;
     $('#otlp-warning').classList.toggle('hidden', !secret);
@@ -585,7 +567,6 @@
           const data = await resp.json();
           if (!resp.ok) throw new Error(data.error || `HTTP ${resp.status}`);
           current.enabled = false;
-          updateOtlpState(connId, current.auth_mode, false);
         }
         otlpEnv.textContent = 'OTLP tracing is disabled for this connection.';
         $('#otlp-warning').classList.add('hidden');
@@ -599,7 +580,6 @@
       const data = await resp.json();
       if (!resp.ok) throw new Error(data.error || `HTTP ${resp.status}`);
       CONNS[connId].otlp = { id: data.credential.id, auth_mode: data.credential.auth_mode, enabled: true };
-      updateOtlpState(connId, data.credential.auth_mode, true);
       showOtlpResult(Object.entries(data.env_vars).map(([k, v]) => `${k}=${v}`).join('\n'), data.secret);
     } catch (err) {
       otlpEnv.textContent = `Error: ${err.message}`;
