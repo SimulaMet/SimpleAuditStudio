@@ -66,13 +66,13 @@
                 class="px-2.5 py-1 rounded-lg text-xs text-gray-300 bg-surface-overlay hover:text-white">+ Models</button>
           {% if otlp_enabled %}
           {% if conn.otlp_credential %}
-          <label class="inline-flex items-center gap-1.5 text-[11px] text-gray-400" title="Allow this target to export OTLP traces to Studio; tracing controls appear in New Experiment when enabled.">
-            <input type="checkbox" data-otlp-toggle data-credential-id="{{ conn.otlp_credential.id }}"
-                   {% if conn.otlp_credential.enabled %}checked{% endif %} class="toggle toggle-xs">
-            <span>OTLP traces</span>
-          </label>
+          <span data-otlp-state="{{ conn.id }}" class="text-[11px] {% if conn.otlp_credential.enabled %}text-emerald-400{% else %}text-gray-600{% endif %}"
+                title="{{ conn.otlp_credential.get_auth_mode_display }}{% if not conn.otlp_credential.enabled %} — disabled{% endif %}">
+            OTLP credential · Auth mode:
+            {% if conn.otlp_credential.enabled %}{{ conn.otlp_credential.get_auth_mode_display }}{% else %}Disabled{% endif %}
+          </span>
           {% else %}
-          <span class="text-[11px] text-gray-600" title="Tracing is disabled until an OTLP credential is issued.">OTLP disabled</span>
+          <span data-otlp-state="{{ conn.id }}" class="text-[11px] text-gray-600" title="Tracing is disabled until an OTLP credential is issued.">OTLP credential · Auth mode: Disabled</span>
           {% endif %}
           <button type="button" data-write data-otlp="{{ conn.id }}" title="Generate an OTLP credential so this target can push traces to Studio"
                 class="px-2.5 py-1 rounded-lg text-xs text-gray-300 bg-surface-overlay hover:text-white">OTLP</button>
@@ -335,11 +335,12 @@
     <div class="flex items-center gap-2">
       <label class="text-xs text-gray-300" for="otlp-mode">Auth mode</label>
       <select id="otlp-mode" class="px-2.5 py-1.5 rounded-lg bg-surface-overlay border border-gray-700 text-xs text-gray-200">
-        <option value="none" selected>None (unauthenticated)</option>
+        <option value="disabled" selected>Disabled</option>
+        <option value="none">None (unauthenticated)</option>
         <option value="basic">Basic Auth</option>
         <option value="bearer">Bearer Token</option>
       </select>
-      <button type="button" id="otlp-issue" class="px-3 py-1.5 rounded-lg bg-accent text-white text-xs font-medium hover:bg-accent-hover">Issue credential</button>
+      <button type="button" id="otlp-issue" class="px-3 py-1.5 rounded-lg bg-accent text-white text-xs font-medium hover:bg-accent-hover">Save</button>
     </div>
     <div id="otlp-result" class="hidden space-y-2 text-xs">
       <p id="otlp-warning" class="hidden text-amber-300 bg-amber-900/20 rounded px-2 py-1.5">Copy the secret now — it won't be shown again.</p>
@@ -549,9 +550,20 @@
   const otlpDialog = $('#otlp-dialog'), otlpResult = $('#otlp-result'), otlpEnv = $('#otlp-env');
   function openOtlp(connId) {
     $('#otlp-dialog-conn').textContent = CONNS[connId].name;
+    const current = CONNS[connId].otlp;
+    $('#otlp-mode').value = current && current.enabled ? current.auth_mode : 'disabled';
     otlpResult.classList.add('hidden');
     otlpDialog.dataset.connId = connId;
     otlpDialog.showModal();
+  }
+  function updateOtlpState(connId, mode, enabled) {
+    const state = document.querySelector(`[data-otlp-state="${connId}"]`);
+    if (!state) return;
+    state.textContent = enabled
+      ? `OTLP credential · Auth mode: ${mode === 'none' ? 'None (open)' : mode === 'basic' ? 'Basic Auth' : 'Bearer Token'}`
+      : 'OTLP credential · Auth mode: Disabled';
+    state.classList.toggle('text-emerald-400', enabled);
+    state.classList.toggle('text-gray-600', !enabled);
   }
   function showOtlpResult(env, secret) {
     otlpEnv.textContent = env;
@@ -559,41 +571,41 @@
     otlpResult.classList.remove('hidden');
   }
   document.addEventListener('click', e => { const b = e.target.closest('[data-otlp]'); if (b) openOtlp(b.dataset.otlp); });
-  document.addEventListener('change', async e => {
-    const toggle = e.target.closest('[data-otlp-toggle]');
-    if (!toggle) return;
-    const enabled = toggle.checked;
-    toggle.disabled = true;
-    try {
-      const resp = await fetch('{% url "otlp_credential_toggle" %}', {
-        method: 'POST', headers: { 'X-CSRFToken': csrfToken() },
-        body: new URLSearchParams({ credential_id: toggle.dataset.credentialId, enabled: enabled ? '1' : '0' }),
-      });
-      const data = await resp.json();
-      if (!resp.ok) throw new Error(data.error || `HTTP ${resp.status}`);
-    } catch (err) {
-      toggle.checked = !enabled;
-      alert(`Could not update OTLP tracing: ${err.message}`);
-    } finally {
-      toggle.disabled = false;
-    }
-  });
   $('#otlp-issue').addEventListener('click', async () => {
     const connId = otlpDialog.dataset.connId, mode = $('#otlp-mode').value;
-    const btn = $('#otlp-issue'); btn.disabled = true; btn.textContent = 'Issuing…';
+    const btn = $('#otlp-issue'); btn.disabled = true; btn.textContent = mode === 'disabled' ? 'Saving…' : 'Issuing…';
     try {
+      if (mode === 'disabled') {
+        const current = CONNS[connId].otlp;
+        if (current) {
+          const resp = await fetch('{% url "otlp_credential_toggle" %}', {
+            method: 'POST', headers: { 'X-CSRFToken': csrfToken() },
+            body: new URLSearchParams({ credential_id: current.id, enabled: '0' }),
+          });
+          const data = await resp.json();
+          if (!resp.ok) throw new Error(data.error || `HTTP ${resp.status}`);
+          current.enabled = false;
+          updateOtlpState(connId, current.auth_mode, false);
+        }
+        otlpEnv.textContent = 'OTLP tracing is disabled for this connection.';
+        $('#otlp-warning').classList.add('hidden');
+        otlpResult.classList.remove('hidden');
+        return;
+      }
       const resp = await fetch('{% url "otlp_credential_create" %}', {
         method: 'POST', headers: { 'X-CSRFToken': csrfToken() },
         body: new URLSearchParams({ connection_id: connId, auth_mode: mode, origin: location.origin }),
       });
       const data = await resp.json();
       if (!resp.ok) throw new Error(data.error || `HTTP ${resp.status}`);
+      CONNS[connId].otlp = { id: data.credential.id, auth_mode: data.credential.auth_mode, enabled: true };
+      updateOtlpState(connId, data.credential.auth_mode, true);
       showOtlpResult(Object.entries(data.env_vars).map(([k, v]) => `${k}=${v}`).join('\n'), data.secret);
     } catch (err) {
       otlpEnv.textContent = `Error: ${err.message}`;
       otlpResult.classList.remove('hidden');
     } finally {
-      btn.disabled = false; btn.textContent = 'Issue credential';
+      btn.disabled = false; btn.textContent = 'Save';
     }
   });
   $('#otlp-copy').addEventListener('click', async () => {
