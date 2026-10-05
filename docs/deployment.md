@@ -168,6 +168,7 @@ override them when you deliberately need to.
 | `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_HOST`, `POSTGRES_PORT`, `POSTGRES_CONN_MAX_AGE` | PostgreSQL connection (`compose` mode). |
 | `SIMPLEAUDIT_LOCAL_SQLITE` **internal** | `1` = local SQLite database at the repository's `dev.sqlite3`. Set automatically by the `dev` entry point and by the test suite. |
 | `SIMPLEAUDIT_SQLITE_PATH` | Override where the local dev SQLite file lives. Default: `<repo>/dev.sqlite3`. Relative paths resolve from the repo root; absolute paths are used as-is. Ignored unless `SIMPLEAUDIT_LOCAL_SQLITE=1`. |
+| `VISUALIZER_RESULTS_DIR` | Folder of JSON audit-result files shown by `/visualizer/`. Dev defaults to `./results`; the folder is created on demand. |
 | `SIMPLEAUDIT_MINIMAL` **internal** | `1` = single-process demo mode. Set by the CLI. |
 | `SIMPLEAUDIT_CHAT` | Chat mode: `embedded` / `docker`, or `off` (and `disabled`, `false`, `no`, `0`, unset). On by default in every mode (`embedded` in the single-process modes, `docker` in compose — set in `.env`). Turn off with this var or the `--disable-chat` flag; the flag beats the env value (flag > env > mode default). |
 | `SIMPLEAUDIT_DATA_DIR` | Where single-process mode keeps its data (default `~/.simpleaudit-studio`): the SQLite database and embedded Hatchet's PostgreSQL. |

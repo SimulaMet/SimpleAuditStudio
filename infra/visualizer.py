@@ -350,12 +350,14 @@ class VisualizerFilesView(View):
     def get(self, request):
         root_dir = results_dir()
         if not root_dir:
-            return JsonResponse(
-                {"error": "Results directory not set. Start Studio with --results_dir."},
-                status=500,
-            )
+            # The upload visualizer is still available, and the server-side
+            # tree should remain a valid empty state when no folder is set.
+            return JsonResponse({"tree": [], "configured": False})
         if not os.path.isdir(root_dir):
-            return JsonResponse({"error": "Results directory not found"}, status=404)
+            try:
+                os.makedirs(root_dir, exist_ok=True)
+            except OSError:
+                return JsonResponse({"error": "Results directory is unavailable"}, status=503)
         
         # Check cache
         now = time.time()
