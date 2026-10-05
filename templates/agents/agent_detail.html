@@ -208,7 +208,7 @@
       {% endif %}
     </fieldset>
 
-    <!-- Open WebUI model controls -->
+    <!-- Model controls -->
     <fieldset class="bg-surface-raised rounded-xl border border-gray-800 p-4 space-y-3">
       <legend class="px-2 text-xs font-semibold text-gray-300 uppercase tracking-wide">Model capabilities</legend>
       <p class="text-xs text-gray-500">Controls available on this agent's chat model. Knowledge bases and custom tools are selected above.</p>
@@ -226,7 +226,7 @@
 
     <fieldset class="bg-surface-raised rounded-xl border border-gray-800 p-4 space-y-3">
       <legend class="px-2 text-xs font-semibold text-gray-300 uppercase tracking-wide">Builtin tools</legend>
-      <p class="text-xs text-gray-500">Controls which Open WebUI builtin tools this agent may use. Availability also depends on platform settings and user permissions.</p>
+      <p class="text-xs text-gray-500">Controls which platform tools this agent may use. Availability also depends on platform settings and user permissions.</p>
       <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
         {% for tool in builtin_tool_options %}
         <label class="flex items-start gap-2 text-sm text-gray-300" title="{{ tool.help }}">
