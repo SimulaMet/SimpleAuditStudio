@@ -49,7 +49,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--disable-chat", "--no-chat", dest="disable_chat", action="store_true",
-        help="Do not run the bundled chat (Open WebUI); /chat/ stays unavailable",
+        help="Do not run the bundled chat (Open WebUI); /ai/ stays unavailable",
     )
     parser.add_argument(
         "--no-browser", action="store_true",
@@ -181,8 +181,14 @@ def main() -> None:
 
     # --- Step 6: Start Django web server in a daemon thread ---
     port = args.port
+    from chat import config as chat_config
+
+    # When chat is enabled the front door (Caddy) owns the public port and
+    # Studio moves to the internal port; Caddy proxies non-/chat to it.
+    web_port = chat_config.INTERNAL_PORT if chat_config.ENABLED else port
+
     web_thread = threading.Thread(
-        target=lambda: call_command("runserver", f"0.0.0.0:{port}", use_reloader=False),
+        target=lambda: call_command("runserver", f"0.0.0.0:{web_port}", use_reloader=False),
         daemon=True,
     )
     web_thread.start()
@@ -192,22 +198,23 @@ def main() -> None:
 
     # --- Chat: Open WebUI + its forward-auth proxy ---
     chat_process = None
-    from chat import config as chat_config
 
     if chat_config.ENABLED:
         from chat import proxy as chat_proxy
 
         print("💬 Starting chat (Open WebUI)...")
         if chat_proxy.is_first_run():
-            print("   First start downloads it (~1 GB via uvx) and can take a few minutes.")
-            print("   Studio is usable right away; /chat/ works once the download finishes.")
+            print("   First start installs the subpath wheel and can take a few minutes.")
+            print("   Studio is usable right away; /ai/ (chat) works once it is ready.")
         print(f"   Its data: {chat_proxy.home_dir()}")
         print(f"   Its log:  {chat_proxy.log_path()}")
         try:
-            chat_process = start_chat(chat_proxy, port)
+            chat_process = start_chat(chat_proxy, web_port)
         except (OSError, RuntimeError) as exc:
-            # No open-webui to run, a taken port, a failed spawn: chat is one
-            # part of the stack, so the rest still comes up without it.
+            # No open-webui to run, a taken port, a failed spawn, or no Caddy
+            # binary: chat is one part of the stack, so the rest still comes
+            # up without it.
+            chat_proxy.stop_open_webui()
             print(f"⚠️  Chat could not start ({exc}); continuing without it.")
             print("   Skip it with --disable-chat.\n")
         else:
@@ -229,7 +236,7 @@ def main() -> None:
     print(f"│   Login:      {username} / {password:<20s}│")
     print(f"│   API Docs:   http://localhost:{port}/api/schema/       │")
     if chat_process is not None:
-        print(f"│   Chat:       http://localhost:{port}/chat/             │")
+        print(f"│   Chat:       http://localhost:{port}/ai/               │")
     print("│                                                         │")
     if args.mock:
         print("│   Models:     Built-in mock (simulated results)        │")
@@ -279,22 +286,31 @@ def main() -> None:
                 mock_server.shutdown()
 
 
-def start_chat(chat_proxy, studio_port: int):
-    """Start Open WebUI and its proxy, and report readiness in the background.
+def start_chat(chat_proxy, internal_port: int):
+    """Start Open WebUI and its front door, and report readiness in the background.
 
-    Open WebUI takes minutes to be ready on a first run (it is fetched, then it
-    migrates its database), so the wait happens in a thread: Studio and the
-    worker come up meanwhile, and one line says when /chat/ is live.
+    ``internal_port`` is where Studio's web server listens while the front door
+    owns the public port (config.PUBLIC_PORT). Open WebUI takes minutes to be
+    ready on a first run (its wheel is fetched, then it migrates its database),
+    so the wait happens in a thread: Studio and the worker come up meanwhile,
+    and one line says when /ai/ (chat) is live.
     """
-    process = chat_proxy.start_open_webui(studio_port)
-    chat_proxy.serve(studio_port)
+    process = chat_proxy.start_open_webui(internal_port)
+    chat_proxy.serve(internal_port)
+
+    from chat import config as _chat_config
+
+    public_port = _chat_config.PUBLIC_PORT
 
     def report():
         # flush: this lands minutes later, and stdout is block-buffered when the
         # CLI's output is a file or a pipe rather than a terminal.
         if chat_proxy.wait_until_ready(process):
-            print(f"\n✅ Chat is ready — http://localhost:{studio_port}/chat/", flush=True)
+            print(f"\n✅ Chat is ready — http://localhost:{public_port}/ai/", flush=True)
             print(f"   {_sync_chat_models()}\n", flush=True)
+            backfilled = _backfill_demo_chat()
+            if backfilled:
+                print(f"   {backfilled}", flush=True)
         elif process.poll() is not None:
             print(f"\n⚠️  Chat stopped (exit {process.returncode}). Studio is unaffected.")
             print(f"   What happened: {chat_proxy.log_path()}\n", flush=True)
@@ -323,14 +339,46 @@ def _sync_chat_models() -> str:
     return f"Synced {result['pushed']} model connection(s) to chat{kept}."
 
 
+def _backfill_demo_chat() -> str:
+    """Finish pushing demo KB/tool rows that seeded before the chat existed.
+
+    ``_seed_demo_data`` runs while Open WebUI is down, so its rows are
+    local-only (empty ``external_id``) and the OWUI-backed /agents/knowledge/
+    and /agents/tools/ pages look empty. Once the chat is ready, this
+    completes the push for the bootstrap project. Never raises; reports
+    nothing when there is nothing to backfill.
+    """
+    try:
+        from django.contrib.auth import get_user_model
+
+        from accounts.models import Project
+        from infra.seed import backfill_demo_chat_resources
+
+        user = get_user_model().objects.order_by("id").first()
+        project = Project.objects.order_by("id").first()
+        if user is None or project is None:
+            return ""
+        counts = backfill_demo_chat_resources(project, user)
+        if not any(counts.values()):
+            return ""
+        labels = {"agents": "agent", "knowledge_bases": "knowledge base(s)", "tools": "tool(s)"}
+        return "Backfilled demo resources into chat: " + ", ".join(
+            f"{counts[k]} {labels[k]}" for k in labels if counts[k]
+        )
+    except Exception as exc:  # noqa: BLE001 - runs in a startup thread; don't crash it
+        print(f"   Demo chat backfill skipped: {exc}", flush=True)
+        return ""
+
+
 def _ensure_ports_available(args) -> None:
     """Make sure every port the run needs is free, or exit with advice.
 
-    The web port always; with chat, Open WebUI's upstream and the proxy's too.
-    A port held by another Studio instance or one of its derivatives can be
-    stopped (offered, or automatic with --yes); anything else — or a declined
-    offer — ends the run with a free port and the exact flag or environment
-    variable that moves the conflicting one.
+    The public port always (the web server when chat is off, the front door
+    when chat is on); with chat, the internal Studio port and Open WebUI's
+    upstream port too. A port held by another Studio instance or one of its
+    derivatives can be stopped (offered, or automatic with --yes); anything
+    else — or a declined offer — ends the run with a free port and the exact
+    flag or environment variable that moves the conflicting one.
     """
     from urllib.parse import urlsplit
 
@@ -339,24 +387,29 @@ def _ensure_ports_available(args) -> None:
     force_kill = not args.no_force_kill
     yes = args.yes
 
-    ports.resolve_port_conflict(
-        args.port, "the web server", "spin --port <free port>",
-        force_kill=force_kill, yes=yes,
-    )
-
     from chat import config as chat_config
 
     if not chat_config.ENABLED:
+        ports.resolve_port_conflict(
+            args.port, "the web server", "spin --port <free port>",
+            force_kill=force_kill, yes=yes,
+        )
         return
+
+    ports.resolve_port_conflict(
+        args.port, "the chat front door", "spin --port <free port>",
+        force_kill=force_kill, yes=yes,
+    )
+    if chat_config.INTERNAL_PORT != args.port:
+        ports.resolve_port_conflict(
+            chat_config.INTERNAL_PORT, "the web server (internal)",
+            "SIMPLEAUDIT_CHAT_INTERNAL_PORT=<free port>",
+            force_kill=force_kill, yes=yes,
+        )
     upstream_port = urlsplit(chat_config.UPSTREAM).port or 8080
     ports.resolve_port_conflict(
         upstream_port, "chat's Open WebUI",
         "SIMPLEAUDIT_CHAT_UPSTREAM=http://127.0.0.1:<free port>",
-        force_kill=force_kill, yes=yes,
-    )
-    ports.resolve_port_conflict(
-        chat_config.PROXY_PORT, "chat's proxy",
-        "SIMPLEAUDIT_CHAT_PROXY_PORT=<free port>",
         force_kill=force_kill, yes=yes,
     )
 

@@ -248,10 +248,20 @@ urlpatterns = [
     path("api/visualizer/api/image/", VisualizerImageView.as_view(), name="visualizer_image"),
 ]
 
-# Optional Open WebUI module (the `chat` app). The chat UI itself lives on its
-# own origin; these routes are the iframe page and the forward-auth endpoint its
-# proxy calls. Both 404 unless SIMPLEAUDIT_CHAT is set. See chat/config.py.
-urlpatterns += [path("chat/", include("chat.urls"))]
+# Optional Open WebUI module (the `chat` app). Open WebUI itself is served at
+# /chat/ by Caddy (the subpath build); Studio owns /ai/ — the wrapper page with
+# the model-picker bar — plus /chat/authz, the forward-auth endpoint Caddy
+# calls. All 404 unless SIMPLEAUDIT_CHAT is set. See chat/config.py.
+from chat.views import authz as _chat_authz
+from chat.views import css_mask as _chat_css_mask
+from chat.views import loader_mask as _chat_loader_mask
+
+urlpatterns += [
+    path("ai/", include("chat.urls")),
+    path("chat/authz", _chat_authz, name="chat_authz"),
+    path("chat/css-mask", _chat_css_mask, name="chat_css_mask"),
+    path("chat/loader-mask", _chat_loader_mask, name="chat_loader_mask"),
+]
 
 # OTLP listener (machine-to-machine span ingestion + credential management).
 # Wired only while SIMPLEAUDIT_OTLP is on (the default); otherwise the

@@ -4,6 +4,8 @@ Everything about *why* it works this way is in chat/config.py.
 """
 from __future__ import annotations
 
+import time
+from pathlib import Path
 from urllib.parse import urlencode
 
 from django.http import Http404, HttpResponse
@@ -22,15 +24,78 @@ def authz(request):
     200 with the trusted headers when signed in, 401 otherwise. The proxy copies
     the headers onto the upstream request and turns a 401 into a redirect to
     Studio's login page.
+
+    ``?embed=admin`` (set by Studio's admin pages in their iframe URL) marks the
+    session admin for EMBED_ADMIN_FLAG_TTL, so the css_mask request that
+    follows — which carries the session cookie but not the query flag — gets
+    the admin embed assets.
     """
     if not config.ENABLED:
         raise Http404
     user = request.user
     if not user.is_authenticated:
         return HttpResponse(status=401)
+    # The admin pages' iframe URL carries embed=admin. The forward-auth call
+    # is a rewritten GET, so the query never reaches this endpoint; Caddy
+    # passes the flag as X-Studio-Embed instead (see the Caddyfile). Both
+    # sources are stripped/overwritten before reaching OWUI, so a client
+    # cannot forge them.
+    if (
+        request.GET.get("embed") == "admin"
+        or request.headers.get("X-Studio-Embed") == "admin"
+    ):
+        request.session["studio_chat_embed_admin"] = (
+            time.time() + config.EMBED_ADMIN_FLAG_TTL
+        )
     response = HttpResponse(status=200)
     for header, value in config.identity(user).items():
         response[header] = value
+    return response
+
+
+def css_mask(request):
+    """The embed skin Open WebUI loads as /static/custom.css (both chat modes).
+
+    Serves embed_admin.css while the session carries a live admin flag stamped
+    by authz (from the admin pages' iframe URL), embed.css for everyone else —
+    including anonymous. The flag expires after EMBED_ADMIN_FLAG_TTL so a one-
+    time workspace visit doesn't re-skin a later plain chat view. no-store,
+    because the choice follows the session, not its URL.
+    """
+    if not config.ENABLED:
+        raise Http404
+    flag = request.session.get("studio_chat_embed_admin")
+    is_admin = bool(
+        request.user.is_authenticated
+        and isinstance(flag, (int, float))
+        and flag > time.time()
+    )
+    filename = "embed_admin.css" if is_admin else "embed.css"
+    path = Path(__file__).resolve().parent / filename
+    response = HttpResponse(path.read_bytes(), content_type="text/css")
+    response["Cache-Control"] = "no-store"
+    return response
+
+
+def loader_mask(request):
+    """The embed mask Open WebUI loads as /static/loader.js (Caddy mode).
+
+    The subpath build ships a 0-byte static/loader.js — the SPA's first
+    <script> — and SvelteKit hydration comes from the separate entry/start
+    bundle, so Caddy (local dev + docker) intercepts /chat/static/loader.js
+    and Studio answers here with chat/embed_admin.js. The script
+    self-gates on the PAGE URL: ?embed=admin masks the admin workspace
+    iframes (Knowledge, Tools); top-level /chat/workspace/knowledge pages
+    (the folder-upload home Studio links to) get the Access List + branding
+    masks but keep the directory rows. Plain /chat/ and other pages load
+    the same bytes, see no flag, and keep their full menu. no-store,
+    because the script follows this repo, not its URL.
+    """
+    if not config.ENABLED:
+        raise Http404
+    path = Path(__file__).resolve().parent / "embed_admin.js"
+    response = HttpResponse(path.read_bytes(), content_type="text/javascript")
+    response["Cache-Control"] = "no-store"
     return response
 
 
@@ -160,7 +225,28 @@ class ChatView(TemplateView):
                 {"id": f"{prefix}.{m.model_id}", "name": m.display_name, "has_key": m.has_key}
                 for m in conn.models.filter(enabled=True)
             )
+        # Synced agents are pinnable too — a saved ``studio.agent-<pk>``
+        # preference must survive here instead of being silently dropped.
+        models.extend(self._agent_models())
         return models
+
+    def _agent_models(self):
+        """Synced agents as picker entries.
+
+        Only agents already pushed to Open WebUI (non-empty ``external_id``)
+        are pinnable — their OWUI workspace-model id (``studio.agent-<pk>``)
+        is what the ``?models=`` param must name.
+        """
+        from model_registry.models import Agent
+
+        project = getattr(self.request, "project", None)
+        if project is None:
+            return []
+        return [
+            {"id": a.external_id, "name": a.name, "has_key": True}
+            for a in Agent.objects.filter(project=project, enabled=True)
+            if a.external_id
+        ]
 
     def _chat_model_groups(self):
         """The models the top-bar picker offers, grouped by connection."""
@@ -181,6 +267,9 @@ class ChatView(TemplateView):
             ]
             if models:
                 groups.append({"connection": conn.name, "models": models})
+        agents = self._agent_models()
+        if agents:
+            groups.append({"connection": "Agents", "models": agents})
         return groups
 
     def _resolve_default_model(self):

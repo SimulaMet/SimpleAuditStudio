@@ -116,7 +116,7 @@ def _hatchet_probe() -> dict[str, Any]:
     except requests.ConnectionError:
         # Not reachable: say what to do instead of dumping the urllib3 traceback.
         hint = (
-            "start it with `manage.py dev_server --embedded`"
+            "start it with `manage.py dev`"
             if getattr(settings, "DATABASES", {}).get("default", {}).get("ENGINE", "").endswith("sqlite3")
             else "check that the hatchet-server container is running"
         )

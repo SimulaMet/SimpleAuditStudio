@@ -4,6 +4,7 @@ Phase 1 intentionally keeps the domain surface small. Scenario, model registry,
 audit run, event, artifact, and comparison models are introduced in later phases
 so migrations can be reviewed against the approved domain model.
 """
+from django.conf import settings
 from django.contrib.auth.models import AbstractUser
 from django.db import models
 
@@ -51,6 +52,12 @@ class Project(models.Model):
     # Soft-hide a workspace that still contains data. Members keep read access;
     # all mutations are blocked for non-superusers. Never deletes data.
     archived = models.BooleanField(default=False, db_index=True)
+    # Who created the workspace (null for system-seeded workspaces, e.g. the
+    # bootstrapped "default" one created by setup_local).
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="created_projects",
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -73,6 +80,11 @@ class ProjectMembership(models.Model):
     project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name="memberships")
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="memberships")
     role = models.CharField(max_length=20, choices=Role.choices)
+    # Who granted this membership (an admin adding a member, or the creator for
+    # the creator's own ADMIN row). System bootstrap has no acting user.
+    created_by = models.ForeignKey(
+        User, on_delete=models.SET_NULL, null=True, blank=True, related_name="granted_memberships"
+    )
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
