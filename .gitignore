@@ -45,3 +45,4 @@ app.pid
 # Data artifacts (prototype)
 data/
 .testmondata*
+.testmondata*
