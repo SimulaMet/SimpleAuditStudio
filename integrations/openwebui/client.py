@@ -287,6 +287,7 @@ class OpenWebUIAdapter:
             "knowledge": meta.get("knowledge") or [],
             "capabilities": meta.get("capabilities") or {},
             "builtin_tools": meta.get("builtinTools") or {},
+            "tool_ids": meta.get("toolIds") or [],
             "is_active": item.get("is_active", True),
         }
 

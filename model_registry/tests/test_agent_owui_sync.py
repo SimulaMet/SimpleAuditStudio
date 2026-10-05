@@ -272,6 +272,26 @@ class AgentLiveFetchTest(_SyncBase):
         self.assertIsNone(resp.json()["openwebui_live"])
         api.get_workspace_model.assert_not_called()
 
+    def test_detail_returns_tool_ids_from_live_workspace_model(self):
+        """Regression: workspace model toolIds must be extracted and returned."""
+        api = self._mock_chat()
+        agent = AgentFactory(project=self.project, external_id="studio.agent-7")
+        api.get_workspace_model.return_value = {
+            "id": "studio.agent-7",
+            "name": agent.name,
+            "base_model_id": "1.model-0",
+            "meta": {
+                "description": "d",
+                "knowledge": [{"id": "kb-1"}],
+                "toolIds": ["owui-tool-1", "owui-tool-2"],
+            },
+            "is_active": True,
+        }
+        resp = self._api(f"/api/agents/{agent.id}/")
+        self.assertEqual(resp.status_code, 200)
+        live = resp.json()["openwebui_live"]
+        self.assertEqual(live["tool_ids"], ["owui-tool-1", "owui-tool-2"])
+
     def test_list_does_not_fetch_live(self):
         api = self._mock_chat()
         AgentFactory(project=self.project, external_id="studio.agent-7")
