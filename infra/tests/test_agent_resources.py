@@ -120,6 +120,34 @@ class AgentResourcesViewTest(TestCase):
         self.assertEqual(KnowledgeBase.objects.count(), 1)
         self.assertEqual(KnowledgeBase.objects.get(pk=seeded.pk).external_id, "owui-kb-1")
 
+    def test_sync_renames_kb_by_external_id_not_duplicate(self):
+        """A KB renamed in OWUI keeps the same id. Sync must update the existing
+        row in place (matching on external_id), not CREATE a second row whose
+        external_id is already taken — that raised
+        ``UNIQUE constraint failed: project_id, external_id`` (a 500)."""
+        from infra.ui import _sync_openwebui_resources
+
+        user = _member(self.project)
+        seeded = KnowledgeBase.objects.create(
+            project=self.project, name="Old Name", external_id="owui-kb-1"
+        )
+        api = mock.Mock()
+        # Same id, new name: a rename.
+        api.knowledge_bases.return_value = [
+            {"id": "owui-kb-1", "name": "New Name", "description": "d"}
+        ]
+        api.tools.return_value = []
+
+        with mock.patch("chat.api.ChatAPI.as_user", return_value=api):
+            kb_count, tool_count = _sync_openwebui_resources(self.project, user)
+
+        self.assertEqual((kb_count, tool_count), (1, 0))
+        # Same row renamed, not duplicated.
+        self.assertEqual(KnowledgeBase.objects.count(), 1)
+        kb = KnowledgeBase.objects.get(pk=seeded.pk)
+        self.assertEqual(kb.name, "New Name")
+        self.assertEqual(kb.external_id, "owui-kb-1")
+
 
 class AgentResourcesNavTest(TestCase):
     def setUp(self):
