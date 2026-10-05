@@ -18,13 +18,11 @@ from .agent_serializers import (
     AgentDetailSerializer,
     AgentSerializer,
     KnowledgeBaseSerializer,
-    RetrievalProfileSerializer,
     ToolSerializer,
 )
 from .models import (
     Agent,
     KnowledgeBase,
-    RetrievalProfile,
     Tool,
 )
 from .services import (
@@ -69,44 +67,6 @@ def _any_authenticated_user():
     from django.contrib.auth import get_user_model
 
     return get_user_model().objects.order_by("id").first()
-
-
-# --- Retrieval Profiles -----------------------------------------------------
-
-
-@api_view(["GET", "POST"])
-@permission_classes([IsAuthenticated])
-def retrieval_profiles(request):
-    project = _project(request)
-    if request.method == "GET":
-        profiles = RetrievalProfile.objects.filter(project=project)
-        return Response(RetrievalProfileSerializer(profiles, many=True).data)
-
-    serializer = RetrievalProfileSerializer(data=request.data)
-    serializer.is_valid(raise_exception=True)
-    profile = serializer.save(project=project, created_by=request.user)
-    return Response(RetrievalProfileSerializer(profile).data, status=status.HTTP_201_CREATED)
-
-
-@api_view(["GET", "PUT", "DELETE"])
-@permission_classes([IsAuthenticated])
-def retrieval_profile_detail(request, pk):
-    project = _project(request)
-    profile = RetrievalProfile.objects.filter(pk=pk, project=project).first()
-    if not profile:
-        raise StableAPIError("Retrieval profile not found.", status=404)
-
-    if request.method == "GET":
-        return Response(RetrievalProfileSerializer(profile).data)
-
-    if request.method == "PUT":
-        serializer = RetrievalProfileSerializer(profile, data=request.data, partial=True)
-        serializer.is_valid(raise_exception=True)
-        serializer.save()
-        return Response(serializer.data)
-
-    profile.delete()
-    return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 # --- Knowledge Bases --------------------------------------------------------
@@ -209,7 +169,7 @@ def agents(request):
     project = _project(request)
     if request.method == "GET":
         agent_list = Agent.objects.filter(project=project).select_related(
-            "base_model", "base_model__connection", "retrieval_profile"
+            "base_model", "base_model__connection"
         ).prefetch_related("knowledge_bases", "tools")
         return Response(
             AgentDetailSerializer(agent_list, many=True, context={"request": request}).data
@@ -227,7 +187,7 @@ def agents(request):
 def agent_detail(request, pk):
     project = _project(request)
     agent = Agent.objects.filter(pk=pk, project=project).select_related(
-        "base_model", "base_model__connection", "retrieval_profile"
+            "base_model", "base_model__connection"
     ).prefetch_related("knowledge_bases", "tools").first()
     if not agent:
         raise StableAPIError("Agent not found.", status=404)

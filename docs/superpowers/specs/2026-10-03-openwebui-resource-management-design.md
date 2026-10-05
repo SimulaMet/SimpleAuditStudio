@@ -50,7 +50,7 @@ chat/agent runtime that Open WebUI serves).
 | Forward-auth proxy | `chat/proxy.py` | Listens on `8801`; identifies the browser via `GET /chat/authz` and injects `X-Studio-*` headers; serves Studio's `embed.css` as Open WebUI's `/static/custom.css` |
 | `ChatAPI` | `chat/api.py` | Per-user client. `as_user(user)` signs in with the user's identity. Generic `request(method, path, json)` can call any `/api/v1/*` endpoint. Already has `knowledge_bases()` (pull) |
 | Pull-sync | `infra/ui.py:_sync_openwebui_resources` | Reads KBs + functions from Open WebUI, `update_or_create`s local `KnowledgeBase` / `Tool` rows |
-| Local models | `model_registry/models.py` | `KnowledgeBase`, `Tool`, `MCPServer`, `MCPTool`, `RetrievalProfile`, `Agent` |
+| Local models | `model_registry/models.py` | `KnowledgeBase`, `Tool`, `MCPServer`, `MCPTool`, `Agent` (with inline retrieval settings) |
 | Agent UI | `infra/ui.py:AgentDetailView`, `agents/agent_detail.html` | Create/edit agent with pickers for KBs/tools/MCP |
 
 ## 5. Design decision: restricted iframe (Approach A) — delegate to Open WebUI

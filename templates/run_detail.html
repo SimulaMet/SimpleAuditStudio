@@ -845,8 +845,8 @@ function openScriptModal() {
         {% if frozen_agent.tools %}
         <div class="flex justify-between gap-2"><span class="text-gray-500 shrink-0">Tools</span><span class="min-w-0 text-gray-300 text-right">{{ frozen_agent.tools|length }} tool(s)</span></div>
         {% endif %}
-        {% if frozen_agent.retrieval_profile %}
-        <div class="flex justify-between gap-2"><span class="text-gray-500 shrink-0">Retrieval</span><span class="min-w-0 text-gray-300 text-right">{{ frozen_agent.retrieval_profile.mode|default:"hybrid" }} · top {{ frozen_agent.retrieval_profile.top_k|default:"5" }}</span></div>
+        {% if frozen_agent.retrieval %}
+        <div class="flex justify-between gap-2"><span class="text-gray-500 shrink-0">Retrieval</span><span class="min-w-0 text-gray-300 text-right">{{ frozen_agent.retrieval.search_mode|default:"semantic" }} · top {{ frozen_agent.retrieval.top_k|default:"5" }}</span></div>
         {% endif %}
       </div>
       {% endif %}

@@ -181,13 +181,11 @@ class OpenWebUIAdapter:
         model_id = self.agent_model_id(agent)
         base_model_id = self.agent_base_model_id(agent)
         knowledge = self._knowledge_refs(agent)
+        retrieval = agent.retrieval_settings or {}
         description = agent.system_prompt or agent.description or agent.name
         metadata = {
             "simpleaudit": {
-                "retrieval_profile": (
-                    agent.retrieval_profile.config_dict()
-                    if agent.retrieval_profile else None
-                ),
+                "retrieval": agent.retrieval_settings,
             },
         }
 
@@ -197,6 +195,7 @@ class OpenWebUIAdapter:
                     self._api.update_workspace_model(
                         model_id, agent.name, base_model_id=base_model_id,
                         description=description, knowledge=knowledge,
+                        params=retrieval,
                         metadata=metadata,
                     )
                     status = "updated"
@@ -208,6 +207,7 @@ class OpenWebUIAdapter:
                     self._api.create_workspace_model(
                         model_id, agent.name, base_model_id=base_model_id,
                         description=description, knowledge=knowledge,
+                        params=retrieval,
                         metadata=metadata,
                     )
                     status = "created"
@@ -216,6 +216,7 @@ class OpenWebUIAdapter:
                     self._api.create_workspace_model(
                         model_id, agent.name, base_model_id=base_model_id,
                         description=description, knowledge=knowledge,
+                        params=retrieval,
                         metadata=metadata,
                     )
                     status = "created"
@@ -294,11 +295,7 @@ class OpenWebUIAdapter:
             "system_prompt": agent.system_prompt,
             "knowledge_base_ids": kb_ids,
             "tool_ids": tool_ids,
-            "retrieval_profile": (
-                agent.retrieval_profile.config_dict()
-                if agent.retrieval_profile
-                else None
-            ),
+            "retrieval": agent.retrieval_settings,
             "capabilities": agent.capabilities,
         }
 

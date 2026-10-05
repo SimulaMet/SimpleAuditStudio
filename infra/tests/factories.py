@@ -16,7 +16,6 @@ from model_registry.models import (
     KnowledgeBase,
     ModelConnection,
     RegisteredModel,
-    RetrievalProfile,
     Tool,
 )
 from scenarios.models import (
@@ -198,15 +197,6 @@ class RepeatedScenarioResultFactory(ScenarioResultFactory):
 
 
 # --- Agent configuration domain factories ----------------------------------
-
-
-class RetrievalProfileFactory(DjangoModelFactory):
-    class Meta:
-        model = RetrievalProfile
-    project = factory.SubFactory(ProjectFactory)
-    name = factory.Sequence(lambda n: f"Profile {n}")
-    search_mode = "semantic"
-    top_k = 5
 
 
 class KnowledgeBaseFactory(DjangoModelFactory):

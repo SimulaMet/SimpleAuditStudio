@@ -11,46 +11,14 @@ from infra.tests.factories import (
     ModelConnectionFactory,
     ProjectFactory,
     RegisteredModelFactory,
-    RetrievalProfileFactory,
     ToolFactory,
     UserFactory,
 )
 from model_registry.models import (
     Agent,
     KnowledgeBase,
-    RetrievalProfile,
     Tool,
 )
-
-
-class RetrievalProfileModelTest(TestCase):
-    def test_create(self):
-        project = ProjectFactory()
-        profile = RetrievalProfile.objects.create(
-            project=project, name="Default", search_mode="hybrid", top_k=8,
-            rerank_enabled=True, rerank_top_k=4, relevance_threshold=0.4,
-            bm25_weight=0.35, full_context=False,
-        )
-        self.assertEqual(profile.name, "Default")
-        self.assertEqual(profile.search_mode, "hybrid")
-        self.assertEqual(profile.top_k, 8)
-
-    def test_config_dict(self):
-        profile = RetrievalProfileFactory(
-            search_mode="hybrid", top_k=10, rerank_enabled=True,
-            rerank_top_k=5, relevance_threshold=0.5, bm25_weight=0.4,
-        )
-        d = profile.config_dict()
-        self.assertEqual(d["search_mode"], "hybrid")
-        self.assertEqual(d["top_k"], 10)
-        self.assertTrue(d["rerank_enabled"])
-        self.assertEqual(d["relevance_threshold"], 0.5)
-
-    def test_unique_name_per_project(self):
-        project = ProjectFactory()
-        RetrievalProfile.objects.create(project=project, name="Dup")
-        with self.assertRaises(IntegrityError):
-            RetrievalProfile.objects.create(project=project, name="Dup")
 
 
 class KnowledgeBaseModelTest(TestCase):
@@ -117,12 +85,13 @@ class AgentModelTest(TestCase):
         agent.tools.add(tool)
         self.assertEqual(agent.tools.count(), 1)
 
-    def test_agent_retrieval_profile(self):
+    def test_agent_retrieval_settings(self):
         agent = AgentFactory()
-        profile = RetrievalProfileFactory(project=agent.project)
-        agent.retrieval_profile = profile
+        agent.retrieval_settings = {"search_mode": "hybrid", "top_k": 8}
         agent.save()
-        self.assertEqual(agent.retrieval_profile, profile)
+        agent.refresh_from_db()
+        self.assertEqual(agent.retrieval_settings["search_mode"], "hybrid")
+        self.assertEqual(agent.retrieval_settings["top_k"], 8)
 
     def test_agent_permissions_persisted(self):
         agent = AgentFactory(capabilities={"knowledge_search": True, "code_execution": False})
@@ -144,11 +113,9 @@ class AgentModelTest(TestCase):
         )
         kb = KnowledgeBaseFactory(project=agent.project, name="KB1", external_id="owui-1", version="v1")
         tool = ToolFactory(project=agent.project, name="Calc", type="builtin")
-        profile = RetrievalProfileFactory(project=agent.project, name="Hybrid", search_mode="hybrid", top_k=8)
-
         agent.knowledge_bases.add(kb)
         agent.tools.add(tool)
-        agent.retrieval_profile = profile
+        agent.retrieval_settings = {"search_mode": "hybrid", "top_k": 8}
         agent.save()
 
         snap = agent.config_snapshot()
@@ -159,14 +126,14 @@ class AgentModelTest(TestCase):
         self.assertEqual(snap["knowledge_bases"][0][1], "KB1")
         self.assertEqual(len(snap["tools"]), 1)
         self.assertEqual(snap["tools"][0][1], "Calc")
-        self.assertEqual(snap["retrieval_profile"]["name"], "Hybrid")
-        self.assertEqual(snap["retrieval_profile"]["top_k"], 8)
+        self.assertEqual(snap["retrieval"]["search_mode"], "hybrid")
+        self.assertEqual(snap["retrieval"]["top_k"], 8)
         self.assertTrue(snap["capabilities"]["knowledge_search"])
 
-    def test_snapshot_without_profile(self):
-        agent = AgentFactory(retrieval_profile=None)
+    def test_snapshot_has_default_retrieval_settings(self):
+        agent = AgentFactory()
         snap = agent.config_snapshot()
-        self.assertIsNone(snap["retrieval_profile"])
+        self.assertEqual(snap["retrieval"]["search_mode"], "semantic")
 
     def test_deleting_shared_resources_does_not_invalidate_snapshot(self):
         """A config snapshot is a plain dict — deleting live objects doesn't change it."""
@@ -296,39 +263,6 @@ class AgentAPITest(TestCase):
         self.assertEqual(resp.status_code, 201)
         agent = Agent.objects.get(name="Tool Agent")
         self.assertIn(tool, agent.tools.all())
-
-class RetrievalProfileAPITest(TestCase):
-    def setUp(self):
-        self.user = UserFactory()
-        self.project = ProjectFactory()
-        MembershipFactory(user=self.user, project=self.project, role="admin")
-        self.client = Client()
-        self.client.force_login(self.user)
-        self.client.session["active_project_id"] = self.project.id
-        self.session = self.client.session
-        self.session.save()
-
-    def test_create_profile(self):
-        resp = self.client.post(
-            "/api/retrieval-profiles/",
-            data=json.dumps({"name": "Fast", "search_mode": "semantic", "top_k": 3}),
-            content_type="application/json",
-        )
-        self.assertEqual(resp.status_code, 201)
-        self.assertEqual(resp.json()["name"], "Fast")
-
-    def test_list_profiles(self):
-        RetrievalProfileFactory(project=self.project, name="P1")
-        RetrievalProfileFactory(project=self.project, name="P2")
-        resp = self.client.get("/api/retrieval-profiles/")
-        self.assertEqual(resp.status_code, 200)
-        self.assertEqual(len(resp.json()), 2)
-
-    def test_delete_profile(self):
-        profile = RetrievalProfileFactory(project=self.project)
-        resp = self.client.delete(f"/api/retrieval-profiles/{profile.id}/")
-        self.assertEqual(resp.status_code, 204)
-
 
 class KnowledgeBaseAPITest(TestCase):
     def setUp(self):
@@ -540,16 +474,14 @@ class AgentAuditTargetTest(TestCase):
         self.assertEqual(bm["id"], self.agent.base_model.id)
         self.assertEqual(bm["model_id"], self.agent.base_model.model_id)
 
-    def test_agent_snapshot_includes_retrieval_profile(self):
-        profile = RetrievalProfileFactory(project=self.project)
-        self.agent.retrieval_profile = profile
+    def test_agent_snapshot_includes_retrieval_settings(self):
+        self.agent.retrieval_settings = {"search_mode": "hybrid", "top_k": 9}
         self.agent.save()
 
         run = self._create_audit_run()
-        rp = run.agent_config_snapshot["retrieval_profile"]
-        self.assertIsNotNone(rp)
-        self.assertEqual(rp["id"], profile.id)
-        self.assertEqual(rp["top_k"], profile.top_k)
+        retrieval = run.agent_config_snapshot["retrieval"]
+        self.assertEqual(retrieval["search_mode"], "hybrid")
+        self.assertEqual(retrieval["top_k"], 9)
 
     def test_agent_snapshot_includes_capabilities(self):
         self.agent.capabilities = ["rag", "tools"]

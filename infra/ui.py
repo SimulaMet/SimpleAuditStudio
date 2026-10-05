@@ -2843,7 +2843,7 @@ class AgentsView(ProjectMixin, TemplateView):
 
         ctx["agents"] = (
             Agent.objects.filter(project=self.request.project)
-            .select_related("base_model", "base_model__connection", "retrieval_profile")
+            .select_related("base_model", "base_model__connection")
             .prefetch_related("knowledge_bases", "tools")
         )
         return ctx
@@ -3092,8 +3092,8 @@ class AgentDetailView(ProjectMixin, TemplateView):
             Agent,
             KnowledgeBase,
             RegisteredModel,
-            RetrievalProfile,
             Tool,
+            default_retrieval_settings,
         )
 
         project = self.request.project
@@ -3102,7 +3102,7 @@ class AgentDetailView(ProjectMixin, TemplateView):
             agent = Agent.objects.filter(
                 pk=self.kwargs["agent_id"], project=project
             ).select_related(
-                "base_model", "base_model__connection", "retrieval_profile"
+                "base_model", "base_model__connection"
             ).prefetch_related("knowledge_bases", "tools").first()
 
         # Auto-sync from OpenWebUI so the picker lists are always fresh.
@@ -3147,7 +3147,10 @@ class AgentDetailView(ProjectMixin, TemplateView):
                 ctx["openwebui_rag"] = OpenWebUIAdapter.for_admin().safe_rag_settings()
             except Exception:  # noqa: BLE001 - the agent form remains usable when chat is down
                 logger.warning("Could not load Open WebUI RAG settings for agent form")
-        ctx["retrieval_profiles"] = RetrievalProfile.objects.filter(project=project)
+        ctx["retrieval_settings"] = (
+            {**default_retrieval_settings(), **(agent.retrieval_settings or {})}
+            if agent else default_retrieval_settings()
+        )
         ctx["capability_options"] = [
             {"key": "knowledge_search", "label": "Knowledge Search"},
             {"key": "file_read", "label": "File Read"},
@@ -3162,7 +3165,12 @@ class AgentDetailView(ProjectMixin, TemplateView):
         return ctx
 
     def post(self, request, *args, **kwargs):
-        from model_registry.models import Agent, KnowledgeBase, Tool
+        from model_registry.models import (
+            Agent,
+            KnowledgeBase,
+            Tool,
+            default_retrieval_settings,
+        )
 
         project = request.project
         agent = None
@@ -3182,18 +3190,36 @@ class AgentDetailView(ProjectMixin, TemplateView):
             messages.error(request, "Select a valid base model.")
             return self._render(request, agent)
 
-        retrieval_profile = None
-        profile_id = request.POST.get("retrieval_profile")
-        if profile_id:
-            from model_registry.models import RetrievalProfile
-            retrieval_profile = RetrievalProfile.objects.filter(pk=profile_id, project=project).first()
+        def _positive_int(name, default):
+            try:
+                return max(1, int(request.POST.get(name) or default))
+            except (TypeError, ValueError):
+                return default
+
+        def _optional_float(name):
+            raw = request.POST.get(name, "").strip()
+            try:
+                return float(raw) if raw else None
+            except ValueError:
+                return None
+
+        retrieval = default_retrieval_settings()
+        retrieval["search_mode"] = request.POST.get("search_mode", "semantic")
+        if retrieval["search_mode"] not in {"semantic", "hybrid"}:
+            retrieval["search_mode"] = "semantic"
+        retrieval["top_k"] = _positive_int("top_k", 5)
+        retrieval["rerank_enabled"] = request.POST.get("rerank_enabled") == "on"
+        retrieval["rerank_top_k"] = _positive_int("rerank_top_k", 4)
+        for field in ("relevance_threshold", "bm25_weight"):
+            retrieval[field] = _optional_float(field)
+        retrieval["full_context"] = request.POST.get("full_context") == "on"
 
         if agent:
             agent.name = name
             agent.description = request.POST.get("description", "")
             agent.base_model = base_model
             agent.system_prompt = request.POST.get("system_prompt", "")
-            agent.retrieval_profile = retrieval_profile
+            agent.retrieval_settings = retrieval
             agent.enabled = request.POST.get("enabled") == "on"
             agent.save()
             agent.knowledge_bases.set(
@@ -3224,7 +3250,7 @@ class AgentDetailView(ProjectMixin, TemplateView):
                 description=request.POST.get("description", ""),
                 base_model=base_model,
                 system_prompt=request.POST.get("system_prompt", ""),
-                retrieval_profile=retrieval_profile,
+                retrieval_settings=retrieval,
                 capabilities=caps,
                 created_by=request.user,
             )

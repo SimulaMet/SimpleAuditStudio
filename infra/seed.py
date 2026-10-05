@@ -360,7 +360,6 @@ def seed_demo_agent(project, user, log=logger.info) -> dict[str, str]:
     from model_registry.models import (
         Agent,
         KnowledgeBase,
-        RetrievalProfile,
         Tool,
     )
 
@@ -429,17 +428,6 @@ def seed_demo_agent(project, user, log=logger.info) -> dict[str, str]:
         tool.external_id = tool_external_id
         tool.save(update_fields=["external_id", "updated_at"])
 
-    profile, _ = RetrievalProfile.objects.get_or_create(
-        project=project,
-        name="Support RAG (demo)",
-        defaults={
-            "search_mode": RetrievalProfile.SearchMode.HYBRID,
-            "top_k": 5,
-            "relevance_threshold": 0.2,
-            "created_by": user,
-        },
-    )
-
     meta = DEMO_AGENT
     agent, created = Agent.objects.get_or_create(
         project=project,
@@ -448,7 +436,11 @@ def seed_demo_agent(project, user, log=logger.info) -> dict[str, str]:
             "description": meta["description"],
             "base_model": base_model,
             "system_prompt": meta["system_prompt"],
-            "retrieval_profile": profile,
+            "retrieval_settings": {
+                "search_mode": "hybrid",
+                "top_k": 5,
+                "relevance_threshold": 0.2,
+            },
             "capabilities": meta["capabilities"],
             "created_by": user,
         },

@@ -1,4 +1,4 @@
-<label class="flex items-center gap-2">
-  <input type="checkbox" name="{{ name }}" {% if checked %}checked{% endif %} class="rounded border-gray-600 bg-surface-overlay text-accent">
+<label class="flex items-center gap-2"{% if help %} title="{{ help }}"{% endif %}>
+  <input type="checkbox" name="{{ name }}" {% if checked %}checked{% endif %}{% if help %} title="{{ help }}"{% endif %} class="rounded border-gray-600 bg-surface-overlay text-accent">
   {{ label }}
 </label>
