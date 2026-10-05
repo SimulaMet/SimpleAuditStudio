@@ -147,29 +147,10 @@ def setup_demo_audit(project, user, log=logger.info) -> dict[str, str]:
 
     # 4. Studio-side target: a model connection for Open WebUI + a registered
     # model for the agent, so the platform can audit the agent like any model.
-    from model_registry.models import ModelConnection, RegisteredModel
+    from model_registry.services import agent_target_model
 
-    owui_conn, _ = ModelConnection.objects.get_or_create(
-        project=project, name="Open WebUI Agent",
-        defaults={
-            "provider": "openai",
-            # Open WebUI's own OpenAI-compatible completions endpoint.
-            "base_url": "http://127.0.0.1:8080/chat/api/v1",
-            "description": "Targets the live Open WebUI agent (Support Refund Assistant).",
-            "enabled": True,
-            "created_by": user,
-        },
-    )
-    _target_model, _ = RegisteredModel.objects.get_or_create(
-        connection=owui_conn, project=project,
-        model_id=f"studio.agent-{agent.pk}",
-        defaults={
-            "display_name": "Support Refund Assistant (Open WebUI)",
-            "enabled": True,
-            "default_parameters": {"max_turns": 3},
-            "created_by": user,
-        },
-    )
+    _target_model = agent_target_model(agent)
+    owui_conn = _target_model.connection
     status["studio_target"] = "ready"
 
     # 5. OTLP credential (none auth) so Studio captures the run's spans.
@@ -187,10 +168,10 @@ def setup_demo_audit(project, user, log=logger.info) -> dict[str, str]:
     # 7. A queued audit run so the demo is visible in the UI.
     # Agent-target runs must use the Agent's base model as target_model. The
     # Open WebUI connection above is a chat-facing resource; the audit service
-    # deliberately rejects a wrapper model that does not equal agent.base_model.
+    # the audit service resolves the shared Agent wrapper target.
     status["run"] = (
         "submitted"
-        if _create_demo_run(project, user, agent, simula_model, simula_model, log)
+        if _create_demo_run(project, user, agent, None, simula_model, log)
         else "queued"
     )
     return status

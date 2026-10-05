@@ -1150,7 +1150,7 @@ class NewExperimentView(ProjectMixin, TemplateView):
                         user=request.user,
                         name=custom_name or f"Run {timezone.now():%Y-%m-%d %H:%M}",
                         scenario_set_version=run_spec["version"],
-                        target_model=run_spec["target"],
+                        target_model=None if run_spec.get("agent") else run_spec["target"],
                         auditor_model=run_spec["auditor"],
                         judge_model=run_spec["judge_model"],
                         judge=run_spec["judge"],

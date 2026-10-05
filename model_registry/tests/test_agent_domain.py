@@ -393,7 +393,7 @@ class AgentAuditTargetTest(TestCase):
         self.session.save()
 
         # Build the full agent stack
-        self.agent = AgentFactory(project=self.project)
+        self.agent = AgentFactory(project=self.project, external_id="studio.agent-test")
         self.kb = KnowledgeBaseFactory(project=self.project)
         self.tool = ToolFactory(project=self.project)
         self.agent.knowledge_bases.add(self.kb)
@@ -517,14 +517,10 @@ class AgentAuditTargetTest(TestCase):
             self._create_audit_run()
         self.assertEqual(ctx.exception.code, "agent_disabled")
 
-    def test_agent_model_mismatch_rejected(self):
+    def test_agent_target_model_argument_is_ignored(self):
         mismatched_model = RegisteredModelFactory(project=self.project)
-
-        from infra.exceptions import StableAPIError
-
-        with self.assertRaises(StableAPIError) as ctx:
-            self._create_audit_run(target_model=mismatched_model)
-        self.assertEqual(ctx.exception.code, "agent_model_mismatch")
+        run = self._create_audit_run(target_model=mismatched_model)
+        self.assertEqual(run.target_model.model_id, self.agent.external_id)
 
     def test_no_agent_run_has_null_snapshot(self):
         from audits.services import create_audit_run
