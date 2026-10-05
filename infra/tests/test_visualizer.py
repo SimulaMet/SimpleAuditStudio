@@ -135,7 +135,8 @@ class VisualizerFilesTests(_VisualizerBase):
     def test_files_without_results_dir(self):
         set_results_dir(None)
         resp = self.client.get("/api/visualizer/api/files", follow=True)
-        self.assertEqual(resp.status_code, 500)
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json(), {"tree": [], "configured": False})
 
 
 class VisualizerJsonTests(_VisualizerBase):
