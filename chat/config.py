@@ -14,7 +14,7 @@ else goes to Studio. The browser sees one origin and one port.
                               │         200 -> X-Studio-Email / -Name / -Role
                               └──► Open WebUI on the internal :8080 (at /chat)
 
-Studio's own wrapper page (the model-picker bar) lives at ``/ai/`` and iframes
+Studio's own wrapper page (the model-picker bar) lives at ``/playground/`` and iframes
 ``/chat/``; both are same-origin now.
 
 Single sign-on uses Open WebUI's trusted-header mode: the proxy injects the
@@ -37,7 +37,7 @@ Modes (``SIMPLEAUDIT_CHAT``):
               deploy/openwebui-subpath/Caddyfile.subpath. A missing binary
               (a broken install) fails the front door at startup.
     docker    Caddy (this compose) does forward-auth; Studio only serves the
-              /ai/ wrapper page, the admin iframes and /chat/authz
+              /playground/ wrapper page, the admin iframes and /chat/authz
     off       the URLs 404 and nothing starts — also "disabled", "false", "no",
               "0", or leaving the variable unset, which is the default
 """

@@ -9,7 +9,7 @@
 #
 #   https://studio.example.com
 #     ├── /chat/...   -> Open WebUI (subpath build, served AT /chat)
-#     ├── /ai/...     -> Studio's wrapper page (model-picker bar + iframe of /chat/)
+#     ├── /playground/... -> Studio's wrapper page (model-picker bar + iframe of /chat/)
 #     └── everything  -> Studio (Django)
 #
 # Only THIS container publishes a port. Studio (web) and Open WebUI publish
@@ -35,7 +35,7 @@
 	request_header -X-Studio-Name
 	request_header -X-Studio-Role
 
-	# Studio's /ai/ iframe points at the bare subpath with query params
+	# Studio's /playground/ iframe points at the bare subpath with query params
 	# (/chat?models=...). `handle /chat/*` does NOT match a bare /chat, so
 	# send it to /chat/ (query preserved) before route selection.
 	rewrite /chat /chat/

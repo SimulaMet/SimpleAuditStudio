@@ -293,7 +293,7 @@ class Command(BaseCommand):
 
         username = os.environ.get("BOOTSTRAP_USERNAME", "studio")
         chat_line = (
-            f"   Chat:       http://localhost:{options['port']}/ai/\n"
+            f"   Playground: http://localhost:{options['port']}/playground/\n"
             if chat_process is not None
             else ""
         )
@@ -362,7 +362,7 @@ class Command(BaseCommand):
             self.stdout.write(self.style.WARNING(
                 "   First start installs the subpath wheel and can take a few minutes."
             ))
-            self.stdout.write("   Studio is usable right away; /ai/ (chat) works once it is ready.")
+        self.stdout.write("   Studio is usable right away; /playground/ works once it is ready.")
         try:
             process = chat_proxy.start_open_webui(internal_port)
             chat_proxy.serve(internal_port)
@@ -375,7 +375,7 @@ class Command(BaseCommand):
 
         def report():
             if chat_proxy.wait_until_ready(process):
-                print(f"\n✅ Chat is ready — http://localhost:{public_port}/ai/", flush=True)
+                print(f"\n✅ Playground is ready — http://localhost:{public_port}/playground/", flush=True)
                 print(f"   {_sync_chat_models()}\n", flush=True)
                 backfilled = _backfill_demo_chat()
                 if backfilled:
