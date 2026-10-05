@@ -126,7 +126,18 @@ def get_client() -> Hatchet:
     without a process restart.
     """
     global _CLIENT, _CLIENT_IS_PLACEHOLDER
-    if _CLIENT is None or (_CLIENT_IS_PLACEHOLDER and _resolve_hatchet_token()):
+    embedded_handshake_available = False
+    if _CLIENT_IS_PLACEHOLDER:
+        from infra.minimal_config import get_persisted_embedded_handshake
+
+        embedded_handshake_available = bool(
+            os.environ.get("HATCHET_EMBEDDED_HANDSHAKE")
+            or get_persisted_embedded_handshake()
+        )
+    if _CLIENT is None or (
+        _CLIENT_IS_PLACEHOLDER
+        and (_resolve_hatchet_token() or embedded_handshake_available)
+    ):
         # Demo mode: reuse the embedded client started by the CLI entry point.
         from infra.minimal_config import get_embedded_client, is_minimal_config
 
@@ -146,6 +157,10 @@ def get_client() -> Hatchet:
         # URL) via HATCHET_EMBEDDED_HANDSHAKE. Build a lightweight client that
         # connects to the already-running engine — no sidecar restart.
         handshake_raw = os.environ.get("HATCHET_EMBEDDED_HANDSHAKE")
+        if not handshake_raw:
+            from infra.minimal_config import get_persisted_embedded_handshake
+
+            handshake_raw = get_persisted_embedded_handshake()
         if handshake_raw:
             from hatchet_sdk.embedded import Handshake as _Handshake
 
