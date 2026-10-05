@@ -4,7 +4,7 @@
 <div class="max-w-none">
   <div class="mb-5">
     <h1 class="text-lg font-semibold text-gray-100">Sub-agents</h1>
-    <p class="mt-1 text-sm text-gray-500">Global delegated-agent settings for Open WebUI.</p>
+    <p class="mt-1 text-sm text-gray-500">Global delegated-agent settings for the platform.</p>
   </div>
   {% include "admin/_tabs.html" %}
   {% if settings_error %}<div role="alert" class="alert alert-warning mt-5 text-sm">Sub-agent settings are unavailable: {{ settings_error }}</div>{% endif %}
@@ -14,7 +14,7 @@
       <legend class="px-2 text-xs font-semibold uppercase tracking-wide text-gray-300">Service access</legend>
       <p class="text-xs text-gray-500">Sub-agents create additional model calls. Keep this off unless an agent explicitly needs delegation.</p>
       <div class="space-y-2">
-        <label class="flex items-start gap-2 text-sm text-gray-300" title="Global Open WebUI feature gate."><input type="checkbox" name="ENABLE_SUBAGENTS" {% if subagents.ENABLE_SUBAGENTS %}checked{% endif %} class="checkbox checkbox-sm mt-0.5"><span><span class="block text-gray-200">Enable sub-agents</span><span class="block text-xs text-gray-500">Agents also need the Sub-agents permission.</span></span></label>
+        <label class="flex items-start gap-2 text-sm text-gray-300" title="Global sub-agent feature gate."><input type="checkbox" name="ENABLE_SUBAGENTS" {% if subagents.ENABLE_SUBAGENTS %}checked{% endif %} class="checkbox checkbox-sm mt-0.5"><span><span class="block text-gray-200">Enable sub-agents</span><span class="block text-xs text-gray-500">Agents also need the Sub-agents permission.</span></span></label>
         <label class="flex items-start gap-2 text-sm text-gray-300" title="Allow delegated work to continue without waiting in the parent chat."><input type="checkbox" name="SUBAGENTS_BACKGROUND_ENABLED" {% if subagents.SUBAGENTS_BACKGROUND_ENABLED %}checked{% endif %} class="checkbox checkbox-sm mt-0.5"><span><span class="block text-gray-200">Allow background delegation</span><span class="block text-xs text-gray-500">Background work returns later instead of blocking the parent chat.</span></span></label>
       </div>
     </fieldset>
