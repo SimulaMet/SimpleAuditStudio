@@ -42,7 +42,9 @@ def _simula_model(project):
     conn = ModelConnection.objects.filter(project=project, name="SimulaChat").first()
     if conn is None:
         return None
-    return RegisteredModel.objects.filter(connection=conn, model_id="default").first()
+    return (RegisteredModel.objects.filter(connection=conn, model_id="copilot-auto-efficiency").first()
+            or RegisteredModel.objects.filter(connection=conn, model_id="default").first()
+            or RegisteredModel.objects.filter(connection=conn, enabled=True).order_by("id").first())
 
 
 def _demo_agent(project):
