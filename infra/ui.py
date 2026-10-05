@@ -2070,6 +2070,7 @@ class ConnectionsView(ProjectMixin, TemplateView):
             admin_workspaces,
             can_edit_connection,
             connection_share_label,
+            is_internal_agent_connection,
             model_usage_counts,
             visible_connections_for,
         )
@@ -2077,7 +2078,10 @@ class ConnectionsView(ProjectMixin, TemplateView):
         p = self.request.project
         user = self.request.user
         # Owner connections first, then shared ones (see visible_connections_for).
-        connections = visible_connections_for(user, p)
+        connections = [
+            conn for conn in visible_connections_for(user, p)
+            if not is_internal_agent_connection(conn)
+        ]
         otlp_credentials = {
             cred.connection_id: cred
             for cred in OTLPCredential.objects.filter(
