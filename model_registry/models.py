@@ -276,9 +276,9 @@ class Tool(models.Model):
     """
 
     class ToolType(models.TextChoices):
-        BUILTIN = "builtin", "OpenWebUI built-in"
+        BUILTIN = "builtin", "Built-in"
         OPENAPI = "openapi", "OpenAPI"
-        CUSTOM = "custom", "Custom OpenWebUI function"
+        CUSTOM = "custom", "Custom function"
 
     project = models.ForeignKey("accounts.Project", on_delete=models.CASCADE, related_name="tools")
     name = models.CharField(max_length=250)
