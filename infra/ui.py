@@ -2107,6 +2107,11 @@ class ConnectionsView(ProjectMixin, TemplateView):
                 "shared_with": [str(x) for x in c.shared_with.values_list("id", flat=True)],
                 "can_edit": c.can_edit,
                 "share_label": c.share_label,
+                "otlp": {
+                    "id": c.otlp_credential.id,
+                    "auth_mode": c.otlp_credential.auth_mode,
+                    "enabled": c.otlp_credential.enabled,
+                } if c.otlp_credential else None,
             }
             for c in connections
         }
