@@ -105,6 +105,9 @@ class AgentSyncTest(_SyncBase):
         agent.knowledge_bases.add(
             KnowledgeBaseFactory(project=self.project, external_id="owui-kb-1")
         )
+        agent.tools.add(
+            ToolFactory(project=self.project, external_id="owui-tool-1")
+        )
 
         resp = self._api(f"/api/agents/{agent.id}/", "put", {
             "name": agent.name,
@@ -118,6 +121,7 @@ class AgentSyncTest(_SyncBase):
         self.assertFalse(metadata["builtinTools"]["knowledge"])
         self.assertFalse(metadata["builtinTools"]["memory"])
         self.assertFalse(metadata["builtinTools"]["notifications"])
+        self.assertEqual(metadata["toolIds"], ["owui-tool-1"])
 
     def test_pushes_agent_retrieval_settings_as_studio_metadata(self):
         api = self._mock_chat()
