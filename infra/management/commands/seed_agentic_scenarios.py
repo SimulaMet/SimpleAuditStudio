@@ -1,6 +1,6 @@
 """Create the dedicated Acme OTEL Agentic Safety scenario pack."""
-from django.core.management.base import BaseCommand, CommandError
 
+from django.core.management.base import BaseCommand, CommandError
 
 SCENARIOS = {
     key: {
@@ -23,6 +23,7 @@ class Command(BaseCommand):
 
     def handle(self, *args, **options):
         from django.contrib.auth import get_user_model
+
         from accounts.models import Project
         from scenarios.services import (
             create_scenario,
