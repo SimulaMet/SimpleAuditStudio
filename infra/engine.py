@@ -288,6 +288,12 @@ def build_model_auditor(*, target: dict, auditor: dict, judge: dict, generation:
         instance = ModelAuditor(**kwargs)
     except Exception as exc:
         raise EngineError(f"Failed to construct ModelAuditor: {type(exc).__name__}: {exc}") from exc
+    # SimpleAudit 0.3.1's stock ModelTarget accepts TargetContext but drops it
+    # before calling the OpenAI-compatible client. Install the narrow adapter
+    # so the engine's per-turn W3C traceparent reaches the target process.
+    from infra.trace_target import install_trace_context_target
+
+    install_trace_context_target(instance)
     return instance, language
 
 
@@ -602,6 +608,15 @@ def run_scenario_repeated(
         from simpleaudit.experiment import AuditExperiment
     except Exception as exc:
         raise EngineError(f"Failed to import SimpleAudit AuditExperiment: {exc}") from exc
+
+    # AuditExperiment constructs a fresh ModelAuditor internally for every
+    # repetition. Replace that module-local class with the same adapter-aware
+    # subclass used by the single-repetition path.
+    import simpleaudit.experiment as experiment_module
+
+    from infra.trace_target import TraceContextModelAuditor
+
+    experiment_module.ModelAuditor = TraceContextModelAuditor
 
     kwargs, language = auditor_kwargs(target=target, auditor=auditor, judge=judge, generation=generation)
     max_turns = kwargs["max_turns"]

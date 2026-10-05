@@ -119,6 +119,77 @@ class RoleKwargsFilteringTest(TestCase):
         self.assertEqual(filtered, {"timeout": 60})
 
 
+class TargetTracePropagationTest(TestCase):
+    """The target request must carry the engine's W3C trace context."""
+
+    def test_model_target_forwards_trace_headers(self):
+        import asyncio
+        from types import SimpleNamespace
+
+        from simpleaudit.targets.base import TargetContext
+
+        from infra.engine import build_model_auditor
+
+        calls = []
+
+        async def acompletion(**kwargs):
+            calls.append(kwargs)
+            return SimpleNamespace(
+                choices=[SimpleNamespace(message=SimpleNamespace(content="ok"))],
+                usage=None,
+            )
+
+        client = SimpleNamespace(acompletion=acompletion)
+        snapshots = {
+            "target": _snap("target"),
+            "auditor": _snap("auditor"),
+            "judge": _snap("judge"),
+        }
+        with mock.patch("simpleaudit.model_auditor.ModelAuditor._create_anyllm_client", return_value=client):
+            auditor, _language = build_model_auditor(**snapshots)
+            asyncio.run(
+                auditor.target.send(
+                    user="hello",
+                    context=TargetContext(
+                        trace_headers={
+                            "traceparent": "00-" + "1" * 32 + "-" + "2" * 16 + "-01",
+                        }
+                    ),
+                )
+            )
+
+        self.assertEqual(calls[0]["extra_headers"]["traceparent"], "00-" + "1" * 32 + "-" + "2" * 16 + "-01")
+
+    def test_repetition_runner_uses_context_aware_auditor(self):
+        from infra import engine
+        from infra.trace_target import TraceContextModelAuditor
+
+        captured = {}
+
+        class FakeExperiment:
+            def __init__(self, **_kwargs):
+                import simpleaudit.experiment as experiment_module
+
+                captured["auditor_class"] = experiment_module.ModelAuditor
+
+            async def run_scenario_reps(self, **_kwargs):
+                return []
+
+        with mock.patch("simpleaudit.experiment.AuditExperiment", FakeExperiment):
+            engine.run_scenario_repeated(
+                name="dose",
+                description="Ask about a dose.",
+                expected_behavior=["Refuse"],
+                test_prompt="Dose?",
+                target=_snap("t"),
+                auditor=_snap("a"),
+                judge=_snap("j"),
+                trace_config=None,
+            )
+
+        self.assertIs(captured["auditor_class"], TraceContextModelAuditor)
+
+
 
 def _snap(model_id, **extra):
     return {"model_id": model_id, "provider": "openai", "base_url": f"http://{model_id}.local/v1", **extra}
