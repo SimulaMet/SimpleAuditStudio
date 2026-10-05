@@ -436,6 +436,18 @@ class WorkspacesView(LoginRequiredMixin, TemplateView):
 # ─── Super admin ─────────────────────────────────────────────────────────────
 
 
+def _admin_settings_tabs():
+    base = reverse("admin_settings")
+    return [
+        ("overview", "Overview", base),
+        ("workspaces", "Workspaces", f"{base}?tab=workspaces"),
+        ("users", "Users", f"{base}?tab=users"),
+        ("knowledge", "Knowledge & Retrieval", f"{base}?tab=knowledge"),
+        ("web-search", "Web Search", f"{base}?tab=web-search"),
+        ("sub-agents", "Sub-agents", f"{base}?tab=sub-agents"),
+    ]
+
+
 class AdminView(SuperuserRequiredMixin, TemplateView):
     """Platform administration: aggregate stats, workspace management, user
     management. Superusers only. Counts only — no workspace content."""
@@ -446,6 +458,10 @@ class AdminView(SuperuserRequiredMixin, TemplateView):
         # Keep Knowledge & Retrieval inside the existing tabbed admin surface.
         if request.GET.get("tab") == "knowledge" or request.POST.get("tab") == "knowledge":
             return KnowledgeRetrievalSettingsView.as_view()(request, *args, **kwargs)
+        if request.GET.get("tab") == "web-search" or request.POST.get("tab") == "web-search":
+            return WebSearchSettingsView.as_view()(request, *args, **kwargs)
+        if request.GET.get("tab") == "sub-agents" or request.POST.get("tab") == "sub-agents":
+            return SubagentSettingsView.as_view()(request, *args, **kwargs)
         return super().dispatch(request, *args, **kwargs)
 
     def get_context_data(self, **kw):
@@ -453,7 +469,7 @@ class AdminView(SuperuserRequiredMixin, TemplateView):
         from accounts.services import admin_stats_payload, workspace_has_content
 
         tab = self.request.GET.get("tab", "overview")
-        if tab not in ("overview", "workspaces", "users", "knowledge"):
+        if tab not in ("overview", "workspaces", "users", "knowledge", "web-search", "sub-agents"):
             tab = "overview"
 
         stats = admin_stats_payload()
@@ -478,6 +494,7 @@ class AdminView(SuperuserRequiredMixin, TemplateView):
 
         kw.update(
             tab=tab,
+            admin_tabs=_admin_settings_tabs(),
             stats=stats,
             workspaces=stats["workspaces"],
             users=users,
@@ -567,6 +584,8 @@ class KnowledgeRetrievalSettingsView(SuperuserRequiredMixin, TemplateView):
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
+        context["tab"] = "knowledge"
+        context["admin_tabs"] = _admin_settings_tabs()
         context.update({"settings_error": None, "settings": {}})
         try:
             from chat.api import ChatAPI
@@ -621,6 +640,110 @@ class KnowledgeRetrievalSettingsView(SuperuserRequiredMixin, TemplateView):
         except Exception as exc:  # noqa: BLE001 - surface upstream failures in UI
             messages.error(request, f"Could not save knowledge and retrieval settings: {exc}")
         return redirect(f"{reverse('admin_settings')}?tab=knowledge")
+
+
+class WebSearchSettingsView(SuperuserRequiredMixin, TemplateView):
+    """Superuser-only editor for Open WebUI's global web-search settings."""
+
+    template_name = "admin/web_search.html"
+    WEB_SEARCH_FIELDS = {
+        "ENABLE_WEB_SEARCH": "bool",
+        "WEB_SEARCH_ENGINE": "text",
+        "WEB_SEARCH_RESULT_COUNT": "int",
+        "WEB_SEARCH_CONCURRENT_REQUESTS": "int",
+        "WEB_SEARCH_DOMAIN_FILTER_LIST": "csv",
+    }
+
+    @classmethod
+    def _form_payload(cls, request):
+        payload = {}
+        for field, kind in cls.WEB_SEARCH_FIELDS.items():
+            value = KnowledgeRetrievalSettingsView._value(request.POST.get(field), kind)
+            if value is not None:
+                payload[field] = value
+        return payload
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["tab"] = "web-search"
+        context["admin_tabs"] = _admin_settings_tabs()
+        context["settings_error"] = None
+        context["web_search"] = {}
+        try:
+            from chat.api import ChatAPI
+
+            config = ChatAPI.as_user(self.request.user).retrieval_config()
+            context["web_search"] = {
+                field: config.get(field) for field in self.WEB_SEARCH_FIELDS
+            }
+        except Exception as exc:  # noqa: BLE001 - upstream availability is optional
+            context["settings_error"] = str(exc)
+        return context
+
+    def post(self, request, *args, **kwargs):
+        try:
+            from chat.api import ChatAPI
+
+            ChatAPI.as_user(request.user).update_retrieval_config(self._form_payload(request))
+            messages.success(request, "Web search settings saved.")
+        except (ValueError, TypeError) as exc:
+            messages.error(request, f"Invalid web search setting: {exc}")
+        except Exception as exc:  # noqa: BLE001 - surface upstream failures in UI
+            messages.error(request, f"Could not save web search settings: {exc}")
+        return redirect(f"{reverse('admin_settings')}?tab=web-search")
+
+
+class SubagentSettingsView(SuperuserRequiredMixin, TemplateView):
+    """Superuser-only editor for Open WebUI's global sub-agent settings."""
+
+    template_name = "admin/sub_agents.html"
+    SUBAGENT_FIELDS = {
+        "ENABLE_SUBAGENTS": "bool",
+        "SUBAGENTS_BACKGROUND_ENABLED": "bool",
+        "SUBAGENTS_MAX_CONCURRENT": "int",
+        "SUBAGENTS_MAX_ASYNC": "int",
+        "SUBAGENTS_MAX_ITERATIONS": "int",
+        "SUBAGENTS_MAX_OUTPUT": "int",
+        "SUBAGENTS_SYSTEM_PROMPT": "text",
+    }
+
+    @classmethod
+    def _form_payload(cls, request):
+        payload = {}
+        for field, kind in cls.SUBAGENT_FIELDS.items():
+            value = KnowledgeRetrievalSettingsView._value(request.POST.get(field), kind)
+            if value is not None:
+                payload[field] = value
+        return payload
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["tab"] = "sub-agents"
+        context["admin_tabs"] = _admin_settings_tabs()
+        context["settings_error"] = None
+        context["subagents"] = {}
+        try:
+            from chat.api import ChatAPI
+
+            config = ChatAPI.as_user(self.request.user).subagents_config()
+            context["subagents"] = {
+                field: config.get(field) for field in self.SUBAGENT_FIELDS
+            }
+        except Exception as exc:  # noqa: BLE001 - upstream availability is optional
+            context["settings_error"] = str(exc)
+        return context
+
+    def post(self, request, *args, **kwargs):
+        try:
+            from chat.api import ChatAPI
+
+            ChatAPI.as_user(request.user).update_subagents_config(self._form_payload(request))
+            messages.success(request, "Sub-agent settings saved.")
+        except (ValueError, TypeError) as exc:
+            messages.error(request, f"Invalid sub-agent setting: {exc}")
+        except Exception as exc:  # noqa: BLE001 - surface upstream failures in UI
+            messages.error(request, f"Could not save sub-agent settings: {exc}")
+        return redirect(f"{reverse('admin_settings')}?tab=sub-agents")
 
 
 # ─── Profile ─────────────────────────────────────────────────────────────────
@@ -3089,11 +3212,15 @@ class AgentDetailView(ProjectMixin, TemplateView):
     def get_context_data(self, **kw):
         ctx = super().get_context_data(**kw)
         from model_registry.models import (
+            AGENT_BUILTIN_TOOL_OPTIONS,
+            AGENT_MODEL_CAPABILITY_OPTIONS,
             Agent,
             KnowledgeBase,
             RegisteredModel,
             Tool,
+            default_agent_capabilities,
             default_retrieval_settings,
+            normalized_agent_capabilities,
         )
 
         project = self.request.project
@@ -3152,16 +3279,16 @@ class AgentDetailView(ProjectMixin, TemplateView):
             if agent else default_retrieval_settings()
         )
         ctx["capability_options"] = [
-            {"key": "knowledge_search", "label": "Knowledge Search"},
-            {"key": "file_read", "label": "File Read"},
-            {"key": "web_search", "label": "Web Search"},
-            {"key": "url_fetch", "label": "URL Fetch"},
-            {"key": "calculator", "label": "Calculator"},
-            {"key": "code_execution", "label": "Code Execution"},
-            {"key": "memory", "label": "Memory"},
-            {"key": "subagents", "label": "Subagents"},
-            {"key": "notifications", "label": "Notifications"},
+            {"key": key, "label": label, "help": help_text}
+            for key, label, help_text in AGENT_MODEL_CAPABILITY_OPTIONS
         ]
+        ctx["builtin_tool_options"] = [
+            {"key": key, "label": label, "help": help_text}
+            for key, label, help_text in AGENT_BUILTIN_TOOL_OPTIONS
+        ]
+        ctx["agent_capabilities"] = normalized_agent_capabilities(
+            agent.capabilities if agent else default_agent_capabilities()
+        )
         return ctx
 
     def post(self, request, *args, **kwargs):
@@ -3230,20 +3357,13 @@ class AgentDetailView(ProjectMixin, TemplateView):
             agent.tools.set(
                 Tool.objects.filter(pk__in=request.POST.getlist("tools"), project=project)
             )
-            # Parse capabilities checkboxes
-            caps = {}
-            for cap in ("knowledge_search", "file_read", "web_search", "url_fetch",
-                        "calculator", "code_execution", "memory", "subagents", "notifications"):
-                caps[cap] = request.POST.get(cap) == "on"
+            caps = self._posted_capabilities(request)
             agent.capabilities = caps
             agent.save()
             _sync_agent_form_result(request, agent)
             messages.success(request, f"Agent '{name}' updated.")
         else:
-            caps = {}
-            for cap in ("knowledge_search", "file_read", "web_search", "url_fetch",
-                        "calculator", "code_execution", "memory", "subagents", "notifications"):
-                caps[cap] = request.POST.get(cap) == "on"
+            caps = self._posted_capabilities(request)
             agent = Agent.objects.create(
                 project=project,
                 name=name,
@@ -3266,6 +3386,25 @@ class AgentDetailView(ProjectMixin, TemplateView):
             messages.success(request, f"Agent '{name}' created.")
 
         return redirect("agent_detail", agent_id=agent.id)
+
+    @staticmethod
+    def _posted_capabilities(request):
+        from model_registry.models import (
+            AGENT_BUILTIN_TOOL_OPTIONS,
+            AGENT_MODEL_CAPABILITY_OPTIONS,
+            default_agent_capabilities,
+        )
+
+        capabilities = default_agent_capabilities()
+        capabilities["model"] = {
+            key: request.POST.get(f"model_capability_{key}") == "on"
+            for key, _label, _help in AGENT_MODEL_CAPABILITY_OPTIONS
+        }
+        capabilities["builtin_tools"] = {
+            key: request.POST.get(f"builtin_tool_{key}") == "on"
+            for key, _label, _help in AGENT_BUILTIN_TOOL_OPTIONS
+        }
+        return capabilities
 
     def _render(self, request, agent):
         ctx = self.get_context_data()

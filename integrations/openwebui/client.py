@@ -17,6 +17,7 @@ from model_registry.models import (
     Agent,
     KnowledgeBase,
     Tool,
+    normalized_agent_capabilities,
 )
 
 logger = logging.getLogger(__name__)
@@ -182,8 +183,14 @@ class OpenWebUIAdapter:
         base_model_id = self.agent_base_model_id(agent)
         knowledge = self._knowledge_refs(agent)
         retrieval = agent.retrieval_settings or {}
+        capabilities = normalized_agent_capabilities(agent.capabilities)
+        # Knowledge context is derived from Studio's attached knowledge bases;
+        # it is not a second agent checkbox.
+        capabilities["model"]["file_context"] = bool(knowledge)
         description = agent.system_prompt or agent.description or agent.name
         metadata = {
+            "capabilities": capabilities["model"],
+            "builtinTools": capabilities["builtin_tools"],
             "simpleaudit": {
                 "retrieval": agent.retrieval_settings,
             },
@@ -266,6 +273,8 @@ class OpenWebUIAdapter:
             "base_model_id": item.get("base_model_id"),
             "description": meta.get("description") or "",
             "knowledge": meta.get("knowledge") or [],
+            "capabilities": meta.get("capabilities") or {},
+            "builtin_tools": meta.get("builtinTools") or {},
             "is_active": item.get("is_active", True),
         }
 

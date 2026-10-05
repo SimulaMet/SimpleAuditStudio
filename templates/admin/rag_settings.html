@@ -1,21 +1,13 @@
 {% extends "base.html" %}
 {% block title %}Knowledge &amp; Retrieval — SimpleAudit{% endblock %}
 {% block content %}
-<div class="max-w-4xl">
-  <div class="flex items-center justify-between mb-5">
-    <div>
-      <h1 class="text-lg font-semibold text-gray-100">Knowledge &amp; Retrieval</h1>
-      <p class="text-sm text-gray-500 mt-1">Instance-wide document retrieval settings. Superusers only.</p>
-    </div>
-    <a href="{% url 'admin_settings' %}" class="text-xs text-gray-400 hover:text-white">← Admin settings</a>
+<div class="max-w-none">
+  <div class="mb-5">
+    <h1 class="text-lg font-semibold text-gray-100">Knowledge &amp; Retrieval</h1>
+    <p class="text-sm text-gray-500 mt-1">Instance-wide document retrieval settings. Superusers only.</p>
   </div>
 
-  <div class="flex gap-1 mb-5 border-b border-gray-800">
-    <a href="{% url 'admin_settings' %}" class="px-3 py-2 text-sm rounded-t-lg text-gray-400 hover:text-gray-200">Overview</a>
-    <a href="{% url 'admin_settings' %}?tab=workspaces" class="px-3 py-2 text-sm rounded-t-lg text-gray-400 hover:text-gray-200">Workspaces</a>
-    <a href="{% url 'admin_settings' %}?tab=users" class="px-3 py-2 text-sm rounded-t-lg text-gray-400 hover:text-gray-200">Users</a>
-    <a href="{% url 'admin_settings' %}?tab=knowledge" class="px-3 py-2 text-sm rounded-t-lg bg-accent/15 text-accent font-medium border-b-2 border-accent">Knowledge &amp; Retrieval</a>
-  </div>
+  {% include "admin/_tabs.html" %}
 
   {% if settings_error %}
   <div class="mb-5 rounded-lg border border-amber-800/60 bg-amber-900/20 px-4 py-3 text-sm text-amber-300">
@@ -26,28 +18,38 @@
   <form method="post" class="space-y-5">
     {% csrf_token %}
 
-    <fieldset class="bg-surface-raised rounded-xl border border-gray-800 p-4 space-y-4">
-      <legend class="px-2 text-xs font-semibold text-gray-300 uppercase tracking-wide">Embedding</legend>
-      <p class="text-xs text-gray-500">Controls how uploaded documents are converted into searchable vectors. These settings affect indexing and re-indexing.</p>
-      <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-        {% include "admin/_rag_text.html" with name="RAG_EMBEDDING_ENGINE" label="Embedding engine" value=embedding.RAG_EMBEDDING_ENGINE placeholder="ollama, openai, azure_openai" help="The service that creates vector embeddings for documents." %}
-        {% include "admin/_rag_text.html" with name="RAG_EMBEDDING_MODEL" label="Embedding model" value=embedding.RAG_EMBEDDING_MODEL placeholder="sentence-transformers/all-MiniLM-L6-v2" help="The model used to turn document text into vectors." %}
-        {% include "admin/_rag_number.html" with name="RAG_EMBEDDING_BATCH_SIZE" label="Embedding batch size" value=embedding.RAG_EMBEDDING_BATCH_SIZE help="Number of text chunks embedded in one request." %}
-        {% include "admin/_rag_number.html" with name="RAG_EMBEDDING_CONCURRENT_REQUESTS" label="Concurrent embedding requests" value=embedding.RAG_EMBEDDING_CONCURRENT_REQUESTS help="Maximum number of embedding requests processed at once." %}
-      </div>
-      <label class="flex items-center gap-2 text-sm text-gray-300">
-        <input type="checkbox" name="ENABLE_ASYNC_EMBEDDING" {% if embedding.ENABLE_ASYNC_EMBEDDING %}checked{% endif %} class="rounded border-gray-600 bg-surface-overlay text-accent">
-        Enable asynchronous embedding
-      </label>
-      <p class="text-xs text-gray-500">Provider API keys are write-only here. Leave a key blank to keep the existing key.</p>
-      <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-        {% include "admin/_rag_text.html" with name="RAG_OPENAI_BASE_URL" label="OpenAI-compatible embedding URL" value=embedding.openai_config.url placeholder="https://…" %}
-        {% include "admin/_rag_text.html" with name="RAG_OPENAI_API_KEY" label="OpenAI embedding API key" value=embedding.openai_config.key type="password" placeholder="Leave blank to keep" %}
-        {% include "admin/_rag_text.html" with name="RAG_OLLAMA_BASE_URL" label="Ollama embedding URL" value=embedding.ollama_config.url placeholder="http://ollama:11434" %}
-        {% include "admin/_rag_text.html" with name="RAG_OLLAMA_API_KEY" label="Ollama API key" value=embedding.ollama_config.key type="password" placeholder="Leave blank to keep" %}
-        {% include "admin/_rag_text.html" with name="RAG_AZURE_OPENAI_BASE_URL" label="Azure OpenAI embedding URL" value=embedding.azure_openai_config.url placeholder="https://…" %}
-        {% include "admin/_rag_text.html" with name="RAG_AZURE_OPENAI_API_KEY" label="Azure OpenAI API key" value=embedding.azure_openai_config.key type="password" placeholder="Leave blank to keep" %}
-        {% include "admin/_rag_text.html" with name="RAG_AZURE_OPENAI_API_VERSION" label="Azure API version" value=embedding.azure_openai_config.version placeholder="2024-02-15-preview" %}
+    <fieldset class="space-y-4 rounded-xl border border-gray-800 bg-surface-raised p-4">
+      <div class="space-y-4">
+        <div>
+          <legend class="px-2 text-xs font-semibold uppercase tracking-wide text-gray-300">Embedding</legend>
+          <p class="mt-1 text-sm text-gray-500">Choose the one service that converts uploaded documents into searchable vectors. These settings affect indexing and re-indexing.</p>
+        </div>
+        <div class="grid grid-cols-1 gap-4 md:grid-cols-2">
+          <label class="form-control"><span class="label-text text-xs text-gray-400">Embedding service</span>
+            <select id="embedding-engine" name="RAG_EMBEDDING_ENGINE" class="select select-sm mt-1 w-full bg-surface-overlay text-gray-100">
+              <option value="" {% if not embedding.RAG_EMBEDDING_ENGINE %}selected{% endif %}>Local</option>
+              <option value="ollama" {% if embedding.RAG_EMBEDDING_ENGINE == 'ollama' %}selected{% endif %}>Ollama</option>
+              <option value="openai" {% if embedding.RAG_EMBEDDING_ENGINE == 'openai' %}selected{% endif %}>OpenAI-compatible</option>
+              <option value="azure_openai" {% if embedding.RAG_EMBEDDING_ENGINE == 'azure_openai' %}selected{% endif %}>Azure OpenAI</option>
+              {% if embedding.RAG_EMBEDDING_ENGINE and embedding.RAG_EMBEDDING_ENGINE != 'ollama' and embedding.RAG_EMBEDDING_ENGINE != 'openai' and embedding.RAG_EMBEDDING_ENGINE != 'azure_openai' %}<option value="{{ embedding.RAG_EMBEDDING_ENGINE }}" selected>{{ embedding.RAG_EMBEDDING_ENGINE }} (current)</option>{% endif %}
+            </select>
+            <span class="label-text-alt mt-1 text-gray-600">Only the selected service’s connection fields are shown.</span>
+          </label>
+          <label class="form-control"><span class="label-text text-xs text-gray-400">Embedding model</span><input type="text" name="RAG_EMBEDDING_MODEL" value="{{ embedding.RAG_EMBEDDING_MODEL|default:'' }}" placeholder="sentence-transformers/all-MiniLM-L6-v2" class="input input-sm mt-1 w-full bg-surface-overlay text-gray-100"><span class="label-text-alt mt-1 text-gray-600">The model used to turn document text into vectors.</span></label>
+          <label class="form-control"><span class="label-text text-xs text-gray-400">Batch size</span><input type="number" min="1" name="RAG_EMBEDDING_BATCH_SIZE" value="{{ embedding.RAG_EMBEDDING_BATCH_SIZE|default:'' }}" class="input input-sm mt-1 w-full bg-surface-overlay text-gray-100"></label>
+          <label class="form-control"><span class="label-text text-xs text-gray-400">Concurrent requests</span><input type="number" min="1" name="RAG_EMBEDDING_CONCURRENT_REQUESTS" value="{{ embedding.RAG_EMBEDDING_CONCURRENT_REQUESTS|default:'' }}" class="input input-sm mt-1 w-full bg-surface-overlay text-gray-100"></label>
+        </div>
+        <div data-embedding-provider="ollama" class="card card-border border-gray-800/80 bg-surface-overlay {% if embedding.RAG_EMBEDDING_ENGINE != 'ollama' %}hidden{% endif %}">
+          <div class="card-body gap-3 p-4"><h3 class="text-sm font-medium text-gray-200">Ollama connection</h3><label class="form-control"><span class="label-text text-xs text-gray-400">Ollama URL</span><input type="text" name="RAG_OLLAMA_BASE_URL" value="{{ embedding.ollama_config.url|default:'' }}" placeholder="http://ollama:11434" class="input input-sm mt-1 w-full bg-surface text-gray-100"></label><label class="form-control"><span class="label-text text-xs text-gray-400">API key <span class="text-gray-600">(optional)</span></span><input type="password" name="RAG_OLLAMA_API_KEY" value="{{ embedding.ollama_config.key|default:'' }}" placeholder="Leave blank to keep existing key" class="input input-sm mt-1 w-full bg-surface text-gray-100"></label></div>
+        </div>
+        <div data-embedding-provider="openai" class="card card-border border-gray-800/80 bg-surface-overlay {% if embedding.RAG_EMBEDDING_ENGINE != 'openai' %}hidden{% endif %}">
+          <div class="card-body gap-3 p-4"><h3 class="text-sm font-medium text-gray-200">OpenAI-compatible connection</h3><label class="form-control"><span class="label-text text-xs text-gray-400">Base URL</span><input type="text" name="RAG_OPENAI_BASE_URL" value="{{ embedding.openai_config.url|default:'' }}" placeholder="https://api.openai.com/v1" class="input input-sm mt-1 w-full bg-surface text-gray-100"></label><label class="form-control"><span class="label-text text-xs text-gray-400">API key</span><input type="password" name="RAG_OPENAI_API_KEY" value="{{ embedding.openai_config.key|default:'' }}" placeholder="Leave blank to keep existing key" class="input input-sm mt-1 w-full bg-surface text-gray-100"></label></div>
+        </div>
+        <div data-embedding-provider="azure_openai" class="card card-border border-gray-800/80 bg-surface-overlay {% if embedding.RAG_EMBEDDING_ENGINE != 'azure_openai' %}hidden{% endif %}">
+          <div class="card-body gap-3 p-4"><h3 class="text-sm font-medium text-gray-200">Azure OpenAI connection</h3><label class="form-control"><span class="label-text text-xs text-gray-400">Base URL</span><input type="text" name="RAG_AZURE_OPENAI_BASE_URL" value="{{ embedding.azure_openai_config.url|default:'' }}" placeholder="https://…" class="input input-sm mt-1 w-full bg-surface text-gray-100"></label><div class="grid grid-cols-1 gap-3 md:grid-cols-2"><label class="form-control"><span class="label-text text-xs text-gray-400">API key</span><input type="password" name="RAG_AZURE_OPENAI_API_KEY" value="{{ embedding.azure_openai_config.key|default:'' }}" placeholder="Leave blank to keep existing key" class="input input-sm mt-1 w-full bg-surface text-gray-100"></label><label class="form-control"><span class="label-text text-xs text-gray-400">API version</span><input type="text" name="RAG_AZURE_OPENAI_API_VERSION" value="{{ embedding.azure_openai_config.version|default:'' }}" placeholder="2024-02-15-preview" class="input input-sm mt-1 w-full bg-surface text-gray-100"></label></div></div>
+        </div>
+        <label class="flex cursor-pointer items-start gap-3 text-sm text-gray-300"><input type="checkbox" name="ENABLE_ASYNC_EMBEDDING" {% if embedding.ENABLE_ASYNC_EMBEDDING %}checked{% endif %} class="toggle toggle-sm mt-0.5"><span><span class="block font-medium text-gray-200">Enable asynchronous embedding</span><span class="block text-xs text-gray-500">Process multiple document chunks without blocking the request.</span></span></label>
+        <div role="note" class="alert alert-info text-xs">Provider keys are write-only here. Leave a key blank to keep the existing key.</div>
       </div>
     </fieldset>
 
@@ -102,4 +104,20 @@
     </div>
   </form>
 </div>
+<script>
+  (() => {
+    const engine = document.getElementById('embedding-engine');
+    const providers = document.querySelectorAll('[data-embedding-provider]');
+    if (!engine) return;
+    const updateProvider = () => {
+      providers.forEach((provider) => {
+        const active = provider.dataset.embeddingProvider === engine.value;
+        provider.classList.toggle('hidden', !active);
+        provider.querySelectorAll('input').forEach((input) => { input.disabled = !active; });
+      });
+    };
+    engine.addEventListener('change', updateProvider);
+    updateProvider();
+  })();
+</script>
 {% endblock %}

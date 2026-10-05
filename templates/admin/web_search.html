@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block title %}Web Search — SimpleAudit{% endblock %}
+{% block content %}
+<div class="max-w-none">
+  <div class="mb-5">
+    <h1 class="text-lg font-semibold text-gray-100">Web Search</h1>
+    <p class="mt-1 text-sm text-gray-500">Platform-wide web-search configuration.</p>
+  </div>
+  {% include "admin/_tabs.html" %}
+  {% if settings_error %}<div role="alert" class="alert alert-warning mt-5 text-sm">Web-search settings are unavailable: {{ settings_error }}</div>{% endif %}
+  <form method="post" class="mt-5 space-y-6">
+    {% csrf_token %}
+    <fieldset class="space-y-4 rounded-xl border border-gray-800 bg-surface-raised p-4">
+      <legend class="px-2 text-xs font-semibold uppercase tracking-wide text-gray-300">Service access</legend>
+      <p class="text-xs text-gray-500">This is the platform gate. Agents still need Web Search enabled individually.</p>
+      <label class="flex items-start gap-2 text-sm text-gray-300" title="Allow Open WebUI to perform external web searches.">
+        <input type="checkbox" name="ENABLE_WEB_SEARCH" {% if web_search.ENABLE_WEB_SEARCH %}checked{% endif %} class="checkbox checkbox-sm mt-0.5">
+        <span><span class="block text-gray-200">Allow web search</span><span class="block text-xs text-gray-500">Keep off unless an audit scenario explicitly requires external results.</span></span>
+      </label>
+    </fieldset>
+    <fieldset class="space-y-4 rounded-xl border border-gray-800 bg-surface-raised p-4">
+      <legend class="px-2 text-xs font-semibold uppercase tracking-wide text-gray-300">Search behavior</legend>
+      <p class="text-xs text-gray-500">These values are read and written through Open WebUI. Provider credentials remain outside Studio.</p>
+      <div class="grid grid-cols-1 gap-4 md:grid-cols-2">
+        <label class="block text-xs text-gray-400" title="The Open WebUI search backend, such as DuckDuckGo, Brave, or SearXNG.">Search engine<input type="text" name="WEB_SEARCH_ENGINE" value="{{ web_search.WEB_SEARCH_ENGINE|default:'' }}" placeholder="duckduckgo, brave, searxng…" class="mt-1 w-full rounded-lg border border-gray-700 bg-surface-overlay px-3 py-2 text-sm text-gray-100"></label>
+        <label class="block text-xs text-gray-400" title="Maximum number of results returned for one search.">Results per query<input type="number" min="1" name="WEB_SEARCH_RESULT_COUNT" value="{{ web_search.WEB_SEARCH_RESULT_COUNT|default:'' }}" class="mt-1 w-full rounded-lg border border-gray-700 bg-surface-overlay px-3 py-2 text-sm text-gray-100"></label>
+        <label class="block text-xs text-gray-400" title="Maximum number of search requests processed concurrently.">Concurrent requests<input type="number" min="0" name="WEB_SEARCH_CONCURRENT_REQUESTS" value="{{ web_search.WEB_SEARCH_CONCURRENT_REQUESTS|default:'' }}" class="mt-1 w-full rounded-lg border border-gray-700 bg-surface-overlay px-3 py-2 text-sm text-gray-100"></label>
+        <label class="block text-xs text-gray-400" title="Optional comma-separated allowlist of domains.">Allowed domains<input type="text" name="WEB_SEARCH_DOMAIN_FILTER_LIST" value="{{ web_search.WEB_SEARCH_DOMAIN_FILTER_LIST|join:', ' }}" placeholder="example.com, docs.example.com" class="mt-1 w-full rounded-lg border border-gray-700 bg-surface-overlay px-3 py-2 text-sm text-gray-100"><span class="mt-1 block text-[11px] text-gray-600">Leave empty to allow any domain.</span></label>
+      </div>
+    </fieldset>
+    <div class="flex flex-wrap items-center gap-3"><input type="hidden" name="tab" value="web-search"><button type="submit" class="rounded-lg bg-accent px-4 py-2 text-sm font-medium text-white hover:bg-accent-hover">Save settings</button><span class="text-xs text-amber-400">External results are time-varying and should be recorded in audit scenarios.</span></div>
+  </form>
+</div>
+{% endblock %}
