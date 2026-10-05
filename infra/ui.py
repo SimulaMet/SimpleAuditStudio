@@ -2828,18 +2828,29 @@ def _sync_openwebui_resources(project, user):
             if not external_id:
                 continue
             name = item.get("name") or external_id
-            # Key on name — the UNIQUE(project, name) column — not external_id.
-            # Keying on external_id could CREATE a row whose name already exists
-            # under a different/empty external_id (e.g. right after the seed or
-            # chat-ready backfill creates it) and violate the unique constraint.
-            KnowledgeBase.objects.update_or_create(
-                project=project,
-                name=name,
-                defaults={
-                    "external_id": external_id,
-                    "description": item.get("description") or "",
-                },
-            )
+            description = item.get("description") or ""
+            # Two-step upsert: external_id is OWUI's stable identity; name is
+            # the local identity used by the seed before external_id is known.
+            # 1) match on external_id (handles renames in OWUI),
+            # 2) match on name (handles seeded rows with external_id=""),
+            # 3) create.
+            existing = KnowledgeBase.objects.filter(
+                project=project, external_id=external_id
+            ).first()
+            if existing is None:
+                existing = KnowledgeBase.objects.filter(
+                    project=project, name=name
+                ).first()
+            if existing is not None:
+                existing.name = name
+                existing.external_id = external_id
+                existing.description = description
+                existing.save(update_fields=["name", "external_id", "description", "updated_at"])
+            else:
+                KnowledgeBase.objects.create(
+                    project=project, name=name,
+                    external_id=external_id, description=description,
+                )
             kb_count += 1
     except ChatAPIError:
         pass
