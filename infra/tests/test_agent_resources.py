@@ -6,6 +6,7 @@ from django.test import TestCase
 
 from accounts.models import ProjectMembership
 from infra.tests.factories import ProjectFactory, UserFactory
+from model_registry.models import KnowledgeBase
 
 
 def _member(project, *, is_admin=True):
@@ -92,6 +93,32 @@ class AgentResourcesViewTest(TestCase):
         resp = self.client.get("/agents/tools/")
         self.assertEqual(resp.status_code, 302)
         self.assertIn("/login/", resp["Location"])
+
+    def test_sync_updates_seeded_kb_by_name_not_duplicate(self):
+        """The seed / chat-ready backfill creates a KB row keyed by name, often
+        with a still-empty external_id. When the ⟳ Sync then lists the same KB
+        from OWUI, it must UPDATE that row (filling external_id), not CREATE a
+        second one whose name already exists — that raised
+        ``UNIQUE constraint failed: project_id, name`` (a 500 on /agents/sync/)."""
+        from infra.ui import _sync_openwebui_resources
+
+        user = _member(self.project)
+        seeded = KnowledgeBase.objects.create(
+            project=self.project, name="Acme Retail Policy", external_id=""
+        )
+        api = mock.Mock()
+        api.knowledge_bases.return_value = [
+            {"id": "owui-kb-1", "name": "Acme Retail Policy", "description": "d"}
+        ]
+        api.tools.return_value = []
+
+        with mock.patch("chat.api.ChatAPI.as_user", return_value=api):
+            kb_count, tool_count = _sync_openwebui_resources(self.project, user)
+
+        self.assertEqual((kb_count, tool_count), (1, 0))
+        # Same row updated, not duplicated.
+        self.assertEqual(KnowledgeBase.objects.count(), 1)
+        self.assertEqual(KnowledgeBase.objects.get(pk=seeded.pk).external_id, "owui-kb-1")
 
 
 class AgentResourcesNavTest(TestCase):

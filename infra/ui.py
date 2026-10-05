@@ -2827,11 +2827,16 @@ def _sync_openwebui_resources(project, user):
             external_id = item.get("id", "")
             if not external_id:
                 continue
+            name = item.get("name") or external_id
+            # Key on name — the UNIQUE(project, name) column — not external_id.
+            # Keying on external_id could CREATE a row whose name already exists
+            # under a different/empty external_id (e.g. right after the seed or
+            # chat-ready backfill creates it) and violate the unique constraint.
             KnowledgeBase.objects.update_or_create(
                 project=project,
-                external_id=external_id,
+                name=name,
                 defaults={
-                    "name": item.get("name") or external_id,
+                    "external_id": external_id,
                     "description": item.get("description") or "",
                 },
             )
