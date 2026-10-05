@@ -144,6 +144,14 @@ class Command(BaseCommand):
             help="Do not open the default browser signed in; the one-time "
                  "sign-in link is still printed.",
         )
+        parser.add_argument(
+            "--no-force-kill", action="store_true",
+            help="Never stop another Studio instance or derivative to free a port.",
+        )
+        parser.add_argument(
+            "--yes", action="store_true",
+            help="Automatically stop a conflicting Studio-owned process.",
+        )
 
     def handle(self, *args, **options):
         # The legacy non-embedded path (connect to external Postgres + Hatchet
@@ -212,6 +220,17 @@ class Command(BaseCommand):
         # web server binds the internal port instead; Caddy proxies the rest
         # of the site to it. Same topology as the docker deployment.
         from chat import config as _chat_config
+        from simpleaudit_studio import ports as _ports
+
+        _ports.ensure_stack_ports(
+            options["port"],
+            chat_enabled=_chat_config.ENABLED,
+            chat_internal_port=_chat_config.INTERNAL_PORT,
+            chat_upstream_url=_chat_config.UPSTREAM,
+            force_kill=not options["no_force_kill"],
+            yes=options["yes"],
+            command_hint="manage.py dev --port <free port>",
+        )
 
         web_port = _chat_config.INTERNAL_PORT if _chat_config.ENABLED else options["port"]
 
@@ -255,9 +274,11 @@ class Command(BaseCommand):
         if not options["no_reload"]:
             import subprocess
 
+            from simpleaudit_studio.process_guard import guarded_command
+
             cmd = [sys.executable, sys.argv[0], "runserver", f"0.0.0.0:{web_port}"]
             self.stdout.write(self.style.NOTICE(f"Starting web server at http://localhost:{web_port} (auto-reload on) ..."))
-            web_proc = subprocess.Popen(cmd)
+            web_proc = subprocess.Popen(guarded_command(cmd))
             time.sleep(2)  # give the reloader + server a moment to bind
         else:
             addr = f"0.0.0.0:{web_port}"

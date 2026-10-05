@@ -23,6 +23,7 @@ import signal
 import socket
 import time
 from dataclasses import dataclass
+from urllib.parse import urlsplit
 
 import psutil
 
@@ -34,11 +35,45 @@ import psutil
 # count.
 _STUDIO_MARKERS = ("simpleaudit_studio", "manage.py runserver")
 _STUDIO_SCRIPTS = ("/spin", "/simpleaudit-studio")
-_OPEN_WEBUI_MARKER = "open-webui"
+_OPEN_WEBUI_MARKERS = ("open-webui", "open_webui")
 _HATCHET_MARKER = "hatchet-embedded-sidecar"
 
 #: Occupants the CLI may stop on the user's behalf.
 OURS = ("studio", "open_webui", "hatchet_sidecar")
+
+
+def ensure_stack_ports(
+    public_port: int,
+    *,
+    chat_enabled: bool,
+    chat_internal_port: int,
+    chat_upstream_url: str,
+    force_kill: bool = True,
+    yes: bool = False,
+    command_hint: str = "manage.py dev --port <free port>",
+) -> None:
+    """Apply one port-conflict policy to every local entry point."""
+    if not chat_enabled:
+        resolve_port_conflict(
+            public_port, "the web server", command_hint,
+            force_kill=force_kill, yes=yes,
+        )
+        return
+    resolve_port_conflict(
+        public_port, "the chat front door", command_hint,
+        force_kill=force_kill, yes=yes,
+    )
+    if chat_internal_port != public_port:
+        resolve_port_conflict(
+            chat_internal_port, "the web server (internal)",
+            "SIMPLEAUDIT_CHAT_INTERNAL_PORT=<free port>",
+            force_kill=force_kill, yes=yes,
+        )
+    resolve_port_conflict(
+        urlsplit(chat_upstream_url).port or 8080, "chat's Open WebUI",
+        "SIMPLEAUDIT_CHAT_UPSTREAM=http://127.0.0.1:<free port>",
+        force_kill=force_kill, yes=yes,
+    )
 
 
 @dataclass(frozen=True)
@@ -101,7 +136,7 @@ def _classify_command(command: str) -> str:
     if any(token.endswith(script) for script in _STUDIO_SCRIPTS
            for token in command.split()):
         return "studio"
-    if _OPEN_WEBUI_MARKER in lowered:
+    if any(marker in lowered for marker in _OPEN_WEBUI_MARKERS):
         return "open_webui"
     if _HATCHET_MARKER in lowered:
         return "hatchet_sidecar"
