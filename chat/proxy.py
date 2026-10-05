@@ -32,6 +32,7 @@ from chat import config as chat
 
 logger = logging.getLogger(__name__)
 
+
 # Open WebUI is managed like the embedded Hatchet engine: one instance per
 # process, stopped on the way out (atexit as well as the CLI's own shutdown),
 # and a run that was hard-killed has its leftovers cleaned up by the next start.
@@ -334,8 +335,10 @@ def _start_caddy(port: int, internal_port: int) -> subprocess.Popen:
     # expand to nothing: spawn Caddy with WEBUI_SUBPATH cleared so a stray
     # value in our environment can't prepend a second path segment.
     caddy_env = {**os.environ, "WEBUI_SUBPATH": ""}
+    from simpleaudit_studio.process_guard import guarded_command
+
     process = subprocess.Popen(
-        [binary, "run", "--config", str(config), "--adapter", "caddyfile"],
+        guarded_command([binary, "run", "--config", str(config), "--adapter", "caddyfile"]),
         stdout=log, stderr=subprocess.STDOUT, start_new_session=True,
         env=caddy_env,
     )
@@ -777,8 +780,10 @@ def _spawn(home: Path, studio_port: int | None = None) -> subprocess.Popen:
     _log_file = log_path().open("a")
     # Its own process group, so stopping it reaches the server that `uvx` (or
     # any other launcher) starts as a child, not just the launcher.
+    from simpleaudit_studio.process_guard import guarded_command
+
     _process = subprocess.Popen(
-        argv, env=env, cwd=str(home),
+        guarded_command(argv), env=env, cwd=str(home),
         stdout=_log_file, stderr=subprocess.STDOUT, start_new_session=True,
     )
     # Never overwrite a file that records a *live* Open WebUI: that one

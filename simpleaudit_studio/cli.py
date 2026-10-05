@@ -380,37 +380,16 @@ def _ensure_ports_available(args) -> None:
     else — or a declined offer — ends the run with a free port and the exact
     flag or environment variable that moves the conflicting one.
     """
-    from urllib.parse import urlsplit
-
-    from simpleaudit_studio import ports
-
-    force_kill = not args.no_force_kill
-    yes = args.yes
-
     from chat import config as chat_config
-
-    if not chat_config.ENABLED:
-        ports.resolve_port_conflict(
-            args.port, "the web server", "spin --port <free port>",
-            force_kill=force_kill, yes=yes,
-        )
-        return
-
-    ports.resolve_port_conflict(
-        args.port, "the chat front door", "spin --port <free port>",
-        force_kill=force_kill, yes=yes,
-    )
-    if chat_config.INTERNAL_PORT != args.port:
-        ports.resolve_port_conflict(
-            chat_config.INTERNAL_PORT, "the web server (internal)",
-            "SIMPLEAUDIT_CHAT_INTERNAL_PORT=<free port>",
-            force_kill=force_kill, yes=yes,
-        )
-    upstream_port = urlsplit(chat_config.UPSTREAM).port or 8080
-    ports.resolve_port_conflict(
-        upstream_port, "chat's Open WebUI",
-        "SIMPLEAUDIT_CHAT_UPSTREAM=http://127.0.0.1:<free port>",
-        force_kill=force_kill, yes=yes,
+    from simpleaudit_studio import ports
+    ports.ensure_stack_ports(
+        args.port,
+        chat_enabled=chat_config.ENABLED,
+        chat_internal_port=chat_config.INTERNAL_PORT,
+        chat_upstream_url=chat_config.UPSTREAM,
+        force_kill=not args.no_force_kill,
+        yes=args.yes,
+        command_hint="spin --port <free port>",
     )
 
 
