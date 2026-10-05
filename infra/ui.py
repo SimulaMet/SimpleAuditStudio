@@ -3133,6 +3133,14 @@ class AgentDetailView(ProjectMixin, TemplateView):
             ctx["openwebui_live"] = agent_live_openwebui(agent, self.request.user)
         else:
             ctx["openwebui_live"] = None
+        ctx["openwebui_rag"] = None
+        if chat_enabled():
+            try:
+                from integrations.openwebui.client import OpenWebUIAdapter
+
+                ctx["openwebui_rag"] = OpenWebUIAdapter.for_admin().safe_rag_settings()
+            except Exception:  # noqa: BLE001 - the agent form remains usable when chat is down
+                logger.warning("Could not load Open WebUI RAG settings for agent form")
         ctx["retrieval_profiles"] = RetrievalProfile.objects.filter(project=project)
         ctx["capability_options"] = [
             {"key": "knowledge_search", "label": "Knowledge Search"},

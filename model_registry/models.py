@@ -389,7 +389,7 @@ class Agent(models.Model):
     def __str__(self) -> str:
         return self.name
 
-    def config_snapshot(self) -> dict:
+    def config_snapshot(self, *, server_rag: dict | None = None) -> dict:
         """A serialisable snapshot of the agent's full configuration.
 
         Used by audit runs to freeze the configuration at execution time so
@@ -422,7 +422,9 @@ class Agent(models.Model):
                 "bm25_weight": profile.bm25_weight,
                 "full_context": profile.full_context,
             } if profile else None,
+            # Read-only Open WebUI global RAG settings captured at audit-run
+            # creation. The live source remains Open WebUI.
+            "server_rag": server_rag,
             "capabilities": self.capabilities,
             "metadata": self.metadata,
         }
-
