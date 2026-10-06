@@ -378,6 +378,15 @@ class WheelMarkerTests(SimpleTestCase):
     rebuild so every existing machine picks up the pinned wheel.
     """
 
+    def test_default_wheel_is_content_capture_release(self):
+        self.assertIn("v0.11.4.3-subpath", proxy.OWUI_WHEEL_URL)
+        self.assertIn("open_webui-0.11.4.3-py3-none-any.whl", proxy.OWUI_WHEEL_URL)
+
+    def test_install_requirement_includes_observability_extra(self):
+        requirement = proxy._owui_install_requirement()
+        self.assertIn("open-webui[observability]", requirement)
+        self.assertIn(proxy.OWUI_WHEEL_URL, requirement)
+
     def test_missing_marker_is_a_mismatch(self):
         with tempfile.TemporaryDirectory() as tmp:
             self.assertFalse(proxy._managed_venv_matches_wheel(Path(tmp)))
