@@ -229,6 +229,16 @@ unset: the iframe loads the same-origin `/chat/`.
 | `SIMPLEAUDIT_CHAT_OTLP`         | `false`                  | export Open WebUI's spans to Studio's OTLP listener |
 | `SIMPLEAUDIT_CHAT_OTLP_ENDPOINT`| full OTLP listener URL   | the `/otlp/v1/traces` ingestion URL (embedded: `http://127.0.0.1:<port>/otlp/v1/traces`, docker: `http://web:8000/otlp/v1/traces`) — the exporter uses it as-is |
 | `SIMPLEAUDIT_CHAT_OTLP_SERVICE_NAME` | `open-webui`         | the service name Open WebUI tags its spans with |
+| `OTEL_GENAI_CAPTURE_INPUTS` | `true` in the Compose example | capture model input messages |
+| `OTEL_GENAI_CAPTURE_OUTPUTS` | `true` in the Compose example | capture model output messages |
+| `OTEL_GENAI_CAPTURE_SYSTEM_INSTRUCTIONS` | `true` in the Compose example | capture system instructions |
+| `OTEL_GENAI_CAPTURE_TOOL_ARGUMENTS` | `true` in the Compose example | capture tool arguments |
+| `OTEL_GENAI_CAPTURE_TOOL_RESULTS` | `true` in the Compose example | capture tool results |
+| `OTEL_GENAI_CAPTURE_RETRIEVAL_QUERY` | `true` in the Compose example | capture retrieval queries |
+| `OTEL_GENAI_CAPTURE_RETRIEVAL_DOCUMENTS` | `true` in the Compose example | capture retrieved document content |
+| `OTEL_GENAI_CAPTURE_EMBEDDING_TEXT` | `true` in the Compose example | capture embedding input text |
+| `OTEL_GENAI_CAPTURE_EMBEDDING_VECTORS` | `false` | capture embedding vectors |
+| `OTEL_GENAI_CONTENT_MAX_LENGTH` | `2000` | maximum characters per captured field |
 
 ## Exporting Open WebUI's spans to Studio (OTLP)
 
@@ -263,6 +273,9 @@ So enabling it is one line:
 ```bash
 # .env (docker) — or the equivalent environment in embedded mode
 SIMPLEAUDIT_CHAT_OTLP=true
+# The Compose example enables bounded GenAI content capture for the protected
+# Studio receiver. Keep the receiver access-controlled and turn individual
+# flags off when the corresponding content must not leave Open WebUI.
 ```
 
 For an authenticated target (a `basic` or `bearer` OTLP credential instead of a
