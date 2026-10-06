@@ -187,7 +187,7 @@ services:
   # forward /chat/* WITHOUT stripping the prefix (see the Caddyfile header).
   open-webui:
     profiles: ["chat"]
-    image: ${OPEN_WEBUI_IMAGE:-ghcr.io/sushantgautam/open-webui:v0.11.4.1-subpath}
+    image: ${OPEN_WEBUI_IMAGE:-ghcr.io/sushantgautam/open-webui:v0.11.4.3-subpath}
     environment:
       WEBUI_SUBPATH: /chat
       WEBUI_AUTH_TRUSTED_EMAIL_HEADER: X-Studio-Email
@@ -213,6 +213,18 @@ services:
       OTEL_OTLP_SPAN_EXPORTER: "http"
       OTEL_EXPORTER_OTLP_ENDPOINT: ${SIMPLEAUDIT_CHAT_OTLP_ENDPOINT:-http://web:8000/otlp/v1/traces}
       OTEL_SERVICE_NAME: ${SIMPLEAUDIT_CHAT_OTLP_SERVICE_NAME:-open-webui}
+      # M13 content capture: opt in only for this protected Studio receiver.
+      # Keep vectors off; captured values are truncated by Open WebUI.
+      OTEL_GENAI_CAPTURE_INPUTS: ${OTEL_GENAI_CAPTURE_INPUTS:-true}
+      OTEL_GENAI_CAPTURE_OUTPUTS: ${OTEL_GENAI_CAPTURE_OUTPUTS:-true}
+      OTEL_GENAI_CAPTURE_SYSTEM_INSTRUCTIONS: ${OTEL_GENAI_CAPTURE_SYSTEM_INSTRUCTIONS:-true}
+      OTEL_GENAI_CAPTURE_TOOL_ARGUMENTS: ${OTEL_GENAI_CAPTURE_TOOL_ARGUMENTS:-true}
+      OTEL_GENAI_CAPTURE_TOOL_RESULTS: ${OTEL_GENAI_CAPTURE_TOOL_RESULTS:-true}
+      OTEL_GENAI_CAPTURE_RETRIEVAL_QUERY: ${OTEL_GENAI_CAPTURE_RETRIEVAL_QUERY:-true}
+      OTEL_GENAI_CAPTURE_RETRIEVAL_DOCUMENTS: ${OTEL_GENAI_CAPTURE_RETRIEVAL_DOCUMENTS:-true}
+      OTEL_GENAI_CAPTURE_EMBEDDING_TEXT: ${OTEL_GENAI_CAPTURE_EMBEDDING_TEXT:-true}
+      OTEL_GENAI_CAPTURE_EMBEDDING_VECTORS: ${OTEL_GENAI_CAPTURE_EMBEDDING_VECTORS:-false}
+      OTEL_GENAI_CONTENT_MAX_LENGTH: ${OTEL_GENAI_CONTENT_MAX_LENGTH:-2000}
     volumes:
       - open_webui_data:/app/backend/data
     restart: unless-stopped
