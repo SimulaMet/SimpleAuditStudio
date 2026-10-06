@@ -111,8 +111,11 @@ def frozen_agent(run: AuditRun) -> dict | None:
     snap = run.agent_config_snapshot
     if not snap:
         return None
+    agent_id = snap.get("agent_id")
+    detail_url = f"/agents/{agent_id}/" if str(agent_id or "").isdigit() else ""
     return {
-        "id": snap.get("agent_id"),
+        "id": agent_id,
+        "detail_url": detail_url,
         "name": snap.get("name", "—"),
         "base_model": snap.get("base_model", {}),
         "system_prompt": snap.get("system_prompt", ""),
@@ -258,13 +261,18 @@ def create_audit_run(
     if trace_config is None:
         from model_registry.models import OTLPCredential
 
-        target_id = (
+        credential = (
             OTLPCredential.objects.filter(connection_id=target_model.connection_id, enabled=True)
-            .order_by("-created_at")
-            .values_list("target_id", flat=True)
-            .first()
+            .order_by("-created_at").first()
         )
-        trace_config = {"mode": "studio", "target_id": target_id or ""} if target_id else {}
+        if credential:
+            trace_config = {"mode": "studio", "target_id": credential.target_id}
+            # Preserve the legacy frozen shape for the default structural
+            # policy; only persist an explicit non-default capture choice.
+            if credential.capture_level != "structural":
+                trace_config["content_capture"] = credential.capture_level
+        else:
+            trace_config = {}
 
     now = timezone.now()
     agent_snapshot = None

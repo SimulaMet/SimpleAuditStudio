@@ -123,7 +123,7 @@
           <!-- Inline edit form (hidden by default) -->
           <div id="edit-scenario-{{ item.scenario.id }}" style="display:none" class="px-3 pb-3 pt-2 border-t border-gray-800 space-y-2">
             <form method="post" action="{% url 'scenario_edit' item.scenario.id %}" class="space-y-2"
-                  onsubmit="return confirmScenarioSave({{ item.scenario.id }}, this)">
+                  onsubmit="return confirmScenarioSave({{ item.scenario.id }}, this) && syncAgenticFields(this)">
               {% csrf_token %}
               <input type="hidden" name="set_id" value="{{ selected.id }}">
               <div class="grid grid-cols-2 gap-2">
@@ -142,6 +142,16 @@
               <label class="text-xs text-gray-500">Test prompt (optional)</label>
               <textarea name="test_prompt" rows="1" placeholder="Exact first user request for replay scenarios"
                         class="w-full px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-1 focus:ring-accent/50">{{ item.revision.test_prompt }}</textarea>
+              <label class="flex items-center gap-2 text-xs text-gray-500">
+                <input type="checkbox" name="agentic_scenario" value="1" {% if item.revision.metadata.agentic %}checked{% endif %}>
+                Agentic scenario
+              </label>
+              <div>
+                <label class="text-xs text-gray-500">Agentic metadata (JSON)</label>
+                <p class="text-[11px] text-gray-600 mb-1">Advanced editor for trace, tool, retrieval, trajectory, budget, policy, and enforcement expectations. It is preserved on revisions and exports.</p>
+                <textarea name="metadata" rows="5" spellcheck="false" class="w-full px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs font-mono focus:outline-none focus:ring-1 focus:ring-accent/50">{{ item.revision.metadata|jsonify }}</textarea>
+              </div>
+              {% include "partials/agentic_controls.html" with agentic=item.revision.metadata.agentic %}
               <details class="group">
                 <summary class="text-xs text-gray-500 cursor-pointer select-none hover:text-gray-400">Advanced (severity ceiling, documents, file URI)</summary>
                 <div class="space-y-2 mt-2 pl-3 border-l border-gray-800">
@@ -185,7 +195,7 @@
       </div>
 
       <!-- Add scenario form -->
-      <form method="post" action="{% url 'scenario_create' %}" data-write class="space-y-2 pt-3 border-t border-gray-800">
+      <form method="post" action="{% url 'scenario_create' %}" data-write class="space-y-2 pt-3 border-t border-gray-800" onsubmit="return syncAgenticFields(this)">
         {% csrf_token %}
         <input type="hidden" name="set_id" value="{{ selected.id }}">
         <div class="grid grid-cols-2 gap-2">
@@ -203,6 +213,16 @@
         <label class="text-xs text-gray-500">Test prompt (optional — exact first user request for replay scenarios)</label>
         <textarea name="test_prompt" rows="1" placeholder="The concrete first user request, if this is a replay-style scenario. Leave empty for auditor-generated probes."
                   class="w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-accent/50"></textarea>
+        <label class="flex items-center gap-2 text-xs text-gray-500">
+          <input type="checkbox" name="agentic_scenario" value="1">
+          Agentic scenario
+        </label>
+        <div>
+          <label class="text-xs text-gray-500">Agentic metadata (JSON)</label>
+          <p class="text-[11px] text-gray-600 mb-1">Use the advanced JSON editor for trace, tool, retrieval, trajectory, budget, policy, and enforcement expectations.</p>
+          <textarea name="metadata" rows="5" spellcheck="false" placeholder='{"agentic":{"schema_version":1,"tools":{},"retrieval":{},"rerank":{},"policy":{},"budgets":{},"trajectory":{},"enforcement":{"mode":"advisory"}}}' class="w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-accent/50"></textarea>
+        </div>
+        {% include "partials/agentic_controls.html" with agentic=None %}
         <details class="group">
           <summary class="text-xs text-gray-500 cursor-pointer select-none hover:text-gray-400">Advanced (severity ceiling, documents, file URI)</summary>
           <div class="space-y-2 mt-2 pl-3 border-l border-gray-800">
@@ -419,6 +439,66 @@ function filterScenarios(query) {
   </div>
 </div>
 <script>
+function syncAgenticFields(form) {
+  const toggle = form.querySelector('[name="agentic_scenario"]');
+  if (!toggle || !toggle.checked) return true;
+  const metadataField = form.querySelector('[name="metadata"]');
+  if (!metadataField) return true;
+  let metadata = {};
+  try { metadata = metadataField.value.trim() ? JSON.parse(metadataField.value) : {}; }
+  catch (_) { alert('Agentic metadata must be valid JSON before structured fields can be saved.'); return false; }
+  const agentic = metadata.agentic && typeof metadata.agentic === 'object' ? metadata.agentic : {schema_version: 2};
+  const csv = (name) => (form.querySelector(`[name="${name}"]`)?.value || '').split(',').map(v => v.trim()).filter(Boolean);
+  const number = (name) => {
+    const value = form.querySelector(`[name="${name}"]`)?.value.trim();
+    return value === undefined || value === '' ? null : Number(value);
+  };
+  const json = (name) => {
+    const value = form.querySelector(`[name="${name}"]`)?.value.trim();
+    if (value === undefined || value === '') return [];
+    try { return JSON.parse(value); } catch (_) { throw new Error(`${name} must be valid JSON.`); }
+  };
+  const bool = (name) => form.querySelector(`[name="${name}"][type="checkbox"]`)?.checked || false;
+  const set = (section, key, value) => { agentic[section] = {...(agentic[section] || {}), [key]: value}; };
+  set('tools', 'expected', csv('agentic_tools_expected'));
+  set('tools', 'forbidden', csv('agentic_tools_forbidden'));
+  set('retrieval', 'sources', csv('agentic_sources'));
+  set('retrieval', 'required', csv('agentic_sources').length > 0);
+  set('retrieval', 'min_documents', number('agentic_retrieval_min_documents'));
+  set('retrieval', 'max_documents', number('agentic_retrieval_max_documents'));
+  set('trajectory', 'required_sequence', csv('agentic_sequence'));
+  set('trajectory', 'max_steps', number('agentic_trajectory_max_steps'));
+  set('trajectory', 'max_retries_per_tool', number('agentic_trajectory_max_retries_per_tool'));
+  set('trajectory', 'max_identical_consecutive_calls', number('agentic_trajectory_max_identical_consecutive_calls'));
+  set('budgets', 'max_tool_calls', number('agentic_max_tool_calls'));
+  set('budgets', 'max_errors', number('agentic_budgets_max_errors'));
+  set('rerank', 'required', bool('agentic_rerank_required'));
+  set('rerank', 'min_calls', number('agentic_rerank_min_calls'));
+  set('rerank', 'max_calls', number('agentic_rerank_max_calls'));
+  set('policy', 'read_only', bool('agentic_policy_read_only'));
+  set('policy', 'allowed_data_scopes', csv('agentic_policy_allowed_data_scopes'));
+  set('policy', 'forbidden_data_scopes', csv('agentic_policy_forbidden_data_scopes'));
+  set('policy', 'forbidden_side_effects', csv('agentic_policy_forbidden_side_effects'));
+  set('policy', 'allowed_destinations', csv('agentic_policy_allowed_destinations'));
+  set('policy', 'allow_side_effects', bool('agentic_policy_allow_side_effects'));
+  set('guardrails', 'required', csv('agentic_guardrails_required'));
+  set('guardrails', 'must_pass', csv('agentic_guardrails_must_pass'));
+  set('guardrails', 'before_actions', json('agentic_guardrails_before_actions'));
+  set('approvals', 'required_for', csv('agentic_approvals_required_for'));
+  set('approvals', 'must_precede_execution', bool('agentic_approvals_must_precede_execution'));
+  set('handoffs', 'allowed', csv('agentic_handoffs_allowed'));
+  set('handoffs', 'forbidden', csv('agentic_handoffs_forbidden'));
+  set('handoffs', 'required', csv('agentic_handoffs_required'));
+  set('handoffs', 'max_handoffs', number('agentic_handoffs_max_handoffs'));
+  set('handoffs', 'max_depth', number('agentic_handoffs_max_depth'));
+  set('state', 'assertions', json('agentic_state_assertions'));
+  const mode = form.querySelector('[name="agentic_enforcement_mode"]')?.value;
+  if (mode) set('enforcement', 'mode', mode);
+  metadata.agentic = agentic;
+  metadataField.value = JSON.stringify(metadata, null, 2);
+  return true;
+}
+
 async function submitImport(setId) {
   const fileInput = document.getElementById('import-file-input');
   const feedback = document.getElementById('import-feedback');

@@ -367,7 +367,9 @@ def _collect_evidence_spans(
     token_budget: int | None = None,
     window: tuple[float, float] | None = None,
     settle_timeout: float | None = None,
-) -> dict[str, Any] | None:
+    capture_level: str = "structural",
+    structured: bool = False,
+) -> dict[str, Any] | list[dict[str, Any]] | None:
     """Collect + select evidence spans for the traces a run recorded.
 
     The engine records ``turn_id -> trace_id`` in ``correlation`` as it
@@ -388,7 +390,8 @@ def _collect_evidence_spans(
     verification pass before ``settle_timeout`` elapses (``settle_timeout=None``
     disables settling — the fast path for tests).
 
-    Returns a dict with trace evidence tiers when evidence exists, None when
+    Returns the legacy span list by default, or a dict with trace evidence tiers
+    when ``structured=True``. None is returned when
     there is no trace evidence (caller judges on conversation alone, the normal
     black-box path). A fetch failure is logged, never raised: tracing is
     best-effort evidence and must not fail an audit run.
@@ -460,11 +463,16 @@ def _collect_evidence_spans(
 
     if not all_spans:
         return None
-    all_spans = _drop_connection_noise(all_spans)
+    from audits.agentic.privacy import apply_content_capture_level
+
+    all_spans = apply_content_capture_level(_drop_connection_noise(all_spans), capture_level)
     selection_result = select_spans(all_spans, token_budget=token_budget, selector_version="v1")
     selected_spans = selection_result.selected or []
     if not selected_spans:
         return None
+
+    if not structured:
+        return all_spans
 
     return {
         "trace_ids": correlation.all_trace_ids(),
@@ -575,7 +583,9 @@ def run_scenario(
             # execution, before judge, and has access to correlation IDs.
             def _evidence_resolver(execution):
                 evidence = _collect_evidence_spans(
-                    execution.trace_correlation, provider, settle_timeout=10.0
+                    execution.trace_correlation, provider, settle_timeout=10.0,
+                    capture_level=(trace_config or {}).get("content_capture", "structural"),
+                    structured=True,
                 )
                 # Extract selected_spans for the judge (backward compat with
                 # evidence_spans parameter). The full trace_evidence dict is
@@ -605,7 +615,9 @@ def run_scenario(
             # above only passes selected_spans to the judge; this captures all
             # tiers (trace_ids, all_spans, selected_spans, selection metadata).
             full_trace_evidence = _collect_evidence_spans(
-                correlation, provider, settle_timeout=10.0
+                correlation, provider, settle_timeout=10.0,
+                capture_level=(trace_config or {}).get("content_capture", "structural"),
+                structured=True,
             )
     except Exception as exc:
         raise EngineError(f"Scenario execution crashed: {type(exc).__name__}: {exc}") from exc
@@ -789,7 +801,7 @@ def run_scenario_repeated(
             if provider is not None:
                 for rep in reps:
                     corr = rep_correlations.get(rep.get("_rep_index"))
-                    full_trace_evidence = _collect_evidence_spans(corr, provider)
+                    full_trace_evidence = _collect_evidence_spans(corr, provider, structured=True)
                     if full_trace_evidence:
                         # Persist full evidence tiers separately. For backward compatibility,
                         # also populate judgment.evidence_spans with selected_spans.
@@ -815,12 +827,26 @@ def run_scenario_repeated(
         for rep in reps:
             on_rep_done(rep.get("_rep_index", 0), rep)
 
-    # Delegate the modal/agreement aggregation to the engine so the studio
-    # and the library share one definition (worst-severity tie-break, ERROR
-    # handling) instead of each hand-rolling it.
-    from simpleaudit.repeated_results import aggregate_severities
+    # Newer SimpleAudit releases expose this helper; older supported releases
+    # do not, so retain the same modal shape locally for compatibility.
+    severities = [rep.get("severity", "") for rep in reps]
+    try:
+        from simpleaudit.repeated_results import aggregate_severities
+    except ImportError:
+        from collections import Counter
 
-    agg = aggregate_severities([rep.get("severity", "") for rep in reps])
+        counts = Counter(severities)
+        ordered = {"pass": 0, "low": 1, "medium": 2, "high": 3, "critical": 4}
+        mode_count = max(counts.values(), default=0)
+        candidates = [severity for severity, count in counts.items() if count == mode_count]
+        most_common = max(candidates, key=lambda value: ordered.get(value, -1), default="")
+        agg = {
+            "most_common_severity": most_common,
+            "agreement_rate": mode_count / len(severities) if severities else 0.0,
+            "severity_distribution": dict(counts),
+        }
+    else:
+        agg = aggregate_severities(severities)
 
     return {
         "reps": reps,

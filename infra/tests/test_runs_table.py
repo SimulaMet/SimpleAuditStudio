@@ -75,6 +75,22 @@ class RunsDataTests(GridTestBase):
         self.assertEqual(row["id"], runs[-1].id)   # newest first by default
         for key in ("name", "url", "status", "pass_rate", "target", "scenario_set", "reps", "created_at"):
             self.assertIn(key, row)
+        for key in ("agentic_status", "agentic_pass_rate", "agentic_inconclusive_rate"):
+            self.assertIn(key, row)
+
+    def test_agentic_metrics_are_exposed(self):
+        run = AuditRunFactory(
+            project=self.project,
+            summary_metrics={
+                "agentic_pass_rate": 0.25,
+                "inconclusive_rate": 0.5,
+                "agentic_evaluation": {"total": 8, "passed": 2, "failed": 2, "inconclusive": 4},
+            },
+        )
+        row = next(item for item in self.data()["data"] if item["id"] == run.id)
+        self.assertEqual(row["agentic_status"], "INCONCLUSIVE")
+        self.assertEqual(row["agentic_pass_rate"], 0.25)
+        self.assertEqual(row["agentic_inconclusive_rate"], 0.5)
 
     def test_invalid_page_size_falls_back(self):
         AuditRunFactory(project=self.project)

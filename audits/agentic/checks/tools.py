@@ -8,6 +8,8 @@ from .base import CheckResult, result
 
 def _tool_arguments(step: Any) -> dict | None:
     """Extract tool arguments from a step's attributes."""
+    if isinstance(step.arguments, dict):
+        return step.arguments
     raw = step.attributes.get("gen_ai.tool.call.arguments")
     if isinstance(raw, dict):
         return raw
@@ -96,6 +98,16 @@ def tool_selection(trajectory: AgentTrajectory, expected: dict) -> list[CheckRes
                 observed=sorted(bad),
             )
         )
+
+    allowed = set(expected.get("allowed", []))
+    if allowed:
+        unknown = sorted(set(names) - allowed)
+        out.append(result(
+            "tool.allowed", "tool", "FAIL" if unknown else "PASS",
+            "Only allowed tools were called." if not unknown else "A tool outside the allow-list was called.",
+            expected=sorted(allowed), observed=unknown,
+            evidence_span_ids=[step.span_id for step in calls if step.name in unknown and step.span_id],
+        ))
 
     return out
 

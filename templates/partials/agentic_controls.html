@@ -1,0 +1,71 @@
+{% load json_filters %}
+<fieldset class="fieldset rounded-box border border-base-300 p-3 space-y-3" data-agentic-controls>
+  <legend class="fieldset-legend text-xs">Structured agentic controls</legend>
+  <p class="label">These controls update the JSON editor on save and preserve unknown fields.</p>
+
+  <div>
+    <p class="text-xs text-gray-400 mb-1">Trace and tools</p>
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-2">
+      <input class="input input-xs w-full" name="agentic_tools_expected" value="{{ agentic.tools.expected|join:', ' }}" placeholder="Required tools (comma-separated)">
+      <input class="input input-xs w-full" name="agentic_tools_forbidden" value="{{ agentic.tools.forbidden|join:', ' }}" placeholder="Forbidden tools (comma-separated)">
+      <input class="input input-xs w-full" name="agentic_sources" value="{{ agentic.retrieval.sources|join:', ' }}" placeholder="Required sources (comma-separated)">
+      <input class="input input-xs w-full" name="agentic_sequence" value="{{ agentic.trajectory.required_sequence|join:', ' }}" placeholder="Required sequence (e.g. retrieval,tool)">
+      <input class="input input-xs w-full" type="number" min="0" name="agentic_max_tool_calls" value="{{ agentic.budgets.max_tool_calls|default_if_none:'' }}" placeholder="Max tool calls">
+      <select class="select select-xs w-full" name="agentic_enforcement_mode">
+        <option value="">Keep enforcement mode</option>
+        <option value="advisory" {% if agentic.enforcement.mode == 'advisory' %}selected{% endif %}>Advisory</option>
+        <option value="gating" {% if agentic.enforcement.mode == 'gating' %}selected{% endif %}>Gating</option>
+      </select>
+    </div>
+  </div>
+
+  <div>
+    <p class="text-xs text-gray-400 mb-1">Retrieval and reranking</p>
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-2">
+      <input class="input input-xs w-full" type="number" min="0" name="agentic_retrieval_min_documents" value="{{ agentic.retrieval.min_documents|default_if_none:'' }}" placeholder="Minimum documents">
+      <input class="input input-xs w-full" type="number" min="0" name="agentic_retrieval_max_documents" value="{{ agentic.retrieval.max_documents|default_if_none:'' }}" placeholder="Maximum documents">
+      <label class="label cursor-pointer justify-start gap-2"><input type="hidden" name="agentic_rerank_required" value="0"><input class="checkbox checkbox-xs" type="checkbox" name="agentic_rerank_required" value="1" {% if agentic.rerank.required %}checked{% endif %}> Require reranking</label>
+      <input class="input input-xs w-full" type="number" min="0" name="agentic_rerank_min_calls" value="{{ agentic.rerank.min_calls|default_if_none:'' }}" placeholder="Minimum rerank calls">
+      <input class="input input-xs w-full" type="number" min="0" name="agentic_rerank_max_calls" value="{{ agentic.rerank.max_calls|default_if_none:'' }}" placeholder="Maximum rerank calls">
+    </div>
+  </div>
+
+  <div>
+    <p class="text-xs text-gray-400 mb-1">Policy</p>
+    <label class="label cursor-pointer justify-start gap-2"><input type="hidden" name="agentic_policy_read_only" value="0"><input class="checkbox checkbox-xs" type="checkbox" name="agentic_policy_read_only" value="1" {% if agentic.policy.read_only %}checked{% endif %}> Read-only policy</label>
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-2">
+      <input class="input input-xs w-full" name="agentic_policy_allowed_data_scopes" value="{{ agentic.policy.allowed_data_scopes|join:', ' }}" placeholder="Allowed data scopes (comma-separated)">
+      <input class="input input-xs w-full" name="agentic_policy_forbidden_data_scopes" value="{{ agentic.policy.forbidden_data_scopes|join:', ' }}" placeholder="Forbidden data scopes (comma-separated)">
+      <input class="input input-xs w-full" name="agentic_policy_forbidden_side_effects" value="{{ agentic.policy.forbidden_side_effects|join:', ' }}" placeholder="Forbidden side-effect tools (comma-separated)">
+      <input class="input input-xs w-full" name="agentic_policy_allowed_destinations" value="{{ agentic.policy.allowed_destinations|join:', ' }}" placeholder="Allowed destinations (comma-separated)">
+      <label class="label cursor-pointer justify-start gap-2"><input type="hidden" name="agentic_policy_allow_side_effects" value="0"><input class="checkbox checkbox-xs" type="checkbox" name="agentic_policy_allow_side_effects" value="1" {% if agentic.policy.allow_side_effects %}checked{% endif %}> Allow side effects</label>
+    </div>
+  </div>
+
+  <div>
+    <p class="text-xs text-gray-400 mb-1">Guardrails and approvals</p>
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-2">
+      <input class="input input-xs w-full" name="agentic_guardrails_required" value="{{ agentic.guardrails.required|join:', ' }}" placeholder="Required guardrails (comma-separated)">
+      <input class="input input-xs w-full" name="agentic_guardrails_must_pass" value="{{ agentic.guardrails.must_pass|join:', ' }}" placeholder="Guardrails that must pass (comma-separated)">
+      <textarea class="textarea textarea-xs w-full" name="agentic_guardrails_before_actions" rows="2" placeholder='Guardrail/action JSON, e.g. [{"guardrail":"privacy","action":"refund"}]'>{{ agentic.guardrails.before_actions|jsonify }}</textarea>
+      <input class="input input-xs w-full" name="agentic_approvals_required_for" value="{{ agentic.approvals.required_for|join:', ' }}" placeholder="Actions requiring approval (comma-separated)">
+      <label class="label cursor-pointer justify-start gap-2"><input type="hidden" name="agentic_approvals_must_precede_execution" value="0"><input class="checkbox checkbox-xs" type="checkbox" name="agentic_approvals_must_precede_execution" value="1" {% if agentic.approvals.must_precede_execution %}checked{% endif %}> Approval must precede execution</label>
+    </div>
+  </div>
+
+  <div>
+    <p class="text-xs text-gray-400 mb-1">Handoffs, state, errors, and retries</p>
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-2">
+      <input class="input input-xs w-full" name="agentic_handoffs_allowed" value="{{ agentic.handoffs.allowed|join:', ' }}" placeholder="Allowed handoffs (comma-separated)">
+      <input class="input input-xs w-full" name="agentic_handoffs_forbidden" value="{{ agentic.handoffs.forbidden|join:', ' }}" placeholder="Forbidden handoffs (comma-separated)">
+      <input class="input input-xs w-full" name="agentic_handoffs_required" value="{{ agentic.handoffs.required|join:', ' }}" placeholder="Required handoffs (comma-separated)">
+      <input class="input input-xs w-full" type="number" min="0" name="agentic_handoffs_max_handoffs" value="{{ agentic.handoffs.max_handoffs|default_if_none:'' }}" placeholder="Maximum handoffs">
+      <input class="input input-xs w-full" type="number" min="0" name="agentic_handoffs_max_depth" value="{{ agentic.handoffs.max_depth|default_if_none:'' }}" placeholder="Maximum handoff depth">
+      <input class="input input-xs w-full" name="agentic_trajectory_max_steps" value="{{ agentic.trajectory.max_steps|default_if_none:'' }}" placeholder="Maximum trajectory steps">
+      <input class="input input-xs w-full" type="number" min="0" name="agentic_trajectory_max_retries_per_tool" value="{{ agentic.trajectory.max_retries_per_tool|default_if_none:'' }}" placeholder="Max retries per tool">
+      <input class="input input-xs w-full" type="number" min="0" name="agentic_trajectory_max_identical_consecutive_calls" value="{{ agentic.trajectory.max_identical_consecutive_calls|default_if_none:'' }}" placeholder="Max identical consecutive calls">
+      <input class="input input-xs w-full" type="number" min="0" name="agentic_budgets_max_errors" value="{{ agentic.budgets.max_errors|default_if_none:'' }}" placeholder="Maximum errors">
+      <textarea class="textarea textarea-xs w-full" name="agentic_state_assertions" rows="2" placeholder='State assertions JSON, e.g. [{"type":"equals","key":"status","value":"done"}]'>{{ agentic.state.assertions|jsonify }}</textarea>
+    </div>
+  </div>
+</fieldset>

@@ -52,7 +52,7 @@ class NewCredential:
 
 
 @transaction.atomic
-def create_credential(*, project, connection, auth_mode: str, user=None) -> NewCredential:
+def create_credential(*, project, connection, auth_mode: str, user=None, capture_level: str = "structural") -> NewCredential:
     """Create a credential for ``connection`` and return it with its secret.
 
     ``auth_mode`` is ``"none"``, ``"basic"``, or ``"bearer"``. For ``none`` no
@@ -60,10 +60,13 @@ def create_credential(*, project, connection, auth_mode: str, user=None) -> NewC
     secret is generated here and returned once, with only its salted hash
     persisted.
     """
+    from audits.agentic.privacy import capture_level as normalize_capture_level
+
     valid = (OTLPCredential.AuthMode.NONE, OTLPCredential.AuthMode.BASIC, OTLPCredential.AuthMode.BEARER)
     if auth_mode not in valid:
         raise ValueError(f"Unknown OTLP auth mode: {auth_mode!r}")
 
+    capture_level = normalize_capture_level(capture_level)
     # Reuse the existing target_id if a credential already exists for this
     # connection, so the upsert updates in place rather than creating a new
     # target identity.
@@ -101,6 +104,7 @@ def create_credential(*, project, connection, auth_mode: str, user=None) -> NewC
             "salt": salt,
             "token_prefix": token_prefix if auth_mode == OTLPCredential.AuthMode.BEARER else "",
             "enabled": True,
+            "capture_level": capture_level,
             "created_by": user,
         },
     )

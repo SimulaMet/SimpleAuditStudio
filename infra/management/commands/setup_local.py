@@ -9,6 +9,7 @@ Equivalent to running, in order:
     manage.py migrate
     manage.py bootstrap_platform
     manage.py seed_platform
+    manage.py seed_agentic_scenarios
 
 Safe to re-run — every step is idempotent and skips what already exists.
 Requires BOOTSTRAP_PASSWORD (or --password) for the admin user, matching
@@ -56,8 +57,9 @@ class Command(BaseCommand):
         )
 
         if not options["skip_seed"]:
-            self.stdout.write("→ Seeding scenario packs + model connections...")
+            self.stdout.write("→ Seeding scenario packs, models, judges, and agentic scenarios...")
             call_command("seed_platform", verbosity=1)
+            call_command("seed_agentic_scenarios", verbosity=1)
 
         self.stdout.write(self.style.SUCCESS(
             f"\nSetup complete. Start the server with:\n"

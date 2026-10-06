@@ -724,6 +724,20 @@ def _sync_run_counters(run_id: str) -> None:
     )
 
 
+@retry_if_locked
+def _refresh_run_summary_metrics(run_id: str) -> None:
+    """Persist agentic rollups once durable scenario results are available."""
+    from audits.agentic.metrics import compute_run_metrics
+    from audits.events import ScenarioResult
+    from audits.models import AuditRun
+
+    results = list(ScenarioResult.objects.filter(run_id=int(run_id)).values_list("result", flat=True))
+    if not any(isinstance(result, dict) and "agentic_evaluation" in result for result in results):
+        return
+    metrics = compute_run_metrics([result for result in results if isinstance(result, dict)])
+    AuditRun.objects.filter(pk=int(run_id)).update(summary_metrics=metrics, updated_at=timezone.now())
+
+
 def _provenance_mismatch(run) -> bool:
     """Frozen engine version/commit differs from the one this worker loaded."""
     if run.simpleaudit_version and run.simpleaudit_version != WORKER_SIMPLEAUDIT_VERSION:
@@ -752,6 +766,7 @@ def _maybe_finalize(run_id: str) -> str | None:
     done = _terminal_results(run_id).count()
     if not run.total_scenarios or done < run.total_scenarios:
         return None
+    _refresh_run_summary_metrics(run_id)
     if _provenance_mismatch(run):
         if AuditRun.objects.filter(pk=run.pk, status__in=_ACTIVE_STATUSES).update(
             status=AuditRun.Status.FAILED, error_code="SIMPLEAUDIT_VERSION_MISMATCH", finished_at=timezone.now(),

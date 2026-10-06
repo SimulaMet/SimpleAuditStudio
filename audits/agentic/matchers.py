@@ -1,11 +1,11 @@
 """Robust argument matchers for agentic checks."""
 import re
-from typing import Any, Callable, Dict
+from collections.abc import Callable
+from typing import Any
 from urllib.parse import urlparse
 
-
 # Custom predicates registered by identifier (no eval of JSON)
-_custom_predicates: Dict[str, Callable[[Any, Any], bool]] = {}
+_custom_predicates: dict[str, Callable[[Any, Any], bool]] = {}
 
 
 def register_predicate(identifier: str, predicate: Callable[[Any, Any], bool]) -> None:
@@ -36,7 +36,7 @@ def match_subset(observed: Any, expected: Any) -> bool:
     return observed == expected
 
 
-def match_json_schema(observed: Any, expected: Dict[str, Any]) -> bool:
+def match_json_schema(observed: Any, expected: dict[str, Any]) -> bool:
     """Validate against JSON schema (simplified check)."""
     try:
         import jsonschema
@@ -45,18 +45,16 @@ def match_json_schema(observed: Any, expected: Dict[str, Any]) -> bool:
     except ImportError:
         # Fallback: basic schema validation without jsonschema library
         return _basic_schema_check(observed, expected)
-    except Exception:
+    except Exception:  # noqa: BLE001 - matcher failures are a non-match
         return False
 
 
-def _basic_schema_check(observed: Any, schema: Dict[str, Any]) -> bool:
+def _basic_schema_check(observed: Any, schema: dict[str, Any]) -> bool:
     """Basic JSON schema validation without jsonschema library."""
     schema_type = schema.get("type")
     if schema_type and not isinstance(observed, _type_map.get(schema_type)):
         return False
-    if "enum" in schema and observed not in schema["enum"]:
-        return False
-    return True
+    return "enum" not in schema or observed in schema["enum"]
 
 
 _type_map = {
@@ -84,7 +82,7 @@ def match_one_of(observed: Any, values: list[Any]) -> bool:
     return observed in values
 
 
-def match_numeric_range(observed: Any, range_spec: Dict[str, Any]) -> bool:
+def match_numeric_range(observed: Any, range_spec: dict[str, Any]) -> bool:
     """Match if observed is within numeric range."""
     try:
         num = float(observed)
@@ -93,19 +91,15 @@ def match_numeric_range(observed: Any, range_spec: Dict[str, Any]) -> bool:
         inclusive_min = range_spec.get("min_inclusive", True)
         inclusive_max = range_spec.get("max_inclusive", True)
 
-        if min_val is not None:
-            if inclusive_min and num < min_val:
-                return False
-            elif not inclusive_min and num <= min_val:
-                return False
+        if min_val is not None and (
+            inclusive_min and num < min_val or not inclusive_min and num <= min_val
+        ):
+            return False
 
-        if max_val is not None:
-            if inclusive_max and num > max_val:
-                return False
-            elif not inclusive_max and num >= max_val:
-                return False
-
-        return True
+        return not (
+            max_val is not None
+            and (inclusive_max and num > max_val or not inclusive_max and num >= max_val)
+        )
     except (TypeError, ValueError):
         return False
 
@@ -128,7 +122,7 @@ def match_normalized_uri(observed: str, expected: str) -> bool:
         exp_normalized = (exp_parsed.scheme, exp_parsed.netloc, exp_parsed.path)
 
         return obs_normalized == exp_normalized
-    except Exception:
+    except Exception:  # noqa: BLE001 - malformed URI values are non-matches
         return False
 
 
@@ -149,11 +143,11 @@ def match_custom(observed: Any, predicate_id: str, value: Any = None) -> bool:
         return False
     try:
         return predicate(observed, value)
-    except Exception:
+    except Exception:  # noqa: BLE001 - custom predicates fail closed
         return False
 
 
-def match_arguments(observed: Any, expected: Dict[str, Any]) -> bool:
+def match_arguments(observed: Any, expected: dict[str, Any]) -> bool:
     """Match arguments using the specified match type."""
     match_type = expected.get("match", "subset")
     value = expected.get("value")

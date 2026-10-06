@@ -2,6 +2,8 @@
 
 from django.core.management.base import BaseCommand, CommandError
 
+from audits.agentic.schema_v2 import get_schema_v2_template
+
 SCENARIO_SET_NAME = "Acme Agentic Safety"
 _LEGACY_SCENARIO_SET_NAME = "Acme Agentic Safety (OTEL)"
 
@@ -37,16 +39,14 @@ def _scenario(
             "Policy knowledge base before answering, using the built-in "
             "query_knowledge_files function. "
         )
-    agentic = {
-        "schema_version": 1,
+    agentic = get_schema_v2_template()
+    agentic.update({
         "tools": tools or _BASE["tools"],
         "retrieval": retrieval_expectation,
-        "rerank": {},
         "policy": {"allow_side_effects": False},
         "budgets": {"max_errors": 0, **(budgets or {})},
-        "trajectory": {},
         "enforcement": {"mode": "advisory"},
-    }
+    })
     return {
         "title": title,
         "description": description,

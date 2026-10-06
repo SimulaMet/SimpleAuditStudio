@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 from datetime import timedelta
+from pathlib import Path
 
 from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
@@ -63,6 +64,10 @@ class Command(BaseCommand):
 
     def add_arguments(self, parser):
         parser.add_argument("--project", type=int, default=1)
+        parser.add_argument(
+            "--fixture",
+            help="Load a validated recorded fixture instead of the legacy synthetic demo.",
+        )
 
     @transaction.atomic
     def handle(self, *args, **options):
@@ -93,13 +98,13 @@ class Command(BaseCommand):
         existing = AuditRun.objects.filter(project=project, runtime_metadata__agentic_demo_seed=True).first()
         if existing:
             results = list(ScenarioResult.objects.filter(run_id=existing.pk))
-            summary = _summary_metrics(
-                (row.result.get("agentic_evaluation") for row in results),
-                (row.result.get("severity") for row in results),
-            )
-            if summary["total"]:
+            from audits.agentic.metrics import compute_run_metrics
+
+            summary = compute_run_metrics([row.result for row in results])
+            if summary["total_scenarios"]:
                 existing.summary_metrics.update(summary)
-                existing.save(update_fields=["summary_metrics"])
+                existing.successful_scenarios = results and sum(row.status == "completed" for row in results)
+                existing.save(update_fields=["summary_metrics", "successful_scenarios"])
             self.stdout.write(f"Preloaded Agentic demo already exists (run #{existing.pk}).")
             return
 
@@ -139,6 +144,32 @@ class Command(BaseCommand):
             credential = create_credential(
                 project=project, connection=target_model.connection, auth_mode="none", user=user
             ).credential
+
+        if options.get("fixture"):
+            from audits.agentic.demo_fixture import validate_fixture
+
+            fixture_path = Path(options["fixture"])
+            try:
+                fixture = json.loads(fixture_path.read_text())
+                validate_fixture(fixture, require_recorded=True)
+            except (OSError, json.JSONDecodeError, TypeError, ValueError) as exc:
+                raise CommandError(f"Invalid recorded agentic fixture: {exc}") from exc
+            run = self._load_recorded_fixture(
+                fixture=fixture,
+                project=project,
+                user=user,
+                version=version,
+                target_model=target_model,
+                agent=agent,
+                auditor_model=auditor_model,
+                judge_version=judge_version,
+                judge_model=judge_model,
+                credential=credential,
+            )
+            self.stdout.write(self.style.SUCCESS(
+                f"Loaded recorded Agentic demo run #{run.pk} from {fixture_path} (no model calls)."
+            ))
+            return
         endpoint_snapshot = _endpoint_snapshot
         now = timezone.now()
         provenance = resolve_engine_provenance()
@@ -248,6 +279,91 @@ class Command(BaseCommand):
         self.stdout.write(self.style.SUCCESS(
             f"Preloaded completed Agentic demo run #{run.pk} with {count} synthetic results and traces."
         ))
+
+    @staticmethod
+    def _load_recorded_fixture(*, fixture, project, user, version, target_model,
+                               agent, auditor_model, judge_version, judge_model,
+                               credential):
+        """Materialize a captured run without recomputing or inventing results."""
+        from audits.agentic.metrics import compute_run_metrics
+        from audits.events import append_event, upsert_scenario_result
+        from audits.models import AuditRun
+        from audits.services import _endpoint_snapshot
+        from judges.services import judge_snapshot
+        from model_registry.models import OtlpSpan
+
+        recorded = fixture["recorded_run"]
+        data = fixture["run"]
+        now = timezone.now()
+        trace_config = dict(data.get("trace_config") or {})
+        trace_config["target_id"] = credential.target_id
+        run = AuditRun.objects.create(
+            project=project,
+            name=data.get("name") or "Demo: Acme Agentic Safety (recorded)",
+            status=AuditRun.Status.COMPLETED,
+            scenario_set_version=version,
+            target_model=target_model,
+            agent=agent,
+            auditor_model=auditor_model,
+            judge_version=judge_version,
+            judge_model=judge_model,
+            target_config_snapshot=data.get("target_config_snapshot") or _endpoint_snapshot(target_model),
+            auditor_config_snapshot=data.get("auditor_config_snapshot") or _endpoint_snapshot(auditor_model),
+            judge_config_snapshot=data.get("judge_config_snapshot") or {"judge": judge_snapshot(judge_version)},
+            generation_parameters_snapshot=data.get("generation_parameters_snapshot") or {},
+            agent_config_snapshot=data.get("agent_config_snapshot"),
+            trace_config=trace_config,
+            simpleaudit_version=recorded.get("simpleaudit_version") or data.get("simpleaudit_version", "unknown"),
+            git_commit=recorded.get("studio_git_commit") or data.get("git_commit", ""),
+            runtime_metadata={
+                "agentic_demo_seed": True,
+                "source": "recorded_real_run_fixture",
+                "fixture_version": fixture["fixture_version"],
+                "fixture_checksum": (fixture.get("_meta") or {}).get("fixture_checksum", ""),
+                "recorded_run": recorded,
+            },
+            queued_at=now,
+            started_at=now,
+            finished_at=now,
+            total_scenarios=data.get("total_scenarios") or len(fixture["scenario_results"]),
+            completed_scenarios=data.get("completed_scenarios") or len(fixture["scenario_results"]),
+            successful_scenarios=data.get("successful_scenarios", 0),
+            summary_metrics=data.get("summary_metrics") or {},
+            created_by=user,
+        )
+        items = {item.scenario.key.lower(): item for item in version.items.select_related("scenario")}
+        for spec in fixture["scenario_results"]:
+            item = items.get(str(spec["scenario_key"]).lower())
+            if item is None:
+                raise CommandError(f"Recorded fixture scenario is not in the seeded set: {spec['scenario_key']}")
+            upsert_scenario_result(
+                run.pk, str(item.pk), status=spec["status"],
+                attempts=spec.get("attempts", 1), result=spec.get("result") or {},
+            )
+            append_event(run.pk, str(item.pk), "scenario_completed", {"attempt": spec.get("attempts", 1)})
+        computed_metrics = compute_run_metrics([
+            spec.get("result") or {} for spec in fixture["scenario_results"]
+        ])
+        run.summary_metrics = {
+            **(data.get("summary_metrics") or {}),
+            **computed_metrics,
+        }
+        run.successful_scenarios = sum(
+            str(spec.get("status", "")).lower() == "completed"
+            for spec in fixture["scenario_results"]
+        )
+        run.save(update_fields=["summary_metrics", "successful_scenarios"])
+        for span in fixture["spans"]:
+            OtlpSpan.objects.create(
+                target_id=credential.target_id,
+                trace_id=span["trace_id"], span_id=span["span_id"],
+                name=span.get("name", "span"), kind=span.get("kind", "CHAIN"),
+                parent_span_id=span.get("parent_span_id"), start_time=span.get("start_time"),
+                end_time=span.get("end_time"), status=span.get("status", "OK"),
+                attributes=span.get("attributes") or {},
+            )
+        append_event(run.pk, "_run", "run_completed", {"source": "recorded_real_run_fixture"})
+        return run
 
 
 def _synthetic_spans(scenario_key: str, trace_id: str, now) -> list[dict]:

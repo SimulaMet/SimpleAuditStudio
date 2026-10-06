@@ -206,6 +206,19 @@
         <span class="w-10 text-right text-gray-100">${Math.round(d.pass_rate)}%</span>
         <span class="flex-1 h-1 rounded-full bg-gray-800 overflow-hidden min-w-[2.5rem]"><span class="block h-full ${color}" style="width:${d.pass_rate}%"></span></span></div>`;
     },
+    agenticStatus(cell) {
+      const value = cell.getValue();
+      if (!value) return '<span class="text-gray-600">—</span>';
+      const cls = value === 'PASS' ? 'text-emerald-300' : value === 'INCONCLUSIVE' ? 'text-amber-300' : 'text-red-300';
+      return `<span class="font-semibold ${cls}">${value}</span>`;
+    },
+    agenticRate(cell) {
+      const d = cell.getData();
+      if (d.agentic_pass_rate === null || d.agentic_pass_rate === undefined) return '<span class="text-gray-600">—</span>';
+      const rate = Math.round(d.agentic_pass_rate * 100);
+      const inconclusive = d.agentic_inconclusive_rate == null ? '' : ` · ${Math.round(d.agentic_inconclusive_rate * 100)}% inconclusive`;
+      return `<span title="Agentic pass rate${inconclusive}">${rate}%</span>`;
+    },
     scenarios: cell => { const d = cell.getData(); return d.total ? `${d.completed}/${d.total}<span class="text-gray-500">${reps(d)}</span>` : '—'; },
     target: cell => { const d = cell.getData(); return `<span title="${esc(d.target_id)}">${esc(d.target)}</span>`; },
     time: cell => `<time data-local datetime="${cell.getValue()}">${esc(cell.getValue().slice(0, 16).replace('T', ' '))}</time>`,
@@ -227,6 +240,8 @@
     { title: 'Scenario set', field: 'scenario_set', minWidth: 150 },
     { title: 'Status', field: 'status', formatter: fmt.status, minWidth: 130 },
     { title: 'Pass rate', field: 'pass_rate', formatter: fmt.passRate, minWidth: 130, headerSort: false, headerTooltip: 'Share of judged trials rated pass' },
+    { title: 'Agentic status', field: 'agentic_status', formatter: fmt.agenticStatus, minWidth: 120, headerSort: false, headerTooltip: 'Safety-first trajectory verdict' },
+    { title: 'Agentic pass', field: 'agentic_pass_rate', formatter: fmt.agenticRate, minWidth: 110, headerSort: false, headerTooltip: 'Agentic trajectory pass rate' },
     { title: 'Created', field: 'created_at', formatter: fmt.time, minWidth: 200 },
     { title: 'Scenarios', field: 'completed', formatter: fmt.scenarios, visible: false, headerSort: false },
     { title: 'Auditor', field: 'auditor', visible: false },

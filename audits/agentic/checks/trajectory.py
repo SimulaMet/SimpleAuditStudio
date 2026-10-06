@@ -8,7 +8,8 @@ def sequence_checks(trajectory: AgentTrajectory, expected: dict) -> list[CheckRe
     out = []
 
     if required_sequence := expected.get("required_sequence"):
-        out.extend(_check_exact_sequence(trajectory, required_sequence))
+        checker = _check_exact_sequence if expected.get("order_mode") == "exact" else _check_subsequence
+        out.extend(checker(trajectory, required_sequence))
 
     if required_subsequence := expected.get("required_subsequence"):
         out.extend(_check_subsequence(trajectory, required_subsequence))
@@ -28,20 +29,18 @@ def sequence_checks(trajectory: AgentTrajectory, expected: dict) -> list[CheckRe
 def _check_exact_sequence(trajectory: AgentTrajectory, required: list[dict]) -> list[CheckResult]:
     """Exact sequence: only these operations in exact order."""
     steps = trajectory.primary_steps
-    required_kinds = [r.get("kind") for r in required]
-    actual_kinds = [s.kind for s in steps]
-
-    if actual_kinds == required_kinds:
-        return [result("trajectory.exact_sequence", "trajectory", "PASS", f"Exact sequence matched: {actual_kinds}")]
+    matched = len(steps) == len(required) and all(_step_matches(step, item) for step, item in zip(steps, required))
+    if matched:
+        return [result("trajectory.exact_sequence", "trajectory", "PASS", "Exact sequence matched.")]
 
     return [
         result(
             "trajectory.exact_sequence",
             "trajectory",
             "FAIL",
-            f"Exact sequence mismatch. Expected {required_kinds}, got {actual_kinds}",
-            expected=required_kinds,
-            observed=actual_kinds,
+            "Exact sequence mismatch.",
+            expected=required,
+            observed=[_step_descriptor(step) for step in steps],
         )
     ]
 
@@ -49,26 +48,23 @@ def _check_exact_sequence(trajectory: AgentTrajectory, required: list[dict]) -> 
 def _check_subsequence(trajectory: AgentTrajectory, required: list[dict]) -> list[CheckResult]:
     """Subsequence: required operations in order but may have other ops between."""
     steps = trajectory.primary_steps
-    actual_kinds = [s.kind for s in steps]
-    required_kinds = [r.get("kind") for r in required]
-
     idx = 0
-    for req_kind in required_kinds:
-        try:
-            idx = actual_kinds.index(req_kind, idx) + 1
-        except ValueError:
+    for item in required:
+        match = next((i for i in range(idx, len(steps)) if _step_matches(steps[i], item)), None)
+        if match is None:
             return [
                 result(
                     "trajectory.subsequence",
                     "trajectory",
-                    "FAIL",
-                    f"Required operation {req_kind} not found in sequence",
-                    expected=required_kinds,
-                    observed=actual_kinds,
+                    "FAIL" if trajectory.steps else "INCONCLUSIVE",
+                    "Required operation was not found in sequence",
+                    expected=required,
+                    observed=[_step_descriptor(step) for step in steps],
                 )
             ]
+        idx = match + 1
 
-    return [result("trajectory.subsequence", "trajectory", "PASS", f"Subsequence found: {required_kinds}")]
+    return [result("trajectory.subsequence", "trajectory", "PASS", "Required subsequence found.")]
 
 
 def _check_partial_order(trajectory: AgentTrajectory, constraints: list[dict]) -> list[CheckResult]:
@@ -130,7 +126,7 @@ def _check_forbidden_sequences(trajectory: AgentTrajectory, forbidden: list[list
 def _check_loops(trajectory: AgentTrajectory, config: dict) -> list[CheckResult]:
     """Loop/retry detection: identical calls, budget exceeded, repeated failures."""
     out = []
-    steps = trajectory.steps
+    steps = trajectory.primary_steps
 
     max_retries = config.get("max_retries_per_tool", 1)
     max_identical = config.get("max_identical_consecutive", 1)
@@ -172,6 +168,13 @@ def _check_loops(trajectory: AgentTrajectory, config: dict) -> list[CheckResult]
                 consecutive_identical = 1
                 prev_tool = key
 
+    if consecutive_identical > max_identical and prev_tool is not None:
+        out.append(result(
+            "trajectory.identical_calls", "trajectory", "FAIL",
+            f"Identical consecutive calls exceeded: {consecutive_identical} > {max_identical}",
+            observed=consecutive_identical,
+        ))
+
     for (tool_name, args), count in tool_calls.items():
         if count > max_retries:
             out.append(
@@ -185,6 +188,19 @@ def _check_loops(trajectory: AgentTrajectory, config: dict) -> list[CheckResult]
             )
 
     return out or [result("trajectory.loops", "trajectory", "PASS", "No loop/retry issues detected.")]
+
+
+def _step_matches(step, expected: dict) -> bool:
+    if not isinstance(expected, dict):
+        return False
+    if expected.get("kind") and step.kind != expected["kind"]:
+        return False
+    name = expected.get("name") or expected.get("tool") or expected.get("tool_name")
+    return not name or step.name == name or step.tool_name == name
+
+
+def _step_descriptor(step) -> dict:
+    return {"kind": step.kind, "name": step.name}
 
 
 def _contains_sequence(haystack: list[str], needle: list[str]) -> bool:

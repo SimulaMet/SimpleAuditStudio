@@ -9,12 +9,24 @@ whole result of a single-rep run. Context: rep (see infra.ui._rep_view).
       <h3 class="text-sm font-semibold text-violet-300">Agentic Safety</h3>
       <span class="text-xs font-semibold {% if rep.agentic.status == 'PASS' %}text-emerald-300{% elif rep.agentic.status == 'INCONCLUSIVE' %}text-amber-300{% else %}text-red-300{% endif %}">{{ rep.agentic.status }}</span>
     </div>
+    {% if rep.agentic.overall or rep.agentic.verdict %}
+    <div class="mb-3 rounded-lg bg-surface-overlay/50 px-3 py-2 text-xs">
+      <div class="flex flex-wrap gap-x-4 gap-y-1 text-gray-400">
+        <span>Overall: <strong class="text-gray-200">{% if rep.agentic.overall %}{{ rep.agentic.overall.status }}{% else %}{{ rep.agentic.verdict.status }}{% endif %}</strong></span>
+        {% if rep.agentic.policy_version %}<span>Policy: <code class="text-gray-300">{{ rep.agentic.policy_version }}</code></span>{% endif %}
+        {% if rep.agentic.trajectory_stats %}<span>Trace: {{ rep.agentic.trajectory_stats.total_steps|default:0 }} steps · {{ rep.agentic.trajectory_stats.tool_calls|default:0 }} tools · {{ rep.agentic.trajectory_stats.errors|default:0 }} errors</span>{% endif %}
+      </div>
+      {% if rep.agentic.reason %}<p class="mt-1 text-gray-400">Reason: {{ rep.agentic.reason }}</p>{% elif rep.agentic.overall.reason %}<p class="mt-1 text-gray-400">Reason: {{ rep.agentic.overall.reason }}</p>{% elif rep.agentic.verdict.reason %}<p class="mt-1 text-gray-400">Reason: {{ rep.agentic.verdict.reason }}</p>{% endif %}
+    </div>
+    {% endif %}
     <div class="space-y-1.5">
       {% for check in rep.agentic.checks %}
       <details class="rounded bg-surface-overlay/50 px-3 py-2">
         <summary class="cursor-pointer text-xs text-gray-300"><span class="mr-2 {% if check.status == 'PASS' %}text-emerald-400{% elif check.status == 'INCONCLUSIVE' %}text-amber-400{% else %}text-red-400{% endif %}">{{ check.status }}</span>{{ check.id }} — {{ check.summary }}</summary>
         {% if check.expected or check.observed %}<div class="mt-2 text-[11px] text-gray-500">Expected: {{ check.expected|default:'—' }} · Observed: {{ check.observed|default:'—' }}</div>{% endif %}
-        {% if check.evidence_span_ids %}<div class="mt-1 text-[11px] text-gray-500">Evidence spans: {{ check.evidence_span_ids|join:', ' }}</div>{% endif %}
+        {% if check.evidence_span_ids %}<div class="mt-1 text-[11px] text-gray-500">Evidence spans:
+          {% for span_id in check.evidence_span_ids %}<a class="text-violet-300 hover:text-violet-200 underline" href="#trace-span-{{ span_id }}">{{ span_id }}</a>{% if not forloop.last %}, {% endif %}{% endfor %}
+        </div>{% endif %}
       </details>
       {% endfor %}
     </div>
@@ -119,7 +131,7 @@ whole result of a single-rep run. Context: rep (see infra.ui._rep_view).
     {% if rep.trace.spans %}
     <ul class="space-y-1.5">
       {% for s in rep.trace.spans %}
-      <li class="flex items-center gap-2 text-sm">
+      <li id="trace-span-{{ s.span_id }}" class="flex items-center gap-2 text-sm scroll-mt-4">
         <span class="shrink-0 px-1.5 py-0.5 rounded bg-surface-overlay/60 border border-gray-800 text-[10px] uppercase tracking-wide {% if s.kind == 'LLM' %}text-sky-300{% elif s.kind == 'RETRIEVER' %}text-emerald-300{% elif s.kind == 'TOOL' %}text-amber-300{% elif s.kind == 'AGENT' %}text-fuchsia-300{% elif s.kind == 'GUARDRAIL' %}text-fuchsia-300{% elif s.kind == 'EVALUATOR' %}text-fuchsia-300{% elif s.kind == 'SPAN_KIND_SERVER' %}text-violet-300{% elif s.kind == 'SPAN_KIND_CLIENT' %}text-cyan-300{% elif s.kind == 'SPAN_KIND_INTERNAL' %}text-gray-400{% elif s.kind == 'CHAIN' %}text-gray-400{% else %}text-gray-300{% endif %}" title="{{ s.kind }}">{{ s.kind }}</span>
         <span class="text-gray-200 truncate" title="{{ s.name }}">{{ s.name }}</span>
         {% if s.attributes.tool_name %}<span class="text-gray-500 text-xs truncate" title="{{ s.attributes.tool_name }}">· {{ s.attributes.tool_name }}</span>{% endif %}

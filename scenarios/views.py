@@ -167,9 +167,19 @@ def export_scenarios(request, project_id):
             "description": rev.description,
             "expected_behavior": rev.expected_behavior,
             "test_prompt": rev.test_prompt,
+            "severity_ceiling": rev.severity_ceiling,
+            "documents": rev.documents,
+            "file_uri": rev.file_uri,
+            "metadata": rev.metadata,
+            "category": s.category,
             "tags": s.tags or [],
         })
-    response = Response({"scenarios": data, "count": len(data), "exported_at": __import__("django.utils.timezone", fromlist=["timezone"]).now().isoformat()})
+    response = Response({
+        "format_version": 2,
+        "scenarios": data,
+        "count": len(data),
+        "exported_at": __import__("django.utils.timezone", fromlist=["timezone"]).now().isoformat(),
+    })
     response["Content-Disposition"] = 'attachment; filename="scenarios-export.json"'
     return response
 
@@ -187,6 +197,12 @@ def import_scenarios(request, project_id):
     _require_project_access(request.user, project)
     require_project_writable(request.user, project)
     payload = request.data
+    if isinstance(payload, dict) and "format_version" in payload and payload["format_version"] != 2:
+        raise StableAPIError(
+            detail="Unsupported scenario import format_version; expected 2.",
+            code="unsupported_import_version",
+            http_status=400,
+        )
     items = payload.get("scenarios", payload) if isinstance(payload, dict) else payload
     if not isinstance(items, list):
         raise StableAPIError(detail="Expected a list of scenarios or {\"scenarios\": [...]}.", code="invalid_import_format", http_status=400)
@@ -211,6 +227,11 @@ def import_scenarios(request, project_id):
                 description=item.get("description", ""),
                 expected_behavior=item.get("expected_behavior", []),
                 test_prompt=item.get("test_prompt", ""),
+                severity_ceiling=item.get("severity_ceiling", ""),
+                documents=item.get("documents", []),
+                file_uri=item.get("file_uri"),
+                metadata=item.get("metadata", {}),
+                category=item.get("category", ""),
                 tags=item.get("tags", []),
             )
             created += 1

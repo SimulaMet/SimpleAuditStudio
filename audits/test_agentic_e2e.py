@@ -1,7 +1,10 @@
 """E2E test for agentic auditing flow (phases 1-3)."""
-from audits.agentic.schema import AgentTrajectory, TrajectoryStep
 from audits.agentic.orchestrator import orchestrate_agentic_audit
-from audits.agentic.ui_helpers import render_audit_result_summary, format_check_for_display
+from audits.agentic.schema import AgentTrajectory, TrajectoryStep
+from audits.agentic.ui_helpers import (
+    format_check_for_display,
+    render_audit_result_summary,
+)
 
 
 def test_orchestrator_end_to_end():

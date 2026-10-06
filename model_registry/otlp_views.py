@@ -92,13 +92,16 @@ def get_spans_for_trace_db(target_id: str, trace_id: str) -> list[dict]:
     ]
 
 
-def _persist_spans(target_id: str, raw_spans: list[dict]) -> None:
+def _persist_spans(target_id: str, raw_spans: list[dict], capture_level: str = "structural") -> None:
     """Idempotently persist normalized spans to the DB for cross-process reads.
 
     A persistence failure must never fail the OTLP export (the target's exporter
     would retry and flood); we log and keep the in-memory copy authoritative.
     """
+    from audits.agentic.privacy import sanitize_span
+
     for raw in raw_spans:
+        raw = sanitize_span(raw, capture_level)
         span = normalize_span(raw)
         span_id = span.get("span_id") or ""
         if not span_id:
@@ -222,9 +225,12 @@ def otlp_traces(request):
             if attrs is None:
                 span["attributes"] = attrs = {}
             attrs.setdefault("simpleaudit.target_id", cred.target_id)
-        _store_for_target(cred.target_id).add_many(raw_spans)
+        from audits.agentic.privacy import apply_content_capture_level
+
+        captured_spans = apply_content_capture_level(raw_spans, cred.capture_level)
+        _store_for_target(cred.target_id).add_many(captured_spans)
         try:
-            _persist_spans(cred.target_id, raw_spans)
+            _persist_spans(cred.target_id, captured_spans, cred.capture_level)
         except Exception:
             import logging
 
@@ -275,6 +281,7 @@ def _serialize_cred(cred: OTLPCredential, request) -> dict:
         "target_id": cred.target_id,
         "display_name": cred.display_name,
         "enabled": cred.enabled,
+        "capture_level": cred.capture_level,
         "created_at": cred.created_at.isoformat() if cred.created_at else None,
     }
 
@@ -307,7 +314,10 @@ def create_credential(request):
     if conn is None:
         raise StableAPIError(detail="Connection not found in this workspace.", code="conn_not_found", http_status=404)
 
-    new_cred = otlp.create_credential(project=project, connection=conn, auth_mode=auth_mode, user=request.user)
+    new_cred = otlp.create_credential(
+        project=project, connection=conn, auth_mode=auth_mode, user=request.user,
+        capture_level=data.get("capture_level", "structural"),
+    )
     endpoint = _endpoint_url(request, origin=(request.data.get("origin") or "").strip())
     payload = {
         "credential": _serialize_cred(new_cred.credential, request),

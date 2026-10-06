@@ -1,4 +1,33 @@
-"""Agentic scenario schema v2 validation."""
+"""Agentic scenario schema v2 validation.
+
+The validator intentionally stays dependency-free because scenario metadata is
+validated on every write path.  v1 remains readable, while v2 is strict so a
+typo cannot silently disable an evaluator.
+"""
+
+from copy import deepcopy
+
+_TOP_LEVEL = {
+    "schema_version", "trace", "goal", "tools", "retrieval", "trajectory",
+    "handoffs", "guardrails", "approvals", "policy", "state", "budgets",
+    "semantic_judge", "enforcement", "rerank",
+}
+_SECTION_KEYS = {
+    "trace": {"required", "required_kinds", "content_capture", "missing_evidence"},
+    "goal": {"description", "reference_outcome"},
+    "tools": {"expected", "allowed", "forbidden", "max_total_calls"},
+    "retrieval": {"required", "sources", "forbidden_sources", "min_documents", "max_documents", "content_capture"},
+    "trajectory": {"required_sequence", "order_mode", "forbidden_sequences", "max_steps", "max_retries_per_tool", "max_identical_consecutive_calls"},
+    "handoffs": {"allowed", "forbidden", "required", "max_handoffs", "max_depth"},
+    "guardrails": {"required", "must_pass", "before_actions"},
+    "approvals": {"required_for", "must_precede_execution"},
+    "policy": {"read_only", "allowed_data_scopes", "forbidden_data_scopes", "forbidden_side_effects", "allowed_destinations", "allow_side_effects"},
+    "state": {"assertions"},
+    "budgets": {"max_tool_calls", "max_errors", "max_latency_ms", "max_target_tokens", "max_cost_usd"},
+    "semantic_judge": {"enabled", "criteria"},
+    "enforcement": {"mode", "deterministic_fail_severity", "trace_judge_fail_severity", "missing_required_trace", "severity_overrides"},
+    "rerank": {"required", "min_calls", "max_calls"},
+}
 
 
 def validate_agentic_metadata(metadata: dict) -> tuple[bool, list[str]]:
@@ -20,10 +49,21 @@ def validate_agentic_metadata(metadata: dict) -> tuple[bool, list[str]]:
         errors.append(f"Unsupported schema_version: {schema_version}")
         return False, errors
 
+    unknown = sorted(set(metadata) - _TOP_LEVEL)
+    errors.extend(f"Unknown field: {field}" for field in unknown)
+
     # Required v2 fields
     for field in ["trace", "tools", "retrieval", "trajectory", "enforcement"]:
         if field not in metadata:
             errors.append(f"Missing required field: {field}")
+
+    for section, allowed in _SECTION_KEYS.items():
+        value = metadata.get(section)
+        if value is not None and isinstance(value, dict):
+            errors.extend(
+                f"Unknown field: {section}.{field}"
+                for field in sorted(set(value) - allowed)
+            )
 
     # Validate trace
     trace = metadata.get("trace", {})
@@ -32,8 +72,8 @@ def validate_agentic_metadata(metadata: dict) -> tuple[bool, list[str]]:
     else:
         if "required" in trace and not isinstance(trace["required"], bool):
             errors.append("trace.required must be boolean")
-        if "content_capture" in trace and trace["content_capture"] not in ["optional", "structural", "full"]:
-            errors.append("trace.content_capture must be optional/structural/full")
+        if "content_capture" in trace and trace["content_capture"] not in ["optional", "structural", "inputs", "full"]:
+            errors.append("trace.content_capture must be optional/structural/inputs/full")
 
     # Validate tools
     tools = metadata.get("tools", {})
@@ -59,16 +99,15 @@ def validate_agentic_metadata(metadata: dict) -> tuple[bool, list[str]]:
 
 def migrate_v1_to_v2(v1_metadata: dict) -> dict:
     """Migrate v1 metadata to v2 format (pure data transform, never mutates v1)."""
-    v2 = dict(v1_metadata)
-    v2["schema_version"] = 2
-
-    # Add default v2 fields if missing
-    if "trace" not in v2:
-        v2["trace"] = {"required": True, "content_capture": "optional", "missing_evidence": "inconclusive"}
-
-    if "enforcement" not in v2:
-        v2["enforcement"] = {"mode": "advisory"}
-
+    source = deepcopy(v1_metadata)
+    v2 = get_schema_v2_template()
+    for section, value in source.items():
+        if section == "schema_version":
+            continue
+        if isinstance(value, dict) and isinstance(v2.get(section), dict):
+            v2[section].update(value)
+        else:
+            v2[section] = value
     return v2
 
 
@@ -109,6 +148,7 @@ def get_schema_v2_template() -> dict:
             "forbidden": [],
             "required": [],
             "max_handoffs": 0,
+            "max_depth": 0,
         },
         "guardrails": {
             "required": [],
@@ -125,7 +165,9 @@ def get_schema_v2_template() -> dict:
             "forbidden_data_scopes": [],
             "forbidden_side_effects": [],
             "allowed_destinations": [],
+            "allow_side_effects": False,
         },
+        "rerank": {"required": False, "min_calls": None, "max_calls": None},
         "state": {"assertions": []},
         "budgets": {
             "max_tool_calls": None,

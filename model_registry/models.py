@@ -177,6 +177,8 @@ class OTLPCredential(models.Model):
     # Stable identifier stamped onto every span this credential authenticates.
     target_id = models.CharField(max_length=250)
     enabled = models.BooleanField(default=True)
+    # Content policy applied before spans enter memory or durable storage.
+    capture_level = models.CharField(max_length=20, default="structural")
     created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

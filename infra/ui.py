@@ -27,10 +27,8 @@ from audits.events import ScenarioResult
 from audits.models import AuditRun
 from audits.services import create_audit_run, frozen_name, submit_audit_run
 from infra.chat_feature import chat_enabled
-from infra.hashing import scenario_revision_hash
 from scenarios.models import (
     Scenario,
-    ScenarioRevision,
     ScenarioSet,
     ScenarioSetVersion,
     ScenarioSetVersionItem,
@@ -101,6 +99,72 @@ def _int(value, default: int = 0) -> int:
         return int(value)
     except (TypeError, ValueError):
         return default
+
+
+def _merge_structured_agentic_fields(metadata: dict, post) -> dict:
+    """Merge authoring controls into agentic metadata without dropping extensions."""
+    if not any(key.startswith("agentic_") and key != "agentic_scenario" for key in post):
+        return metadata
+    agentic = dict(metadata.get("agentic") or {})
+    agentic.setdefault("schema_version", 2)
+
+    def csv(name):
+        return [value.strip() for value in post.get(name, "").split(",") if value.strip()]
+
+    def number(name):
+        value = post.get(name)
+        if value in (None, ""):
+            return None
+        return int(value)
+
+    def boolean(name):
+        return post.get(name) == "1"
+
+    def json_value(name):
+        value = post.get(name, "").strip()
+        return json.loads(value) if value else []
+
+    def set_value(section, key, value):
+        current = dict(agentic.get(section) or {})
+        current[key] = value
+        agentic[section] = current
+
+    set_value("tools", "expected", csv("agentic_tools_expected"))
+    set_value("tools", "forbidden", csv("agentic_tools_forbidden"))
+    sources = csv("agentic_sources")
+    set_value("retrieval", "sources", sources)
+    set_value("retrieval", "required", bool(sources))
+    set_value("retrieval", "min_documents", number("agentic_retrieval_min_documents"))
+    set_value("retrieval", "max_documents", number("agentic_retrieval_max_documents"))
+    set_value("trajectory", "required_sequence", csv("agentic_sequence"))
+    set_value("trajectory", "max_steps", number("agentic_trajectory_max_steps"))
+    set_value("trajectory", "max_retries_per_tool", number("agentic_trajectory_max_retries_per_tool"))
+    set_value("trajectory", "max_identical_consecutive_calls", number("agentic_trajectory_max_identical_consecutive_calls"))
+    set_value("budgets", "max_tool_calls", number("agentic_max_tool_calls"))
+    set_value("budgets", "max_errors", number("agentic_budgets_max_errors"))
+    set_value("rerank", "required", boolean("agentic_rerank_required"))
+    set_value("rerank", "min_calls", number("agentic_rerank_min_calls"))
+    set_value("rerank", "max_calls", number("agentic_rerank_max_calls"))
+    set_value("policy", "read_only", boolean("agentic_policy_read_only"))
+    for key in ("allowed_data_scopes", "forbidden_data_scopes", "forbidden_side_effects", "allowed_destinations"):
+        set_value("policy", key, csv(f"agentic_policy_{key}"))
+    set_value("policy", "allow_side_effects", boolean("agentic_policy_allow_side_effects"))
+    set_value("guardrails", "required", csv("agentic_guardrails_required"))
+    set_value("guardrails", "must_pass", csv("agentic_guardrails_must_pass"))
+    set_value("guardrails", "before_actions", json_value("agentic_guardrails_before_actions"))
+    set_value("approvals", "required_for", csv("agentic_approvals_required_for"))
+    set_value("approvals", "must_precede_execution", boolean("agentic_approvals_must_precede_execution"))
+    for key in ("allowed", "forbidden", "required"):
+        set_value("handoffs", key, csv(f"agentic_handoffs_{key}"))
+    set_value("handoffs", "max_handoffs", number("agentic_handoffs_max_handoffs"))
+    set_value("handoffs", "max_depth", number("agentic_handoffs_max_depth"))
+    set_value("state", "assertions", json_value("agentic_state_assertions"))
+    mode = post.get("agentic_enforcement_mode", "")
+    if mode:
+        set_value("enforcement", "mode", mode)
+    result = dict(metadata)
+    result["agentic"] = agentic
+    return result
 
 
 def _require_write_access(request):
@@ -1842,7 +1906,21 @@ class ScenarioCreateView(ProjectMixin, View):
         test_prompt = request.POST.get("test_prompt", "").strip()
         severity_ceiling = request.POST.get("severity_ceiling", "").strip().lower()
         documents_raw = request.POST.get("documents", "").strip()
-        documents = json.loads(documents_raw) if documents_raw else []
+        metadata_raw = request.POST.get("metadata", "").strip()
+        try:
+            documents = json.loads(documents_raw) if documents_raw else []
+            metadata = json.loads(metadata_raw) if metadata_raw else {}
+        except json.JSONDecodeError:
+            messages.error(request, "Documents and agentic metadata must be valid JSON.")
+            return _scenario_redirect(request.POST.get("set_id", "").strip() or None)
+        if not request.POST.get("agentic_scenario"):
+            metadata = {}
+        else:
+            try:
+                metadata = _merge_structured_agentic_fields(metadata, request.POST)
+            except (ValueError, json.JSONDecodeError):
+                messages.error(request, "Structured agentic controls must contain valid numbers and JSON.")
+                return _scenario_redirect(request.POST.get("set_id", "").strip() or None)
         file_uri_raw = request.POST.get("file_uri", "").strip()
         file_uri = file_uri_raw or None
         set_id = request.POST.get("set_id", "").strip()
@@ -1852,7 +1930,7 @@ class ScenarioCreateView(ProjectMixin, View):
                 project=request.project, user=request.user, key=key, title=name, category=category,
                 description=desc, expected_behavior=expected_behavior, test_prompt=test_prompt,
                 severity_ceiling=severity_ceiling, documents=documents, file_uri=file_uri,
-                metadata={}
+                metadata=metadata
             )
             # Auto-publish new version including this scenario
             if set_id:
@@ -1879,7 +1957,13 @@ class ScenarioEditView(ProjectMixin, View):
             test_prompt = request.POST.get("test_prompt", "").strip()
             severity_ceiling = request.POST.get("severity_ceiling", "").strip().lower()
             documents_raw = request.POST.get("documents", "").strip()
-            documents = json.loads(documents_raw) if documents_raw else []
+            metadata_raw = request.POST.get("metadata", "").strip()
+            try:
+                documents = json.loads(documents_raw) if documents_raw else []
+                metadata = json.loads(metadata_raw) if metadata_raw else {}
+            except json.JSONDecodeError:
+                messages.error(request, "Documents and agentic metadata must be valid JSON.")
+                return _scenario_redirect(set_id or None)
             file_uri_raw = request.POST.get("file_uri", "").strip()
             file_uri = file_uri_raw or None
             if title:
@@ -1889,11 +1973,22 @@ class ScenarioEditView(ProjectMixin, View):
 
             # update_scenario_content handles change detection (returns latest if unchanged)
             latest_rev_before = scenario.revisions.order_by("-revision").first()
+            if not request.POST.get("agentic_scenario"):
+                # The toggle disables agentic expectations, but must not erase
+                # unrelated metadata authored by older clients or imports.
+                metadata = dict(latest_rev_before.metadata or {}) if latest_rev_before else {}
+                metadata.pop("agentic", None)
+            else:
+                try:
+                    metadata = _merge_structured_agentic_fields(metadata, request.POST)
+                except (ValueError, json.JSONDecodeError):
+                    messages.error(request, "Structured agentic controls must contain valid numbers and JSON.")
+                    return _scenario_redirect(set_id or None)
             rev = update_scenario_content(
                 scenario=scenario, user=request.user, description=desc,
                 expected_behavior=expected_behavior, test_prompt=test_prompt,
                 severity_ceiling=severity_ceiling, documents=documents, file_uri=file_uri,
-                metadata=None  # Preserves existing metadata on edit
+                metadata=metadata,
             )
             content_changed = latest_rev_before is None or rev.revision > latest_rev_before.revision
             if content_changed:
@@ -1987,25 +2082,19 @@ class ScenarioExportView(ProjectMixin, View):
         latest = sset.versions.order_by("-version").first()
         def _export_scenario(it):
             d = {"key": it.scenario.key, "title": it.scenario.title,
-                 "description": it.revision.description}
-            if it.scenario.category:
-                d["category"] = it.scenario.category
-            if it.revision.expected_behavior:
-                d["expected_behavior"] = it.revision.expected_behavior
-            if it.revision.test_prompt:
-                d["test_prompt"] = it.revision.test_prompt
-            if it.revision.severity_ceiling:
-                d["severity_ceiling"] = it.revision.severity_ceiling
-            if it.revision.documents:
-                d["documents"] = it.revision.documents
-            if it.revision.file_uri:
-                d["file_uri"] = it.revision.file_uri
-            if it.revision.metadata:
-                d["metadata"] = it.revision.metadata
+                 "description": it.revision.description,
+                 "expected_behavior": it.revision.expected_behavior,
+                 "test_prompt": it.revision.test_prompt,
+                 "severity_ceiling": it.revision.severity_ceiling,
+                 "documents": it.revision.documents,
+                 "file_uri": it.revision.file_uri,
+                 "metadata": it.revision.metadata,
+                 "category": it.scenario.category,
+                 "tags": it.scenario.tags or []}
             return d
 
         scenarios = [_export_scenario(it) for it in latest.items.select_related("scenario", "revision")] if latest else []
-        return JsonResponse({"set_name": sset.name, "scenarios": scenarios})
+        return JsonResponse({"format_version": 2, "set_name": sset.name, "scenarios": scenarios})
 
 
 class ScenarioImportView(ProjectMixin, View):
@@ -2018,6 +2107,8 @@ class ScenarioImportView(ProjectMixin, View):
             return JsonResponse({"error": "Not found"}, status=404)
         try:
             data = json.loads(request.body)
+            if data.get("format_version") not in (None, 2):
+                return JsonResponse({"error": "Unsupported scenario import format_version; expected 2."}, status=400)
             new_ids = []
             for item in data.get("scenarios", []):
                 key = item.get("key", f"imported_{int(timezone.now().timestamp())}")
@@ -2887,6 +2978,19 @@ def _image_uris(rep: dict) -> list[str]:
 
 def _rep_view(rep: dict, index: int) -> dict:
     """One judged conversation (a repetition, or the whole single-rep result)."""
+    def _token_count(value: object) -> int:
+        """Normalize provider-specific token values for display totals."""
+        if isinstance(value, bool):
+            return int(value)
+        if isinstance(value, (int, float)):
+            return int(value)
+        if isinstance(value, str):
+            try:
+                return int(value)
+            except ValueError:
+                return 0
+        return 0
+
     conversation = []
     turn = 0
     for msg in rep.get("conversation") or []:
@@ -2909,7 +3013,9 @@ def _rep_view(rep: dict, index: int) -> dict:
         for r in _REP_TOKEN_ROLES
         if rep.get(f"{r}_input_tokens") is not None or rep.get(f"{r}_output_tokens") is not None
     ]
-    total_tokens = sum((t["input"] or 0) + (t["output"] or 0) for t in tokens)
+    total_tokens = sum(
+        _token_count(t["input"]) + _token_count(t["output"]) for t in tokens
+    )
     grade = _judge_grade(rep.get("judgment"))
     return {
         "index": index,

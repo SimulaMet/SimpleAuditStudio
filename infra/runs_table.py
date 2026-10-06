@@ -121,6 +121,9 @@ def _frozen_name(run, role: str) -> str:
 def run_row(run, counts: dict) -> dict:
     params = run.generation_parameters_snapshot or {}
     c = counts.get(run.id) or {"k": 0, "n": 0}
+    metrics = run.summary_metrics or {}
+    agentic = metrics.get("agentic_evaluation") if isinstance(metrics, dict) else {}
+    agentic = agentic if isinstance(agentic, dict) else {}
     return {
         "id": run.id,
         "name": run.name,
@@ -134,6 +137,13 @@ def run_row(run, counts: dict) -> dict:
         "reps": int(params.get("n_repetitions") or 1),
         "pass_rate": round(c["k"] * 100 / c["n"], 1) if c["n"] else None,
         "trials": c["n"],
+        "agentic_status": (
+            "INCONCLUSIVE" if agentic.get("inconclusive") else
+            "FAIL" if agentic.get("failed") else
+            "PASS" if agentic.get("passed") else None
+        ),
+        "agentic_pass_rate": metrics.get("agentic_pass_rate"),
+        "agentic_inconclusive_rate": metrics.get("inconclusive_rate"),
         # Names as frozen when the run was created (models can be renamed later).
         "target": _frozen_name(run, "target"),
         "target_id": (run.target_config_snapshot or {}).get("model_id") or run.target_model.model_id,

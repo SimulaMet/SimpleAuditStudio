@@ -10,6 +10,7 @@ a downed job system must not roll back a frozen experiment record).
 from __future__ import annotations
 
 import logging
+import math
 from datetime import UTC, timedelta
 
 from django.db import transaction
@@ -467,16 +468,30 @@ def pass_counts(run_ids: list[int]) -> dict[int, dict]:
 
 
 def wilson(k: int, n: int, z: float = Z_CRIT) -> tuple[float, float]:
-    """Wilson score interval for a binomial proportion (delegates to the engine)."""
-    from simpleaudit.stats import wilson_interval
-
+    """Wilson score interval, preferring the engine helper when available."""
+    try:
+        from simpleaudit.stats import wilson_interval
+    except ModuleNotFoundError:
+        if n <= 0:
+            return 0.0, 1.0
+        p = k / n
+        denominator = 1 + z * z / n
+        centre = (p + z * z / (2 * n)) / denominator
+        margin = z * math.sqrt((p * (1 - p) + z * z / (4 * n)) / n) / denominator
+        return max(0.0, centre - margin), min(1.0, centre + margin)
     return wilson_interval(k, n, z=z)
 
 
 def two_proportion_z(k1: int, n1: int, k2: int, n2: int) -> float | None:
-    """z statistic for p2 - p1 (pooled); None when undefined (delegates to the engine)."""
-    from simpleaudit.stats import two_proportion_z as _core_two_proportion_z
-
+    """z statistic for p2 - p1 (pooled), with an older-engine fallback."""
+    try:
+        from simpleaudit.stats import two_proportion_z as _core_two_proportion_z
+    except ModuleNotFoundError:
+        if n1 <= 0 or n2 <= 0:
+            return None
+        pooled = (k1 + k2) / (n1 + n2)
+        variance = pooled * (1 - pooled) * (1 / n1 + 1 / n2)
+        return (k2 / n2 - k1 / n1) / math.sqrt(variance) if variance else 0.0
     return _core_two_proportion_z(k1, n1, k2, n2)
 
 

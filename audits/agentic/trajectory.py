@@ -9,7 +9,11 @@ def _attrs(span: dict[str, Any]) -> dict[str, Any]:
 
 
 def _kind(name: str, attrs: dict[str, Any]) -> str:
-    value = attrs.get("gen_ai.operation.name") or attrs.get("openinference.span.kind")
+    value = (
+        attrs.get("gen_ai.operation.name")
+        or attrs.get("openinference.span.kind")
+        or attrs.get("openwebui.span.kind")
+    )
     if value:
         value = str(value).lower()
         mapping = {
@@ -29,6 +33,8 @@ def _kind(name: str, attrs: dict[str, Any]) -> str:
             "invoke_agent": "workflow",
             "invoke_workflow": "workflow",
             "chain": "workflow",
+            "handoff": "handoff",
+            "transfer": "handoff",
         }
         return mapping.get(value, value)
     lowered = name.lower()
@@ -44,6 +50,19 @@ def _tool_arguments(attrs: dict[str, Any]) -> Any:
     raw = attrs.get("gen_ai.tool.call.arguments") or attrs.get("tool.arguments")
     if isinstance(raw, str):
         import json
+        try:
+            return json.loads(raw)
+        except (json.JSONDecodeError, TypeError):
+            return raw
+    return raw
+
+
+def _content(attrs: dict[str, Any], *keys: str) -> Any:
+    """Return the first captured content field, parsing JSON strings."""
+    import json
+
+    raw = next((attrs.get(key) for key in keys if attrs.get(key) is not None), None)
+    if isinstance(raw, str):
         try:
             return json.loads(raw)
         except (json.JSONDecodeError, TypeError):
@@ -76,9 +95,25 @@ def normalize(all_spans: list[dict[str, Any]]) -> AgentTrajectory:
             status=span.get("status") or attrs.get("status"),
             start_time=span.get("start_time"),
             end_time=span.get("end_time"),
+            duration_ms=(
+                (float(span["end_time"]) - float(span["start_time"])) * 1000
+                if span.get("start_time") is not None and span.get("end_time") is not None
+                else None
+            ),
+            actor=(
+                attrs.get("gen_ai.agent.name")
+                or attrs.get("agent.name")
+                or attrs.get("openinference.agent.name")
+            ),
             tool_name=tool_name,
             tool_call_id=attrs.get("gen_ai.tool.call.id"),
             arguments=_tool_arguments(attrs) if kind == "tool" else None,
+            result=_content(attrs, "gen_ai.tool.call.result", "tool.result") if kind == "tool" else None,
+            handoff_to=(
+                attrs.get("gen_ai.handoff.to")
+                or attrs.get("handoff.to")
+                or attrs.get("openinference.handoff.destination")
+            ),
             attributes=attrs,
             events=span.get("events") or [],
         ))

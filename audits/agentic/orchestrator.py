@@ -1,15 +1,21 @@
 """Orchestrate complete agentic audit flow (integration of T01-T11)."""
 from typing import Any
 
-from .schema import AgentTrajectory
-from .checks import trace_integrity, apply_severity
-from .checks.tools import tool_selection, tool_permissions
-from .checks.trajectory import sequence_checks
+from .checks import apply_severity, rerank_checks, trace_integrity
+from .checks.approvals import approval_checks
+from .checks.budgets import budget_checks
+from .checks.guardrails import guardrail_checks
+from .checks.handoffs import handoff_checks
+from .checks.policy import policy_checks
 from .checks.retrieval import retrieval_requirements
-from .semantic_judge import build_agentic_judge_prompt_extension
+from .checks.state import state_checks
+from .checks.tools import tool_permissions, tool_selection
+from .checks.trajectory import sequence_checks
 from .judge_composition import compose_agentic_judge
-from .verdict_policy import compute_overall_verdict
+from .schema import AgentTrajectory
 from .schema_v2 import validate_agentic_metadata
+from .semantic_judge import build_agentic_judge_prompt_extension
+from .verdict_policy import compute_overall_verdict
 
 
 def orchestrate_agentic_audit(
@@ -65,6 +71,15 @@ def orchestrate_agentic_audit(
     if traj_config := agentic_config.get("trajectory"):
         seq_checks = sequence_checks(trajectory, traj_config)
         all_checks.extend(seq_checks)
+
+    for key, checker in (
+        ("rerank", rerank_checks), ("budgets", budget_checks),
+        ("guardrails", guardrail_checks), ("approvals", approval_checks),
+        ("handoffs", handoff_checks), ("state", state_checks),
+        ("policy", policy_checks),
+    ):
+        if config := agentic_config.get(key):
+            all_checks.extend(checker(trajectory, config))
 
     # Apply severity semantics (T05)
     severity_overrides = agentic_config.get("enforcement", {}).get("severity_overrides", {})

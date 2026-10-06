@@ -823,7 +823,7 @@ function openScriptModal() {
       <div class="flex justify-between gap-2"><span class="text-gray-500 shrink-0">{% if m.role == "judge" %}Judge model{% else %}{{ m.role|capfirst }}{% endif %}</span>
         <span class="min-w-0 text-right">
           {% if m.role == "target" and frozen_agent %}
-          <a href="{% url 'agent_detail' frozen_agent.id %}" class="text-emerald-300 break-all hover:text-emerald-200 transition-colors" title="Agent: {{ frozen_agent.name }} (base: {{ m.display_name }})">{{ frozen_agent.name }} <span class="text-gray-500 font-mono">({{ m.model_id }})</span></a>
+          {% if frozen_agent.detail_url %}<a href="{{ frozen_agent.detail_url }}" class="text-emerald-300 break-all hover:text-emerald-200 transition-colors" title="Agent: {{ frozen_agent.name }} (base: {{ m.display_name }})">{% else %}<span class="text-emerald-300 break-all" title="Agent: {{ frozen_agent.name }} (base: {{ m.display_name }})">{% endif %}{{ frozen_agent.name }} <span class="text-gray-500 font-mono">({{ m.model_id }})</span>{% if frozen_agent.detail_url %}</a>{% else %}</span>{% endif %}
           {% else %}
           <a href="{% url 'connections' %}#conn-{{ m.connection_id }}" class="text-gray-300 break-all hover:text-accent transition-colors" title="{{ m.provider }} · {{ m.base_url }} (as used by this run)">{{ m.display_name }} <span class="text-gray-500 font-mono">({{ m.model_id }})</span></a>
           {% endif %}
@@ -834,7 +834,7 @@ function openScriptModal() {
       {% if frozen_agent %}
       <div class="mt-3 pt-3 border-t border-gray-800">
         <p class="text-[10px] uppercase tracking-wide text-gray-500 mb-2">Agent</p>
-        <div class="flex justify-between gap-2"><span class="text-gray-500 shrink-0">Name</span><a href="{% url 'agent_detail' frozen_agent.id %}" class="min-w-0 text-emerald-300 text-right hover:text-emerald-200 transition-colors" title="Open agent">{{ frozen_agent.name }}</a></div>
+        <div class="flex justify-between gap-2"><span class="text-gray-500 shrink-0">Name</span>{% if frozen_agent.detail_url %}<a href="{{ frozen_agent.detail_url }}" class="min-w-0 text-emerald-300 text-right hover:text-emerald-200 transition-colors" title="Open agent">{% else %}<span class="min-w-0 text-emerald-300 text-right">{% endif %}{{ frozen_agent.name }}{% if frozen_agent.detail_url %}</a>{% else %}</span>{% endif %}</div>
         <div class="flex justify-between gap-2"><span class="text-gray-500 shrink-0">Base Model</span><a href="{% url 'connections' %}#conn-{{ frozen_agent.base_model.connection_id }}" class="min-w-0 text-gray-300 text-right hover:text-accent transition-colors" title="{{ frozen_agent.base_model.connection.provider }} · {{ frozen_agent.base_model.connection.base_url }}">{{ frozen_agent.base_model.display_name|default:frozen_agent.base_model.model_id }} <span class="text-gray-500 font-mono">({{ frozen_agent.base_model.model_id }})</span></a></div>
         {% if frozen_agent.system_prompt %}
         <div class="flex justify-between gap-2"><span class="text-gray-500 shrink-0">System Prompt</span><span class="min-w-0 text-gray-300 text-right truncate max-w-[180px]" title="{{ frozen_agent.system_prompt }}">{{ frozen_agent.system_prompt|truncatechars:50 }}</span></div>

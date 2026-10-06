@@ -13,7 +13,6 @@ def sha256_text(text: str) -> str:
 
 def scenario_revision_hash(*, description: str, expected_behavior, test_prompt: str, metadata: dict,
                            severity_ceiling: str = "", documents=None, file_uri=None) -> str:
-    execution_metadata = metadata.get("execution") if isinstance(metadata, dict) else None
     payload = {
         "description": description or "",
         "expected_behavior": expected_behavior or [],
@@ -21,7 +20,9 @@ def scenario_revision_hash(*, description: str, expected_behavior, test_prompt: 
         "severity_ceiling": severity_ceiling or "",
         "documents": documents or [],
         "file_uri": file_uri,
-        "execution_metadata": execution_metadata,
+        # Metadata is part of the immutable execution contract. Keeping only
+        # ``execution`` made agentic expectation edits invisible to hashes.
+        "metadata": metadata or {},
     }
     return sha256_text(canonical_json(payload))
 

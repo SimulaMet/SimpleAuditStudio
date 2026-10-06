@@ -1,8 +1,10 @@
-from django.test import TestCase
+import json
+
+from django.test import Client, TestCase
 from rest_framework.test import APIClient
 
 from accounts.models import Project, ProjectMembership, User
-from scenarios.models import Scenario, ScenarioRevision, ScenarioSetVersion
+from scenarios.models import Scenario, ScenarioRevision, ScenarioSet, ScenarioSetVersion
 
 
 class ScenarioLibraryTests(TestCase):
@@ -117,6 +119,171 @@ class ScenarioLibraryTests(TestCase):
         response = client.get(f"/api/projects/{self.project.id}/scenarios/")
         assert response.status_code == 403
         assert response.json()["error"]["code"] == "project_access_denied"
+
+
+class AgenticScenarioBrowserRoundTripTests(TestCase):
+    """Exercise the server-rendered scenario workflow as a browser would."""
+
+    def setUp(self):
+        self.user = User.objects.create_user(username="agentic-ui", password="pass12345")
+        self.project = Project.objects.create(name="Agentic UI", slug="agentic-ui")
+        ProjectMembership.objects.create(
+            project=self.project, user=self.user, role=ProjectMembership.Role.AUDITOR
+        )
+        self.client = Client(SERVER_NAME="localhost")
+        self.client.force_login(self.user)
+        session = self.client.session
+        session["active_project_id"] = self.project.id
+        session.save()
+
+        create_set = self.client.post(
+            "/scenarios/set-create/", {"name": "Agentic round trip"}
+        )
+        self.assertRedirects(create_set, "/scenarios/")
+        self.scenario_set = ScenarioSet.objects.get(project=self.project)
+
+    def test_create_edit_export_import_preserves_agentic_prompt_and_metadata(self):
+        metadata = {
+            "agentic": {
+                "schema_version": 2,
+                "tools": {"expected": ["search"], "forbidden": ["delete"]},
+                "trajectory": {"required_sequence": ["search", "respond"]},
+                "enforcement": {"mode": "gating"},
+            },
+            "custom_context": {"owner": "red-team", "case": 17},
+        }
+        structured_fields = {
+            "agentic_tools_expected": "search",
+            "agentic_tools_forbidden": "delete",
+            "agentic_sequence": "search,respond",
+            "agentic_enforcement_mode": "gating",
+        }
+        created = self.client.post(
+            "/scenarios/create/",
+            {
+                "set_id": self.scenario_set.id,
+                "name": "Agentic support escalation",
+                "category": "support",
+                "description": "Handle an escalation with tool use.",
+                "expected_behavior": "Use the approved search tool\nDo not delete data",
+                "test_prompt": "Please investigate my account issue.",
+                "agentic_scenario": "1",
+                "metadata": json.dumps(metadata),
+                **structured_fields,
+            },
+        )
+        self.assertRedirects(created, f"/scenarios/?set={self.scenario_set.id}")
+
+        scenario = Scenario.objects.get(project=self.project, title="Agentic support escalation")
+        revision = scenario.revisions.get(revision=1)
+        self.assertEqual(revision.test_prompt, "Please investigate my account issue.")
+        self.assertEqual(revision.metadata["custom_context"], metadata["custom_context"])
+        self.assertEqual(revision.metadata["agentic"]["tools"]["expected"], ["search"])
+        self.assertEqual(revision.metadata["agentic"]["tools"]["forbidden"], ["delete"])
+
+        page = self.client.get(f"/scenarios/?set={self.scenario_set.id}")
+        self.assertContains(page, "Please investigate my account issue.")
+        self.assertContains(page, "Agentic metadata (JSON)")
+
+        edited_metadata = {
+            **metadata,
+            "custom_context": {"owner": "red-team", "case": 18},
+        }
+        edited = self.client.post(
+            f"/scenarios/edit/{scenario.id}/",
+            {
+                "set_id": self.scenario_set.id,
+                "title": scenario.title,
+                "category": "support",
+                "description": "Handle an escalated account issue safely.",
+                "expected_behavior": "Use the approved search tool\nExplain the next step",
+                "test_prompt": "Please investigate and explain my account issue.",
+                "agentic_scenario": "1",
+                "metadata": json.dumps(edited_metadata),
+                **structured_fields,
+            },
+        )
+        self.assertRedirects(edited, f"/scenarios/?set={self.scenario_set.id}")
+
+        revision = scenario.revisions.order_by("-revision").first()
+        self.assertEqual(revision.test_prompt, "Please investigate and explain my account issue.")
+        self.assertEqual(revision.metadata["custom_context"], edited_metadata["custom_context"])
+        self.assertEqual(revision.metadata["agentic"]["trajectory"]["required_sequence"], ["search", "respond"])
+
+        exported = self.client.get(f"/scenarios/{self.scenario_set.id}/export/")
+        self.assertEqual(exported.status_code, 200)
+        export_payload = exported.json()
+        exported_item = export_payload["scenarios"][0]
+        self.assertEqual(exported_item["test_prompt"], revision.test_prompt)
+        self.assertEqual(exported_item["metadata"], revision.metadata)
+
+        create_second_set = self.client.post(
+            "/scenarios/set-create/", {"name": "Imported agentic scenarios"}
+        )
+        self.assertRedirects(create_second_set, "/scenarios/")
+        imported_set = ScenarioSet.objects.get(project=self.project, name="Imported agentic scenarios")
+        imported = self.client.post(
+            f"/scenarios/{imported_set.id}/import/",
+            data=json.dumps(export_payload),
+            content_type="application/json",
+        )
+        self.assertRedirects(imported, f"/scenarios/?set={imported_set.id}")
+
+        imported_revision = scenario.revisions.order_by("-revision").first()
+        self.assertEqual(imported_revision.test_prompt, revision.test_prompt)
+        self.assertEqual(imported_revision.metadata, exported_item["metadata"])
+        imported_page = self.client.get(f"/scenarios/?set={imported_set.id}")
+        self.assertContains(imported_page, "Please investigate and explain my account issue.")
+        self.assertContains(imported_page, "red-team")
+
+    def test_structured_agentic_controls_cover_schema_v2_and_preserve_unknown_fields(self):
+        metadata = {
+            "agentic": {
+                "schema_version": 2,
+                "trace": {"required": True},
+            },
+            "custom_context": {"owner": "red-team"},
+            "custom_section": {"keep": "this"},
+        }
+        response = self.client.post(
+            "/scenarios/create/",
+            {
+                "set_id": self.scenario_set.id,
+                "name": "Structured controls",
+                "description": "Exercise the structured authoring controls.",
+                "agentic_scenario": "1",
+                "metadata": json.dumps(metadata),
+                "agentic_tools_expected": "search, refund",
+                "agentic_sources": "orders, policy",
+                "agentic_sequence": "retrieval, tool",
+                "agentic_max_tool_calls": "4",
+                "agentic_rerank_required": "1",
+                "agentic_rerank_min_calls": "1",
+                "agentic_policy_read_only": "1",
+                "agentic_policy_allowed_data_scopes": "order:id",
+                "agentic_guardrails_required": "privacy",
+                "agentic_guardrails_before_actions": '[{"guardrail":"privacy","action":"refund"}]',
+                "agentic_approvals_required_for": "refund",
+                "agentic_handoffs_allowed": "billing",
+                "agentic_handoffs_max_depth": "2",
+                "agentic_trajectory_max_retries_per_tool": "3",
+                "agentic_budgets_max_errors": "1",
+                "agentic_state_assertions": '[{"type":"equals","key":"status","value":"done"}]',
+                "agentic_enforcement_mode": "gating",
+            },
+        )
+        self.assertRedirects(response, f"/scenarios/?set={self.scenario_set.id}")
+        revision = Scenario.objects.get(title="Structured controls").revisions.get(revision=1)
+        agentic = revision.metadata["agentic"]
+        self.assertEqual(revision.metadata["custom_section"], {"keep": "this"})
+        self.assertEqual(revision.metadata["custom_context"], {"owner": "red-team"})
+        self.assertEqual(agentic["rerank"], {"required": True, "min_calls": 1, "max_calls": None})
+        self.assertEqual(agentic["policy"]["allowed_data_scopes"], ["order:id"])
+        self.assertEqual(agentic["guardrails"]["before_actions"], [{"guardrail": "privacy", "action": "refund"}])
+        self.assertEqual(agentic["handoffs"]["max_depth"], 2)
+        self.assertEqual(agentic["trajectory"]["max_retries_per_tool"], 3)
+        self.assertEqual(agentic["budgets"]["max_errors"], 1)
+        self.assertEqual(agentic["state"]["assertions"][0]["type"], "equals")
 
 
 class ConflictHandlingTests(TestCase):

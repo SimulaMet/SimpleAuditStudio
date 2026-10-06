@@ -95,3 +95,17 @@ class TraceCardViewTest(TestCase):
     def test_rep_view_no_trace_card_when_untraced(self):
         view = _rep_view({"severity": "pass", "conversation": []}, 1)
         self.assertIsNone(view["trace"])
+
+    def test_rep_view_tolerates_non_numeric_provider_token_values(self):
+        view = _rep_view(
+            {
+                "severity": "medium",
+                "conversation": [],
+                "target_input_tokens": "[REDACTED]",
+                "target_output_tokens": "unknown",
+                "judge_input_tokens": "12",
+                "judge_output_tokens": 8,
+            },
+            1,
+        )
+        self.assertEqual(view["total_tokens"], 20)

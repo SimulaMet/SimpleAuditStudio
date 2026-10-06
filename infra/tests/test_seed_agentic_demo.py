@@ -1,4 +1,6 @@
+import json
 import os
+import tempfile
 from io import StringIO
 from unittest.mock import patch
 
@@ -310,3 +312,30 @@ class SeedAgenticDemoTests(TestCase):
         self.assertEqual(AuditRun.objects.filter(project=self.project, runtime_metadata__agentic_demo_seed=True).count(), 1)
         self.assertEqual(ScenarioResult.objects.filter(run_id=run.id).count(), 8)
         self.assertEqual(OtlpSpan.objects.filter(target_id=run.trace_config["target_id"]).count(), 16)
+
+    def test_capture_exports_db_results_and_spans_only_with_explicit_execution_provenance(self):
+        from audits.agentic.demo_fixture import export_run_fixture, validate_fixture
+
+        run = self._seed_preloaded_run()
+        metadata = dict(run.runtime_metadata)
+        metadata.pop("agentic_demo_seed", None)
+        metadata.update({"source": "live_run", "executed": True})
+        run.runtime_metadata = metadata
+        run.save(update_fields=["runtime_metadata"])
+
+        fixture = export_run_fixture(run)
+        validate_fixture(fixture, require_recorded=True)
+        self.assertEqual(len(fixture["scenario_results"]), 8)
+        self.assertEqual(len(fixture["spans"]), 16)
+        self.assertEqual(fixture["recorded_run"]["source"], "recorded_real_run_fixture")
+
+        with tempfile.TemporaryDirectory() as directory:
+            output = f"{directory}/captured.json"
+            call_command(
+                "capture_agentic_demo_fixture", "--run", str(run.pk),
+                "--output", output, "--require-recorded", stdout=StringIO(),
+            )
+            with open(output) as captured:
+                written = json.load(captured)
+        self.assertEqual(written["_meta"]["sanitized"], True)
+        self.assertEqual(written["recorded_run"]["executed"], True)

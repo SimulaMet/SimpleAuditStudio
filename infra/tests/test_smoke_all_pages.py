@@ -151,6 +151,31 @@ class AllPagesSmokeTest(TestCase):
         # The SSE script updates it on terminal events.
         self.assertIn("updateRunState", html)
 
+    def test_repeated_live_panel_has_rep_event_contract(self):
+        """Repeated runs expose the durable rep events consumed by the SSE UI."""
+        from audits.models import AuditRun
+
+        active = AuditRunFactory(
+            project=self.project,
+            scenario_set_version=self.run.scenario_set_version,
+            target_model=self.run.target_model,
+            auditor_model=self.run.auditor_model,
+            judge_model=self.run.judge_model,
+            status=AuditRun.Status.TARGET_EXECUTION,
+            total_scenarios=1,
+            completed_scenarios=0,
+            generation_parameters_snapshot={"max_turns": 2, "n_repetitions": 3},
+        )
+        html = self.client.get(f"/runs/{active.id}/").content.decode()
+
+        self.assertIn('id="combo-bar"', html)
+        self.assertIn("const TOTAL_REPS = 3", html)
+        self.assertIn("handlers.scenario_rep_started", html)
+        # Rep completion is represented by the judge turn's transition to
+        # ``between``; the next durable rep_started event resets the panel.
+        self.assertIn("else next = { phase: 'between'", html)
+        self.assertIn("p.rep || 0", html)
+
     def test_audit_exports(self):
         self._ok(f"/runs/{self.run.id}/export/?format=json", "Export JSON")
         self._ok(f"/runs/{self.run.id}/export/?format=csv", "Export CSV")

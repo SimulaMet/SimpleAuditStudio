@@ -38,6 +38,40 @@ class ScenarioImportExportTest(APITestCase):
         self.assertEqual(alpha["description"], "desc")
         self.assertEqual(alpha["expected_behavior"], ["a"])
         self.assertEqual(alpha["test_prompt"], "p")
+        self.assertEqual(data["format_version"], 2)
+        self.assertEqual(alpha["metadata"], {})
+
+    def test_agentic_metadata_round_trips_losslessly(self):
+        metadata = {"agentic": {"schema_version": 1, "tools": {"forbidden": ["delete"]}}}
+        resp = self.client.post(
+            f"/api/projects/{self.pid}/scenarios/create/",
+            {"key": "agentic", "title": "Agentic", "description": "d", "expected_behavior": ["x"], "metadata": metadata},
+            format="json",
+        )
+        assert resp.status_code == 201, resp.content
+        export = self.client.get(f"/api/projects/{self.pid}/scenarios/export/").json()
+        item = export["scenarios"][0]
+        self.assertEqual(item["metadata"], metadata)
+        self.assertEqual(item["severity_ceiling"], "")
+        self.assertEqual(item["documents"], [])
+
+        other = Project.objects.create(name="Target", slug="target")
+        ProjectMembership.objects.create(user=self.user, project=other, role=ProjectMembership.Role.AUDITOR)
+        imported = self.client.post(f"/api/projects/{other.id}/scenarios/import/", export, format="json")
+        assert imported.status_code == 201, imported.content
+        scenario = self.client.get(f"/api/projects/{other.id}/scenarios/").json()[0]
+        self.assertEqual(scenario["latest_revision"]["metadata"], metadata)
+
+    def test_metadata_only_edit_changes_revision_hash(self):
+        original = self._create_scenario("hash-agentic")
+        response = self.client.post(
+            f"/api/projects/{self.pid}/scenarios/{original['id']}/update/",
+            {"description": "desc", "expected_behavior": ["a"], "metadata": {"agentic": {"schema_version": 1}}},
+            format="json",
+        )
+        assert response.status_code == 201, response.content
+        self.assertEqual(response.json()["revision"], 2)
+        self.assertNotEqual(response.json()["content_hash"], original["latest_revision"]["content_hash"])
 
     def test_export_empty_project(self):
         resp = self.client.get(f"/api/projects/{self.pid}/scenarios/export/")

@@ -1,0 +1,60 @@
+{
+  "fixture_format": "simpleaudit-agentic-trace-verification",
+  "fixture_version": 1,
+  "traces": [
+    {
+      "trace_id": "trace-multi-agent-001",
+      "spans": [
+        {
+          "trace_id": "trace-multi-agent-001",
+          "span_id": "span-router",
+          "name": "router",
+          "start_time": 1.0,
+          "end_time": 1.01,
+          "attributes": {
+            "gen_ai.operation.name": "invoke_agent",
+            "gen_ai.agent.name": "router"
+          }
+        },
+        {
+          "trace_id": "trace-multi-agent-001",
+          "span_id": "span-handoff",
+          "parent_span_id": "span-router",
+          "name": "handoff",
+          "start_time": 1.02,
+          "end_time": 1.03,
+          "attributes": {
+            "gen_ai.operation.name": "handoff",
+            "gen_ai.agent.name": "router",
+            "gen_ai.handoff.to": "refund-specialist"
+          }
+        },
+        {
+          "trace_id": "trace-multi-agent-001",
+          "span_id": "span-specialist",
+          "parent_span_id": "span-handoff",
+          "name": "refund-specialist",
+          "start_time": 1.04,
+          "end_time": 1.05,
+          "attributes": {
+            "gen_ai.operation.name": "invoke_agent",
+            "gen_ai.agent.name": "refund-specialist"
+          }
+        },
+        {
+          "trace_id": "trace-multi-agent-001",
+          "span_id": "span-tool",
+          "parent_span_id": "span-specialist",
+          "name": "acme_lookup_order",
+          "start_time": 1.06,
+          "end_time": 1.08,
+          "attributes": {
+            "gen_ai.operation.name": "execute_tool",
+            "gen_ai.agent.name": "refund-specialist",
+            "gen_ai.tool.name": "acme_lookup_order"
+          }
+        }
+      ]
+    }
+  ]
+}
