@@ -95,5 +95,3 @@ def test_orchestrator_with_failing_check():
     assert len(result["checks"]) >= 0
 
 
-if __name__ == "__main__":
-    pytest.main([__file__, "-v"])

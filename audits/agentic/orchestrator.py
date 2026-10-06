@@ -1,12 +1,13 @@
 """Orchestrate complete agentic audit flow (integration of T01-T11)."""
 from typing import Any
 
-from .schema import AgentTrajectory, TrajectoryStep
+from .schema import AgentTrajectory
 from .checks import trace_integrity, apply_severity
 from .checks.tools import tool_selection, tool_permissions
 from .checks.trajectory import sequence_checks
+from .checks.retrieval import retrieval_requirements
 from .semantic_judge import build_agentic_judge_prompt_extension
-from .judge_composition import compose_agentic_judge, extract_agentic_results
+from .judge_composition import compose_agentic_judge
 from .verdict_policy import compute_overall_verdict
 from .schema_v2 import validate_agentic_metadata
 
@@ -53,6 +54,10 @@ def orchestrate_agentic_audit(
         if agent_snapshot:
             perm_checks = tool_permissions(trajectory, agent_snapshot)
             all_checks.extend(perm_checks)
+
+    if retrieval_config := agentic_config.get("retrieval"):
+        retrieval_checks = retrieval_requirements(trajectory, retrieval_config)
+        all_checks.extend(retrieval_checks)
 
     if traj_config := agentic_config.get("trajectory"):
         seq_checks = sequence_checks(trajectory, traj_config)
