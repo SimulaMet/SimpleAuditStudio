@@ -6,15 +6,15 @@ from typing import Any, Literal
 @dataclass
 class TrajectoryStep:
     """Normalized representation of one step in an agent execution trace."""
-    trace_id: str
     span_id: str
-    parent_span_id: str | None = None
-    index: int = 0
     kind: Literal[
         "agent", "inference", "tool", "retrieval", "rerank",
         "guardrail", "approval", "handoff", "state", "workflow", "unknown"
     ] = "unknown"
     name: str = ""
+    trace_id: str = ""
+    parent_span_id: str | None = None
+    index: int = 0
     actor: str | None = None
     purpose: Literal["primary", "auxiliary"] = "primary"
     status: str | None = None

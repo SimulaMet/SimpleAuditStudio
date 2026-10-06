@@ -51,12 +51,15 @@ def orchestrate_agentic_audit(
         tool_checks = tool_selection(trajectory, tools_config)
         all_checks.extend(tool_checks)
 
-        if agent_snapshot:
-            perm_checks = tool_permissions(trajectory, agent_snapshot)
-            all_checks.extend(perm_checks)
+    # Tool/permission policy is evaluated against the frozen agent snapshot
+    # whenever one is available, independent of whether the scenario also
+    # declares explicit tool-selection expectations.
+    if agent_snapshot:
+        perm_checks = tool_permissions(trajectory, agent_snapshot)
+        all_checks.extend(perm_checks)
 
     if retrieval_config := agentic_config.get("retrieval"):
-        retrieval_checks = retrieval_requirements(trajectory, retrieval_config)
+        retrieval_checks = retrieval_requirements(trajectory, retrieval_config, agent_snapshot)
         all_checks.extend(retrieval_checks)
 
     if traj_config := agentic_config.get("trajectory"):
@@ -98,6 +101,10 @@ def orchestrate_agentic_audit(
                 "status": c.status,
                 "severity": c.severity,
                 "summary": c.summary,
+                "expected": c.expected,
+                "observed": c.observed,
+                "evidence_span_ids": c.evidence_span_ids,
+                "details": c.details,
             }
             for c in all_checks
         ],

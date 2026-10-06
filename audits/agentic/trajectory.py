@@ -40,9 +40,20 @@ def _kind(name: str, attrs: dict[str, Any]) -> str:
     return "unknown"
 
 
+def _tool_arguments(attrs: dict[str, Any]) -> Any:
+    raw = attrs.get("gen_ai.tool.call.arguments") or attrs.get("tool.arguments")
+    if isinstance(raw, str):
+        import json
+        try:
+            return json.loads(raw)
+        except (json.JSONDecodeError, TypeError):
+            return raw
+    return raw
+
+
 def normalize(all_spans: list[dict[str, Any]]) -> AgentTrajectory:
     steps = []
-    for span in all_spans:
+    for index, span in enumerate(all_spans):
         attrs = _attrs(span)
         name = str(span.get("name") or span.get("span_name") or "unknown")
         purpose = str(attrs.get("purpose") or "primary")
@@ -50,11 +61,25 @@ def normalize(all_spans: list[dict[str, Any]]) -> AgentTrajectory:
             purpose = "auxiliary"
         kind = _kind(name, attrs)
         step_name = name
+        tool_name = None
         if kind == "tool":
-            step_name = str(attrs.get("gen_ai.tool.name") or attrs.get("tool.name") or name)
+            tool_name = str(attrs.get("gen_ai.tool.name") or attrs.get("tool.name") or name)
+            step_name = tool_name
         steps.append(TrajectoryStep(
-            span_id=span.get("span_id"), kind=kind, name=step_name,
-            purpose=purpose, status=span.get("status") or attrs.get("status"),
-            attributes=attrs, payload=span.get("events") or {},
+            trace_id=str(span.get("trace_id") or ""),
+            span_id=str(span.get("span_id") or ""),
+            parent_span_id=span.get("parent_span_id"),
+            index=index,
+            kind=kind,
+            name=step_name,
+            purpose=purpose,
+            status=span.get("status") or attrs.get("status"),
+            start_time=span.get("start_time"),
+            end_time=span.get("end_time"),
+            tool_name=tool_name,
+            tool_call_id=attrs.get("gen_ai.tool.call.id"),
+            arguments=_tool_arguments(attrs) if kind == "tool" else None,
+            attributes=attrs,
+            events=span.get("events") or [],
         ))
     return AgentTrajectory(steps=steps)

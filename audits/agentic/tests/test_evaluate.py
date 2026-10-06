@@ -218,7 +218,7 @@ def test_tool_argument_assertion_uses_captured_standard_genai_arguments():
 
 
 def test_forbidden_side_effect_fails_against_frozen_policy():
-    trajectory = AgentTrajectory([TrajectoryStep("s1", "tool", "refund", payload={})])
+    trajectory = AgentTrajectory([TrajectoryStep("s1", "tool", "refund")])
     result = evaluate(trajectory, None, {"tools": [{"name": "refund", "enabled": True, "read_only": False, "has_side_effects": True}]})
     assert result["status"] == "FAIL"
 
