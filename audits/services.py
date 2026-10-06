@@ -270,13 +270,28 @@ def create_audit_run(
     agent_snapshot = None
     if agent is not None:
         server_rag = None
+        tool_invocation_names = {}
         try:
             from integrations.openwebui.client import OpenWebUIAdapter
 
-            server_rag = OpenWebUIAdapter.for_admin().safe_rag_settings()
+            adapter = OpenWebUIAdapter.for_admin()
         except Exception:  # noqa: BLE001 - a down chat service must not block freezing local inputs
-            logger.warning("Could not freeze Open WebUI RAG settings for agent %s", agent.id)
-        agent_snapshot = agent.config_snapshot(server_rag=server_rag)
+            adapter = None
+            logger.warning("Could not connect to Open WebUI while freezing agent %s", agent.id)
+        if adapter is not None:
+            try:
+                server_rag = adapter.safe_rag_settings()
+            except Exception:  # noqa: BLE001 - a down chat service must not block freezing local inputs
+                logger.warning("Could not freeze Open WebUI RAG settings for agent %s", agent.id)
+            try:
+                tool_invocation_names = adapter.tool_invocation_names(
+                    list(agent.tools.exclude(external_id="").values_list("external_id", flat=True))
+                )
+            except Exception:  # noqa: BLE001 - tool metadata is optional evidence
+                logger.warning("Could not freeze Open WebUI tool names for agent %s", agent.id)
+        agent_snapshot = agent.config_snapshot(
+            server_rag=server_rag, tool_invocation_names=tool_invocation_names
+        )
     return AuditRun.objects.create(
         project=project,
         name=name.strip(),

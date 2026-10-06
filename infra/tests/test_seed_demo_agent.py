@@ -257,7 +257,7 @@ class SeedDemoAgentBackfillTests(TestCase):
         # OWUI model is wired to the KB.
         self.assertEqual(
             api.create_workspace_model.call_args.kwargs["knowledge"],
-            [{"id": "kb-backfill", "name": DEMO_AGENT["knowledge_base"]["name"], "type": "file"}],
+            [{"id": "kb-backfill", "name": DEMO_AGENT["knowledge_base"]["name"], "type": "collection"}],
         )
 
     def test_rewires_agent_when_only_it_was_pushed(self):
@@ -281,7 +281,7 @@ class SeedDemoAgentBackfillTests(TestCase):
         api.create_workspace_model.assert_not_called()
         self.assertEqual(
             api.update_workspace_model.call_args.kwargs["knowledge"],
-            [{"id": "kb-backfill", "name": DEMO_AGENT["knowledge_base"]["name"], "type": "file"}],
+            [{"id": "kb-backfill", "name": DEMO_AGENT["knowledge_base"]["name"], "type": "collection"}],
         )
 
     def test_reconciles_existing_agent_when_ids_present(self):

@@ -119,13 +119,39 @@ class RoleKwargsFilteringTest(TestCase):
         self.assertEqual(filtered, {"timeout": 60})
 
 
+class OpenWebUISavedChatParamsTest(TestCase):
+    def test_saved_chat_drops_agent_unsupported_generation_fields(self):
+        from infra.trace_target import _openwebui_saved_chat_params
+
+        params = {
+            "temperature": 0.0,
+            "max_tokens": 512,
+            "reasoning_effort": "none",
+            "search_mode": "hybrid",
+            "top_k": 5,
+            "relevance_threshold": 0.2,
+            "extra_body": {
+                "reasoning_effort": "none",
+                "session_id": "simpleaudit-agent-1",
+            },
+        }
+        self.assertEqual(
+            _openwebui_saved_chat_params(params),
+            {
+                "temperature": 0.0,
+                "max_tokens": 512,
+                "extra_body": {"session_id": "simpleaudit-agent-1"},
+            },
+        )
+
+
 class AgentRequestWiringTest(TestCase):
     """Frozen Agent capabilities become standard Open WebUI request fields."""
 
     def test_agent_snapshot_adds_session_and_tool_ids_without_overwriting_explicit_fields(self):
         from infra.engine import augment_agent_generation
 
-        generation = {"target_params": {"temperature": 0.0}}
+        generation = {"target_params": {"temperature": 0.0, "reasoning_effort": "none"}}
         snapshot = {
             "agent_id": 1,
             "tools": [{"external_id": "acme_order_lookup"}],
@@ -137,6 +163,7 @@ class AgentRequestWiringTest(TestCase):
         self.assertEqual(result["target_params"]["temperature"], 0.0)
         self.assertEqual(result["target_params"]["extra_body"]["tool_ids"], ["acme_order_lookup"])
         self.assertEqual(result["target_params"]["extra_body"]["session_id"], "simpleaudit-agent-1")
+        self.assertNotIn("reasoning_effort", result["target_params"])
 
     def test_existing_openwebui_request_fields_win(self):
         from infra.engine import augment_agent_generation
@@ -145,6 +172,43 @@ class AgentRequestWiringTest(TestCase):
         result = augment_agent_generation(generation, {"agent_id": 2, "tools": [{"external_id": "ignored"}]})
 
         self.assertEqual(result["target_params"]["extra_body"], {"session_id": "run-session", "tool_ids": ["custom"]})
+
+    def test_agent_target_drops_provider_reasoning_default_but_judge_keeps_it(self):
+        from infra.engine import auditor_kwargs, augment_agent_generation
+
+        target = {
+            "model_id": "agent",
+            "provider": "openai",
+            "base_url": "https://target.invalid/v1",
+            "default_parameters": {"reasoning_effort": "none"},
+        }
+        judge = {
+            "model_id": "judge",
+            "provider": "openai",
+            "base_url": "https://judge.invalid/v1",
+            "default_parameters": {"reasoning_effort": "none"},
+            "judge": {"spec": {}},
+        }
+        auditor = {
+            "model_id": "auditor",
+            "provider": "openai",
+            "base_url": "https://auditor.invalid/v1",
+            "default_parameters": {},
+        }
+
+        with mock.patch("infra.engine._client_defaults", return_value={}):
+            kwargs, _ = auditor_kwargs(
+                target=target,
+                auditor=auditor,
+                judge=judge,
+                generation=augment_agent_generation(
+                    {"target_params": {}}, {"agent_id": 1}
+                ),
+                resolve_key=lambda _snapshot: "test-key",
+            )
+
+        self.assertNotIn("reasoning_effort", kwargs["target_params"])
+        self.assertEqual(kwargs["judge_params"]["reasoning_effort"], "none")
 
 
 class TargetTracePropagationTest(TestCase):
@@ -309,7 +373,7 @@ class TargetTracePropagationTest(TestCase):
         self.assertEqual(calls[0][0:2], ("post", "/chat/completions"))
         self.assertEqual(calls[0][2]["parent_id"], None)
         self.assertEqual(calls[0][2]["tool_ids"], ["acme_order_lookup"])
-        self.assertEqual(calls[0][3]["extra_headers"]["traceparent"], "00-" + "1" * 32 + "-" + "2" * 16 + "-01")
+        self.assertEqual(calls[0][3]["headers"]["traceparent"], "00-" + "1" * 32 + "-" + "2" * 16 + "-01")
         self.assertEqual(calls[1][0:2], ("get", "/chats/chat-1"))
 
 

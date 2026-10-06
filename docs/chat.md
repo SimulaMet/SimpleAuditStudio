@@ -226,7 +226,7 @@ unset: the iframe loads the same-origin `/chat/`.
 | `SIMPLEAUDIT_CHAT_CMD`          | auto                     | command that starts Open WebUI             |
 | `SIMPLEAUDIT_CHAT_IDENTITY_TTL` | `5`                      | seconds the proxy caches who a cookie is   |
 | `SIMPLEAUDIT_CHAT_SYNC_DELAY`   | `2`                      | seconds a model-connection push waits      |
-| `SIMPLEAUDIT_CHAT_OTLP`         | `false`                  | export Open WebUI's spans to Studio's OTLP listener |
+| `SIMPLEAUDIT_CHAT_OTLP`         | `false` outside embedded CLI; `true` for `uvx` | export Open WebUI's spans to Studio's OTLP listener |
 | `SIMPLEAUDIT_CHAT_OTLP_ENDPOINT`| full OTLP listener URL   | the `/otlp/v1/traces` ingestion URL (embedded: `http://127.0.0.1:<port>/otlp/v1/traces`, docker: `http://web:8000/otlp/v1/traces`) — the exporter uses it as-is |
 | `SIMPLEAUDIT_CHAT_OTLP_SERVICE_NAME` | `open-webui`         | the service name Open WebUI tags its spans with |
 
@@ -242,10 +242,15 @@ its wheel metadata. This matters for embedded mode, which installs the wheel
 directly; Docker installs the same dependencies from Open WebUI's backend
 requirements files.
 
-It is off by default. When enabled it exports **unauthenticated** by default —
-no credentials are sent — which matches the listener's default fallback to an
-enabled `none` credential. The exporter is the standard OTel one, so the
-environment variables are the standard ones, with two Open WebUI specifics:
+Compose and development modes leave it off unless explicitly enabled. The
+embedded `uvx simpleaudit-studio` launcher enables structural tracing by default
+so future Agent audits can show operation names, timing, and other non-content
+attributes; set `SIMPLEAUDIT_CHAT_OTLP=false` to opt out. Prompt, output, tool
+argument/result, and retrieved-document content capture remains opt-in and is
+not enabled by this default. When enabled, the demo uses the Studio listener's
+`none` credential unless a basic/bearer credential is configured. The exporter
+is the standard OTel one, so the environment variables are the standard ones,
+with two Open WebUI specifics:
 
 - Open WebUI selects the HTTP exporter from `OTEL_OTLP_SPAN_EXPORTER`
   (`http`), **not** the standard `OTEL_EXPORTER_OTLP_PROTOCOL`. `http`

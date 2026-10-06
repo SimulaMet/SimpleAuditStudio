@@ -218,7 +218,11 @@ def augment_agent_generation(generation: dict | None, agent_snapshot: dict | Non
     result = dict(generation or {})
     if not agent_snapshot:
         return result
+    result["_agent_target"] = True
     target_params = dict(result.get("target_params") or {})
+    # Open WebUI's Agent compatibility endpoint does not accept provider-only
+    # reasoning controls; the Agent's base provider owns that configuration.
+    target_params.pop("reasoning_effort", None)
     extra_body = dict(target_params.get("extra_body") or {})
     if not extra_body.get("session_id") and agent_snapshot.get("agent_id") is not None:
         extra_body["session_id"] = f"simpleaudit-agent-{agent_snapshot['agent_id']}"
@@ -262,6 +266,12 @@ def auditor_kwargs(*, target: dict, auditor: dict, judge: dict, generation: dict
         _validate_secrets(("target", target), ("auditor", auditor), ("judge", judge))
         resolve_key = snapshot_api_key
     target_cfg = _auditor_kwargs_from_snapshot(target, resolve_key)
+    if gen.get("_agent_target"):
+        target_cfg["gen_params"] = {
+            key: value
+            for key, value in (target_cfg["gen_params"] or {}).items()
+            if key != "reasoning_effort"
+        } or None
     auditor_cfg = _auditor_kwargs_from_snapshot(auditor, resolve_key)
     judge_cfg = _auditor_kwargs_from_snapshot(judge, resolve_key)
 

@@ -18,16 +18,18 @@ stored under `agentic_evaluation` beside the ordinary SimpleAudit judgment; an
 Agentic evaluator failure is recorded as `ERROR` and does not discard the ordinary
 result. Missing content or trace evidence is `INCONCLUSIVE`, never an implicit pass.
 
-Create the dedicated Acme pack with:
+The embedded `uvx simpleaudit-studio` startup seeds this pack and, after the
+demo Agent syncs to Open WebUI, preloads a completed example run with synthetic
+results and correlated synthetic OTLP spans. This is fixture data only: startup
+does not submit a workflow or call a target, auditor, or judge model. The example
+includes a text-only PASS beside an Agentic FAIL to show why intermediate tool
+activity matters. Run `uv run manage.py seed_agentic_scenarios --project 1` to
+seed the pack separately.
 
-```sh
-uv run manage.py seed_agentic_scenarios --project 1
-```
-
-Configure an OpenAI-compatible connection and enable trace capture on the Agent
-target before running it. Content capture is optional; structural span IDs,
-operation kinds, and statuses remain useful with content capture disabled. Do not
-put API keys in scenario metadata or source control.
+Embedded mode enables structural OTLP by default for future live Agent audits;
+set `SIMPLEAUDIT_CHAT_OTLP=false` to opt out. Content capture stays separately
+opt-in; structural span IDs, operation kinds, and statuses remain useful when
+content is absent. Do not put API keys in scenario metadata or source control.
 
 ## 1. Components
 

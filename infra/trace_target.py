@@ -36,6 +36,30 @@ def _saved_chat_content(message: dict[str, Any]) -> str:
     return content or ""
 
 
+_OPENWEBUI_AGENT_UNSUPPORTED_PARAMS = frozenset({
+    "reasoning_effort",
+    "search_mode",
+    "top_k",
+    "relevance_threshold",
+})
+
+
+def _openwebui_saved_chat_params(params: dict[str, Any]) -> dict[str, Any]:
+    """Remove generation fields rejected by Open WebUI's Agent endpoint.
+
+    Agent retrieval settings are already frozen into the Open WebUI workspace
+    model.  The saved-chat endpoint rejects those settings, and provider-only
+    reasoning controls, as unknown request arguments.
+    """
+    filtered = {
+        key: value for key, value in params.items()
+        if key not in _OPENWEBUI_AGENT_UNSUPPORTED_PARAMS
+    }
+    if isinstance(filtered.get("extra_body"), dict):
+        filtered["extra_body"] = _openwebui_saved_chat_params(filtered["extra_body"])
+    return filtered
+
+
 async def _openwebui_saved_chat_call(
     client: Any,
     model: str,
@@ -66,10 +90,11 @@ async def _openwebui_saved_chat_call(
         (message for message in reversed(messages) if message.get("role") == "user"),
         {"role": "user", "content": ""},
     )
-    body = dict(kwargs)
+    body = _openwebui_saved_chat_params(kwargs)
     body.pop("extra_headers", None)
     body.pop("extra_body", None)
-    body.update(extra_body)
+    body.update(_openwebui_saved_chat_params(extra_body))
+    body = _openwebui_saved_chat_params(body)
     body.update(
         {
             "parent_id": None,
@@ -83,7 +108,7 @@ async def _openwebui_saved_chat_call(
             "stream": True,
         }
     )
-    options = {"extra_headers": trace_headers} if trace_headers else {}
+    options = {"headers": trace_headers} if trace_headers else {}
     created = await raw_client.post("/chat/completions", cast_to=dict, body=body, options=options)
     chat_id = created.get("chat_id") if isinstance(created, dict) else None
     if not chat_id:

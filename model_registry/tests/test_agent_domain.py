@@ -130,6 +130,17 @@ class AgentModelTest(TestCase):
         self.assertEqual(snap["retrieval"]["top_k"], 8)
         self.assertTrue(snap["capabilities"]["knowledge_search"])
 
+    def test_config_snapshot_freezes_openwebui_tool_invocation_names(self):
+        agent = AgentFactory()
+        tool = ToolFactory(project=agent.project, external_id="acme_order_lookup")
+        agent.tools.add(tool)
+
+        snapshot = agent.config_snapshot(
+            tool_invocation_names={"acme_order_lookup": ["acme_lookup_order"]}
+        )
+
+        self.assertEqual(snapshot["tools"][0]["invocation_names"], ["acme_lookup_order"])
+
     def test_snapshot_has_default_retrieval_settings(self):
         agent = AgentFactory()
         snap = agent.config_snapshot()

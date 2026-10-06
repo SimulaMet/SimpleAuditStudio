@@ -451,7 +451,12 @@ class Agent(models.Model):
     def __str__(self) -> str:
         return self.name
 
-    def config_snapshot(self, *, server_rag: dict | None = None) -> dict:
+    def config_snapshot(
+        self,
+        *,
+        server_rag: dict | None = None,
+        tool_invocation_names: dict[str, list[str]] | None = None,
+    ) -> dict:
         """A serialisable snapshot of the agent's full configuration.
 
         Used by audit runs to freeze the configuration at execution time so
@@ -481,6 +486,7 @@ class Agent(models.Model):
             "tools": [
                 {
                     "id": tool.id, "name": tool.name, "external_id": tool.external_id,
+                    "invocation_names": (tool_invocation_names or {}).get(tool.external_id, []),
                     "type": tool.type, "description": tool.description,
                     "input_schema": tool.input_schema, "output_schema": tool.output_schema,
                     "read_only": tool.read_only, "has_side_effects": tool.has_side_effects,
