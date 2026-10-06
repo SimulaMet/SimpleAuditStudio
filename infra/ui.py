@@ -1800,8 +1800,9 @@ class ScenariosView(ProjectMixin, TemplateView):
         items = []
         versions = []
         viewing_version = None
-        if self.request.GET.get("set"):
-            selected = ScenarioSet.objects.filter(pk=self.request.GET["set"], project=p).first()
+        set_param = self.request.GET.get("set", "").strip()
+        if set_param.isdigit():
+            selected = ScenarioSet.objects.filter(pk=int(set_param), project=p).first()
             if selected:
                 versions = list(selected.versions.order_by("-version"))
                 # Check if a specific version is being viewed
