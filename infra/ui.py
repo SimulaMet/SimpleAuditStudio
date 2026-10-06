@@ -1150,7 +1150,7 @@ class NewExperimentView(ProjectMixin, TemplateView):
                         user=request.user,
                         name=custom_name or f"Run {timezone.now():%Y-%m-%d %H:%M}",
                         scenario_set_version=run_spec["version"],
-                        target_model=run_spec["target"],
+                        target_model=None if run_spec.get("agent") else run_spec["target"],
                         auditor_model=run_spec["auditor"],
                         judge_model=run_spec["judge_model"],
                         judge=run_spec["judge"],
@@ -2748,6 +2748,7 @@ _REP_KNOWN_KEYS = {
     "severity", "rationale", "evidence", "judge_rationale", "judgment", "scenario_name",
     "scenario_description", "expected_behavior", "file_uri", "_rep_index", "_language", "error",
     "trace_ids",
+    "agentic_evaluation",
     *(f"{r}_{d}_tokens" for r in _REP_TOKEN_ROLES for d in ("input", "output")),
 }
 # Span kinds worth surfacing in the result page's trace card (the same set the
@@ -2935,6 +2936,7 @@ def _rep_view(rep: dict, index: int) -> dict:
         "tokens": tokens,
         "total_tokens": total_tokens,
         "trace": _trace_card_view(rep),
+        "agentic": rep.get("agentic_evaluation") if isinstance(rep.get("agentic_evaluation"), dict) else None,
         "other": {k: v for k, v in rep.items() if k not in _REP_KNOWN_KEYS},
     }
 

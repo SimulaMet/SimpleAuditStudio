@@ -107,9 +107,9 @@ function openScriptModal() {
         <span class="md:hidden text-gray-600">·</span>
         <span class="whitespace-nowrap" title="Scenarios that finished all their repetitions"><span id="overall-label">{{ run.completed_scenarios }} / {{ run.total_scenarios }}</span> scenarios done</span>
       </span>
-      <span class="flex items-center gap-3 whitespace-nowrap text-gray-400" title="Final verdict per scenario, aggregated across its repetitions">
-        <span><span class="font-semibold text-gray-200" id="stat-ok">{{ run.successful_scenarios }}</span> pass</span>
-        <span><span class="font-semibold text-red-400" id="stat-fail">{{ run.failed_scenarios }}</span> fail</span>
+      <span class="flex items-center gap-3 whitespace-nowrap text-gray-400" title="Scenario executions completed or failed; audit verdicts are shown per scenario">
+        <span><span class="font-semibold text-gray-200" id="stat-ok">{{ run.successful_scenarios }}</span> completed</span>
+        <span><span class="font-semibold text-red-400" id="stat-fail">{{ run.failed_scenarios }}</span> execution errors</span>
       </span>
     </div>
     <div id="combo-bar" class="flex gap-[3px]"></div>
@@ -880,6 +880,15 @@ function openScriptModal() {
     </div>
   </div>
 </div>
+
+{% with agentic=run.summary_metrics.agentic_evaluation %}
+  {% if agentic %}
+    <div class="mb-4 rounded-xl border border-accent/20 bg-surface-raised px-4 py-3 text-xs text-gray-400" title="Deterministic Agent trajectory policy checks across the run">
+      <span class="font-semibold text-gray-300">Agentic checks:</span>
+      {{ agentic.passed }} pass · {{ agentic.failed }} fail · {{ agentic.inconclusive }} inconclusive
+    </div>
+  {% endif %}
+{% endwith %}
 
 <!-- Results (refreshed live, see refreshResults) -->
 {% include "partials/run_results.html" %}

@@ -310,6 +310,25 @@ def _ensure_agent_model_reference(agent, user) -> None:
     )
 
 
+def agent_target_model(agent):
+    """Return the single RegisteredModel representing an Open WebUI Agent."""
+    if not agent.external_id:
+        raise ValueError("Agent is not synced to Open WebUI and has no external_id.")
+    from model_registry.models import RegisteredModel
+
+    model = (RegisteredModel.objects.select_related("connection")
+             .filter(project=agent.project, model_id=agent.external_id,
+                     connection__name="Open WebUI Agents").first())
+    if model is None:
+        _ensure_agent_model_reference(agent, agent.created_by)
+        model = (RegisteredModel.objects.select_related("connection")
+                 .filter(project=agent.project, model_id=agent.external_id,
+                         connection__name="Open WebUI Agents").first())
+    if model is None:
+        raise ValueError("Agent is not synced to the Open WebUI Agents model registry.")
+    return model
+
+
 def agent_live_openwebui(agent, user) -> dict | None:
     """The live Open WebUI model entry for an agent, for detail-page display.
 

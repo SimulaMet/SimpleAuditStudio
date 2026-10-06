@@ -451,7 +451,12 @@ class Agent(models.Model):
     def __str__(self) -> str:
         return self.name
 
-    def config_snapshot(self, *, server_rag: dict | None = None) -> dict:
+    def config_snapshot(
+        self,
+        *,
+        server_rag: dict | None = None,
+        tool_invocation_names: dict[str, list[str]] | None = None,
+    ) -> dict:
         """A serialisable snapshot of the agent's full configuration.
 
         Used by audit runs to freeze the configuration at execution time so
@@ -468,10 +473,29 @@ class Agent(models.Model):
                 "connection_id": self.base_model.connection_id,
             },
             "system_prompt": self.system_prompt,
-            "knowledge_bases": list(
-                self.knowledge_bases.values_list("id", "name", "external_id", "version")
-            ),
-            "tools": list(self.tools.values_list("id", "name", "type")),
+            "knowledge_bases": [
+                {
+                    "id": kb.id, "name": kb.name, "external_id": kb.external_id,
+                    "authority": kb.authority, "trust_level": kb.trust_level,
+                    "sensitivity": kb.sensitivity, "version": kb.version,
+                    "valid_from": kb.valid_from.isoformat() if kb.valid_from else None,
+                    "valid_until": kb.valid_until.isoformat() if kb.valid_until else None,
+                }
+                for kb in self.knowledge_bases.all()
+            ],
+            "tools": [
+                {
+                    "id": tool.id, "name": tool.name, "external_id": tool.external_id,
+                    "invocation_names": (tool_invocation_names or {}).get(tool.external_id, []),
+                    "type": tool.type, "description": tool.description,
+                    "input_schema": tool.input_schema, "output_schema": tool.output_schema,
+                    "read_only": tool.read_only, "has_side_effects": tool.has_side_effects,
+                    "external_network": tool.external_network,
+                    "handles_sensitive_data": tool.handles_sensitive_data,
+                    "enabled": tool.enabled,
+                }
+                for tool in self.tools.all()
+            ],
             "retrieval": self.retrieval_settings,
             # Read-only Open WebUI global RAG settings captured at audit-run
             # creation. The live source remains Open WebUI.

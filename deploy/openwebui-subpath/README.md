@@ -33,8 +33,9 @@ what `subpath.patch` does.
 | File | Purpose |
 |---|---|
 | `subpath.patch` | The subpath change (121 files, +631/−296). Verified to apply **cleanly** to the pinned base and to reproduce the fork's tree byte-for-byte. |
-| `0002-node-build-heap.patch` | Tiny build fix: `ENV NODE_OPTIONS=--max-old-space-size=6144`. The SvelteKit/Vite production build OOMs at Node's ~2GB default heap on constrained builders. |
-| `build.sh` | Clones the pinned upstream, applies both patches, builds with the upstream project's own (now-patched) Dockerfile. |
+| `0002-node-build-heap.patch` | Historical standalone form of the Node heap fix; the same change is now included in `subpath.patch`. |
+| `0003-otel-wheel-dependencies.patch` | Adds OpenTelemetry instrumentation dependencies to wheel metadata. Docker already installs them from `backend/requirements*.txt`; the wheel needs them for embedded Studio mode. |
+| `build.sh` | Clones the pinned upstream, applies all maintained patches, and builds with the upstream project's own (now-patched) Dockerfile. |
 | `Caddyfile.subpath` | The single-origin routing (forward-auth + `handle /chat/*` no-strip + fallthrough to Studio). Reference for cutover. |
 | `DESIGN.md` | Distribution & maintenance decision record (fork vs. artifacts repo, why Docker/ghcr.io is the channel, why `pip install` is a trap as-is). |
 | `UPGRADE.md` | Step-by-step procedure + copy-paste agent prompt for rebasing the patch onto a new upstream version. |
@@ -129,7 +130,7 @@ re-passes. Distribution context (fork, ghcr.io, pip caveats): [`DESIGN.md`](./DE
 publishing to ghcr.io (root on push, `-subpath` on `webui_subpath` dispatch).
 
 The cutover is done: `docker-compose.yml` pulls
-`ghcr.io/sushantgautam/open-webui:v0.11.4-subpath` (set `WEBUI_SUBPATH=/chat`),
+`ghcr.io/sushantgautam/open-webui:v0.11.4.3-subpath` (set `WEBUI_SUBPATH=/chat`),
 `chat-proxy` (Caddy, no profile) is the **only published port** and runs
 `Caddyfile.subpath`, Studio's wrapper page moved to `/playground/`, and
 `Caddyfile.chat` + the separate cross-origin port are retired. Embedded

@@ -575,9 +575,20 @@ def start_open_webui(studio_port: int | None = None) -> subprocess.Popen:
 OWUI_WHEEL_URL = os.environ.get(
     "SIMPLEAUDIT_CHAT_WHEEL",
     "https://github.com/SushantGautam/open-webui/releases/download/"
-    "v0.11.4-subpath/open_webui-0.11.4-py3-none-any.whl",
+    "v0.11.4.3-subpath/open_webui-0.11.4.3-py3-none-any.whl",
 )
 OWUI_PACKAGE = os.environ.get("SIMPLEAUDIT_CHAT_PACKAGE", "open-webui")
+
+
+def _owui_install_requirement() -> str:
+    """Install the wheel with telemetry's declared observability extras.
+
+    The fork's telemetry setup imports these instrumentors at module import
+    time, so installing only the base wheel leaves the managed runtime unable
+    to start even though the wheel metadata declares them as an optional
+    extra.
+    """
+    return f"{OWUI_PACKAGE}[observability] @ {OWUI_WHEEL_URL}"
 
 
 def _wheel_marker(managed: Path) -> Path:
@@ -661,7 +672,7 @@ def _locate_owui_interpreter(home: Path) -> str:
             subprocess.run([uv, "venv", str(managed), "--python", "3.11", "--seed"],
                            check=True, capture_output=True, timeout=120)
             subprocess.run(
-                [managed_py, "-m", "pip", "install", OWUI_WHEEL_URL],
+                [managed_py, "-m", "pip", "install", _owui_install_requirement()],
                 check=True, capture_output=True, timeout=900,
             )
             if _probe_interpreter(str(managed_py)):

@@ -3,6 +3,23 @@ One judged conversation on the scenario result page: a repetition, or the
 whole result of a single-rep run. Context: rep (see infra.ui._rep_view).
 {% endcomment %}
 <div class="space-y-4">
+  {% if rep.agentic %}
+  <div class="bg-surface-raised rounded-xl border {% if rep.agentic.status == 'FAIL' or rep.agentic.status == 'ERROR' %}border-red-900/40{% elif rep.agentic.status == 'INCONCLUSIVE' %}border-amber-900/40{% else %}border-emerald-900/40{% endif %} p-4">
+    <div class="flex items-center justify-between gap-3 mb-3">
+      <h3 class="text-sm font-semibold text-violet-300">Agentic Safety</h3>
+      <span class="text-xs font-semibold {% if rep.agentic.status == 'PASS' %}text-emerald-300{% elif rep.agentic.status == 'INCONCLUSIVE' %}text-amber-300{% else %}text-red-300{% endif %}">{{ rep.agentic.status }}</span>
+    </div>
+    <div class="space-y-1.5">
+      {% for check in rep.agentic.checks %}
+      <details class="rounded bg-surface-overlay/50 px-3 py-2">
+        <summary class="cursor-pointer text-xs text-gray-300"><span class="mr-2 {% if check.status == 'PASS' %}text-emerald-400{% elif check.status == 'INCONCLUSIVE' %}text-amber-400{% else %}text-red-400{% endif %}">{{ check.status }}</span>{{ check.id }} — {{ check.summary }}</summary>
+        {% if check.expected or check.observed %}<div class="mt-2 text-[11px] text-gray-500">Expected: {{ check.expected|default:'—' }} · Observed: {{ check.observed|default:'—' }}</div>{% endif %}
+        {% if check.evidence_span_ids %}<div class="mt-1 text-[11px] text-gray-500">Evidence spans: {{ check.evidence_span_ids|join:', ' }}</div>{% endif %}
+      </details>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
   {% if rep.summary %}
   <div class="bg-surface-raised rounded-xl border border-gray-800 p-4">
     <div class="flex items-center gap-2 mb-2">

@@ -79,6 +79,9 @@ def update_scenario_content(*, scenario: Scenario, user, description: str, expec
 
 def _create_revision(*, scenario: Scenario, user, description: str, expected_behavior, test_prompt: str,
                      severity_ceiling: str = "", documents=None, file_uri=None, metadata: dict) -> ScenarioRevision:
+    from audits.agentic.expectations import validate_agentic_metadata
+
+    validate_agentic_metadata(metadata)
     next_revision = ScenarioRevision.objects.filter(scenario=scenario).count() + 1
     content_hash = scenario_revision_hash(
         description=description,

@@ -126,7 +126,18 @@ def get_client() -> Hatchet:
     without a process restart.
     """
     global _CLIENT, _CLIENT_IS_PLACEHOLDER
-    if _CLIENT is None or (_CLIENT_IS_PLACEHOLDER and _resolve_hatchet_token()):
+    embedded_handshake_available = False
+    if _CLIENT_IS_PLACEHOLDER:
+        from infra.minimal_config import get_persisted_embedded_handshake
+
+        embedded_handshake_available = bool(
+            os.environ.get("HATCHET_EMBEDDED_HANDSHAKE")
+            or get_persisted_embedded_handshake()
+        )
+    if _CLIENT is None or (
+        _CLIENT_IS_PLACEHOLDER
+        and (_resolve_hatchet_token() or embedded_handshake_available)
+    ):
         # Demo mode: reuse the embedded client started by the CLI entry point.
         from infra.minimal_config import get_embedded_client, is_minimal_config
 
@@ -146,6 +157,10 @@ def get_client() -> Hatchet:
         # URL) via HATCHET_EMBEDDED_HANDSHAKE. Build a lightweight client that
         # connects to the already-running engine — no sidecar restart.
         handshake_raw = os.environ.get("HATCHET_EMBEDDED_HANDSHAKE")
+        if not handshake_raw:
+            from infra.minimal_config import get_persisted_embedded_handshake
+
+            handshake_raw = get_persisted_embedded_handshake()
         if handshake_raw:
             from hatchet_sdk.embedded import Handshake as _Handshake
 
@@ -358,7 +373,11 @@ def _scenario_execute_impl(workflow_input: ScenarioInput, ctx: Context) -> dict:
         pk=run.pk, status__in=[AuditRun.Status.QUEUED, AuditRun.Status.PREPARING]
     ).update(status=AuditRun.Status.TARGET_EXECUTION)
 
-    from infra.engine import EngineError, run_scenario_repeated
+    from infra.engine import (
+        EngineError,
+        augment_agent_generation,
+        run_scenario_repeated,
+    )
     from infra.engine import run_scenario as engine_run_scenario
 
     # Stamp agent correlation ID on the log context when the run targets an Agent.
@@ -371,6 +390,8 @@ def _scenario_execute_impl(workflow_input: ScenarioInput, ctx: Context) -> dict:
         )
 
     gen_params = run.generation_parameters_snapshot or {}
+    if run.agent_config_snapshot:
+        gen_params = augment_agent_generation(gen_params, run.agent_config_snapshot)
     n_reps = int(gen_params.get("n_repetitions") or 1)
     max_turns = int(gen_params.get("max_turns") or 5)
     # Trace acquisition config (Promptfoo parity). Empty = no tracing. studio
@@ -610,6 +631,25 @@ def _scenario_execute_impl(workflow_input: ScenarioInput, ctx: Context) -> dict:
     # A failed attempt is final on the last attempt or for errors a retry can't fix;
     # otherwise it is provisional, stored as failed with attempts < max (so not terminal).
     final = not failed or attempt >= MAX_SCENARIO_ATTEMPTS or _is_permanent_error(error)
+    if run.agent_config_snapshot and trace_config:
+        try:
+            from audits.agentic.evaluate import evaluate as evaluate_agentic
+            from audits.agentic.expectations import validate_agentic_metadata
+            from audits.agentic.trajectory import normalize
+
+            expectations = validate_agentic_metadata(revision.metadata or {})
+            reps = result_payload.get("reps") if isinstance(result_payload, dict) else None
+            targets = reps if isinstance(reps, list) else [result_payload]
+            for target in targets:
+                evidence = (target.get("judgment") or {}).get("evidence_spans", [])
+                target["agentic_evaluation"] = evaluate_agentic(
+                    normalize(evidence), expectations, run.agent_config_snapshot
+                )
+        except Exception as exc:  # noqa: BLE001 - optional analysis cannot break persistence
+            result_payload["agentic_evaluation"] = {
+                "status": "ERROR", "checks": [{"id": "agentic.evaluate", "category": "system",
+                "status": "ERROR", "summary": str(exc), "evidence_span_ids": [], "details": {}}]
+            }
     upsert_scenario_result(
         run_id, version_item_id, status="failed" if failed else "completed",
         attempts=MAX_SCENARIO_ATTEMPTS if failed and final else attempt, result=result_payload,

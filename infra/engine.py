@@ -120,7 +120,7 @@ def _normalize_provider(provider: str | None, base_url: str | None) -> str:
 _GENERATION_PARAM_KEYS = {
     "temperature", "top_p", "top_k", "max_tokens", "max_completion_tokens",
     "frequency_penalty", "presence_penalty", "stop", "seed", "logprobs",
-    "n", "response_format", "tools", "tool_choice", "functions",
+    "n", "response_format", "tools", "tool_choice", "functions", "reasoning_effort",
 }
 
 
@@ -206,6 +206,39 @@ def _merge(*dicts: dict | None) -> dict | None:
     return merged or None
 
 
+def augment_agent_generation(generation: dict | None, agent_snapshot: dict | None) -> dict:
+    """Add standard Open WebUI Agent request metadata to target parameters.
+
+    Open WebUI's compatibility endpoint only exposes model-attached native
+    tools/knowledge to requests that carry a session.  The frozen Agent
+    snapshot is the execution source of truth, so forward its tool IDs through
+    the endpoint's standard ``extra_body`` fields without inventing a protocol
+    understood by the target model.
+    """
+    result = dict(generation or {})
+    if not agent_snapshot:
+        return result
+    result["_agent_target"] = True
+    target_params = dict(result.get("target_params") or {})
+    # Open WebUI's Agent compatibility endpoint does not accept provider-only
+    # reasoning controls; the Agent's base provider owns that configuration.
+    target_params.pop("reasoning_effort", None)
+    extra_body = dict(target_params.get("extra_body") or {})
+    if not extra_body.get("session_id") and agent_snapshot.get("agent_id") is not None:
+        extra_body["session_id"] = f"simpleaudit-agent-{agent_snapshot['agent_id']}"
+    tool_ids = [
+        tool.get("external_id")
+        for tool in agent_snapshot.get("tools") or []
+        if isinstance(tool, dict) and tool.get("external_id")
+    ]
+    if tool_ids and "tool_ids" not in extra_body:
+        extra_body["tool_ids"] = tool_ids
+    if extra_body:
+        target_params["extra_body"] = extra_body
+        result["target_params"] = target_params
+    return result
+
+
 def auditor_kwargs(*, target: dict, auditor: dict, judge: dict, generation: dict | None = None,
                    resolve_key=None) -> tuple[dict, str]:
     """``ModelAuditor`` constructor kwargs from the three frozen snapshots, plus the language.
@@ -233,6 +266,12 @@ def auditor_kwargs(*, target: dict, auditor: dict, judge: dict, generation: dict
         _validate_secrets(("target", target), ("auditor", auditor), ("judge", judge))
         resolve_key = snapshot_api_key
     target_cfg = _auditor_kwargs_from_snapshot(target, resolve_key)
+    if gen.get("_agent_target"):
+        target_cfg["gen_params"] = {
+            key: value
+            for key, value in (target_cfg["gen_params"] or {}).items()
+            if key != "reasoning_effort"
+        } or None
     auditor_cfg = _auditor_kwargs_from_snapshot(auditor, resolve_key)
     judge_cfg = _auditor_kwargs_from_snapshot(judge, resolve_key)
 
@@ -288,6 +327,12 @@ def build_model_auditor(*, target: dict, auditor: dict, judge: dict, generation:
         instance = ModelAuditor(**kwargs)
     except Exception as exc:
         raise EngineError(f"Failed to construct ModelAuditor: {type(exc).__name__}: {exc}") from exc
+    # SimpleAudit 0.3.1's stock ModelTarget accepts TargetContext but drops it
+    # before calling the OpenAI-compatible client. Install the narrow adapter
+    # so the engine's per-turn W3C traceparent reaches the target process.
+    from infra.trace_target import install_trace_context_target
+
+    install_trace_context_target(instance)
     return instance, language
 
 
@@ -602,6 +647,15 @@ def run_scenario_repeated(
         from simpleaudit.experiment import AuditExperiment
     except Exception as exc:
         raise EngineError(f"Failed to import SimpleAudit AuditExperiment: {exc}") from exc
+
+    # AuditExperiment constructs a fresh ModelAuditor internally for every
+    # repetition. Replace that module-local class with the same adapter-aware
+    # subclass used by the single-repetition path.
+    import simpleaudit.experiment as experiment_module
+
+    from infra.trace_target import TraceContextModelAuditor
+
+    experiment_module.ModelAuditor = TraceContextModelAuditor
 
     kwargs, language = auditor_kwargs(target=target, auditor=auditor, judge=judge, generation=generation)
     max_turns = kwargs["max_turns"]

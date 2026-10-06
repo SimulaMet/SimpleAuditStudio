@@ -2410,21 +2410,21 @@ wheels = [
 
 [[package]]
 name = "simpleaudit"
-version = "0.3.1"
+version = "0.3.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "any-llm-sdk" },
     { name = "fsspec" },
     { name = "tqdm" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/96/9c/9648e1f09e236701e49f90beec8870c121c9c22b924c0fb7222ac5494c4d/simpleaudit-0.3.1.tar.gz", hash = "sha256:070e0522aba0954e013af4e66a06f77782172cfe848d119bd88cde4801ffd048", size = 1478920, upload-time = "2026-10-02T10:42:52.33Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/88/a3/c39f62c4326e404666430dab361aef5bf1482e972a923594d8cb13b0167e/simpleaudit-0.3.2.tar.gz", hash = "sha256:f16dcd25c6bb5099be466a4a62db4377028f1237de82ace989a50e5b48164793", size = 1479901, upload-time = "2026-10-06T08:51:55.177Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/c1/26/b0506c7e43f72bab61e228b02b6e4443ce4a4ab9568e4c5cfdfa174168e0/simpleaudit-0.3.1-py3-none-any.whl", hash = "sha256:059443b8eba0fa0f7b8fc00cfd674436d405d8341219abc8eb2b0ed40bc654ad", size = 1362230, upload-time = "2026-10-02T10:42:50.279Z" },
+    { url = "https://files.pythonhosted.org/packages/c7/cc/da63fef79152ed5fae292c5dc3c041de085ef229365ebed274691d106b31/simpleaudit-0.3.2-py3-none-any.whl", hash = "sha256:8dd251854f7abad67abf6ab334611792b827bc911ee5c44a89327670ec5daee5", size = 1362503, upload-time = "2026-10-06T08:51:53.539Z" },
 ]
 
 [[package]]
 name = "simpleaudit-studio"
-version = "0.5.4"
+version = "0.5.7"
 source = { virtual = "." }
 dependencies = [
     { name = "caddyserver" },
@@ -2489,7 +2489,7 @@ requires-dist = [
     { name = "requests", specifier = "==2.32.5" },
     { name = "ruff", marker = "extra == 'dev'" },
     { name = "sentry-sdk", extras = ["django"], specifier = ">=2.0" },
-    { name = "simpleaudit", specifier = "==0.3.1" },
+    { name = "simpleaudit", specifier = "==0.3.2" },
     { name = "workos", specifier = "==10.4.0" },
 ]
 provides-extras = ["postgres", "server", "dev", "e2e"]

@@ -445,7 +445,7 @@ def launch_experiment(*, project, user, name: str, runs: list[dict], repeat: dic
                 user=user,
                 name=r["name"],
                 scenario_set_version=r["version"],
-                target_model=r["target"],
+                target_model=None if r.get("agent") else r["target"],
                 auditor_model=r["auditor"],
                 judge_model=r["judge_model"],
                 judge=r["judge"],
