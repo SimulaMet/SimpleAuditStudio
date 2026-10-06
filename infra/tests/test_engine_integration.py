@@ -251,6 +251,67 @@ class TargetTracePropagationTest(TestCase):
         self.assertTrue(calls[0]["stream"])
         self.assertEqual(calls[0]["extra_headers"]["traceparent"], "00-" + "1" * 32 + "-" + "2" * 16 + "-01")
 
+    def test_model_target_uses_saved_chat_path_for_openwebui_server_tools(self):
+        """Open WebUI's API path must create a chat for server-side tool execution."""
+        import asyncio
+        from types import SimpleNamespace
+
+        from simpleaudit.targets.base import TargetContext
+
+        from infra.trace_target import TraceContextModelTarget
+
+        calls = []
+
+        class RawClient:
+            base_url = "http://127.0.0.1:8080/chat/api/v1/"
+            assistant_id = None
+
+            async def post(self, path, *, cast_to, body, options):
+                calls.append(("post", path, body, options))
+                self.assistant_id = body["message_ids"][0]["message_id"]
+                return {"status": True, "chat_id": "chat-1"}
+
+            async def get(self, path, *, cast_to, options):
+                calls.append(("get", path, options))
+                return {
+                    "chat": {
+                        "history": {
+                            "messages": {
+                                "server-assistant-id": {
+                                    "role": "assistant",
+                                    "done": True,
+                                    "content": "The order is refundable.",
+                                }
+                            }
+                        }
+                    }
+                }
+
+        async def acompletion(**_kwargs):
+            raise AssertionError("direct completion path must not bypass Open WebUI tool execution")
+
+        provider = SimpleNamespace(client=RawClient(), acompletion=acompletion)
+        target = TraceContextModelTarget(client=provider, model="studio.agent-1")
+        response = asyncio.run(
+            target.send(
+                user="Call the order tool.",
+                params={
+                    "extra_body": {
+                        "session_id": "session-1",
+                        "tool_ids": ["acme_order_lookup"],
+                    }
+                },
+                context=TargetContext(trace_headers={"traceparent": "00-" + "1" * 32 + "-" + "2" * 16 + "-01"}),
+            )
+        )
+
+        self.assertEqual(response.content, "The order is refundable.")
+        self.assertEqual(calls[0][0:2], ("post", "/chat/completions"))
+        self.assertEqual(calls[0][2]["parent_id"], None)
+        self.assertEqual(calls[0][2]["tool_ids"], ["acme_order_lookup"])
+        self.assertEqual(calls[0][3]["extra_headers"]["traceparent"], "00-" + "1" * 32 + "-" + "2" * 16 + "-01")
+        self.assertEqual(calls[1][0:2], ("get", "/chats/chat-1"))
+
 
 
 def _snap(model_id, **extra):
