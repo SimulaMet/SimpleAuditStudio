@@ -35,7 +35,11 @@ from scenarios.models import (
     ScenarioSetVersion,
     ScenarioSetVersionItem,
 )
-from scenarios.services import publish_scenario_set_version
+from scenarios.services import (
+    create_scenario,
+    publish_scenario_set_version,
+    update_scenario_content,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -1756,22 +1760,6 @@ class ScenariosView(ProjectMixin, TemplateView):
         return super().get_context_data(**kw)
 
 
-def _create_revision(scenario, description: str, user, expected_behavior: list | None = None, test_prompt: str = "",
-                     severity_ceiling: str = "", documents=None, file_uri=None) -> ScenarioRevision:
-    """Create the next revision for a scenario."""
-    rev = scenario.revisions.count() + 1
-    eb = expected_behavior or []
-    docs = documents or []
-    return ScenarioRevision.objects.create(
-        scenario=scenario, revision=rev, description=description,
-        expected_behavior=eb, test_prompt=test_prompt,
-        severity_ceiling=severity_ceiling or "", documents=docs, file_uri=file_uri,
-        content_hash=scenario_revision_hash(description=description, expected_behavior=eb, test_prompt=test_prompt,
-                                            severity_ceiling=severity_ceiling or "", documents=docs, file_uri=file_uri, metadata={}),
-        created_by=user,
-    )
-
-
 def _scenario_redirect(set_id: str | None):
     return redirect(f"/scenarios/?set={set_id}" if set_id else "/scenarios/")
 
@@ -1859,12 +1847,12 @@ class ScenarioCreateView(ProjectMixin, View):
         set_id = request.POST.get("set_id", "").strip()
         if name:
             key = hashlib.sha256(name.encode()).hexdigest()[:12]
-            scenario, _created = Scenario.objects.get_or_create(
-                project=request.project, key=key,
-                defaults={"title": name, "category": category},
+            scenario = create_scenario(
+                project=request.project, user=request.user, key=key, title=name, category=category,
+                description=desc, expected_behavior=expected_behavior, test_prompt="",
+                severity_ceiling=severity_ceiling, documents=documents, file_uri=file_uri,
+                metadata={}
             )
-            _create_revision(scenario, desc, request.user, expected_behavior=expected_behavior,
-                             severity_ceiling=severity_ceiling, documents=documents, file_uri=file_uri)
             # Auto-publish new version including this scenario
             if set_id:
                 sset = ScenarioSet.objects.filter(pk=set_id, project=request.project).first()
@@ -1897,19 +1885,16 @@ class ScenarioEditView(ProjectMixin, View):
             scenario.category = category
             scenario.save()
 
-            # Only create a new revision + publish if content actually changed
-            latest_rev = scenario.revisions.order_by("-revision").first()
-            content_changed = (
-                latest_rev is None
-                or latest_rev.description != desc
-                or (latest_rev.expected_behavior or []) != expected_behavior
-                or latest_rev.severity_ceiling != severity_ceiling
-                or (latest_rev.documents or []) != documents
-                or latest_rev.file_uri != file_uri
+            # update_scenario_content handles change detection (returns latest if unchanged)
+            latest_rev_before = scenario.revisions.order_by("-revision").first()
+            rev = update_scenario_content(
+                scenario=scenario, user=request.user, description=desc,
+                expected_behavior=expected_behavior, test_prompt="",
+                severity_ceiling=severity_ceiling, documents=documents, file_uri=file_uri,
+                metadata=None  # Preserves existing metadata on edit
             )
+            content_changed = latest_rev_before is None or rev.revision > latest_rev_before.revision
             if content_changed:
-                _create_revision(scenario, desc, request.user, expected_behavior=expected_behavior,
-                                 severity_ceiling=severity_ceiling, documents=documents, file_uri=file_uri)
                 if set_id:
                     sset = ScenarioSet.objects.filter(pk=set_id, project=request.project).first()
                     if sset:
@@ -2036,13 +2021,15 @@ class ScenarioImportView(ProjectMixin, View):
                     project=request.project, key=key,
                     defaults={"title": item.get("title", "Imported"), "category": item.get("category", "")},
                 )
-                _create_revision(
-                    scenario, item.get("description", ""), request.user,
+                update_scenario_content(
+                    scenario=scenario, user=request.user,
+                    description=item.get("description", ""),
                     expected_behavior=item.get("expected_behavior") or [],
                     test_prompt=item.get("test_prompt", ""),
                     severity_ceiling=item.get("severity_ceiling", ""),
                     documents=item.get("documents") or [],
                     file_uri=item.get("file_uri"),
+                    metadata=item.get("metadata")  # Import includes metadata if present
                 )
                 new_ids.append(scenario.id)
             # Auto-publish after import (include newly imported scenarios)
