@@ -2410,12 +2410,16 @@ wheels = [
 
 [[package]]
 name = "simpleaudit"
-version = "0.3.2"
-source = { git = "https://github.com/SimulaMet/SimpleAudit.git?rev=main#a16b0b6807c2fd50e59d10a35149e9ab762918e9" }
+version = "0.3.3"
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "any-llm-sdk" },
     { name = "fsspec" },
     { name = "tqdm" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/fe/8d/5f59914ef65ed9561ced8a59965aa12dab3b8df0ebad88a9b9c88ce05925/simpleaudit-0.3.3.tar.gz", hash = "sha256:68d46a14349de6dfd7a180d7f728b282ba13ed43b57603cc384fb06436a95d37", size = 1485168, upload-time = "2026-10-06T21:39:30.313Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/1d/8d/08589174078ea94e6c3bbe2c6541fcc92a490fc2306101e87c4e278f56d8/simpleaudit-0.3.3-py3-none-any.whl", hash = "sha256:93233ac1d42e07952ec6138b434193190eef624ac857ceb134e1a0be1b655bbe", size = 1365030, upload-time = "2026-10-06T21:39:28.103Z" },
 ]
 
 [[package]]
@@ -2485,7 +2489,7 @@ requires-dist = [
     { name = "requests", specifier = "==2.32.5" },
     { name = "ruff", marker = "extra == 'dev'" },
     { name = "sentry-sdk", extras = ["django"], specifier = ">=2.0" },
-    { name = "simpleaudit", git = "https://github.com/SimulaMet/SimpleAudit.git?rev=main" },
+    { name = "simpleaudit", specifier = ">=0.3.3,<0.4.0" },
     { name = "workos", specifier = "==10.4.0" },
 ]
 provides-extras = ["postgres", "server", "dev", "e2e"]
