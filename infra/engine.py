@@ -466,7 +466,16 @@ def _collect_evidence_spans(
     from audits.agentic.privacy import apply_content_capture_level
 
     all_spans = apply_content_capture_level(_drop_connection_noise(all_spans), capture_level)
-    selection_result = select_spans(all_spans, token_budget=token_budget, selector_version="v1")
+    # ``selector_version`` was added after the first public tracing release;
+    # keep Studio compatible with both the released engine and newer git builds.
+    try:
+        selection_result = select_spans(
+            all_spans, token_budget=token_budget, selector_version="v1"
+        )
+    except TypeError as exc:
+        if "selector_version" not in str(exc):
+            raise
+        selection_result = select_spans(all_spans, token_budget=token_budget)
     selected_spans = selection_result.selected or []
     if not selected_spans:
         return None
@@ -483,7 +492,7 @@ def _collect_evidence_spans(
         "selected_spans": selected_spans,
         "selection": {
             "policy_version": "v1",
-            "selector_version": selection_result.selector_version,
+            "selector_version": getattr(selection_result, "selector_version", "v1"),
             "selected_count": len(selection_result.selected or []),
             "elided_count": selection_result.elided_count,
             "budget": selection_result.budget,

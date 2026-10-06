@@ -2410,30 +2410,13 @@ wheels = [
 
 [[package]]
 name = "simpleaudit"
-version = "0.2.3"
-source = { directory = "/Users/sushantgautam/Documents/SimpleAudit" }
+version = "0.3.2"
+source = { git = "https://github.com/SimulaMet/SimpleAudit.git?rev=main#a16b0b6807c2fd50e59d10a35149e9ab762918e9" }
 dependencies = [
     { name = "any-llm-sdk" },
     { name = "fsspec" },
     { name = "tqdm" },
 ]
-
-[package.metadata]
-requires-dist = [
-    { name = "any-llm-sdk", specifier = ">=1.14.0" },
-    { name = "black", marker = "extra == 'dev'", specifier = ">=23.0.0" },
-    { name = "fastapi", marker = "extra == 'visualize'", specifier = ">=0.104.0" },
-    { name = "fsspec", specifier = ">=2023.1.0" },
-    { name = "matplotlib", marker = "extra == 'plot'", specifier = ">=3.5.0" },
-    { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.0.0" },
-    { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.21.0" },
-    { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=4.0.0" },
-    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.1.0" },
-    { name = "simpleaudit", extras = ["plot", "visualize", "dev"], marker = "extra == 'all'" },
-    { name = "tqdm", specifier = ">=4.66.0" },
-    { name = "uvicorn", extras = ["standard"], marker = "extra == 'visualize'", specifier = ">=0.24.0" },
-]
-provides-extras = ["plot", "visualize", "dev", "all"]
 
 [[package]]
 name = "simpleaudit-studio"
@@ -2502,7 +2485,7 @@ requires-dist = [
     { name = "requests", specifier = "==2.32.5" },
     { name = "ruff", marker = "extra == 'dev'" },
     { name = "sentry-sdk", extras = ["django"], specifier = ">=2.0" },
-    { name = "simpleaudit", directory = "/Users/sushantgautam/Documents/SimpleAudit" },
+    { name = "simpleaudit", git = "https://github.com/SimulaMet/SimpleAudit.git?rev=main" },
     { name = "workos", specifier = "==10.4.0" },
 ]
 provides-extras = ["postgres", "server", "dev", "e2e"]
