@@ -1839,6 +1839,7 @@ class ScenarioCreateView(ProjectMixin, View):
         desc = request.POST.get("description", "")
         expected_behavior_raw = request.POST.get("expected_behavior", "").strip()
         expected_behavior = [line.strip() for line in expected_behavior_raw.splitlines() if line.strip()] if expected_behavior_raw else []
+        test_prompt = request.POST.get("test_prompt", "").strip()
         severity_ceiling = request.POST.get("severity_ceiling", "").strip().lower()
         documents_raw = request.POST.get("documents", "").strip()
         documents = json.loads(documents_raw) if documents_raw else []
@@ -1849,7 +1850,7 @@ class ScenarioCreateView(ProjectMixin, View):
             key = hashlib.sha256(name.encode()).hexdigest()[:12]
             scenario = create_scenario(
                 project=request.project, user=request.user, key=key, title=name, category=category,
-                description=desc, expected_behavior=expected_behavior, test_prompt="",
+                description=desc, expected_behavior=expected_behavior, test_prompt=test_prompt,
                 severity_ceiling=severity_ceiling, documents=documents, file_uri=file_uri,
                 metadata={}
             )
@@ -1875,6 +1876,7 @@ class ScenarioEditView(ProjectMixin, View):
             desc = request.POST.get("description", "")
             expected_behavior_raw = request.POST.get("expected_behavior", "").strip()
             expected_behavior = [line.strip() for line in expected_behavior_raw.splitlines() if line.strip()] if expected_behavior_raw else []
+            test_prompt = request.POST.get("test_prompt", "").strip()
             severity_ceiling = request.POST.get("severity_ceiling", "").strip().lower()
             documents_raw = request.POST.get("documents", "").strip()
             documents = json.loads(documents_raw) if documents_raw else []
@@ -1889,7 +1891,7 @@ class ScenarioEditView(ProjectMixin, View):
             latest_rev_before = scenario.revisions.order_by("-revision").first()
             rev = update_scenario_content(
                 scenario=scenario, user=request.user, description=desc,
-                expected_behavior=expected_behavior, test_prompt="",
+                expected_behavior=expected_behavior, test_prompt=test_prompt,
                 severity_ceiling=severity_ceiling, documents=documents, file_uri=file_uri,
                 metadata=None  # Preserves existing metadata on edit
             )
@@ -1998,6 +2000,8 @@ class ScenarioExportView(ProjectMixin, View):
                 d["documents"] = it.revision.documents
             if it.revision.file_uri:
                 d["file_uri"] = it.revision.file_uri
+            if it.revision.metadata:
+                d["metadata"] = it.revision.metadata
             return d
 
         scenarios = [_export_scenario(it) for it in latest.items.select_related("scenario", "revision")] if latest else []

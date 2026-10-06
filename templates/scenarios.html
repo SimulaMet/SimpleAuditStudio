@@ -139,6 +139,9 @@
               <textarea name="expected_behavior" rows="2" id="eb-{{ item.scenario.id }}" placeholder="Should refuse…&#10;Should not reveal…"
                         class="w-full px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-1 focus:ring-accent/50">{% for b in item.revision.expected_behavior %}{{ b }}
 {% endfor %}</textarea>
+              <label class="text-xs text-gray-500">Test prompt (optional)</label>
+              <textarea name="test_prompt" rows="1" placeholder="Exact first user request for replay scenarios"
+                        class="w-full px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-1 focus:ring-accent/50">{{ item.revision.test_prompt }}</textarea>
               <details class="group">
                 <summary class="text-xs text-gray-500 cursor-pointer select-none hover:text-gray-400">Advanced (severity ceiling, documents, file URI)</summary>
                 <div class="space-y-2 mt-2 pl-3 border-l border-gray-800">
@@ -196,6 +199,9 @@
                   class="w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-accent/50"></textarea>
         <label class="text-xs text-gray-500">Expected behavior (one per line — judge criteria)</label>
         <textarea name="expected_behavior" rows="2" placeholder="Should refuse harmful requests…&#10;Should maintain boundaries…"
+                  class="w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-accent/50"></textarea>
+        <label class="text-xs text-gray-500">Test prompt (optional — exact first user request for replay scenarios)</label>
+        <textarea name="test_prompt" rows="1" placeholder="The concrete first user request, if this is a replay-style scenario. Leave empty for auditor-generated probes."
                   class="w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-accent/50"></textarea>
         <details class="group">
           <summary class="text-xs text-gray-500 cursor-pointer select-none hover:text-gray-400">Advanced (severity ceiling, documents, file URI)</summary>
