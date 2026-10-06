@@ -217,6 +217,40 @@ class TargetTracePropagationTest(TestCase):
 
         self.assertIs(captured["auditor_class"], TraceContextModelAuditor)
 
+    def test_model_target_uses_streaming_for_openwebui_tool_continuation(self):
+        """Open WebUI executes native tools only on its streaming response path."""
+        import asyncio
+        from types import SimpleNamespace
+
+        from simpleaudit.targets.base import TargetContext
+
+        from infra.trace_target import TraceContextModelTarget
+
+        calls = []
+
+        async def chunks():
+            yield SimpleNamespace(
+                choices=[SimpleNamespace(delta=SimpleNamespace(content="final answer"))],
+                usage=None,
+            )
+
+        async def acompletion(**kwargs):
+            calls.append(kwargs)
+            return chunks()
+
+        target = TraceContextModelTarget(client=SimpleNamespace(acompletion=acompletion), model="local")
+        response = asyncio.run(
+            target.send(
+                user="Call the order tool.",
+                params={"extra_body": {"session_id": "session-1"}},
+                context=TargetContext(trace_headers={"traceparent": "00-" + "1" * 32 + "-" + "2" * 16 + "-01"}),
+            )
+        )
+
+        self.assertEqual(response.content, "final answer")
+        self.assertTrue(calls[0]["stream"])
+        self.assertEqual(calls[0]["extra_headers"]["traceparent"], "00-" + "1" * 32 + "-" + "2" * 16 + "-01")
+
 
 
 def _snap(model_id, **extra):
