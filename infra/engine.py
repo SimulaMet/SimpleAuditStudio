@@ -367,7 +367,7 @@ def _collect_evidence_spans(
     token_budget: int | None = None,
     window: tuple[float, float] | None = None,
     settle_timeout: float | None = None,
-) -> list[dict[str, Any]] | None:
+) -> dict[str, Any] | None:
     """Collect + select evidence spans for the traces a run recorded.
 
     The engine records ``turn_id -> trace_id`` in ``correlation`` as it
@@ -388,10 +388,10 @@ def _collect_evidence_spans(
     verification pass before ``settle_timeout`` elapses (``settle_timeout=None``
     disables settling — the fast path for tests).
 
-    Returns ``None`` when there is no trace evidence — the caller then judges
-    on the conversation alone (the normal black-box path). A fetch failure is
-    logged, never raised: tracing is best-effort evidence and must not fail an
-    audit run.
+    Returns a dict with trace evidence tiers when evidence exists, None when
+    there is no trace evidence (caller judges on conversation alone, the normal
+    black-box path). A fetch failure is logged, never raised: tracing is
+    best-effort evidence and must not fail an audit run.
     """
     if correlation is None or provider is None:
         return None
@@ -461,7 +461,26 @@ def _collect_evidence_spans(
     if not all_spans:
         return None
     all_spans = _drop_connection_noise(all_spans)
-    return select_spans(all_spans, token_budget=token_budget).selected or None
+    selection_result = select_spans(all_spans, token_budget=token_budget)
+    selected_spans = selection_result.selected or []
+    if not selected_spans:
+        return None
+
+    return {
+        "trace_ids": correlation.all_trace_ids(),
+        "all_span_refs": [
+            {"span_id": s.get("span_id"), "name": s.get("name"), "kind": s.get("kind")}
+            for s in all_spans
+        ],
+        "selected_spans": selected_spans,
+        "selection": {
+            "policy_version": "v1",
+            "selected_count": len(selection_result.selected or []),
+            "elided_count": selection_result.elided_count,
+            "budget": selection_result.budget,
+        },
+        "diagnostics": {},
+    }
 
 
 def _drop_connection_noise(spans: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -554,11 +573,16 @@ def run_scenario(
             # Supply evidence resolver to the engine. It runs after target
             # execution, before judge, and has access to correlation IDs.
             def _evidence_resolver(execution):
-                return _collect_evidence_spans(
+                evidence = _collect_evidence_spans(
                     execution.trace_correlation, provider, settle_timeout=10.0
                 )
+                # Extract selected_spans for the judge (backward compat with
+                # evidence_spans parameter). The full trace_evidence dict is
+                # attached to the result separately for later analysis.
+                return (evidence or {}).get("selected_spans") if evidence else None
             evidence_resolver = _evidence_resolver
 
+    full_trace_evidence = None
     try:
         with (provider or nullcontext()):
             # run_async maps the scenario dict onto run_scenario (file_uri,
@@ -576,10 +600,25 @@ def run_scenario(
                     evidence_resolver=evidence_resolver,
                 )
             )
+            # Collect full evidence tiers after run for persistence. The resolver
+            # above only passes selected_spans to the judge; this captures all
+            # tiers (trace_ids, all_spans, selected_spans, selection metadata).
+            full_trace_evidence = _collect_evidence_spans(
+                correlation, provider, settle_timeout=10.0
+            )
     except Exception as exc:
         raise EngineError(f"Scenario execution crashed: {type(exc).__name__}: {exc}") from exc
 
     payload = results[0].to_dict()
+    if full_trace_evidence:
+        # Persist full evidence tiers separately. For backward compatibility,
+        # also populate judgment.evidence_spans with selected_spans.
+        payload["trace_evidence"] = full_trace_evidence
+        judgment = payload.get("judgment")
+        if not isinstance(judgment, dict):
+            judgment = {}
+        judgment["evidence_spans"] = full_trace_evidence.get("selected_spans") or []
+        payload["judgment"] = judgment
     if correlation is not None:
         # The W3C trace ids the engine propagated this scenario's turns under;
         # persisted on the ScenarioResult so the UI can re-fetch the spans by
@@ -745,16 +784,19 @@ def run_scenario_repeated(
                     trace_correlation=_tracing_correlation,
                 )
             )
-            # Collect per-rep evidence spans while the provider is still alive.
+            # Collect per-rep evidence tiers while the provider is still alive.
             if provider is not None:
                 for rep in reps:
                     corr = rep_correlations.get(rep.get("_rep_index"))
-                    evidence = _collect_evidence_spans(corr, provider)
-                    if evidence:
+                    full_trace_evidence = _collect_evidence_spans(corr, provider)
+                    if full_trace_evidence:
+                        # Persist full evidence tiers separately. For backward compatibility,
+                        # also populate judgment.evidence_spans with selected_spans.
+                        rep["trace_evidence"] = full_trace_evidence
                         judgment = rep.get("judgment")
                         if not isinstance(judgment, dict):
                             judgment = {}
-                        judgment["evidence_spans"] = evidence
+                        judgment["evidence_spans"] = full_trace_evidence.get("selected_spans") or []
                         rep["judgment"] = judgment
                     if corr is not None:
                         rep["trace_ids"] = corr.all_trace_ids()
