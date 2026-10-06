@@ -123,12 +123,23 @@ class AgentModelTest(TestCase):
         self.assertEqual(snap["system_prompt"], "Be helpful.")
         self.assertEqual(snap["base_model"]["model_id"], agent.base_model.model_id)
         self.assertEqual(len(snap["knowledge_bases"]), 1)
-        self.assertEqual(snap["knowledge_bases"][0][1], "KB1")
+        self.assertEqual(snap["knowledge_bases"][0]["name"], "KB1")
         self.assertEqual(len(snap["tools"]), 1)
-        self.assertEqual(snap["tools"][0][1], "Calc")
+        self.assertEqual(snap["tools"][0]["name"], "Calc")
         self.assertEqual(snap["retrieval"]["search_mode"], "hybrid")
         self.assertEqual(snap["retrieval"]["top_k"], 8)
         self.assertTrue(snap["capabilities"]["knowledge_search"])
+
+    def test_config_snapshot_freezes_openwebui_tool_invocation_names(self):
+        agent = AgentFactory()
+        tool = ToolFactory(project=agent.project, external_id="acme_order_lookup")
+        agent.tools.add(tool)
+
+        snapshot = agent.config_snapshot(
+            tool_invocation_names={"acme_order_lookup": ["acme_lookup_order"]}
+        )
+
+        self.assertEqual(snapshot["tools"][0]["invocation_names"], ["acme_lookup_order"])
 
     def test_snapshot_has_default_retrieval_settings(self):
         agent = AgentFactory()
@@ -393,7 +404,7 @@ class AgentAuditTargetTest(TestCase):
         self.session.save()
 
         # Build the full agent stack
-        self.agent = AgentFactory(project=self.project)
+        self.agent = AgentFactory(project=self.project, external_id="studio.agent-test")
         self.kb = KnowledgeBaseFactory(project=self.project)
         self.tool = ToolFactory(project=self.project)
         self.agent.knowledge_bases.add(self.kb)
@@ -457,16 +468,25 @@ class AgentAuditTargetTest(TestCase):
         run = self._create_audit_run()
         kbs = run.agent_config_snapshot["knowledge_bases"]
         self.assertEqual(len(kbs), 1)
-        # values_list("id", "name", "external_id", "version") → [id, name, external_id, version]
-        self.assertEqual(kbs[0][1], self.kb.name)
-        self.assertEqual(kbs[0][2], self.kb.external_id)
+        self.assertEqual(kbs[0]["name"], self.kb.name)
+        self.assertEqual(kbs[0]["external_id"], self.kb.external_id)
 
     def test_agent_snapshot_includes_tools(self):
         run = self._create_audit_run()
         tools = run.agent_config_snapshot["tools"]
         self.assertEqual(len(tools), 1)
-        # values_list("id", "name", "type") → [id, name, type]
-        self.assertEqual(tools[0][1], self.tool.name)
+        self.assertEqual(tools[0]["id"], self.tool.id)
+        self.assertEqual(tools[0]["name"], self.tool.name)
+        self.assertEqual(tools[0]["input_schema"], self.tool.input_schema)
+        self.assertIn("has_side_effects", tools[0])
+        self.assertIn("handles_sensitive_data", tools[0])
+
+    def test_agent_snapshot_includes_full_knowledge_base_metadata(self):
+        run = self._create_audit_run()
+        kb = run.agent_config_snapshot["knowledge_bases"][0]
+        self.assertEqual(kb["authority"], self.kb.authority)
+        self.assertEqual(kb["trust_level"], self.kb.trust_level)
+        self.assertEqual(kb["sensitivity"], self.kb.sensitivity)
 
     def test_agent_snapshot_includes_base_model(self):
         run = self._create_audit_run()
@@ -517,14 +537,10 @@ class AgentAuditTargetTest(TestCase):
             self._create_audit_run()
         self.assertEqual(ctx.exception.code, "agent_disabled")
 
-    def test_agent_model_mismatch_rejected(self):
+    def test_agent_target_model_argument_is_ignored(self):
         mismatched_model = RegisteredModelFactory(project=self.project)
-
-        from infra.exceptions import StableAPIError
-
-        with self.assertRaises(StableAPIError) as ctx:
-            self._create_audit_run(target_model=mismatched_model)
-        self.assertEqual(ctx.exception.code, "agent_model_mismatch")
+        run = self._create_audit_run(target_model=mismatched_model)
+        self.assertEqual(run.target_model.model_id, self.agent.external_id)
 
     def test_no_agent_run_has_null_snapshot(self):
         from audits.services import create_audit_run

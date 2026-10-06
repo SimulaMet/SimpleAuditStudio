@@ -157,7 +157,7 @@ def _generation_parameters(
 
 def frozen_inputs(
     *,
-    target_model: RegisteredModel,
+    target_model: RegisteredModel | None,
     auditor_model: RegisteredModel,
     judge_model: RegisteredModel,
     judge,
@@ -211,9 +211,8 @@ def create_audit_run(
 
     ``judge`` is a ``JudgeVersion`` (criteria, output format, probe prompt); ``judge_model`` grades with it.
 
-    When ``agent`` is provided, the run targets an auditable Agent (model +
-    knowledge + tools + retrieval). The agent's ``base_model`` must match
-    ``target_model``. The agent's full configuration is frozen in
+    When ``agent`` is provided, the run targets the Agent's Open WebUI wrapper;
+    its base model is only part of the frozen configuration. The agent's full configuration is frozen in
     ``agent_config_snapshot`` for reproducibility.
     """
     # Launching spends the workspace's API keys: viewers may not.
@@ -222,19 +221,22 @@ def create_audit_run(
         raise StableAPIError(detail="Scenario set version belongs to another project.", code="cross_project_input")
     if judge.judge.project_id != project.id:
         raise StableAPIError(detail="Judge belongs to another project.", code="cross_project_input")
-    for model in (target_model, auditor_model, judge_model):
-        if model.project_id != project.id or not model.enabled or not model.connection.enabled:
-            raise StableAPIError(detail="Model is unavailable in this project.", code="model_unavailable")
     if agent is not None:
         if agent.project_id != project.id:
             raise StableAPIError(detail="Agent belongs to another project.", code="cross_project_input")
         if not agent.enabled:
             raise StableAPIError(detail="Agent is disabled.", code="agent_disabled")
-        if agent.base_model_id != target_model.id:
-            raise StableAPIError(
-                detail="Agent's base model does not match the target model.",
-                code="agent_model_mismatch",
-            )
+        from model_registry.services import agent_target_model
+
+        try:
+            target_model = agent_target_model(agent)
+        except ValueError as exc:
+            raise StableAPIError(detail=str(exc), code="agent_not_synced") from exc
+    if target_model is None:
+        raise StableAPIError(detail="A target model is required.", code="target_model_required")
+    for model in (target_model, auditor_model, judge_model):
+        if model.project_id != project.id or not model.enabled or not model.connection.enabled:
+            raise StableAPIError(detail="Model is unavailable in this project.", code="model_unavailable")
     # Provenance is authoritative: it comes from the installed SimpleAudit
     # package metadata (version) and its PEP 610 direct_url commit (optional).
     # Callers cannot supply their own — that would let a manifest claim an engine
@@ -268,13 +270,28 @@ def create_audit_run(
     agent_snapshot = None
     if agent is not None:
         server_rag = None
+        tool_invocation_names = {}
         try:
             from integrations.openwebui.client import OpenWebUIAdapter
 
-            server_rag = OpenWebUIAdapter.for_admin().safe_rag_settings()
+            adapter = OpenWebUIAdapter.for_admin()
         except Exception:  # noqa: BLE001 - a down chat service must not block freezing local inputs
-            logger.warning("Could not freeze Open WebUI RAG settings for agent %s", agent.id)
-        agent_snapshot = agent.config_snapshot(server_rag=server_rag)
+            adapter = None
+            logger.warning("Could not connect to Open WebUI while freezing agent %s", agent.id)
+        if adapter is not None:
+            try:
+                server_rag = adapter.safe_rag_settings()
+            except Exception:  # noqa: BLE001 - a down chat service must not block freezing local inputs
+                logger.warning("Could not freeze Open WebUI RAG settings for agent %s", agent.id)
+            try:
+                tool_invocation_names = adapter.tool_invocation_names(
+                    list(agent.tools.exclude(external_id="").values_list("external_id", flat=True))
+                )
+            except Exception:  # noqa: BLE001 - tool metadata is optional evidence
+                logger.warning("Could not freeze Open WebUI tool names for agent %s", agent.id)
+        agent_snapshot = agent.config_snapshot(
+            server_rag=server_rag, tool_invocation_names=tool_invocation_names
+        )
     return AuditRun.objects.create(
         project=project,
         name=name.strip(),

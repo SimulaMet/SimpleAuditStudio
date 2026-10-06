@@ -84,10 +84,7 @@ def main() -> None:
     os.environ.setdefault("SIMPLEAUDIT_MODE", "embedded")
     # Chat is part of the bundle; --disable-chat (or SIMPLEAUDIT_CHAT=disabled)
     # opts out.
-    if args.disable_chat:
-        os.environ["SIMPLEAUDIT_CHAT"] = "off"
-    else:
-        os.environ.setdefault("SIMPLEAUDIT_CHAT", "embedded")
+    _set_embedded_chat_defaults(disable_chat=args.disable_chat)
     os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings")
     os.environ.setdefault("DJANGO_SECRET_KEY", "local-insecure-key-change-for-shared-use")
     os.environ.setdefault("DJANGO_ALLOWED_HOSTS", "localhost,127.0.0.1")
@@ -286,6 +283,17 @@ def main() -> None:
                 mock_server.shutdown()
 
 
+def _set_embedded_chat_defaults(*, disable_chat: bool) -> None:
+    """Set embedded chat defaults before Django loads its settings."""
+    if disable_chat:
+        os.environ["SIMPLEAUDIT_CHAT"] = "off"
+        return
+    os.environ.setdefault("SIMPLEAUDIT_CHAT", "embedded")
+    # Structural spans are useful for future Agent audits. Open WebUI's
+    # content-capture controls remain independent and opt-in.
+    os.environ.setdefault("SIMPLEAUDIT_CHAT_OTLP", "true")
+
+
 def start_chat(chat_proxy, internal_port: int):
     """Start Open WebUI and its front door, and report readiness in the background.
 
@@ -311,6 +319,9 @@ def start_chat(chat_proxy, internal_port: int):
             backfilled = _backfill_demo_chat()
             if backfilled:
                 print(f"   {backfilled}", flush=True)
+            agentic_demo = _backfill_agentic_demo()
+            if agentic_demo:
+                print(f"   {agentic_demo}", flush=True)
         elif process.poll() is not None:
             print(f"\n⚠️  Chat stopped (exit {process.returncode}). Studio is unaffected.")
             print(f"   What happened: {chat_proxy.log_path()}\n", flush=True)
@@ -368,6 +379,28 @@ def _backfill_demo_chat() -> str:
     except Exception as exc:  # noqa: BLE001 - runs in a startup thread; don't crash it
         print(f"   Demo chat backfill skipped: {exc}", flush=True)
         return ""
+
+
+def _backfill_agentic_demo() -> str:
+    """Preload the synthetic completed Agentic example after Agent sync."""
+    from io import StringIO
+
+    from django.contrib.auth import get_user_model
+    from django.core.management import call_command
+
+    from accounts.models import Project
+
+    user = get_user_model().objects.order_by("id").first()
+    project = Project.objects.order_by("id").first()
+    if user is None or project is None:
+        return ""
+    output = StringIO()
+    try:
+        call_command("seed_agentic_demo", project=project.id, stdout=output, verbosity=0)
+    except Exception as exc:  # noqa: BLE001 - startup demo data must not prevent Studio running
+        print(f"   Preloaded Agentic example not ready: {exc}", flush=True)
+        return ""
+    return output.getvalue().strip()
 
 
 def _ensure_ports_available(args) -> None:
@@ -513,8 +546,10 @@ def _seed_demo_data() -> None:
         project_name=project_name,
     )
 
-    # Seed scenario packs + model connections + demo audit runs (all idempotent)
+    # Seed the regular demo resources and both scenario packs before Open WebUI
+    # starts; the precomputed Agentic run waits until the Agent is synced.
     call_command("seed_platform", project=project.id, verbosity=0)
+    call_command("seed_agentic_scenarios", project=project.id, verbosity=0)
 
 
 def _update_model_endpoints(mock_url: str) -> None:

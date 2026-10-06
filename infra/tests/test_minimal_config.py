@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import os
 import urllib.request
+from pathlib import Path
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
@@ -68,6 +69,22 @@ class TestDemoBootSequence(TestCase):
         conn = ModelConnection.objects.filter(enabled=True).first()
         self.assertIsNotNone(conn)
         self.assertEqual(conn.base_url, "https://api.openai.com/v1")
+
+    def test_stop_does_not_remove_foreign_embedded_handshake(self):
+        """A wiring-only process must not erase the server's handshake."""
+        import tempfile
+
+        from infra import minimal_config
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            handshake_path = Path(temp_dir) / "embedded-hatchet-handshake.json"
+            handshake_path.write_text("shared", encoding="utf-8")
+            with (
+                patch.object(minimal_config, "_embedded_client", None),
+                patch.object(minimal_config, "_handshake_path", return_value=handshake_path),
+            ):
+                minimal_config.stop_embedded_hatchet()
+            self.assertTrue(handshake_path.exists())
 
     def test_restore_real_model_endpoints_repairs_mock(self):
         """A connection left pointing at the local mock is repaired to OpenAI."""

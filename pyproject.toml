@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "simpleaudit-studio"
-version = "0.5.8"
+version = "0.5.7"
 description = "Production AI model audit platform — one-liner demo mode via uvx"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -23,9 +23,8 @@ dependencies = [
     # PyPI release (not a git ref): PyPI forbids direct URL dependencies in
     # package metadata, so the engine must be a registry dependency. 0.2.0 is
     # the first release containing run_scenario_reps (n_repetitions support);
-    # 0.2.1 adds the native on_turn per-phase progress callback; 0.3.1 adds
-    # the traceparent-to-wire forwarding this repo's tracing relies on;
-    # 0.3.2 also preserves GenAI content attributes through OTLP parsing.
+    # 0.2.1 adds the native on_turn per-phase progress callback; 0.3.2 is the
+    # current release used for GenAI/OTel capture interoperability.
     "simpleaudit==0.3.2",
     "cronsim==2.7",
     "psutil>=7.2.2",

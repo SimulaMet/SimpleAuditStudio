@@ -226,19 +226,9 @@ unset: the iframe loads the same-origin `/chat/`.
 | `SIMPLEAUDIT_CHAT_CMD`          | auto                     | command that starts Open WebUI             |
 | `SIMPLEAUDIT_CHAT_IDENTITY_TTL` | `5`                      | seconds the proxy caches who a cookie is   |
 | `SIMPLEAUDIT_CHAT_SYNC_DELAY`   | `2`                      | seconds a model-connection push waits      |
-| `SIMPLEAUDIT_CHAT_OTLP`         | `false`                  | export Open WebUI's spans to Studio's OTLP listener |
+| `SIMPLEAUDIT_CHAT_OTLP`         | `false` outside embedded CLI; `true` for `uvx` | export Open WebUI's spans to Studio's OTLP listener |
 | `SIMPLEAUDIT_CHAT_OTLP_ENDPOINT`| full OTLP listener URL   | the `/otlp/v1/traces` ingestion URL (embedded: `http://127.0.0.1:<port>/otlp/v1/traces`, docker: `http://web:8000/otlp/v1/traces`) — the exporter uses it as-is |
 | `SIMPLEAUDIT_CHAT_OTLP_SERVICE_NAME` | `open-webui`         | the service name Open WebUI tags its spans with |
-| `OTEL_GENAI_CAPTURE_INPUTS` | `true` in the Compose example | capture model input messages |
-| `OTEL_GENAI_CAPTURE_OUTPUTS` | `true` in the Compose example | capture model output messages |
-| `OTEL_GENAI_CAPTURE_SYSTEM_INSTRUCTIONS` | `true` in the Compose example | capture system instructions |
-| `OTEL_GENAI_CAPTURE_TOOL_ARGUMENTS` | `true` in the Compose example | capture tool arguments |
-| `OTEL_GENAI_CAPTURE_TOOL_RESULTS` | `true` in the Compose example | capture tool results |
-| `OTEL_GENAI_CAPTURE_RETRIEVAL_QUERY` | `true` in the Compose example | capture retrieval queries |
-| `OTEL_GENAI_CAPTURE_RETRIEVAL_DOCUMENTS` | `true` in the Compose example | capture retrieved document content |
-| `OTEL_GENAI_CAPTURE_EMBEDDING_TEXT` | `true` in the Compose example | capture embedding input text |
-| `OTEL_GENAI_CAPTURE_EMBEDDING_VECTORS` | `false` | capture embedding vectors |
-| `OTEL_GENAI_CONTENT_MAX_LENGTH` | `2000` | maximum characters per captured field |
 
 ## Exporting Open WebUI's spans to Studio (OTLP)
 
@@ -252,10 +242,15 @@ its wheel metadata. This matters for embedded mode, which installs the wheel
 directly; Docker installs the same dependencies from Open WebUI's backend
 requirements files.
 
-It is off by default. When enabled it exports **unauthenticated** by default —
-no credentials are sent — which matches the listener's default fallback to an
-enabled `none` credential. The exporter is the standard OTel one, so the
-environment variables are the standard ones, with two Open WebUI specifics:
+Compose and development modes leave it off unless explicitly enabled. The
+embedded `uvx simpleaudit-studio` launcher enables structural tracing by default
+so future Agent audits can show operation names, timing, and other non-content
+attributes; set `SIMPLEAUDIT_CHAT_OTLP=false` to opt out. Prompt, output, tool
+argument/result, and retrieved-document content capture remains opt-in and is
+not enabled by this default. When enabled, the demo uses the Studio listener's
+`none` credential unless a basic/bearer credential is configured. The exporter
+is the standard OTel one, so the environment variables are the standard ones,
+with two Open WebUI specifics:
 
 - Open WebUI selects the HTTP exporter from `OTEL_OTLP_SPAN_EXPORTER`
   (`http`), **not** the standard `OTEL_EXPORTER_OTLP_PROTOCOL`. `http`
@@ -273,9 +268,6 @@ So enabling it is one line:
 ```bash
 # .env (docker) — or the equivalent environment in embedded mode
 SIMPLEAUDIT_CHAT_OTLP=true
-# The Compose example enables bounded GenAI content capture for the protected
-# Studio receiver. Keep the receiver access-controlled and turn individual
-# flags off when the corresponding content must not leave Open WebUI.
 ```
 
 For an authenticated target (a `basic` or `bearer` OTLP credential instead of a

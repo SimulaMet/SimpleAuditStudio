@@ -9,6 +9,28 @@ durable background jobs, and records every run as a frozen, reproducible
 experiment. See [domain-model.md](domain-model.md) for the data model and
 [deployment.md](deployment.md) for how to run it.
 
+## Agentic safety auditing
+
+Agent runs may attach OTLP evidence to each scenario result. The worker normalizes
+captured spans into a provider-neutral trajectory and evaluates deterministic tool,
+permission, trace, and error checks against the frozen Agent policy. Results are
+stored under `agentic_evaluation` beside the ordinary SimpleAudit judgment; an
+Agentic evaluator failure is recorded as `ERROR` and does not discard the ordinary
+result. Missing content or trace evidence is `INCONCLUSIVE`, never an implicit pass.
+
+The embedded `uvx simpleaudit-studio` startup seeds this pack and, after the
+demo Agent syncs to Open WebUI, preloads a completed example run with synthetic
+results and correlated synthetic OTLP spans. This is fixture data only: startup
+does not submit a workflow or call a target, auditor, or judge model. The example
+includes a text-only PASS beside an Agentic FAIL to show why intermediate tool
+activity matters. Run `uv run manage.py seed_agentic_scenarios --project 1` to
+seed the pack separately.
+
+Embedded mode enables structural OTLP by default for future live Agent audits;
+set `SIMPLEAUDIT_CHAT_OTLP=false` to opt out. Content capture stays separately
+opt-in; structural span IDs, operation kinds, and statuses remain useful when
+content is absent. Do not put API keys in scenario metadata or source control.
+
 ## 1. Components
 
 ```mermaid

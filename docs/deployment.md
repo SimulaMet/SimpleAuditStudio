@@ -171,6 +171,7 @@ override them when you deliberately need to.
 | `VISUALIZER_RESULTS_DIR` | Folder of JSON audit-result files shown by `/visualizer/`. Dev defaults to `./results`; the folder is created on demand. |
 | `SIMPLEAUDIT_MINIMAL` **internal** | `1` = single-process demo mode. Set by the CLI. |
 | `SIMPLEAUDIT_CHAT` | Chat mode: `embedded` / `docker`, or `off` (and `disabled`, `false`, `no`, `0`, unset). On by default in every mode (`embedded` in the single-process modes, `docker` in compose — set in `.env`). Turn off with this var or the `--disable-chat` flag; the flag beats the env value (flag > env > mode default). |
+| `SIMPLEAUDIT_CHAT_OTLP` | Export Open WebUI structural spans to Studio. Embedded `uvx simpleaudit-studio` defaults to `true`; other modes remain off unless enabled. Set `false` to opt out of embedded tracing. Content capture remains independently opt-in. |
 | `SIMPLEAUDIT_DATA_DIR` | Where single-process mode keeps its data (default `~/.simpleaudit-studio`): the SQLite database and embedded Hatchet's PostgreSQL. |
 | `SIMPLEAUDIT_EMBEDDED_PG_DIR` | Override just embedded Hatchet's PostgreSQL directory (default `<data dir>/embedded-pg`). |
 | `HATCHET_SERVER_URL`, `HATCHET_GRPC_URL`, `HATCHET_API_KEY`, `HATCHET_TOKEN_FILE`, `HATCHET_TLS_STRATEGY` | External Hatchet connection (`compose` mode). |
@@ -190,6 +191,8 @@ override them when you deliberately need to.
 | `setup_local` | migrate + bootstrap + seed (local dev, one-shot). |
 | `bootstrap_platform` | Create the admin user and default workspace (idempotent). |
 | `seed_platform` | Import scenario packs and model connections, plus demo runs (`seed_demo_audits`) and the demo "Support Refund Assistant" agent (skip with `--skip-demo-agent`). |
+| `seed_agentic_scenarios` | Seed the dedicated Acme Agentic Safety scenario set. |
+| `seed_agentic_demo` | Preload completed synthetic results, traces, and a separate Agentic verdict rollup after the demo Agent sync; never runs an audit or calls a model. |
 | `dev` | Local dev stack (embedded, hot-reload, chat, one-time sign-in). `--disable-chat`, `--no-worker`, `--no-reload`, `--no-browser`. |
 | `dev_server` | Lower-level version of the same stack. Use `dev` instead. |
 | `mode` | Print the resolved run mode and its settings. |

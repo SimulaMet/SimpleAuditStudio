@@ -143,7 +143,7 @@ def create_audit_run_view(request, project_id):
         user=request.user,
         name=data["name"],
         scenario_set_version=scenario_set_version,
-        target_model=target_model,
+        target_model=None if agent else target_model,
         auditor_model=auditor_model,
         judge_model=judge_model,
         judge=judge,
