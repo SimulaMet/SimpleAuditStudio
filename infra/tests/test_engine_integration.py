@@ -321,6 +321,18 @@ def _snap(model_id, **extra):
 class AuditorKwargsTest(TestCase):
     """Each role gets its own model, endpoint, client kwargs and params."""
 
+    def test_reasoning_effort_is_forwarded_as_a_request_parameter(self):
+        from infra.engine import auditor_kwargs
+
+        kwargs, _ = auditor_kwargs(
+            target=_snap("tgt"),
+            auditor=_snap("aud"),
+            judge=_snap("jdg", default_parameters={"reasoning_effort": "none"}),
+        )
+
+        self.assertEqual(kwargs["judge_params"], {"reasoning_effort": "none"})
+        self.assertEqual(kwargs["judge_kwargs"], {"timeout": 180, "max_retries": 1})
+
     def test_roles_map_to_their_own_snapshot(self):
         from infra.engine import auditor_kwargs
 

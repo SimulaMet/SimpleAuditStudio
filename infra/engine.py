@@ -120,7 +120,7 @@ def _normalize_provider(provider: str | None, base_url: str | None) -> str:
 _GENERATION_PARAM_KEYS = {
     "temperature", "top_p", "top_k", "max_tokens", "max_completion_tokens",
     "frequency_penalty", "presence_penalty", "stop", "seed", "logprobs",
-    "n", "response_format", "tools", "tool_choice", "functions",
+    "n", "response_format", "tools", "tool_choice", "functions", "reasoning_effort",
 }
 
 
