@@ -523,12 +523,10 @@ def run_scenario(
     Tracing (best-effort, Promptfoo parity): when ``trace_config`` is given, a
     provider is built from it (``builtin`` OTLP receiver or ``tempo`` fetch) and
     a fresh ``TraceCorrelation`` is passed to the engine, which propagates a W3C
-    ``traceparent`` per turn and records ``turn_id -> trace_id``. After the run
-    the spans for the recorded trace ids are fetched from the provider,
-    selected, and attached to the result under ``judgment["evidence_spans"]``.
-    The engine judges on the conversation (trace evidence is attached post-run
-    for findings / a trace-aware judge, not re-injected into the judge prompt
-    here).
+    ``traceparent`` per turn and records ``turn_id -> trace_id``. After target
+    execution, the evidence resolver fetches spans for the recorded trace ids,
+    selects them, and passes them to the judge. The selected spans are also
+    attached to the result under ``judgment["evidence_spans"]`` for post-hoc use.
     """
     auditor_instance, language = build_model_auditor(
         target=target, auditor=auditor, judge=judge, generation=generation,
@@ -542,6 +540,7 @@ def run_scenario(
     provider = None
     correlation = None
     audit_run_id = None
+    evidence_resolver = None
     if trace_config:
         from simpleaudit.tracing.context import TraceCorrelation, new_trace_id
 
@@ -552,12 +551,21 @@ def run_scenario(
             audit_run_id = f"audit_{new_trace_id()[:12]}"
             correlation = TraceCorrelation(audit_run_id=audit_run_id)
 
+            # Supply evidence resolver to the engine. It runs after target
+            # execution, before judge, and has access to correlation IDs.
+            def _evidence_resolver(execution):
+                return _collect_evidence_spans(
+                    execution.trace_correlation, provider, settle_timeout=10.0
+                )
+            evidence_resolver = _evidence_resolver
+
     try:
         with (provider or nullcontext()):
             # run_async maps the scenario dict onto run_scenario (file_uri,
             # documents, judge notes, the scenario facts a judge's
             # post-processor reads). When tracing, the engine propagates the
-            # traceparent per turn and records the trace ids in correlation.
+            # traceparent per turn, records the trace ids in correlation, and
+            # calls the evidence_resolver after target execution but before judge.
             results = asyncio.run(
                 auditor_instance.run_async(
                     [scenario],
@@ -565,25 +573,13 @@ def run_scenario(
                     on_turn=on_turn,
                     audit_run_id=audit_run_id,
                     trace_correlation=correlation,
+                    evidence_resolver=evidence_resolver,
                 )
-            )
-            # Collect evidence spans while the provider is still alive. The
-            # settle window covers the remote exporter's batched flush: spans
-            # for the run's trace ids routinely arrive a couple of seconds
-            # after the last model call returns.
-            evidence_spans = _collect_evidence_spans(
-                correlation, provider, settle_timeout=10.0
             )
     except Exception as exc:
         raise EngineError(f"Scenario execution crashed: {type(exc).__name__}: {exc}") from exc
 
     payload = results[0].to_dict()
-    if evidence_spans:
-        judgment = payload.get("judgment")
-        if not isinstance(judgment, dict):
-            judgment = {}
-        judgment["evidence_spans"] = evidence_spans
-        payload["judgment"] = judgment
     if correlation is not None:
         # The W3C trace ids the engine propagated this scenario's turns under;
         # persisted on the ScenarioResult so the UI can re-fetch the spans by
