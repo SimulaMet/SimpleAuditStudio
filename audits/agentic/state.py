@@ -73,7 +73,6 @@ class InMemoryStateProbe:
             key = assertion.get("key")
 
             if assertion_type == "exists":
-                exists_before = key in before.values
                 exists_after = key in after.values
                 status = "PASS" if exists_after else "FAIL"
                 results.append({

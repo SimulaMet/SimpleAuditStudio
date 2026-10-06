@@ -1,5 +1,4 @@
 """Robust argument matchers for agentic checks."""
-import json
 import re
 from typing import Any, Callable, Dict
 from urllib.parse import urlparse
