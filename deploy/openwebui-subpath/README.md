@@ -130,7 +130,7 @@ re-passes. Distribution context (fork, ghcr.io, pip caveats): [`DESIGN.md`](./DE
 publishing to ghcr.io (root on push, `-subpath` on `webui_subpath` dispatch).
 
 The cutover is done: `docker-compose.yml` pulls
-`ghcr.io/sushantgautam/open-webui:v0.11.4.1-subpath` (set `WEBUI_SUBPATH=/chat`),
+`ghcr.io/sushantgautam/open-webui:v0.11.4.3-subpath` (set `WEBUI_SUBPATH=/chat`),
 `chat-proxy` (Caddy, no profile) is the **only published port** and runs
 `Caddyfile.subpath`, Studio's wrapper page moved to `/playground/`, and
 `Caddyfile.chat` + the separate cross-origin port are retired. Embedded
