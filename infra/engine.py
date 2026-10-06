@@ -461,7 +461,7 @@ def _collect_evidence_spans(
     if not all_spans:
         return None
     all_spans = _drop_connection_noise(all_spans)
-    selection_result = select_spans(all_spans, token_budget=token_budget)
+    selection_result = select_spans(all_spans, token_budget=token_budget, selector_version="v1")
     selected_spans = selection_result.selected or []
     if not selected_spans:
         return None
@@ -475,6 +475,7 @@ def _collect_evidence_spans(
         "selected_spans": selected_spans,
         "selection": {
             "policy_version": "v1",
+            "selector_version": selection_result.selector_version,
             "selected_count": len(selection_result.selected or []),
             "elided_count": selection_result.elided_count,
             "budget": selection_result.budget,
