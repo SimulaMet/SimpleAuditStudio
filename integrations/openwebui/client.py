@@ -196,6 +196,10 @@ class OpenWebUIAdapter:
         # Knowledge context is derived from Studio's attached knowledge bases;
         # it is not a second agent checkbox.
         capabilities["model"]["file_context"] = bool(knowledge)
+        # OpenWebUI gates its native knowledge tools separately from the
+        # attached model knowledge list.  An attached KB must therefore enable
+        # the category or no retrieval span/tool can ever be produced.
+        capabilities["builtin_tools"]["knowledge"] = bool(knowledge)
         description = agent.system_prompt or agent.description or agent.name
         metadata = {
             "capabilities": capabilities["model"],

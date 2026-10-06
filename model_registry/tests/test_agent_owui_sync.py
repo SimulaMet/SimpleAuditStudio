@@ -118,7 +118,7 @@ class AgentSyncTest(_SyncBase):
         metadata = api.update_workspace_model.call_args.kwargs["metadata"]
         self.assertTrue(metadata["capabilities"]["file_context"])
         self.assertFalse(metadata["capabilities"]["web_search"])
-        self.assertFalse(metadata["builtinTools"]["knowledge"])
+        self.assertTrue(metadata["builtinTools"]["knowledge"])
         self.assertFalse(metadata["builtinTools"]["memory"])
         self.assertFalse(metadata["builtinTools"]["notifications"])
         self.assertEqual(metadata["toolIds"], ["owui-tool-1"])
