@@ -496,6 +496,9 @@ def _run_visualize_only(args) -> None:
 
     auto_login_token = secrets.token_urlsafe(32)
     os.environ["SIMPLEAUDIT_AUTO_LOGIN_TOKEN"] = auto_login_token
+    # After the one-time sign-in, land on the visualizer instead of the
+    # dashboard (which has no useful content in visualize-only mode).
+    os.environ["SIMPLEAUDIT_AUTO_LOGIN_NEXT"] = "/visualizer/"
     auto_login_url = f"http://localhost:{port}/auto-login/?token={auto_login_token}"
 
     print("┌─────────────────────────────────────────────────────────┐")

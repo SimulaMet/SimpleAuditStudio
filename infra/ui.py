@@ -286,6 +286,12 @@ def auto_login_view(request):
     if user is None:
         raise Http404
     login(request, user)
+    # visualize-only mode sets this so the signed-in browser lands on the
+    # visualizer instead of the (unpopulated) dashboard. Trust the server
+    # env var, not the request: the browser only gets the token URL.
+    next_path = os.environ.get("SIMPLEAUDIT_AUTO_LOGIN_NEXT", "").strip()
+    if next_path.startswith("/") and not next_path.startswith("//"):
+        return redirect(next_path)
     return redirect("dashboard")
 
 
