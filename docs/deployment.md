@@ -169,6 +169,10 @@ override them when you deliberately need to.
 | `SIMPLEAUDIT_LOCAL_SQLITE` **internal** | `1` = local SQLite database at the repository's `dev.sqlite3`. Set automatically by the `dev` entry point and by the test suite. |
 | `SIMPLEAUDIT_SQLITE_PATH` | Override where the local dev SQLite file lives. Default: `<repo>/dev.sqlite3`. Relative paths resolve from the repo root; absolute paths are used as-is. Ignored unless `SIMPLEAUDIT_LOCAL_SQLITE=1`. |
 | `VISUALIZER_RESULTS_DIR` | Folder of JSON audit-result files shown by `/visualizer/`. Dev defaults to `./results`; the folder is created on demand. |
+| `VISUALIZER_MAX_INSPECTED_FILES` | Max JSON files to inspect per scan (default `5000`). When hit, the tree is returned with `truncated: true, reason: "file_limit"`. |
+| `VISUALIZER_SCAN_TIME_BUDGET_S` | Wall-clock time budget for the scan in seconds (default `5`). When hit, the tree is returned with `truncated: true, reason: "time_budget"`. |
+| `VISUALIZER_MAX_TREE_DEPTH` | Max directory depth to walk (default `8`). When hit, the tree is returned with `truncated: true, reason: "depth_limit"`. |
+| `VISUALIZER_MAX_FILE_SIZE_MB` | Max JSON file size in MB to parse (default `100`). Larger files are skipped. |
 | `SIMPLEAUDIT_MINIMAL` **internal** | `1` = single-process demo mode. Set by the CLI. |
 | `SIMPLEAUDIT_CHAT` | Chat mode: `embedded` / `docker`, or `off` (and `disabled`, `false`, `no`, `0`, unset). On by default in every mode (`embedded` in the single-process modes, `docker` in compose — set in `.env`). Turn off with this var or the `--disable-chat` flag; the flag beats the env value (flag > env > mode default). |
 | `SIMPLEAUDIT_CHAT_OTLP` | Export Open WebUI structural spans to Studio. Embedded `uvx simpleaudit-studio` defaults to `true`; other modes remain off unless enabled. Set `false` to opt out of embedded tracing. Content capture remains independently opt-in. |

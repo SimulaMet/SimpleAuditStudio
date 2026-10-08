@@ -28,6 +28,7 @@ dependencies = [
     "psutil>=7.2.2",
     "opentelemetry-proto>=1.45.0",
     "caddyserver>=2.11.7",
+    "watchfiles>=1.1.0",
 ]
 
 # package = false: Studio is run, not installed as a wheel (hatchling rejects

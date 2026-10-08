@@ -6,6 +6,8 @@ submit audit run → verify frozen manifest → poll events → compare runs.
 This is the "another developer can run this" integration test that validates
 the entire user journey without requiring a live worker or Docker stack.
 """
+from unittest import mock
+
 from django.test import tag
 from rest_framework.test import APITestCase
 
@@ -27,6 +29,12 @@ class APIE2ETest(APITestCase):
         self.project = Project.objects.create(name="E2E", slug="e2e")
         ProjectMembership.objects.create(project=self.project, user=self.user, role=ProjectMembership.Role.AUDITOR)
         self.pid = self.project.id
+        # No live Hatchet server in tests: stub the enqueue step so run
+        # creation doesn't attempt a real gRPC call (which hangs when the
+        # configured host is unreachable, e.g. the compose default in CI).
+        self._submit_patcher = mock.patch("audits.views.submit_audit_run")
+        self._submit_patcher.start()
+        self.addCleanup(self._submit_patcher.stop)
 
     def _auth(self):
         """Get a token via the auth endpoint."""
