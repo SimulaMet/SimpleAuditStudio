@@ -93,6 +93,9 @@ _NAV = (
     ("experiments", "Experiments", "⊞", ("/experiments/",), False, ()),
     ("monitors", "Monitors", "↻", ("/monitors/",), False, ()),
     ("scenarios", "Scenarios", "▤", ("/scenarios/",), False, ()),
+    # The Agents surface is chat-backed (agents sync to Open WebUI; knowledge /
+    # tools live in the Open WebUI workspace); it is skipped in nav() when the
+    # chat module is off.
     ("agents", "Agents", "🤖", ("/agents/",), False, (
         ("agents_knowledge", "Knowledge Bases", "📚"),
         ("agents_tools", "Tools", "🔧"),
@@ -117,9 +120,10 @@ def nav(request):
 
     admin = is_any_project_admin(user)
     path = request.path
+    chat_on = chat_enabled()
     # The wrapper page (model-picker bar + iframe of the embedded service at
     # /chat/) lives at /playground/.
-    entries = _NAV + ((("chat", "Playground", "💬", ("/playground/",), False, ()),) if chat_enabled() else ())
+    entries = _NAV + ((("chat", "Playground", "💬", ("/playground/",), False, ()),) if chat_on else ())
     items = [
         {
             "url": reverse(name),
@@ -132,7 +136,10 @@ def nav(request):
             ],
         }
         for name, label, icon, prefixes, admin_only, children in entries
-        if admin or not admin_only
+        if (admin or not admin_only)
+        # The Agents surface (and its Knowledge Bases / Tools children) is
+        # chat-backed; keep it out of the nav while chat is off.
+        and (name != "agents" or chat_on)
     ]
 
     def score(item):   # "/" only matches the home page itself

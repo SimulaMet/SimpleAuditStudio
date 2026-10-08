@@ -8,6 +8,12 @@
     <a href="{% url 'agents' %}" class="text-xs text-gray-400 hover:text-white">← Back to agents</a>
   </div>
 
+  {% if not chat_enabled %}
+  <div class="bg-surface-raised rounded-xl border border-gray-800 p-6 text-sm text-gray-400">
+    Chat is not enabled on this server, so agents cannot be managed here.
+    Enable it with <code class="text-gray-300">SIMPLEAUDIT_CHAT=embedded</code>.
+  </div>
+  {% else %}
   <form method="post" class="space-y-6">
     {% csrf_token %}
 
@@ -255,6 +261,7 @@
       </button>
     </div>
   </form>
+  {% endif %}
 </div>
 
 <script>

@@ -1,5 +1,6 @@
 """Tests for the Agent configuration domain: models, serializers, API, and snapshots."""
 import json
+from unittest import mock
 
 from django.db import IntegrityError
 from django.test import Client, TestCase
@@ -340,6 +341,11 @@ class ToolAPITest(TestCase):
 
 class AgentUITest(TestCase):
     def setUp(self):
+        # The agent editor is chat-backed; these tests exercise the create /
+        # edit / delete flow, which only runs while chat is enabled.
+        self._enabled = mock.patch("chat.config.ENABLED", True)
+        self._enabled.start()
+        self.addCleanup(self._enabled.stop)
         self.user = UserFactory()
         self.project = ProjectFactory()
         MembershipFactory(user=self.user, project=self.project, role="admin")

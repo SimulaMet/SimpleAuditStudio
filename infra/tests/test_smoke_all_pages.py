@@ -113,7 +113,10 @@ class AllPagesSmokeTest(TestCase):
             "RAG_EMBEDDING_MODEL": "all-MiniLM-L6-v2",
             "openai_config": {"key": "secret"},
         }
-        with mock.patch("chat.api.ChatAPI.as_user", return_value=api):
+        with (
+            mock.patch("chat.api.ChatAPI.as_user", return_value=api),
+            mock.patch("chat.config.ENABLED", True),
+        ):
             resp = self.client.get("/admin-settings/?tab=knowledge")
         self.assertEqual(resp.status_code, 200)
         self.assertContains(resp, "all-MiniLM-L6-v2")

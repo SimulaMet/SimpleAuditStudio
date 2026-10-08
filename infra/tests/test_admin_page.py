@@ -65,6 +65,7 @@ class AdminPageAccessTest(TestCase):
         self.assertEqual(resp.status_code, 200)
         self.assertContains(resp, "Per-workspace usage")
 
+    @mock.patch("chat.config.ENABLED", True)
     @mock.patch("chat.api.ChatAPI.as_user")
     def test_web_search_tab_reads_and_updates_openwebui(self, as_user):
         admin = superuser()
@@ -96,6 +97,7 @@ class AdminPageAccessTest(TestCase):
             "WEB_SEARCH_DOMAIN_FILTER_LIST": ["example.com", "docs.example.com"],
         })
 
+    @mock.patch("chat.config.ENABLED", True)
     @mock.patch("chat.api.ChatAPI.as_user")
     def test_subagent_tab_reads_and_updates_openwebui(self, as_user):
         admin = superuser()
@@ -135,6 +137,7 @@ class AdminPageAccessTest(TestCase):
             "SUBAGENTS_SYSTEM_PROMPT": "Stay concise.",
         })
 
+    @mock.patch("chat.config.ENABLED", True)
     @mock.patch("chat.api.ChatAPI.as_user")
     def test_knowledge_settings_save_persists_local_embedding(self, as_user):
         admin = superuser()
@@ -153,6 +156,7 @@ class AdminPageAccessTest(TestCase):
             api.update_embedding_config.call_args.args[0]["RAG_EMBEDDING_ENGINE"], ""
         )
 
+    @mock.patch("chat.config.ENABLED", True)
     @mock.patch("chat.api.ChatAPI.as_user")
     def test_knowledge_reindex_records_completion(self, as_user):
         admin = superuser()
@@ -175,6 +179,50 @@ class AdminPageAccessTest(TestCase):
         self.assertEqual(reindex.status, KnowledgeReindex.Status.SUCCEEDED)
         self.assertEqual(reindex.total, 3)
         self.assertEqual(reindex.success, 3)
+
+
+class AdminPageChatTabsOffTest(TestCase):
+    """The Open WebUI-backed tabs are hidden and unreachable with chat off."""
+
+    def setUp(self):
+        self.client = Client(SERVER_NAME="localhost")
+        self.admin = superuser()
+        login(self.client, self.admin)
+        # Test env default: chat off.
+        self._off = mock.patch("chat.config.ENABLED", False)
+        self._off.start()
+        self.addCleanup(self._off.stop)
+
+    def test_chat_tabs_hidden_from_admin_nav(self):
+        resp = self.client.get("/admin-settings/")
+        self.assertEqual(resp.status_code, 200)
+        self.assertNotContains(resp, "Knowledge &amp; Retrieval")
+        self.assertNotContains(resp, "Web Search")
+        self.assertNotContains(resp, "Sub-agents")
+        self.assertContains(resp, "Overview")
+        self.assertContains(resp, "Workspaces")
+        self.assertContains(resp, "Users")
+
+    def test_chat_tab_urls_redirect_to_overview(self):
+        for tab in ("knowledge", "web-search", "sub-agents"):
+            resp = self.client.get(f"/admin-settings/?tab={tab}")
+            self.assertEqual(resp.status_code, 302, tab)
+            self.assertEqual(resp.url, "/admin-settings/")
+
+    def test_chat_tab_posts_are_rejected(self):
+        resp = self.client.post(
+            "/admin-settings/", {"tab": "knowledge", "TOP_K": "1"}
+        )
+        self.assertEqual(resp.status_code, 302)
+        self.assertEqual(resp.url, "/admin-settings/")
+
+    @mock.patch("chat.config.ENABLED", True)
+    def test_chat_tabs_present_when_chat_on(self):
+        resp = self.client.get("/admin-settings/")
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, "Knowledge &amp; Retrieval")
+        self.assertContains(resp, "Web Search")
+        self.assertContains(resp, "Sub-agents")
 
 
 class AdminPageStatsTest(TestCase):

@@ -376,6 +376,13 @@ the run's `agent_config_snapshot`; it contains no provider credentials.
 
 Set `SIMPLEAUDIT_CHAT=disabled`, or pass `--disable-chat` to the CLI.
 
+With chat off, the Playground page and the whole Agents surface are hidden from
+the sidebar, and the `/agents/`, `/agents/knowledge/`, and `/agents/tools/` pages
+show a "chat not enabled" notice instead of their managers (agents sync to
+Open WebUI, so they need it to be useful). In **Admin settings** the three
+Open WebUI-backed tabs — Knowledge &amp; Retrieval, Web Search, and Sub-agents —
+are hidden, and requesting their `?tab=` URLs redirects to the Overview.
+
 To drop the code, delete the `chat/` app and `deploy/openwebui-subpath/`,
 then remove its four references: `"chat"` in `INSTALLED_APPS`, the `chat/` route
 in `config/urls.py`, the Chat entry in `infra/context_processors.py`, the

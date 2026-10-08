@@ -504,16 +504,22 @@ class WorkspacesView(LoginRequiredMixin, TemplateView):
 # ─── Super admin ─────────────────────────────────────────────────────────────
 
 
-def _admin_settings_tabs():
+def _admin_settings_tabs(chat_on: bool = False):
     base = reverse("admin_settings")
-    return [
+    tabs = [
         ("overview", "Overview", base),
         ("workspaces", "Workspaces", f"{base}?tab=workspaces"),
         ("users", "Users", f"{base}?tab=users"),
-        ("knowledge", "Knowledge & Retrieval", f"{base}?tab=knowledge"),
-        ("web-search", "Web Search", f"{base}?tab=web-search"),
-        ("sub-agents", "Sub-agents", f"{base}?tab=sub-agents"),
     ]
+    # These tabs edit Open WebUI (knowledge / web search / sub-agents); they
+    # are useless — and their API calls fail — while the chat module is off.
+    if chat_on:
+        tabs += [
+            ("knowledge", "Knowledge & Retrieval", f"{base}?tab=knowledge"),
+            ("web-search", "Web Search", f"{base}?tab=web-search"),
+            ("sub-agents", "Sub-agents", f"{base}?tab=sub-agents"),
+        ]
+    return tabs
 
 
 class AdminView(SuperuserRequiredMixin, TemplateView):
@@ -523,12 +529,17 @@ class AdminView(SuperuserRequiredMixin, TemplateView):
     template_name = "admin.html"
 
     def dispatch(self, request, *args, **kwargs):
-        # Keep Knowledge & Retrieval inside the existing tabbed admin surface.
-        if request.GET.get("tab") == "knowledge" or request.POST.get("tab") == "knowledge":
-            return KnowledgeRetrievalSettingsView.as_view()(request, *args, **kwargs)
-        if request.GET.get("tab") == "web-search" or request.POST.get("tab") == "web-search":
-            return WebSearchSettingsView.as_view()(request, *args, **kwargs)
-        if request.GET.get("tab") == "sub-agents" or request.POST.get("tab") == "sub-agents":
+        # Keep Knowledge / Web Search / Sub-agents inside the existing tabbed
+        # admin surface. They edit Open WebUI, so they are unreachable while the
+        # chat module is off (their API calls would fail).
+        tab = request.GET.get("tab") or request.POST.get("tab")
+        if tab in ("knowledge", "web-search", "sub-agents"):
+            if not chat_enabled():
+                return redirect(reverse("admin_settings"))
+            if tab == "knowledge":
+                return KnowledgeRetrievalSettingsView.as_view()(request, *args, **kwargs)
+            if tab == "web-search":
+                return WebSearchSettingsView.as_view()(request, *args, **kwargs)
             return SubagentSettingsView.as_view()(request, *args, **kwargs)
         return super().dispatch(request, *args, **kwargs)
 
@@ -562,7 +573,7 @@ class AdminView(SuperuserRequiredMixin, TemplateView):
 
         kw.update(
             tab=tab,
-            admin_tabs=_admin_settings_tabs(),
+            admin_tabs=_admin_settings_tabs(chat_enabled()),
             stats=stats,
             workspaces=stats["workspaces"],
             users=users,
@@ -653,7 +664,7 @@ class KnowledgeRetrievalSettingsView(SuperuserRequiredMixin, TemplateView):
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         context["tab"] = "knowledge"
-        context["admin_tabs"] = _admin_settings_tabs()
+        context["admin_tabs"] = _admin_settings_tabs(chat_enabled())
         context.update({"settings_error": None, "settings": {}})
         from model_registry.models import KnowledgeReindex
 
@@ -778,7 +789,7 @@ class WebSearchSettingsView(SuperuserRequiredMixin, TemplateView):
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         context["tab"] = "web-search"
-        context["admin_tabs"] = _admin_settings_tabs()
+        context["admin_tabs"] = _admin_settings_tabs(chat_enabled())
         context["settings_error"] = None
         context["web_search"] = {}
         try:
@@ -831,7 +842,7 @@ class SubagentSettingsView(SuperuserRequiredMixin, TemplateView):
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         context["tab"] = "sub-agents"
-        context["admin_tabs"] = _admin_settings_tabs()
+        context["admin_tabs"] = _admin_settings_tabs(chat_enabled())
         context["settings_error"] = None
         context["subagents"] = {}
         try:
@@ -1121,7 +1132,7 @@ class NewExperimentView(ProjectMixin, TemplateView):
         agent_rows = list(
             Agent.objects.filter(project=p, enabled=True)
             .select_related("base_model", "base_model__connection")
-        )
+        ) if chat_enabled() else []
         agent_by_external_id = {a.external_id: a for a in agent_rows if a.external_id}
         agent_models = list(
             RegisteredModel.objects.filter(
@@ -3178,6 +3189,9 @@ class AgentsView(ProjectMixin, TemplateView):
         ctx = super().get_context_data(**kw)
         from model_registry.models import Agent
 
+        # The Agents surface is chat-backed; the template hides the list and
+        # the "+ New agent" / "Test in Chat" controls when chat is off.
+        ctx["chat_enabled"] = chat_enabled()
         ctx["agents"] = (
             Agent.objects.filter(project=self.request.project)
             .select_related("base_model", "base_model__connection")
@@ -3513,6 +3527,11 @@ class AgentDetailView(ProjectMixin, TemplateView):
             default_retrieval_settings,
         )
 
+        # The agent editor is chat-backed; never create or mutate an agent from
+        # a stale form while chat (and the editor UI) is off.
+        if not chat_enabled():
+            return self._render(request, None)
+
         project = request.project
         agent = None
         if "agent_id" in self.kwargs:
@@ -3649,6 +3668,11 @@ class AgentTestChatView(ProjectMixin, View):
     def get(self, request, agent_id):
         from model_registry.models import Agent
 
+        # "Test in Chat" only works while the chat module is on; without it
+        # /chat/ 404s, so send the user back with an explanation.
+        if not chat_enabled():
+            messages.error(request, "Chat is not enabled on this server, so this agent can't be tested in chat.")
+            return redirect("agents")
         agent = Agent.objects.filter(pk=agent_id, project=request.project).select_related(
             "base_model", "base_model__connection"
         ).first()

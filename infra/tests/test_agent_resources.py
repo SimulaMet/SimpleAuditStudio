@@ -187,10 +187,16 @@ class AgentResourcesViewTest(TestCase):
 
 
 class AgentResourcesNavTest(TestCase):
+    """The Agents surface in the sidebar while chat is ON (the enabled default
+    this whole surface depends on)."""
+
     def setUp(self):
         self.project = ProjectFactory()
         self.user = _member(self.project)
         self.client.force_login(self.user)
+        self._enabled = mock.patch("chat.config.ENABLED", True)
+        self._enabled.start()
+        self.addCleanup(self._enabled.stop)
 
     def test_knowledge_and_tools_appear_in_sidebar(self):
         resp = self.client.get("/agents/knowledge/")
@@ -210,6 +216,90 @@ class AgentResourcesNavTest(TestCase):
         self.assertEqual(knowledge["url"], "/agents/knowledge/")
         tools = next(c for c in agents["children"] if c["label"] == "Tools")
         self.assertEqual(tools["url"], "/agents/tools/")
+
+
+class AgentSurfaceDisabledTest(TestCase):
+    """With chat off, the whole Agents surface is hidden: out of the nav, and
+    the /agents/ pages show a 'chat not enabled' notice instead of their UI."""
+
+    def setUp(self):
+        self.project = ProjectFactory()
+        self.user = _member(self.project)
+        self.client.force_login(self.user)
+        self._disabled = mock.patch("chat.config.ENABLED", False)
+        self._disabled.start()
+        self.addCleanup(self._disabled.stop)
+
+    def test_agents_not_in_nav_when_chat_off(self):
+        resp = self.client.get("/agents/")
+        labels = [i["label"] for i in resp.context["nav_items"]]
+        self.assertNotIn("Agents", labels)
+        self.assertNotIn("Knowledge Bases", labels)
+        self.assertNotIn("Tools", labels)
+
+    def test_agents_list_page_shows_notice_and_no_form(self):
+        from infra.tests.factories import AgentFactory
+
+        AgentFactory(project=self.project)
+        resp = self.client.get("/agents/")
+        self.assertEqual(resp.status_code, 200)
+        html = resp.content.decode()
+        self.assertIn("Chat is not enabled", html)
+        self.assertNotIn("+ New agent", html)
+        self.assertNotIn("Test in Chat", html)
+        self.assertNotIn("agent_new", html)
+
+    def test_agent_new_page_shows_notice_not_editor(self):
+        resp = self.client.get("/agents/new/")
+        self.assertEqual(resp.status_code, 200)
+        html = resp.content.decode()
+        self.assertIn("Chat is not enabled", html)
+        # The editor form (and its Name field) must be absent. (A "<form" string
+        # appears in a JS comment in a shared partial, so assert on the editor
+        # form's own markup, not the bare tag.)
+        self.assertNotIn('<form method="post" class="space-y-6">', html)
+        self.assertNotIn('name="name"', html)
+
+    def test_post_new_agent_does_not_create_when_chat_off(self):
+        from model_registry.models import Agent
+        resp = self.client.post("/agents/new/", {"name": "Ghost", "base_model": "1"})
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(Agent.objects.filter(project=self.project, name="Ghost").count(), 0)
+
+    def test_test_chat_redirects_to_agents_when_chat_off(self):
+        from infra.tests.factories import AgentFactory
+        agent = AgentFactory(project=self.project)
+        resp = self.client.get(f"/agents/{agent.id}/test-chat/")
+        self.assertEqual(resp.status_code, 302)
+        self.assertEqual(resp["Location"], "/agents/")
+
+    def test_new_experiment_picker_has_no_agents_group_when_chat_off(self):
+        resp = self.client.get("/experiments/new/")
+        self.assertEqual(resp.status_code, 200)
+        # agent_models only lists *synced* agents; with chat off none exist, so
+        # the picker must not offer an "Agents" group at all.
+        self.assertEqual(list(resp.context["agent_models"]), [])
+        self.assertNotIn(b">Agents<", resp.content)
+
+    def test_new_experiment_picker_hides_agents_group_for_synced_agent_when_chat_off(self):
+        # Reproduces the seeded live-data leak: an agent that was previously
+        # synced to Open WebUI (non-empty external_id) still exists locally
+        # after chat is turned off. The picker must not surface it as an
+        # "Agents" group — agents need Open WebUI to be testable.
+        from infra.tests.factories import (
+            AgentFactory,
+            ModelConnectionFactory,
+            RegisteredModelFactory,
+        )
+
+        conn = ModelConnectionFactory(project=self.project)
+        RegisteredModelFactory(connection=conn, model_id="studio.agent-1")
+        AgentFactory(project=self.project, external_id="studio.agent-1")
+
+        resp = self.client.get("/experiments/new/")
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(list(resp.context["agent_models"]), [])
+        self.assertNotIn(b">Agents<", resp.content)
 
 
 class AgentResourcesDisabledTest(TestCase):
