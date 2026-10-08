@@ -193,13 +193,14 @@ class TestAutoLoginToken(TestCase):
 
     def tearDown(self):
         os.environ.pop("SIMPLEAUDIT_AUTO_LOGIN_TOKEN", None)
+        os.environ.pop("SIMPLEAUDIT_AUTO_LOGIN_NEXT", None)
 
-    def _login(self, token=None):
+    def _login(self, token=None, follow=True):
         url = "/auto-login/"
         if token is not None:
             url += f"?token={token}"
         # follow=True: the view 302s to the dashboard after signing in.
-        return self.client.get(url, follow=True)
+        return self.client.get(url, follow=follow)
 
     @override_settings(MINIMAL_CONFIG=True)
     def test_valid_token_logs_in_and_consumes(self):
@@ -209,6 +210,29 @@ class TestAutoLoginToken(TestCase):
             self.assertEqual(response.wsgi_request.user.username, "studio")
             # The token is single-use: it must be gone after the first login.
             self.assertNotIn("SIMPLEAUDIT_AUTO_LOGIN_TOKEN", os.environ)
+
+    @override_settings(MINIMAL_CONFIG=True)
+    def test_redirects_to_visualizer_when_next_set(self):
+        # visualize-only mode sets SIMPLEAUDIT_AUTO_LOGIN_NEXT so the
+        # one-time link lands on the visualizer, not the dashboard.
+        env = {"SIMPLEAUDIT_AUTO_LOGIN_TOKEN": self.TOKEN, "SIMPLEAUDIT_AUTO_LOGIN_NEXT": "/visualizer/"}
+        with patch.dict(os.environ, env):
+            response = self._login(self.TOKEN, follow=False)
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response.headers["Location"], "/visualizer/")
+
+    @override_settings(MINIMAL_CONFIG=True)
+    def test_next_must_be_a_relative_path(self):
+        # An absolute (http://) or protocol-relative (//evil) value must be
+        # ignored so a tampered env var can't turn this into an open redirect.
+        for bad in ("https://evil.example.com", "//evil.example.com", ""):
+            with patch.dict(
+                os.environ,
+                {"SIMPLEAUDIT_AUTO_LOGIN_TOKEN": self.TOKEN, "SIMPLEAUDIT_AUTO_LOGIN_NEXT": bad},
+            ):
+                response = self._login(self.TOKEN, follow=False)
+            self.assertEqual(response.status_code, 302)
+            self.assertNotIn("evil.example.com", response.headers["Location"])
 
     @override_settings(MINIMAL_CONFIG=True)
     def test_token_cannot_be_replayed(self):
