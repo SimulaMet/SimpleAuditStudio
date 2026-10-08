@@ -22,6 +22,7 @@ into the visualizer template so the output opens in any browser with no server.
 import json
 import logging
 import os
+import threading
 import time
 
 from django.conf import settings
@@ -34,13 +35,165 @@ from infra.ui import ProjectMixin
 
 logger = logging.getLogger(__name__)
 
+# Persistent metadata index: avoids re-parsing unchanged JSON files between
+# scans. Keyed by (realpath, mtime_ns, size) → classification result.
+# In-memory for the process lifetime; safe to lose (just re-parses).
+_metadata_index: dict[tuple[str, int, int], dict] = {}
+_METADATA_INDEX_MAX = 50_000
+
+# Optional watchfiles-based file monitor: invalidates the tree cache when
+# files in the results dir change. Started lazily on first scan; stopped on
+# shutdown. Uses a daemon thread so it never blocks the request.
+_watcher_thread: threading.Thread | None = None
+_watcher_stop_event: threading.Event | None = None
+_watcher_root: str | None = None
+
 # Simple in-memory cache for file tree (TTL: 60 seconds)
 _file_tree_cache = {
     "data": None,
     "timestamp": 0,
-    "dir": None,
+    "key": None,
 }
 _CACHE_TTL = 60  # seconds
+
+# Bounded-scan limits (overridable via env vars).
+_MAX_INSPECTED_FILES = 5_000
+_SCAN_TIME_BUDGET_S = 5.0
+_MAX_TREE_DEPTH = 8
+_MAX_FILE_SIZE_BYTES = 100 * 1024 * 1024  # 100 MB
+
+
+def _int_setting(name: str, default: int) -> int:
+    try:
+        value = int(os.environ.get(name, "") or default)
+    except ValueError:
+        return default
+    return value if value > 0 else default
+
+
+def _float_setting(name: str, default: float) -> float:
+    try:
+        value = float(os.environ.get(name, "") or default)
+    except ValueError:
+        return default
+    return value if value > 0 else default
+
+
+def _max_inspected_files() -> int:
+    return _int_setting("VISUALIZER_MAX_INSPECTED_FILES", _MAX_INSPECTED_FILES)
+
+
+def _scan_time_budget() -> float:
+    return _float_setting("VISUALIZER_SCAN_TIME_BUDGET_S", _SCAN_TIME_BUDGET_S)
+
+
+def _max_tree_depth() -> int:
+    return _int_setting("VISUALIZER_MAX_TREE_DEPTH", _MAX_TREE_DEPTH)
+
+
+def _max_file_size() -> int:
+    return _int_setting("VISUALIZER_MAX_FILE_SIZE_MB", 100) * 1024 * 1024
+
+
+def _watcher_loop(root: str, stop_event: threading.Event) -> None:
+    """Background loop: watch the results dir and invalidate the tree cache."""
+    try:
+        from watchfiles import watch
+
+        for _changes in watch(root, stop_event=stop_event, yield_on_timeout=True, poll_interval_ms=2000):
+            if stop_event.is_set():
+                break
+            # Any change invalidates the cached tree.
+            _file_tree_cache["data"] = None
+            _file_tree_cache["key"] = None
+    except ImportError:
+        logger.debug("watchfiles not available; cache invalidation falls back to TTL only.")
+    except Exception:
+        logger.debug("watchfiles monitor stopped", exc_info=True)
+
+
+def _ensure_watcher(root: str) -> None:
+    """Start the file watcher for the results dir (idempotent)."""
+    global _watcher_thread, _watcher_stop_event, _watcher_root
+    if _watcher_thread is not None and _watcher_root == root:
+        return
+    # Stop any existing watcher for a different root.
+    if _watcher_stop_event is not None:
+        _watcher_stop_event.set()
+    _watcher_stop_event = threading.Event()
+    _watcher_root = root
+    _watcher_thread = threading.Thread(
+        target=_watcher_loop, args=(root, _watcher_stop_event), daemon=True
+    )
+    _watcher_thread.start()
+
+
+def _stop_watcher() -> None:
+    """Stop the file watcher (called on shutdown)."""
+    global _watcher_thread, _watcher_stop_event, _watcher_root
+    if _watcher_stop_event is not None:
+        _watcher_stop_event.set()
+    _watcher_thread = None
+    _watcher_stop_event = None
+    _watcher_root = None
+
+# Directories that never hold audit results; skipping them keeps the tree walk
+# bounded when a user points --results_dir at a broad tree (a project checkout,
+# the home dir, ...). Everything else is still walked, so results kept inside
+# e.g. ``.raw/`` or ``.simpleaudit/`` subfolders are still found.
+_PRUNED_DIRS = frozenset(
+    {
+        ".git",
+        "node_modules",
+        "__pycache__",
+        ".venv",
+        "venv",
+        ".tox",
+        ".mypy_cache",
+        ".ruff_cache",
+        ".pytest_cache",
+        ".idea",
+        ".vscode",
+        "dist",
+        "build",
+        ".cache",
+        ".npm",
+        ".cargo",
+        ".rustup",
+        ".gradle",
+        ".cocoapods",
+        ".yarn",
+        ".parcel-cache",
+        ".next",
+        ".nuxt",
+        ".serverless",
+        ".terraform",
+        ".docker",
+        ".codex",
+        ".local",
+        ".bundle",
+        "site-packages",
+    }
+)
+
+
+def tree_warnings(results_root: str | None) -> list[str]:
+    """Heuristic warnings for the files endpoint (helps find misconfigured dirs)."""
+    if not results_root:
+        return []
+    warnings = []
+    root = os.path.realpath(os.path.abspath(results_root))
+    if os.path.isdir(os.path.expanduser("~")) and root == os.path.realpath(os.path.expanduser("~")):
+        warnings.append(
+            "The results directory is your home folder — point --results_dir at a "
+            "folder that contains SimpleAudit result JSON files."
+        )
+    if root == os.path.realpath(os.getcwd()):
+        warnings.append(
+            "The results directory is the current working directory — point "
+            "--results_dir at a folder that contains SimpleAudit result JSON files."
+        )
+    return warnings
 
 
 # --- results directory (set by the CLI from --results_dir) ------------------
@@ -114,54 +267,160 @@ def is_valid_audit_data(data) -> bool:
     return False
 
 
-def get_file_tree(directory: str, base_path: str = "") -> list[dict]:
-    """Recursively build the JSON file tree for the visualizer.
+def _classify_json_file(full_path: str) -> dict | None:
+    """Classify a single JSON file: experiment, file, or None (not audit data).
 
-    Folders are included only when they contain at least one loadable JSON
-    file (directly or in a subdirectory); experiment files are tagged with
-    their model labels so the UI can render a model picker.
-
-    Each JSON file is parsed here (not just name-checked) because that is what
-    lets us drop non-audit files and classify experiments. The view wraps this
-    in a short-lived cache, so the tree is only rebuilt on a cache miss.
+    Uses the persistent metadata index to skip re-parsing unchanged files.
+    Returns a dict with 'type' and optionally 'models', or None.
     """
-    items = []
     try:
-        entries = sorted(os.listdir(directory))
-    except (PermissionError, OSError):
+        st = os.stat(full_path)
+    except OSError:
+        return None
+    key = (os.path.realpath(full_path), st.st_mtime_ns, st.st_size)
+    cached = _metadata_index.get(key)
+    if cached is not None:
+        return cached
+
+    # Oversized files are skipped (they are almost never single audit results).
+    if st.st_size > _max_file_size():
+        logger.debug("Skipping oversized JSON (%d bytes): %s", st.st_size, full_path)
+        _store_metadata(key, None)
+        return None
+
+    try:
+        with open(full_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+        _store_metadata(key, None)
+        return None
+
+    experiment_models = _experiment_models(data)
+    if experiment_models:
+        result = {"type": "experiment", "models": experiment_models}
+    elif is_valid_audit_data(data):
+        result = {"type": "file"}
+    else:
+        result = None
+    _store_metadata(key, result)
+    return result
+
+
+def _store_metadata(key: tuple, value: dict | None) -> None:
+    """Store a classification result in the metadata index (bounded)."""
+    if len(_metadata_index) >= _METADATA_INDEX_MAX:
+        # Evict oldest entries (dict preserves insertion order).
+        for _ in range(_METADATA_INDEX_MAX // 10):
+            _metadata_index.pop(next(iter(_metadata_index)), None)
+    _metadata_index[key] = value
+
+
+def _scan_results_dir(
+    root_dir: str,
+    max_depth: int,
+    max_files: int,
+    time_budget: float,
+) -> tuple[list[dict], dict]:
+    """Bounded, incremental scan of the results directory.
+
+    Returns ``(tree, meta)`` where ``meta`` contains:
+    - ``truncated``: bool — True if any limit was hit
+    - ``reason``: str | None — which limit was hit (first one)
+    - ``inspected``: int — number of JSON files inspected
+    - ``elapsed_seconds``: float — wall-clock time of the scan
+    """
+    deadline = time.monotonic() + time_budget
+    inspected = 0
+    reason: str | None = None
+
+    def _time_up() -> bool:
+        nonlocal reason
+        if time.monotonic() >= deadline:
+            if reason is None:
+                reason = "time_budget"
+            return True
+        return False
+
+    def _files_cap_hit() -> bool:
+        nonlocal reason
+        if inspected >= max_files:
+            if reason is None:
+                reason = "file_limit"
+            return True
+        return False
+
+    def _depth_hit() -> bool:
+        nonlocal reason
+        if reason is None:
+            reason = "depth_limit"
+        return True
+
+    def _walk(directory: str, base_path: str, depth: int) -> list[dict]:
+        nonlocal inspected
+        items: list[dict] = []
+        try:
+            entries = sorted(os.listdir(directory))
+        except (PermissionError, OSError):
+            return items
+
+        for entry in entries:
+            if _time_up() or _files_cap_hit():
+                break
+            full_path = os.path.join(directory, entry)
+            rel_path = os.path.join(base_path, entry) if base_path else entry
+
+            if os.path.islink(full_path):
+                # Skip symlinks entirely to avoid cycles and escapes.
+                continue
+            if os.path.isdir(full_path):
+                if entry in _PRUNED_DIRS:
+                    continue
+                if depth >= max_depth:
+                    _depth_hit()
+                    break
+                children = _walk(full_path, rel_path, depth + 1)
+                if children:
+                    items.append(
+                        {"name": entry, "type": "folder", "path": rel_path, "children": children}
+                    )
+            elif os.path.isfile(full_path) and entry.endswith(".json"):
+                inspected += 1
+                result = _classify_json_file(full_path)
+                if result:
+                    item = {"name": entry, "type": result["type"], "path": rel_path}
+                    if "models" in result:
+                        item["models"] = result["models"]
+                    items.append(item)
+
         return items
 
-    for entry in entries:
-        full_path = os.path.join(directory, entry)
-        rel_path = os.path.join(base_path, entry) if base_path else entry
+    start = time.monotonic()
+    tree = _walk(root_dir, "", 0)
+    elapsed = time.monotonic() - start
 
-        if os.path.isdir(full_path):
-            children = get_file_tree(full_path, rel_path)
-            if children:
-                items.append(
-                    {"name": entry, "type": "folder", "path": rel_path, "children": children}
-                )
-        elif os.path.isfile(full_path) and entry.endswith(".json"):
-            try:
-                with open(full_path, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-            except (OSError, json.JSONDecodeError):
-                logger.debug("Skipping unreadable/invalid JSON in results dir: %s", full_path)
-                continue
-            experiment_models = _experiment_models(data)
-            if experiment_models:
-                items.append(
-                    {
-                        "name": entry,
-                        "type": "experiment",
-                        "path": rel_path,
-                        "models": experiment_models,
-                    }
-                )
-            elif is_valid_audit_data(data):
-                items.append({"name": entry, "type": "file", "path": rel_path})
+    meta = {
+        "truncated": reason is not None,
+        "reason": reason,
+        "inspected": inspected,
+        "elapsed_seconds": round(elapsed, 3),
+    }
+    return tree, meta
 
-    return items
+
+def get_file_tree(directory: str, base_path: str = "") -> list[dict]:
+    """Build the JSON file tree for the visualizer (bounded scan).
+
+    This is a convenience wrapper around ``_scan_results_dir`` that applies
+    the default limits. Prefer calling ``_scan_results_dir`` directly when you
+    need the metadata (truncated/reason/inspected/elapsed_seconds).
+    """
+    tree, _meta = _scan_results_dir(
+        directory,
+        max_depth=_max_tree_depth(),
+        max_files=_max_inspected_files(),
+        time_budget=_scan_time_budget(),
+    )
+    return tree
 
 
 def _resolve_results_path(file_path: str) -> str | None:
@@ -345,36 +604,89 @@ class ScenarioViewerView(LoginRequiredMixin, View):
 
 
 class VisualizerFilesView(View):
-    """``GET /api/visualizer/files`` → ``{"tree": [...]}`` of the results dir."""
+    """``GET /api/visualizer/api/files/`` → bounded file tree of the results dir.
+
+    Response shape:
+    {
+        "tree": [...],
+        "warnings": [...],
+        "truncated": bool,
+        "reason": str | null,
+        "inspected": int,
+        "elapsed_seconds": float,
+        "configured": true
+    }
+    """
 
     def get(self, request):
         root_dir = results_dir()
         if not root_dir:
-            # The upload visualizer is still available, and the server-side
-            # tree should remain a valid empty state when no folder is set.
             return JsonResponse({"tree": [], "configured": False})
         if not os.path.isdir(root_dir):
             try:
                 os.makedirs(root_dir, exist_ok=True)
             except OSError:
                 return JsonResponse({"error": "Results directory is unavailable"}, status=503)
-        
-        # Check cache
+
+        warnings = tree_warnings(root_dir)
+        _ensure_watcher(root_dir)
+        cache_key = (
+            root_dir,
+            _max_tree_depth(),
+            _max_inspected_files(),
+            _scan_time_budget(),
+        )
         now = time.time()
-        if (_file_tree_cache["data"] is not None and 
-            _file_tree_cache["dir"] == root_dir and
-            now - _file_tree_cache["timestamp"] < _CACHE_TTL):
-            return JsonResponse({"tree": _file_tree_cache["data"]})
-        
-        # Cache miss - build the tree
-        tree = get_file_tree(root_dir)
-        
-        # Update cache
-        _file_tree_cache["data"] = tree
+        if (
+            _file_tree_cache["data"] is not None
+            and _file_tree_cache["key"] == cache_key
+            and now - _file_tree_cache["timestamp"] < _CACHE_TTL
+        ):
+            cached = _file_tree_cache["data"]
+            return JsonResponse(
+                {
+                    "tree": cached["tree"],
+                    "warnings": warnings,
+                    "truncated": cached["meta"]["truncated"],
+                    "reason": cached["meta"]["reason"],
+                    "inspected": cached["meta"]["inspected"],
+                    "elapsed_seconds": cached["meta"]["elapsed_seconds"],
+                    "configured": True,
+                }
+            )
+
+        tree, meta = _scan_results_dir(
+            root_dir,
+            max_depth=_max_tree_depth(),
+            max_files=_max_inspected_files(),
+            time_budget=_scan_time_budget(),
+        )
+        if meta["truncated"]:
+            logger.warning(
+                "Visualizer tree scan truncated (reason=%s, inspected=%d, elapsed=%.2fs) "
+                "under %r — raise VISUALIZER_MAX_INSPECTED_FILES / "
+                "VISUALIZER_SCAN_TIME_BUDGET_S / VISUALIZER_MAX_TREE_DEPTH if needed.",
+                meta["reason"],
+                meta["inspected"],
+                meta["elapsed_seconds"],
+                root_dir,
+            )
+
+        _file_tree_cache["data"] = {"tree": tree, "meta": meta}
         _file_tree_cache["timestamp"] = now
-        _file_tree_cache["dir"] = root_dir
-        
-        return JsonResponse({"tree": tree})
+        _file_tree_cache["key"] = cache_key
+
+        return JsonResponse(
+            {
+                "tree": tree,
+                "warnings": warnings,
+                "truncated": meta["truncated"],
+                "reason": meta["reason"],
+                "inspected": meta["inspected"],
+                "elapsed_seconds": meta["elapsed_seconds"],
+                "configured": True,
+            }
+        )
 
 
 class VisualizerJsonView(View):

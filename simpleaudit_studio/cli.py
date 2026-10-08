@@ -141,7 +141,34 @@ def main() -> None:
             print(f"⚠️  --results_dir '{resolved}' is not a directory; the visualizer file tree will be empty.")
         else:
             set_results_dir(resolved)
-            print(f"📂 Visualizer results dir: {resolved}\n")
+            print(f"📂 Visualizer results dir: {resolved}")
+            # Guard against pointing the visualizer at a very broad tree
+            # (the home folder, the cwd, ...): the file tree scans the whole
+            # directory, so such paths are slow at best and useless at worst.
+            home = os.path.realpath(os.path.expanduser("~"))
+            if os.path.realpath(resolved) == home:
+                print("⚠️  That is your home folder. Point --results_dir at a folder of "
+                      "SimpleAudit result JSON files instead; the scan will still run "
+                      "but the visualizer will show a warning.")
+            elif os.path.realpath(resolved) == os.path.realpath(os.getcwd()):
+                print("⚠️  That is your current working directory. Point --results_dir at a "
+                      "folder of SimpleAudit result JSON files instead; the scan will "
+                      "still run but the visualizer will show a warning.")
+            # Print the bounded-scan limits so the user knows what to expect.
+            from infra.visualizer import (
+                _max_file_size,
+                _max_inspected_files,
+                _max_tree_depth,
+                _scan_time_budget,
+            )
+
+            print(
+                f"   Scan limits:   {_max_inspected_files()} files, "
+                f"{_scan_time_budget():.0f}s budget, "
+                f"depth {_max_tree_depth()}, "
+                f"{_max_file_size() // (1024 * 1024)} MB/file"
+            )
+            print()
 
     # --- Visualize-only: just run the web server, no worker/hatchet/chat ---
     if args.visualize_only:

@@ -830,12 +830,35 @@
             container.innerHTML = '<div class="text-center text-gray-400"><div class="animate-spin h-8 w-8 border-4 border-accent/40 border-t-transparent rounded-full mx-auto mb-2"></div>Loading files...</div>';
             
             try {
-                        const response = await apiFetch('/api/files');
+                const response = await apiFetch('/api/files');
                 if (!response.ok) throw new Error('Failed to load files');
                 
                 const data = await response.json();
                 currentFileTree = data.tree;
                 renderFileTree(data.tree, container);
+                // Surface server warnings and truncation metadata above the tree.
+                const warnings = (data.warnings || []);
+                const truncated = !!data.truncated;
+                if (warnings.length || truncated) {
+                    let notice = '';
+                    warnings.forEach(w => {
+                        notice += `<div class="mb-2 rounded border border-amber-500/30 bg-amber-500/10 p-2 text-xs text-amber-300">${escapeHtml(w)}</div>`;
+                    });
+                    if (truncated) {
+                        const reason = data.reason || 'limit';
+                        const inspected = data.inspected ?? '?';
+                        const elapsed = data.elapsed_seconds != null ? data.elapsed_seconds.toFixed(1) + 's' : '';
+                        const reasonText = {
+                            'file_limit': `file limit reached (${inspected} files inspected)`,
+                            'time_budget': `time budget exceeded (${elapsed})`,
+                            'depth_limit': `max depth reached`,
+                        }[reason] || reason;
+                        notice += `<div class="mb-2 rounded border border-amber-500/30 bg-amber-500/10 p-2 text-xs text-amber-300">Directory listing is truncated — ${reasonText}. Point the server at a smaller folder or raise the limits.</div>`;
+                    }
+                    const wrap = document.createElement('div');
+                    wrap.innerHTML = notice;
+                    container.insertBefore(wrap, container.firstChild);
+                }
             } catch (error) {
                 container.innerHTML = `<div class="text-center text-red-400 p-4">Error loading files: ${escapeHtml(error.message)}</div>`;
             }
