@@ -23,7 +23,7 @@ dependencies = [
     # The agentic evaluator requires the tracing/evidence APIs from the public
     # SimpleAudit main branch; do not point release metadata at a developer's
     # local filesystem.
-    "simpleaudit>=0.3.3,<0.4.0",
+    "simpleaudit>=0.4.0,<0.5.0",
     "cronsim==2.7",
     "psutil>=7.2.2",
     "opentelemetry-proto>=1.45.0",
