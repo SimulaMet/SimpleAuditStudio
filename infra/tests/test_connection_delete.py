@@ -137,10 +137,17 @@ class DiscoverModelsKeyTests(TestCase):
 
         fake = mock.MagicMock()
         fake.json.return_value = {"data": [{"id": "gpt-x"}]}
-        with mock.patch("model_registry.services.httpx.get", return_value=fake) as get:
+        # Not a decision model: vLLM's 501 "no supported read strategy".
+        post_mock = mock.MagicMock(status_code=501, text="not implemented")
+        with mock.patch("model_registry.services.httpx.get", return_value=fake) as get, mock.patch(
+            "model_registry.services.httpx.post", return_value=post_mock
+        ) as post:
             resp = self.client.post("/connections/discover/", {"connection_id": self.conn.id})
-        # Non-Ollama servers: ids only, no decision probe (httpx.post unused).
-        self.assertEqual(resp.json()["models"], [{"id": "gpt-x", "description": "", "capabilities": {}}])
+        # OpenAI-compatible servers are probed via /v1/systemone too; a 501
+        # (vLLM's "no supported read strategy") is a definitive "not a
+        # decision model".
+        self.assertEqual(resp.json()["models"], [{"id": "gpt-x", "description": "", "capabilities": {"decision": False}}])
+        self.assertEqual(post.call_args.args[0], "https://api.example.invalid/v1/systemone")
         url, kwargs = get.call_args.args[0], get.call_args.kwargs
         self.assertEqual(kwargs["headers"]["Authorization"], "Bearer sk-super-secret-123")
         self.assertEqual(url, "https://api.example.invalid/v1/models")
@@ -224,9 +231,9 @@ class ConnectionCheckTests(TestCase):
         self.assertIn("gemini", providers)   # a connection's own provider stays pickable
 
 
-class OllamaDecisionProbeTests(TestCase):
-    """Ollama answers the System One probe with a 400 "does not support decision"
-    for chat models and a real answer for decision models — no inference either way."""
+class SystemOneDecisionProbeTests(TestCase):
+    """The /v1/systemone probe: a decision model returns a real answer, a
+    chat model a fast 400 (Ollama) / 501 (vLLM) — no inference either way."""
 
     def _post(self, status=200, text="", json=None):
         import httpx
@@ -246,39 +253,46 @@ class OllamaDecisionProbeTests(TestCase):
         )
 
     def test_decision_model_returns_true(self):
-        from model_registry.services import probe_ollama_decision
+        from model_registry.services import probe_systemone_decision
 
         with self._probing(json={"answers": {"probe": {"choice": "yes"}}}):
-            self.assertIs(probe_ollama_decision("http://localhost:11434/v1", "clef:1.0"), True)
+            self.assertIs(probe_systemone_decision("http://localhost:11434/v1", "clef:1.0"), True)
 
     def test_chat_model_returns_false(self):
-        from model_registry.services import probe_ollama_decision
+        from model_registry.services import probe_systemone_decision
 
         with self._probing(400, text='{"error":"model \"qwen3.5:2b\" does not support decision"}'):
-            self.assertIs(probe_ollama_decision("http://localhost:11434/v1", "qwen3.5:2b"), False)
+            self.assertIs(probe_systemone_decision("http://localhost:11434/v1", "qwen3.5:2b"), False)
+
+    def test_vllm_chat_model_returns_false_on_501(self):
+        # vLLM returns 501 when the model has no supported read strategy.
+        from model_registry.services import probe_systemone_decision
+
+        with self._probing(501, text="not implemented"):
+            self.assertIs(probe_systemone_decision("http://localhost:8000/v1", "Qwen/Qwen3-0.6B"), False)
 
     def test_unknown_error_is_none(self):
-        from model_registry.services import probe_ollama_decision
+        from model_registry.services import probe_systemone_decision
 
         with self._probing(404, text='{"error":"model \"x\" not found, try pulling it first"}'):
-            self.assertIsNone(probe_ollama_decision("http://localhost:11434/v1", "x"))
+            self.assertIsNone(probe_systemone_decision("http://localhost:11434/v1", "x"))
 
     def test_network_error_is_none(self):
         from unittest import mock
 
         import httpx
 
-        from model_registry.services import probe_ollama_decision
+        from model_registry.services import probe_systemone_decision
 
         with mock.patch("model_registry.services.httpx.post", side_effect=httpx.ConnectError("refused")):
-            self.assertIsNone(probe_ollama_decision("http://localhost:11434/v1", "clef"))
+            self.assertIsNone(probe_systemone_decision("http://localhost:11434/v1", "clef"))
 
     def test_probe_uses_the_api_root_not_the_openai_prefix(self):
 
-        from model_registry.services import probe_ollama_decision
+        from model_registry.services import probe_systemone_decision
 
         with self._probing(json={}) as post:
-            probe_ollama_decision("http://localhost:11434/v1", "clef")
+            probe_systemone_decision("http://localhost:11434/v1", "clef")
         self.assertEqual(post.call_args.args[0], "http://localhost:11434/v1/systemone")
 
 
@@ -327,6 +341,29 @@ class DetectModelCapabilitiesTests(TestCase):
             post.return_value = mock.MagicMock(status_code=400, text='{"error":"does not support decision"}')
             # A definitive "not a decision model" answer is recorded, not dropped.
             self.assertEqual(detect_model_capabilities(conn, "qwen3.5:2b"), {"decision": False})
+
+    def test_openai_compatible_server_is_probed(self):
+        # vLLM / any OpenAI-compatible server: same /v1/systemone probe, no
+        # name-based fallback (the Ollama library catalog doesn't apply).
+        from unittest import mock
+
+        from model_registry.services import detect_model_capabilities
+
+        conn = self._conn(provider="openai", base_url="http://localhost:8000/v1")
+        with mock.patch("model_registry.services.httpx.post") as post:
+            post.return_value = mock.MagicMock(status_code=200, text="")
+            self.assertEqual(detect_model_capabilities(conn, "Qwen/Qwen3-0.6B"), {"decision": True})
+        self.assertEqual(post.call_args.args[0], "http://localhost:8000/v1/systemone")
+
+    def test_openai_compatible_501_is_not_a_decision_model(self):
+        from unittest import mock
+
+        from model_registry.services import detect_model_capabilities
+
+        conn = self._conn(provider="openai", base_url="http://localhost:8000/v1")
+        with mock.patch("model_registry.services.httpx.post") as post:
+            post.return_value = mock.MagicMock(status_code=501, text="not implemented")
+            self.assertEqual(detect_model_capabilities(conn, "Qwen/Qwen3-0.6B"), {"decision": False})
 
     def test_ollama_unknown_probe_falls_back_to_library_name(self):
         from unittest import mock

@@ -2321,10 +2321,10 @@ class ConnectionsView(ProjectMixin, TemplateView):
             desc = post.get("model_description", "").strip()[:DESCRIPTION_MAX] if single else ""
             existing = set(conn.models.values_list("model_id", flat=True))
             new_models = [m for m in dict.fromkeys(ids) if m not in existing]
-            # The discover dialog already probed each listed model (a decision
-            # model answers in milliseconds, a chat model gets a fast 400 with
-            # no inference); it posts the result per model. A manually typed id
-            # is probed here.
+            # The discover dialog already probed each listed model via the
+            # System One endpoint (a decision model answers in milliseconds,
+            # anything else gets a fast 400/501 with no inference); it posts
+            # the result per model. A manually typed id is probed here.
             for m in new_models:
                 flagged = post.get(f"decision:{m}") == "1"
                 caps = {"decision": True} if flagged else detect_model_capabilities(conn, m)
@@ -2582,8 +2582,8 @@ class DiscoverModelsView(ProjectMixin, View):
             return JsonResponse({"error": str(e)}, status=400)
         except Exception as e:  # noqa: BLE001 - surface any upstream failure to the user
             return JsonResponse({"error": http_error_detail(e)}, status=502)
-        # Ollama answers one probe question per model, so discovery on a server
-        # with many local models can take a few seconds.
+        # One System One probe per model, so discovery on a server with many
+        # models can take a few seconds.
         return JsonResponse({"models": models}, safe=False)
 
 

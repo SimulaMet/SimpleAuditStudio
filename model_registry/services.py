@@ -97,8 +97,8 @@ def fetch_remote_model_ids(conn, *, timeout: float = 10) -> list[str]:
 #: matched by model name so that ``library/clef`` and ``clef`` both count.
 OLLAMA_LIBRARY_DECISION_MODELS = frozenset({"clef", "clef-flash", "laya", "nimble", "tev1"})
 
-#: The probe question for an Ollama decision-model check: two options, the
-#: minimum the System One endpoint accepts.
+#: The probe question for a decision-model check: two options, the minimum
+#: the System One endpoint accepts.
 _DECISION_PROBE_BODY = {
     "state": "capability probe",
     "questions": {
@@ -107,11 +107,13 @@ _DECISION_PROBE_BODY = {
 }
 
 
-def probe_ollama_decision(base_url: str, model_id: str, *, timeout: float = 15) -> bool | None:
-    """Whether an Ollama model answers on ``POST /v1/systemone`` (True/False).
+def probe_systemone_decision(base_url: str, model_id: str, *, timeout: float = 15) -> bool | None:
+    """Whether a model answers on the server's ``POST /v1/systemone`` (True/False).
 
-    ``None`` when it cannot be told: network errors, the server not exposing
-    the endpoint (Ollama < 0.35), or an unrecognised reply.
+    The System One endpoint is a shared surface: Ollama (>= 0.35) and vLLM
+    both expose it at the API root, and every OpenAI-compatible server can
+    be probed the same way. ``None`` when it cannot be told: network errors,
+    a server not exposing the endpoint (404), or an unrecognised reply.
     """
     base = (base_url or "").strip().rstrip("/")
     url = f"{base.removesuffix('/v1')}/v1/systemone"
@@ -122,6 +124,10 @@ def probe_ollama_decision(base_url: str, model_id: str, *, timeout: float = 15) 
         return None
     if resp.status_code == 200:
         return True
+    # 400 with Ollama's explicit message and 501 (vLLM's "no supported read
+    # strategy") are definitive "not a decision model" answers.
+    if resp.status_code == 501:
+        return False
     if resp.status_code == 400 and "does not support decision" in (resp.text or ""):
         return False
     return None
@@ -136,22 +142,25 @@ def detect_model_capabilities(conn, model_id: str, *, timeout: float = 10) -> di
     """Best-effort capability flags for one model on a connection.
 
     A model that cannot be classified simply carries no ``decision`` flag:
-    - Ollama: one ``POST /v1/systemone`` probe (a decision model answers the
-      real two-option question in milliseconds; anything else gets a fast
-      400 with no inference). Unknown Ollama library decision models are
+    - Ollama and OpenAI-compatible servers (vLLM, …): one
+      ``POST /v1/systemone`` probe (a decision model answers the real
+      two-option question in milliseconds; anything else gets a fast 400/501
+      with no inference). Unknown Ollama library decision models are
       recognised by name as a fallback.
-    - OpenRouter: a name match (``typesafe/…`` / ``jev…``); its Decisions API
-      has no public model listing.
+    - OpenRouter: a name match (``typesafe/…`` / ``jev…``); its
+      ``/v1/systemone`` endpoint is a paid proxy with no public model
+      listing, so probing would bill real inference.
     """
     caps: dict = {}
-    if conn.provider == "ollama":
-        supports = probe_ollama_decision(conn.base_url, model_id, timeout=timeout)
+    if conn.provider == "openrouter":
+        if _is_openrouter_decision_model(model_id):
+            caps["decision"] = True
+    else:
+        supports = probe_systemone_decision(conn.base_url, model_id, timeout=timeout)
         if supports is not None:
             caps["decision"] = bool(supports)
-        elif model_id.rsplit(":", 1)[0].rsplit("/", 1)[-1] in OLLAMA_LIBRARY_DECISION_MODELS:
+        elif conn.provider == "ollama" and model_id.rsplit(":", 1)[0].rsplit("/", 1)[-1] in OLLAMA_LIBRARY_DECISION_MODELS:
             caps["decision"] = True
-    elif conn.provider == "openrouter" and _is_openrouter_decision_model(model_id):
-        caps["decision"] = True
     return caps
 
 
