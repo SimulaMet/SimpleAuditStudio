@@ -47,11 +47,12 @@ def models_url(conn) -> str:
     return f"{base}/models"
 
 
-def fetch_remote_model_ids(conn, *, timeout: float = 10) -> list[str]:
-    """Model ids the connection's OpenAI-compatible ``/models`` endpoint lists, sorted.
+def _fetch_remote_model_list(conn, *, timeout: float = 10) -> list[dict]:
+    """The raw model list from the connection's ``/models`` endpoint.
 
-    Raises ``ValueError`` when the connection has no base URL or the reply isn't
-    a JSON model list, and ``httpx.HTTPError`` on network or HTTP failures.
+    Returns ``[{"id": ..., "description": ...}, ...]`` sorted by id. Raises
+    ``ValueError`` when the connection has no base URL or the reply isn't a
+    JSON model list, and ``httpx.HTTPError`` on network or HTTP failures.
     """
     if not (conn.base_url or "").strip():
         raise ValueError("This connection has no base URL.")
@@ -68,10 +69,98 @@ def fetch_remote_model_ids(conn, *, timeout: float = 10) -> list[str]:
             f"{models_url(conn)} didn't return a model list (the reply isn't JSON). "
             "Check the base URL: it usually ends in /v1."
         ) from exc
-    items = data.get("data", []) if isinstance(data, dict) else data if isinstance(data, list) else []
-    ids = {item if isinstance(item, str) else (item.get("id") or item.get("model") or "")
-           for item in items if isinstance(item, (str, dict))}
-    return sorted(i for i in ids if i)
+    items = (
+        data.get("data") if isinstance(data, dict) and "data" in data
+        else data.get("models") if isinstance(data, dict) and "models" in data
+        else data if isinstance(data, list)
+        else []
+    )
+    models = []
+    for item in items:
+        if isinstance(item, str):
+            models.append({"id": item, "description": ""})
+        elif isinstance(item, dict):
+            mid = item.get("id") or item.get("model") or ""
+            if mid:
+                models.append({"id": mid, "description": item.get("description") or ""})
+    return sorted(models, key=lambda m: m["id"])
+
+
+def fetch_remote_model_ids(conn, *, timeout: float = 10) -> list[str]:
+    """Model ids the connection's OpenAI-compatible ``/models`` endpoint lists, sorted."""
+    return [m["id"] for m in _fetch_remote_model_list(conn, timeout=timeout)]
+
+
+# ─── Decision-model detection ────────────────────────────────────────────────
+
+#: Model ids in Ollama's decision-model catalog (https://ollama.com/search?c=decision),
+#: matched by model name so that ``library/clef`` and ``clef`` both count.
+OLLAMA_LIBRARY_DECISION_MODELS = frozenset({"clef", "clef-flash", "laya", "nimble", "tev1"})
+
+#: The probe question for an Ollama decision-model check: two options, the
+#: minimum the System One endpoint accepts.
+_DECISION_PROBE_BODY = {
+    "state": "capability probe",
+    "questions": {
+        "probe": {"type": "choice", "instructions": "Pick one.", "criteria": {"yes": "Yes", "no": "No"}}
+    },
+}
+
+
+def probe_ollama_decision(base_url: str, model_id: str, *, timeout: float = 15) -> bool | None:
+    """Whether an Ollama model answers on ``POST /v1/systemone`` (True/False).
+
+    ``None`` when it cannot be told: network errors, the server not exposing
+    the endpoint (Ollama < 0.35), or an unrecognised reply.
+    """
+    base = (base_url or "").strip().rstrip("/")
+    url = f"{base.removesuffix('/v1')}/v1/systemone"
+    body = {**_DECISION_PROBE_BODY, "model": model_id}
+    try:
+        resp = httpx.post(url, json=body, timeout=timeout)
+    except httpx.HTTPError:
+        return None
+    if resp.status_code == 200:
+        return True
+    if resp.status_code == 400 and "does not support decision" in (resp.text or ""):
+        return False
+    return None
+
+
+def _is_openrouter_decision_model(model_id: str) -> bool:
+    """Heuristic: OpenRouter's decision (System One) models, e.g. ``typesafe/jev-1.13``."""
+    return "typesafe/" in model_id or "jev" in model_id
+
+
+def detect_model_capabilities(conn, model_id: str, *, timeout: float = 10) -> dict:
+    """Best-effort capability flags for one model on a connection.
+
+    A model that cannot be classified simply carries no ``decision`` flag:
+    - Ollama: one ``POST /v1/systemone`` probe (a decision model answers the
+      real two-option question in milliseconds; anything else gets a fast
+      400 with no inference). Unknown Ollama library decision models are
+      recognised by name as a fallback.
+    - OpenRouter: a name match (``typesafe/…`` / ``jev…``); its Decisions API
+      has no public model listing.
+    """
+    caps: dict = {}
+    if conn.provider == "ollama":
+        supports = probe_ollama_decision(conn.base_url, model_id, timeout=timeout)
+        if supports is not None:
+            caps["decision"] = bool(supports)
+        elif model_id.rsplit(":", 1)[0].rsplit("/", 1)[-1] in OLLAMA_LIBRARY_DECISION_MODELS:
+            caps["decision"] = True
+    elif conn.provider == "openrouter" and _is_openrouter_decision_model(model_id):
+        caps["decision"] = True
+    return caps
+
+
+def fetch_remote_models(conn, *, timeout: float = 10) -> list[dict]:
+    """Models the connection offers, each with a ``capabilities`` dict (see detect_model_capabilities)."""
+    return [
+        {"id": m["id"], "description": m["description"], "capabilities": detect_model_capabilities(conn, m["id"], timeout=timeout)}
+        for m in _fetch_remote_model_list(conn, timeout=timeout)
+    ]
 
 
 def http_error_detail(exc: Exception) -> str:

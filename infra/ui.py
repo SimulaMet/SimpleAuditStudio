@@ -2246,6 +2246,7 @@ class ConnectionsView(ProjectMixin, TemplateView):
 
     def post(self, request, *args, **kwargs):
         from model_registry.models import ModelConnection, RegisteredModel
+        from model_registry.services import detect_model_capabilities
 
         blocked = _require_write_access(request)
         if blocked:
@@ -2319,10 +2320,19 @@ class ConnectionsView(ProjectMixin, TemplateView):
             label = post.get("model_display_name", "").strip() if single else ""
             desc = post.get("model_description", "").strip()[:DESCRIPTION_MAX] if single else ""
             existing = set(conn.models.values_list("model_id", flat=True))
-            new = [RegisteredModel(connection=conn, project=p, model_id=m, display_name=label or m, description=desc,
-                                   enabled=True, created_by=request.user)
-                   for m in dict.fromkeys(ids) if m not in existing]
-            RegisteredModel.objects.bulk_create(new)
+            new_models = [m for m in dict.fromkeys(ids) if m not in existing]
+            # The discover dialog already probed each listed model (a decision
+            # model answers in milliseconds, a chat model gets a fast 400 with
+            # no inference); it posts the result per model. A manually typed id
+            # is probed here.
+            for m in new_models:
+                flagged = post.get(f"decision:{m}") == "1"
+                caps = {"decision": True} if flagged else detect_model_capabilities(conn, m)
+                RegisteredModel.objects.create(
+                    connection=conn, project=p, model_id=m, display_name=label or m, description=desc,
+                    capabilities=caps, enabled=True, created_by=request.user,
+                )
+            new = new_models
             skipped = len(set(ids)) - len(new)
             messages.success(request, f"Added {len(new)} model{'s' if len(new) != 1 else ''} to {conn.name}."
                              + (f" {skipped} already there." if skipped else ""))
@@ -2559,7 +2569,7 @@ class DiscoverModelsView(ProjectMixin, View):
 
     def post(self, request):
         from model_registry.models import ModelConnection
-        from model_registry.services import fetch_remote_model_ids, http_error_detail
+        from model_registry.services import fetch_remote_models, http_error_detail
 
         # Looked up server-side (scoped to the workspace) so the API key never
         # reaches the browser.
@@ -2567,12 +2577,14 @@ class DiscoverModelsView(ProjectMixin, View):
         if conn is None:
             return JsonResponse({"error": "Connection not found in this workspace."}, status=404)
         try:
-            models = fetch_remote_model_ids(conn)
+            models = fetch_remote_models(conn)
         except ValueError as e:
             return JsonResponse({"error": str(e)}, status=400)
         except Exception as e:  # noqa: BLE001 - surface any upstream failure to the user
             return JsonResponse({"error": http_error_detail(e)}, status=502)
-        return JsonResponse({"models": models})
+        # Ollama answers one probe question per model, so discovery on a server
+        # with many local models can take a few seconds.
+        return JsonResponse({"models": models}, safe=False)
 
 
 # ─── Compare ─────────────────────────────────────────────────────────────────

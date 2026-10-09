@@ -104,6 +104,11 @@ class RegisteredModel(models.Model):
         """Whether the parent connection has an API key configured."""
         return self.connection.has_key
 
+    @property
+    def is_decision(self) -> bool:
+        """A System One decision model (answers fixed-option questions)."""
+        return bool((self.capabilities or {}).get("decision"))
+
 
 class OtlpSpan(models.Model):
     """A span pushed to Studio's OTLP listener, persisted for cross-process reads.

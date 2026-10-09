@@ -207,6 +207,13 @@ Fields:
 
 Rules:
 
+- `capabilities.decision` — set by automatic detection when models are
+  added on **Connections → Discover models**. Ollama connections probe
+  `{api-root}/v1/systemone` once per model (2-option question, no inference
+  for non-decision models); OpenRouter connections use the model-id prefix
+  heuristic (`typesafe/`, `jev`); OpenAI-compatible connections without an
+  explicit decision endpoint record no decision capability. Models can be
+  used as decision targets only when this flag is `true`.
 - unique `(connection_id, model_id)`
 - display name is user-facing; `model_id` is provider-specific
 - inherits auth from its connection

@@ -139,7 +139,8 @@ class DiscoverModelsKeyTests(TestCase):
         fake.json.return_value = {"data": [{"id": "gpt-x"}]}
         with mock.patch("model_registry.services.httpx.get", return_value=fake) as get:
             resp = self.client.post("/connections/discover/", {"connection_id": self.conn.id})
-        self.assertEqual(resp.json()["models"], ["gpt-x"])
+        # Non-Ollama servers: ids only, no decision probe (httpx.post unused).
+        self.assertEqual(resp.json()["models"], [{"id": "gpt-x", "description": "", "capabilities": {}}])
         url, kwargs = get.call_args.args[0], get.call_args.kwargs
         self.assertEqual(kwargs["headers"]["Authorization"], "Bearer sk-super-secret-123")
         self.assertEqual(url, "https://api.example.invalid/v1/models")
@@ -221,3 +222,213 @@ class ConnectionCheckTests(TestCase):
         providers = self.client.get("/connections/").context["providers"]
         self.assertEqual(providers.count("openai"), 1)
         self.assertIn("gemini", providers)   # a connection's own provider stays pickable
+
+
+class OllamaDecisionProbeTests(TestCase):
+    """Ollama answers the System One probe with a 400 "does not support decision"
+    for chat models and a real answer for decision models — no inference either way."""
+
+    def _post(self, status=200, text="", json=None):
+        import httpx
+
+        kwargs = {"request": httpx.Request("POST", "http://x/v1/systemone")}
+        if json is not None:
+            kwargs["json"] = json
+        else:
+            kwargs["text"] = text
+        return httpx.Response(status, **kwargs)
+
+    def _probing(self, status=200, text="", json=None):
+        from unittest import mock
+
+        return mock.patch(
+            "model_registry.services.httpx.post", return_value=self._post(status, text, json)
+        )
+
+    def test_decision_model_returns_true(self):
+        from model_registry.services import probe_ollama_decision
+
+        with self._probing(json={"answers": {"probe": {"choice": "yes"}}}):
+            self.assertIs(probe_ollama_decision("http://localhost:11434/v1", "clef:1.0"), True)
+
+    def test_chat_model_returns_false(self):
+        from model_registry.services import probe_ollama_decision
+
+        with self._probing(400, text='{"error":"model \"qwen3.5:2b\" does not support decision"}'):
+            self.assertIs(probe_ollama_decision("http://localhost:11434/v1", "qwen3.5:2b"), False)
+
+    def test_unknown_error_is_none(self):
+        from model_registry.services import probe_ollama_decision
+
+        with self._probing(404, text='{"error":"model \"x\" not found, try pulling it first"}'):
+            self.assertIsNone(probe_ollama_decision("http://localhost:11434/v1", "x"))
+
+    def test_network_error_is_none(self):
+        from unittest import mock
+
+        import httpx
+
+        from model_registry.services import probe_ollama_decision
+
+        with mock.patch("model_registry.services.httpx.post", side_effect=httpx.ConnectError("refused")):
+            self.assertIsNone(probe_ollama_decision("http://localhost:11434/v1", "clef"))
+
+    def test_probe_uses_the_api_root_not_the_openai_prefix(self):
+
+        from model_registry.services import probe_ollama_decision
+
+        with self._probing(json={}) as post:
+            probe_ollama_decision("http://localhost:11434/v1", "clef")
+        self.assertEqual(post.call_args.args[0], "http://localhost:11434/v1/systemone")
+
+
+class DetectModelCapabilitiesTests(TestCase):
+    """Detection of decision (System One) models per provider."""
+
+    def _conn(self, **kw):
+        from model_registry.models import ModelConnection
+
+        defaults = {
+            "project": self.project, "name": "det", "provider": "ollama",
+            "base_url": "http://localhost:11434/v1",
+        }
+        defaults.update(kw)
+        return ModelConnection(**defaults)
+
+    def setUp(self):
+        from infra.tests.factories import ProjectFactory
+
+        self.project = ProjectFactory()
+
+    def test_openrouter_by_name_without_network(self):
+        from model_registry.services import detect_model_capabilities
+
+        conn = self._conn(provider="openrouter", base_url="https://openrouter.ai/api/v1")
+        self.assertEqual(detect_model_capabilities(conn, "typesafe/jev-1.13"), {"decision": True})
+        self.assertEqual(detect_model_capabilities(conn, "openai/gpt-4o"), {})
+
+    def test_ollama_probe_decision_true(self):
+        from unittest import mock
+
+        from model_registry.services import detect_model_capabilities
+
+        conn = self._conn()
+        with mock.patch("model_registry.services.httpx.post") as post:
+            post.return_value = mock.MagicMock(status_code=200, text="")
+            self.assertEqual(detect_model_capabilities(conn, "clef:1.0"), {"decision": True})
+
+    def test_ollama_probe_decision_false(self):
+        from unittest import mock
+
+        from model_registry.services import detect_model_capabilities
+
+        conn = self._conn()
+        with mock.patch("model_registry.services.httpx.post") as post:
+            post.return_value = mock.MagicMock(status_code=400, text='{"error":"does not support decision"}')
+            # A definitive "not a decision model" answer is recorded, not dropped.
+            self.assertEqual(detect_model_capabilities(conn, "qwen3.5:2b"), {"decision": False})
+
+    def test_ollama_unknown_probe_falls_back_to_library_name(self):
+        from unittest import mock
+
+        from model_registry.services import detect_model_capabilities
+
+        conn = self._conn()
+        with mock.patch("model_registry.services.httpx.post") as post:
+            post.return_value = mock.MagicMock(status_code=400, text='{"error":"model not found"}')
+            self.assertEqual(detect_model_capabilities(conn, "nimble:latest"), {"decision": True})
+            self.assertEqual(detect_model_capabilities(conn, "llama3.2:3b"), {})
+
+
+class DecisionModelConnectionTests(TestCase):
+    """/connections/ discover marks decision models; add_models persists the flag."""
+
+    def setUp(self):
+        pw = "testpass" + "123"
+        self.user = UserFactory()
+        self.user.set_password(pw)
+        self.user.save()
+        self.project = ProjectFactory()
+        MembershipFactory(user=self.user, project=self.project, role="admin")
+        self.client = Client()
+        auth = {"username": self.user.username, "password": pw}
+        self.client.login(**auth)
+        self.client.session["project_id"] = self.project.pk
+        self.client.session.save()
+        self.conn = ModelConnection.objects.create(
+            project=self.project, name="ollama-local", provider="ollama",
+            base_url="http://localhost:11434/v1",
+        )
+
+    def _server(self, model_ids):
+        from unittest import mock
+
+        get = mock.MagicMock()
+        get.json.return_value = {"models": [{"name": i, "model": i} for i in model_ids]}
+        post = mock.MagicMock()
+        return mock.patch("model_registry.services.httpx.get", return_value=get), mock.patch(
+            "model_registry.services.httpx.post", return_value=post
+        )
+
+    def test_discover_flags_decision_models(self):
+        from unittest import mock
+
+        get_ctx, post_ctx = self._server(["clef:1.0", "qwen3.5:2b"])
+        with get_ctx, post_ctx as post:
+            # First probe: decision model (200). Second: chat model (400).
+            r1 = mock.MagicMock(status_code=200, text="")
+            r2 = mock.MagicMock(status_code=400, text='{"error":"does not support decision"}')
+            post.side_effect = [r1, r2]
+            models = self.client.post("/connections/discover/", {"connection_id": self.conn.id}).json()["models"]
+        by_id = {m["id"]: m for m in models}
+        self.assertEqual(by_id["clef:1.0"]["capabilities"], {"decision": True})
+        self.assertEqual(by_id["qwen3.5:2b"]["capabilities"], {"decision": False})
+        # The probe body carries a two-option question (the endpoint minimum).
+        first_body = post.call_args_list[0].kwargs["json"]
+        self.assertEqual(first_body["model"], "clef:1.0")
+        self.assertEqual(len(first_body["questions"]["probe"]["criteria"]), 2)
+
+    def test_add_models_persists_the_flag(self):
+        from model_registry.models import RegisteredModel
+
+        get_ctx, post_ctx = self._server([])
+        with get_ctx, post_ctx as post:
+            resp = self.client.post("/connections/", {
+                "action": "add_models", "conn_id": self.conn.id,
+                "model_id": ["clef:1.0", "qwen3.5:2b"],
+                "decision:clef:1.0": "1",
+            }, follow=True)
+        self.assertEqual(resp.status_code, 200)
+        # The flagged model was trusted as-is; only the unflagged one was probed.
+        self.assertEqual(post.call_count, 1)
+        self.assertEqual(post.call_args.kwargs["json"]["model"], "qwen3.5:2b")
+        self.assertEqual(
+            RegisteredModel.objects.get(model_id="clef:1.0").capabilities, {"decision": True}
+        )
+
+    def test_add_models_probes_a_manual_id(self):
+        from unittest import mock
+
+        from model_registry.models import RegisteredModel
+
+        get_ctx, post_ctx = self._server([])
+        with get_ctx, post_ctx as post:
+            post.return_value = mock.MagicMock(status_code=400, text='{"error":"does not support decision"}')
+            self.client.post("/connections/", {
+                "action": "add_models", "conn_id": self.conn.id,
+                "model_id": ["qwen3.5:2b"],
+            }, follow=True)
+        self.assertEqual(post.call_count, 1)
+        self.assertEqual(
+            RegisteredModel.objects.get(model_id="qwen3.5:2b").capabilities, {"decision": False}
+        )
+
+    def test_page_shows_the_decision_badge(self):
+        from model_registry.models import RegisteredModel
+
+        RegisteredModel.objects.create(
+            connection=self.conn, project=self.project, model_id="clef:1.0",
+            display_name="clef:1.0", capabilities={"decision": True},
+        )
+        body = self.client.get("/connections/").content.decode()
+        self.assertIn(">decision</span>", body)

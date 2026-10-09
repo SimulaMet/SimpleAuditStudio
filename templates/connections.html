@@ -105,6 +105,9 @@
           <td class="px-2 py-2 text-gray-200 align-top">
             <div class="model-view min-w-0 max-w-md">
               <span>{{ m.display_name|default:m.model_id }}</span>
+              {% if m.is_decision %}
+              <span class="ml-1.5 align-middle text-[10px] font-medium text-violet-300 bg-violet-900/30 border border-violet-700/50 rounded px-1.5 py-0.5" title="Decision model: answers fixed-option questions with probabilities (System One).">decision</span>
+              {% endif %}
               {% if m.description %}<p class="text-[11px] text-gray-500 mt-0.5 line-clamp-2 whitespace-pre-line" title="{{ m.description }}">{{ m.description }}</p>{% endif %}
             </div>
             <form method="post" class="model-edit hidden flex flex-wrap gap-2 items-start max-w-2xl">
@@ -522,11 +525,17 @@
       const data = await resp.json();
       if (!resp.ok) throw new Error(data.error || `HTTP ${resp.status}`);
       if (!data.models.length) { status.textContent = 'The server listed no models. Add one by ID below.'; modelsForm.querySelector('details').open = true; return; }
-      list.innerHTML = data.models.map(id => {
+      list.innerHTML = data.models.map(m => {
+        const id = typeof m === 'string' ? m : m.id;
+        const decision = !(typeof m === 'string') && m.capabilities && m.capabilities.decision;
         const added = have.has(id);
+        const badge = decision
+          ? '<span class="ml-1 text-[10px] font-medium text-violet-300 bg-violet-900/30 border border-violet-700/50 rounded px-1 py-0.5 whitespace-nowrap" title="Decision model: answers fixed-option questions with probabilities">decision</span>'
+          : '';
         return `<li><label class="flex items-center gap-2 px-2 py-1 rounded text-xs ${added ? 'text-gray-600' : 'text-gray-300 hover:bg-surface-overlay cursor-pointer'}" data-search="${esc(id.toLowerCase())}">
           <input type="checkbox" name="model_id" value="${esc(id)}" ${added ? 'disabled checked' : ''} class="accent-accent">
-          <span class="font-mono truncate">${esc(id)}</span>${added ? '<span class="ml-auto text-[10px]">added</span>' : ''}</label></li>`;
+          <span class="font-mono truncate">${esc(id)}</span>${badge}${added ? '<span class="ml-auto text-[10px]">added</span>' : ''}</label>
+          ${decision ? `<input type="hidden" name="decision:${esc(id)}" value="1">` : ''}</li>`;
       }).join('');
       status.classList.add('hidden'); list.classList.remove('hidden');
       $('#discover-filter').focus();
