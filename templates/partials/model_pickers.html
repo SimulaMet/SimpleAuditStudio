@@ -67,7 +67,14 @@ Field names match the single-select partial so one-run posts look the same.
             <input type="checkbox" name="{{ role }}_model" value="{{ m.id }}" class="mt-0.5 accent-[currentColor]"
                    {% if m.id|stringformat:"d" in chosen %}checked{% endif %}>
             <span class="min-w-0">
-              <span class="text-gray-200 block truncate">{{ m.display_name }}</span>
+              <span class="text-gray-200 block truncate">
+                {{ m.display_name }}
+                {% if m.is_decision %}
+                {# Probed on /connections/ and persisted as capabilities.decision. #}
+                <span class="align-middle text-[10px] font-medium text-violet-300 bg-violet-900/30 border border-violet-700/50 rounded px-1.5 py-0.5"
+                      title="Decision model: answers one fixed-option question with probabilities (System One). {% if role == 'target' %}A run against it is a single turn and needs a scenario with a decision block.{% else %}It answers options, not prose, so it cannot judge or drive an audit.{% endif %}">decision</span>
+                {% endif %}
+              </span>
               <span class="text-[11px] text-gray-500 block truncate">{{ m.model_id }}{% if not m.has_key %} · <span class="text-yellow-500">no key set</span>{% endif %}</span>
               {% if m.description %}<span class="text-[11px] text-gray-500/80 italic block truncate">{{ m.description }}</span>{% endif %}
             </span>

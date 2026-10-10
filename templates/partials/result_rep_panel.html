@@ -42,6 +42,36 @@ whole result of a single-rep run. Context: rep (see infra.ui._rep_view).
   </div>
   {% endif %}
 
+  {% if rep.decision %}
+  {# A decision model's structured answer: the chosen option, how confident it
+     was, and the probability it gave every option. Only decision targets
+     (SimpleAudit DecisionTarget) produce this; chat replies have no such block. #}
+  <div class="bg-surface-raised rounded-xl border border-gray-800 p-4">
+    <div class="flex flex-wrap items-center gap-3 mb-2">
+      <h3 class="text-sm font-semibold text-gray-300">Decision answer</h3>
+      <span class="px-2 py-0.5 rounded-full text-xs bg-indigo-900/40 text-indigo-200 font-mono">{{ rep.decision.choice }}</span>
+      {% if rep.decision.confidence_percent is not None %}
+      <span class="text-xs text-gray-400" title="Calibrated confidence reported by the decision model">confidence {{ rep.decision.confidence_percent }}%</span>
+      {% endif %}
+    </div>
+    {% if rep.decision.options %}
+    <dl class="space-y-1.5 text-xs">
+      {% for opt in rep.decision.options %}
+      <div class="flex items-center gap-2">
+        <dt class="w-28 shrink-0 truncate font-mono {% if opt.option == rep.decision.choice %}text-indigo-200{% else %}text-gray-400{% endif %}" title="{{ opt.option }}">{{ opt.option }}</dt>
+        <dd class="flex-1 min-w-0 flex items-center gap-2">
+          <div class="flex-1 h-1.5 rounded bg-gray-800 overflow-hidden">
+            <div class="h-full {% if opt.option == rep.decision.choice %}bg-indigo-400{% else %}bg-gray-600{% endif %}" style="width: {{ opt.percent }}%"></div>
+          </div>
+          <span class="w-12 text-right tabular-nums {% if opt.option == rep.decision.choice %}text-indigo-200{% else %}text-gray-500{% endif %}">{{ opt.percent }}%</span>
+        </dd>
+      </div>
+      {% endfor %}
+    </dl>
+    {% endif %}
+  </div>
+  {% endif %}
+
   {% if rep.has_grade %}
   {# Judge-specific output: score / dimension scores, yes-no, checklist items, feedback. #}
   <div class="bg-surface-raised rounded-xl border border-gray-800 p-4">

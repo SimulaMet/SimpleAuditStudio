@@ -1,0 +1,19 @@
+{
+  "model": "clef-flash",
+  "answers": {
+    "verdict": {
+      "type": "choice",
+      "choice": "yes",
+      "probabilities": {
+        "no": 0.03674318286798253,
+        "unclear": 0.03251467938990112,
+        "yes": 0.9307421377421163
+      },
+      "confidence": 0.7272998370503829
+    }
+  },
+  "usage": {
+    "input_tokens": 240,
+    "output_tokens": 0
+  }
+}

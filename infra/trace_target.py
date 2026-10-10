@@ -295,3 +295,26 @@ class TraceContextModelAuditor(_SimpleAuditModelAuditor):
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         install_trace_context_target(self)
+
+
+def decision_auditor_class(make_target: Any) -> type:
+    """A ModelAuditor subclass that sends to an explicit, non-model Target.
+
+    The repetition runner builds its own auditors, so a decision run cannot
+    just call ``set_target`` on one instance — the class itself has to install
+    the target. ``make_target`` is called once per auditor, since a
+    ``DecisionTarget`` owns an HTTP client.
+
+    No trace-context adapter here: that adapter wraps the OpenAI-compatible
+    chat client, which a decision target does not use.
+    """
+
+    class _DecisionModelAuditor(_SimpleAuditModelAuditor):
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            from infra.engine import skipping_target_client
+
+            with skipping_target_client(_SimpleAuditModelAuditor, skip=True):
+                super().__init__(*args, **kwargs)
+            self.set_target(make_target())
+
+    return _DecisionModelAuditor

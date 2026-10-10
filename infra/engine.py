@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import os
-from contextlib import nullcontext
+from contextlib import contextmanager, nullcontext
 from typing import Any
 
 
@@ -307,7 +307,69 @@ def auditor_kwargs(*, target: dict, auditor: dict, judge: dict, generation: dict
         "show_progress": False,
         "verbose": False,
     }
+    # A decision model answers once and cannot take part in a follow-up turn
+    # (``DecisionTarget.max_turns`` is 1), so the generation config's max_turns
+    # must not reach it. Forced here rather than at either construction site so
+    # the single-repetition path and the repetition runner agree — the latter
+    # also derives max_retries_per_rep and its model entry from these kwargs.
+    from model_registry.decision import is_decision_snapshot
+
+    if is_decision_snapshot(target):
+        kwargs["max_turns"] = 1
     return kwargs, gen.get("language") or "English"
+
+
+def decision_target_for(target: dict, *, resolve_key=snapshot_api_key):
+    """The ``DecisionTarget`` a target snapshot calls for, or ``None``.
+
+    The capability was settled when the model was registered (the /connections/
+    probe writes ``capabilities["decision"]``, read by
+    ``RegisteredModel.is_decision``) and frozen into the run's snapshot, so a
+    run never re-probes. An OpenRouter decision model needs its key, resolved
+    here from the snapshot's ``secret_reference`` like every other role.
+    """
+    from model_registry.decision import decision_target_for_snapshot
+
+    return decision_target_for_snapshot(target, api_key=resolve_key(target) or "")
+
+
+@contextmanager
+def skipping_target_client(auditor_cls, *, skip: bool):
+    """Build auditors without their (unused) AnyLLM chat client while ``skip``.
+
+    SimpleAudit's own ``Auditor`` facade does exactly this when an explicit
+    Target is supplied: the chat client is never called, and building it would
+    demand the provider's any_llm extra and an API key for nothing. A decision
+    run is that case — a local Ollama decision model would otherwise fail on
+    ``any-llm-sdk[ollama]`` not being installed.
+    """
+    if not skip:
+        yield
+        return
+    auditor_cls._skip_target_client = True
+    try:
+        yield
+    finally:
+        auditor_cls._skip_target_client = False
+
+
+def install_target(instance, decision_target) -> bool:
+    """Install the Target a run sends to; ``True`` if it is a decision target.
+
+    A decision model answers on ``/v1/systemone`` and is not a chat client, so
+    it replaces the target outright rather than being wrapped by the
+    trace-context adapter.
+    """
+    if decision_target is not None:
+        instance.set_target(decision_target)
+        return True
+    # SimpleAudit 0.3.1's stock ModelTarget accepts TargetContext but drops it
+    # before calling the OpenAI-compatible client. Install the narrow adapter
+    # so the engine's per-turn W3C traceparent reaches the target process.
+    from infra.trace_target import install_trace_context_target
+
+    install_trace_context_target(instance)
+    return False
 
 
 def build_model_auditor(*, target: dict, auditor: dict, judge: dict, generation: dict | None = None):
@@ -324,15 +386,14 @@ def build_model_auditor(*, target: dict, auditor: dict, judge: dict, generation:
 
     kwargs, language = auditor_kwargs(target=target, auditor=auditor, judge=judge, generation=generation)
     try:
-        instance = ModelAuditor(**kwargs)
+        # Inside the try: a decision snapshot that cannot be turned into a
+        # target (no base URL, no key) is an auditor that cannot be built.
+        decision = decision_target_for(target)
+        with skipping_target_client(ModelAuditor, skip=decision is not None):
+            instance = ModelAuditor(**kwargs)
     except Exception as exc:
         raise EngineError(f"Failed to construct ModelAuditor: {type(exc).__name__}: {exc}") from exc
-    # SimpleAudit 0.3.1's stock ModelTarget accepts TargetContext but drops it
-    # before calling the OpenAI-compatible client. Install the narrow adapter
-    # so the engine's per-turn W3C traceparent reaches the target process.
-    from infra.trace_target import install_trace_context_target
-
-    install_trace_context_target(instance)
+    install_target(instance, decision)
     return instance, language
 
 
@@ -710,9 +771,18 @@ def run_scenario_repeated(
     # subclass used by the single-repetition path.
     import simpleaudit.experiment as experiment_module
 
-    from infra.trace_target import TraceContextModelAuditor
+    from infra.trace_target import TraceContextModelAuditor, decision_auditor_class
 
-    experiment_module.ModelAuditor = TraceContextModelAuditor
+    # A decision run replaces the auditor's target entirely; a chat run gets
+    # the trace-context adapter. The repetition runner builds its own
+    # auditors, so the choice has to be made on the class.
+    # Built once here so a malformed decision snapshot fails before the
+    # experiment is set up; each auditor then gets its own (a DecisionTarget
+    # owns an HTTP client).
+    if decision_target_for(target) is None:
+        experiment_module.ModelAuditor = TraceContextModelAuditor
+    else:
+        experiment_module.ModelAuditor = decision_auditor_class(lambda: decision_target_for(target))
 
     kwargs, language = auditor_kwargs(target=target, auditor=auditor, judge=judge, generation=generation)
     max_turns = kwargs["max_turns"]
