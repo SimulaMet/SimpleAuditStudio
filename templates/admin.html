@@ -192,6 +192,20 @@
 <!-- ─── Users ────────────────────────────────────────────────────────────── -->
 {% if tab == 'users' %}
 <div class="bg-surface-raised rounded-xl border border-gray-800 p-5 mb-6">
+  <div class="flex items-center justify-between gap-4">
+    <div>
+      <h2 class="text-sm font-semibold text-gray-300">Allow self-registration</h2>
+      <p class="text-xs text-gray-500 mt-1">When off, the Register link is hidden and new sign-ups are rejected.</p>
+    </div>
+    <button type="button" id="admin-registration-toggle" role="switch" aria-checked="{{ registration_enabled|yesno:'true,false' }}"
+            onclick="adminToggleRegistration(this)"
+            class="relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors {% if registration_enabled %}bg-accent/60{% else %}bg-gray-700{% endif %}">
+      <span class="inline-block h-4 w-4 transform rounded-full bg-white transition-transform {% if registration_enabled %}translate-x-6{% else %}translate-x-1{% endif %}"></span>
+    </button>
+  </div>
+</div>
+
+<div class="bg-surface-raised rounded-xl border border-gray-800 p-5 mb-6">
   <h2 class="text-sm font-semibold text-gray-300 mb-3">Create user</h2>
   <div class="flex items-end gap-2 flex-wrap">
     <div>
@@ -315,6 +329,19 @@
     try {
       await api('/api/projects/' + id + '/', 'DELETE');
       window.location.reload();
+    } catch (e) { showError(e.message); btn.disabled = false; }
+  };
+  window.adminToggleRegistration = async function(btn) {
+    const next = btn.getAttribute('aria-checked') !== 'true';
+    btn.disabled = true;
+    try {
+      await api('/api/admin/settings/', 'PATCH', { registration_enabled: next });
+      btn.setAttribute('aria-checked', String(next));
+      btn.classList.toggle('bg-accent/60', next);
+      btn.classList.toggle('bg-gray-700', !next);
+      const knob = btn.querySelector('span');
+      knob.classList.toggle('translate-x-6', next);
+      knob.classList.toggle('translate-x-1', !next);
     } catch (e) { showError(e.message); btn.disabled = false; }
   };
   window.adminToggleRename = function(id, btn) {

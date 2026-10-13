@@ -25,6 +25,7 @@ from accounts.serializers import (
 )
 from accounts.services import (
     DEFAULT_PROJECT_SLUG,
+    SITE_SETTING_DEFAULTS,
     admin_create_user,
     admin_delete_user,
     admin_stats_payload,
@@ -33,7 +34,10 @@ from accounts.services import (
     create_workspace,
     delete_workspace,
     ensure_project_access,
+    get_site_setting,
+    registration_enabled,
     require_project_writable,
+    set_site_setting,
     unarchive_workspace,
     update_workspace,
 )
@@ -56,6 +60,12 @@ def readyz(request):
 @api_view(["POST"])
 @permission_classes([AllowAny])
 def register(request):
+    if not registration_enabled():
+        raise StableAPIError(
+            detail="Registration is currently disabled.",
+            code="registration_disabled",
+            http_status=403,
+        )
     serializer = RegisterSerializer(data=request.data)
     serializer.is_valid(raise_exception=True)
     user = serializer.save()
@@ -163,6 +173,18 @@ def admin_update_user_view(request, user_id):
     serializer.is_valid(raise_exception=True)
     target = admin_update_user(admin_user=request.user, target=target, **serializer.validated_data)
     return Response(UserSerializer(target).data)
+
+
+@api_view(["GET", "PATCH"])
+@permission_classes([IsAuthenticated])
+def admin_site_settings(request):
+    """Instance-wide settings (currently: registration toggle)."""
+    _require_superuser_request(request)
+    if request.method == "PATCH":
+        for key in SITE_SETTING_DEFAULTS:
+            if key in request.data:
+                set_site_setting(key, bool(request.data[key]))
+    return Response({key: get_site_setting(key) for key in SITE_SETTING_DEFAULTS})
 
 
 # ─── Workspaces (a.k.a. Projects) ─────────────────────────────────────────────

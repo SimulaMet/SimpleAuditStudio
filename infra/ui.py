@@ -249,11 +249,15 @@ class LoginView(TemplateView):
     def get_context_data(self, **kw):
         kw.setdefault("form", AuthenticationForm())
         from django.conf import settings
+
+        from accounts.services import registration_enabled
+
         if getattr(settings, "DEMO_MODE", False):
             kw["demo_mode"] = True
             kw["demo_username"] = settings.DEMO_USERNAME
             kw["demo_password"] = settings.DEMO_PASSWORD
         kw["workos_enabled"] = getattr(settings, "WORKOS_ENABLED", False)
+        kw["registration_enabled"] = registration_enabled()
         return super().get_context_data(**kw)
 
     def post(self, request, *args, **kwargs):
@@ -270,13 +274,26 @@ class LoginView(TemplateView):
 class RegisterView(TemplateView):
     template_name = "auth/register.html"
 
+    def _registration_disabled(self) -> bool:
+        from accounts.services import registration_enabled
+
+        return not registration_enabled()
+
     def get(self, request, *args, **kwargs):
         if request.user.is_authenticated:
             return redirect("dashboard")
         return super().get(request, *args, **kwargs)
 
+    def get_context_data(self, **kw):
+        kw["registration_disabled"] = self._registration_disabled()
+        return super().get_context_data(**kw)
+
     def post(self, request, *args, **kwargs):
         from accounts.models import User
+        if self._registration_disabled():
+            return self.render_to_response(
+                self.get_context_data(error="Registration is currently disabled.")
+            )
         username = request.POST.get("username", "").strip()
         password = request.POST.get("password", "")
         email = request.POST.get("email", "").strip()
@@ -622,6 +639,8 @@ class AdminView(SuperuserRequiredMixin, TemplateView):
         users = list(User.objects.order_by("username"))
         superuser_count = sum(1 for u in users if u.is_superuser)
 
+        from accounts.services import get_site_setting
+
         kw.update(
             tab=tab,
             admin_tabs=_admin_settings_tabs(chat_enabled()),
@@ -629,6 +648,7 @@ class AdminView(SuperuserRequiredMixin, TemplateView):
             workspaces=stats["workspaces"],
             users=users,
             superuser_count=superuser_count,
+            registration_enabled=get_site_setting("registration_enabled"),
             managed_members=managed_members,
             manage_id=int(manage_id) if manage_id and manage_id.isdigit() else None,
         )

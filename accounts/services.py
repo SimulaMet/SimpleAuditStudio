@@ -457,3 +457,29 @@ def is_any_project_admin(user) -> bool:
     if user.is_superuser:
         return True
     return ProjectMembership.objects.filter(user=user, role=ProjectMembership.Role.ADMIN).exists()
+
+
+# ─── Site settings ───────────────────────────────────────────────────────────
+
+from accounts.models import SiteSetting
+
+SITE_SETTING_DEFAULTS = {
+    "registration_enabled": True,
+}
+
+
+def get_site_setting(key: str):
+    """Value of a site setting, falling back to its default when unset."""
+    row = SiteSetting.objects.filter(key=key).first()
+    if row is None:
+        return SITE_SETTING_DEFAULTS.get(key)
+    return row.value
+
+
+def set_site_setting(key: str, value) -> None:
+    SiteSetting.objects.update_or_create(key=key, defaults={"value": value})
+
+
+def registration_enabled() -> bool:
+    """Whether anonymous self-registration is currently allowed (default: yes)."""
+    return bool(get_site_setting("registration_enabled"))

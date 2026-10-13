@@ -104,3 +104,22 @@ class ProjectMembership(models.Model):
         return f"{self.user.username} -> {self.project.slug}:{self.role}"
 
 
+class SiteSetting(models.Model):
+    """Instance-wide key/value settings editable from the admin UI.
+
+    A row per known key; values are JSON so one table can hold booleans,
+    strings, and numbers without schema churn as new settings appear.
+    Missing rows mean "use the default" — see ``accounts.services`` for the
+    default of each known key.
+    """
+
+    key = models.CharField(max_length=100, unique=True)
+    value = models.JSONField()
+
+    class Meta:
+        db_table = "core_site_setting"
+
+    def __str__(self) -> str:
+        return self.key
+
+
