@@ -2,6 +2,7 @@ import json
 import logging
 import time
 
+from django.db import close_old_connections
 from django.http import StreamingHttpResponse
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
@@ -268,6 +269,9 @@ def stream_audit_run_events(request, project_id, run_id):
                     if e["kind"] in _TERMINAL_EVENT_KINDS:
                         return
                 if len(events) < _SSE_BATCH_SIZE:
+                    # Release (or recycle) the DB connection while idle so a
+                    # long-lived stream does not pin a Postgres connection per thread.
+                    close_old_connections()
                     time.sleep(_SSE_POLL_INTERVAL_SECONDS)
         except (GeneratorExit, SystemExit, KeyboardInterrupt):
             # Normal stream teardown: the client disconnected (GeneratorExit is

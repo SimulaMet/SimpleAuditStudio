@@ -59,4 +59,6 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=5 \
 
 # Default entrypoint serves the web API; compose overrides this with
 # `python manage.py run_worker` for the worker service.
-CMD ["gunicorn", "config.wsgi:application", "--bind", "0.0.0.0:8000", "--workers", "2"]
+# Threaded workers (see gunicorn.conf.py) so long-lived SSE streams are not
+# killed by the sync worker's heartbeat timeout.
+CMD ["gunicorn", "config.wsgi:application", "-c", "gunicorn.conf.py"]
