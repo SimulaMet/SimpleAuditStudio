@@ -428,14 +428,38 @@ def seed_demo_agent(project, user, log=logger.info) -> dict[str, str]:
         tool.external_id = tool_external_id
         tool.save(update_fields=["external_id", "updated_at"])
 
+    # Seed a predefined system prompt (v1) at /prompts/ using the demo agent's
+    # instructions as its v1 content, then point the agent at that same text.
+    # Because the agent's text matches the version exactly, the agent editor's
+    # picker auto-preselects it. Idempotent: reuses an existing same-named prompt.
+    from prompts.models import SystemPrompt
+    from prompts.services import create_prompt
+
     meta = DEMO_AGENT
+    # Seed a predefined system prompt (v1) at /prompts/ using the demo agent's
+    # instructions as its v1 content, then point the agent at that same text.
+    # Because the agent's text matches the version exactly, the agent editor's
+    # picker auto-preselects it. Idempotent: reuses an existing same-named prompt.
+    prompt_name = "Acme Retail Support Refund Assistant"
+    prompt = SystemPrompt.objects.filter(project=project, name=prompt_name).first()
+    if prompt is None or not prompt.latest:
+        prompt = create_prompt(
+            project=project,
+            name=prompt_name,
+            description="Instructions for the demo Support Refund Assistant agent.",
+            content=meta["system_prompt"],
+            note="Seeded",
+            user=user,
+        )
+        log(f"Seeded system prompt '{prompt.name}' (v1).")
+
     agent, created = Agent.objects.get_or_create(
         project=project,
         name=meta["name"],
         defaults={
             "description": meta["description"],
             "base_model": base_model,
-            "system_prompt": meta["system_prompt"],
+            "system_prompt": prompt.latest.content,
             "retrieval_settings": {
                 "search_mode": "hybrid",
                 "top_k": 5,
