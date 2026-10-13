@@ -471,15 +471,20 @@
     if (!fieldset || !ta) return;
     const allRadios = () => [...fieldset.querySelectorAll('input[name="system_prompt_version"]')];
     function syncAll() {
-      const checked = allRadios().find(r => r.checked);
       fieldset.querySelectorAll('[data-prompt-row]').forEach(row => {
         const rs = [...row.querySelectorAll('input[name="system_prompt_version"]')];
         const rowChecked = rs.find(r => r.checked);
+        const nameRadio = row.querySelector('[data-row-radio]');
         const summary = row.querySelector('[data-prompt-summary]');
+        if (!rs.length) return;
+        // The name radio means "latest": keep it checked whenever the row's pick
+        // is the latest version, regardless of which element the browser marked.
+        if (nameRadio) nameRadio.checked = !!rowChecked && rowChecked.hasAttribute('data-latest');
         if (!summary) return;
         if (rowChecked) summary.textContent = `v${rowChecked.dataset.version}` + (rowChecked.hasAttribute('data-latest') ? ' · latest' : ' · older version');
         else { const latest = rs.find(r => 'latest' in r.dataset); summary.textContent = latest ? `v${latest.dataset.version} · latest` : ''; }
       });
+      const checked = allRadios().find(r => r.checked);
       if (checked && ta.value !== checked.dataset.content) ta.value = checked.dataset.content || '';
     }
     allRadios().forEach(r => r.addEventListener('change', syncAll));

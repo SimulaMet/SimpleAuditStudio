@@ -69,6 +69,25 @@ class SeedDemoAgentLocalTests(TestCase):
         self.assertEqual(Tool.objects.filter(project=self.project).count(), 1)
         self.assertEqual(Agent.objects.get(project=self.project).retrieval_settings["top_k"], 5)
 
+    def test_seeds_a_versioned_prompt_the_agent_uses(self):
+        from prompts.models import SystemPrompt
+
+        seed_demo_agent(self.project, self.user)
+
+        # A predefined prompt (v1) exists at /prompts/.
+        prompt = SystemPrompt.objects.get(
+            project=self.project, name="Acme Retail Support Refund Assistant"
+        )
+        self.assertEqual(prompt.latest.version, 1)
+        # The agent's instructions match that version exactly, so the picker
+        # auto-preselects it and deletion of the prompt is blocked while in use.
+        agent = Agent.objects.get(project=self.project, name=DEMO_AGENT["name"])
+        self.assertEqual(agent.system_prompt, prompt.latest.content)
+        # Idempotent: re-running does not create a second prompt or bump v2.
+        seed_demo_agent(self.project, self.user)
+        self.assertEqual(SystemPrompt.objects.filter(project=self.project).count(), 1)
+        self.assertEqual(prompt.versions.count(), 1)
+
     def test_skips_when_no_model_exists(self):
         self.model.delete()
         status = seed_demo_agent(self.project, self.user)
