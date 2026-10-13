@@ -4,6 +4,8 @@ Verifies that the browser-facing event stream replays from Last-Event-ID and end
 on a terminal run event, using the real Postgres/SQLite AuditEvent rows (no live
 Hatchet server required).
 """
+from unittest import mock
+
 from django.test import Client, TestCase
 
 from audits.events import append_event
@@ -96,3 +98,100 @@ class AuditSSEStreamTest(TestCase):
         client2.force_login(outsider)
         response = client2.get(self._events_url(run.id))
         self.assertEqual(response.status_code, 403)
+
+    def _build_request(self, run_id, after_id='0'):
+        """Build an authenticated GET request for the SSE view."""
+        from django.test import RequestFactory
+
+        rf = RequestFactory()
+        request = rf.get(f'/api/projects/{self.project.id}/audit-runs/{run_id}/events/')
+        request.META['HTTP_LAST_EVENT_ID'] = after_id
+        request.user = self.user
+        return request
+
+    def _get_raw_generator(self, run_id, after_id='0'):
+        """Call the view and extract the raw event_stream generator.
+
+        StreamingHttpResponse wraps our generator in a map(str.encode, ...).
+        We intercept the constructor to capture the original iterable before
+        wrapping, giving us direct close()/next() access for deterministic tests.
+        """
+        from django.http import StreamingHttpResponse
+
+        from audits.views import stream_audit_run_events
+
+        captured = {}
+
+        original_init = StreamingHttpResponse.__init__
+
+        def patched_init(self, *args, **kwargs):
+            if args:
+                captured['iterable'] = args[0]
+            elif 'streaming_content' in kwargs:
+                captured['iterable'] = kwargs['streaming_content']
+            original_init(self, *args, **kwargs)
+
+        request = self._build_request(run_id, after_id)
+        with mock.patch.object(StreamingHttpResponse, '__init__', patched_init):
+            stream_audit_run_events(request, self.project.id, run_id)
+
+        gen = captured.get('iterable')
+        assert gen is not None, 'Failed to capture the streaming iterable'
+        return gen
+
+    def test_stream_survives_generator_exit_without_error(self):
+        """A client disconnect (GeneratorExit) mid-stream must not raise.
+
+        Regression test for Sentry issue #25: the long-running SSE poll loop
+        used to surface SystemExit / GeneratorExit as unhandled errors. The
+        generator must catch and re-raise them cleanly so Python's normal
+        close semantics apply without propagating an error to the caller.
+        """
+        run = self._make_run()
+        # No terminal event -> the stream would keep polling forever if left alone.
+        append_event(run.id, 'a', 'scenario_attempted', {'attempt': 1})
+
+        gen = self._get_raw_generator(run.id)
+
+        # Make the poll sleep a no-op so the loop runs fast.
+        with mock.patch('audits.views.time.sleep'):
+            # Consume the first chunk (the non-terminal scenario_attempted event).
+            first = next(gen)
+            self.assertIn('event: scenario_attempted', first)
+
+            # Simulate the server closing the response iterator mid-loop — this
+            # is exactly what Django does when the client disconnects. Must not
+            # raise anything other than GeneratorExit (which is swallowed by
+            # the except block in event_stream).
+            gen.close()
+            # After close(), the generator is exhausted; next() raises StopIteration.
+            with self.assertRaises(StopIteration):
+                next(gen)
+
+    def test_stream_survives_system_exit_during_sleep(self):
+        """SystemExit raised inside the poll sleep must be caught and re-raised.
+
+        This is the exact traceback from Sentry issue #25: a worker process
+        receiving SIGTERM while blocked in time.sleep(). The generator catches
+        SystemExit, logs at debug level, and re-raises so Python can unwind
+        cleanly instead of surfacing it as an application error.
+        """
+        run = self._make_run()
+        # A single non-terminal event so the loop reaches its sleep branch.
+        append_event(run.id, 'a', 'scenario_attempted', {'attempt': 1})
+
+        gen = self._get_raw_generator(run.id)
+
+        # Let the first iteration emit the event and enter the sleep branch.
+        first = next(gen)
+        self.assertIn('event: scenario_attempted', first)
+
+        # On the second call into the generator, time.sleep raises SystemExit(1)
+        # — simulating the OS sending SIGTERM to the worker process.
+        def fake_sleep(_seconds):
+            raise SystemExit(1)
+
+        with mock.patch('audits.views.time.sleep', side_effect=fake_sleep), \
+             self.assertRaises(SystemExit) as ctx:
+            next(gen)
+        self.assertEqual(ctx.exception.code, 1)
