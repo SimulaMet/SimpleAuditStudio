@@ -82,6 +82,13 @@
         {% if viewing_version and viewing_version.version > 1 %}
         <button type="button" data-diff-open="{{ prev_version }}:{{ viewing_version.version }}" title="See what changed from v{{ prev_version }} to v{{ viewing_version.version }}" class="px-2 py-1 rounded text-xs bg-blue-900/30 text-blue-400 hover:bg-blue-900/50">Changes from v{{ prev_version }}</button>
         {% endif %}
+        {% if viewing_is_latest and versions|length > 1 %}
+        <form method="post" action="{% url 'scenario_version_delete' selected.id %}" data-confirm="Delete v{{ viewing_version.version }}? This removes the latest published version. Only possible if no audit runs or monitors reference it." style="display:inline">
+          {% csrf_token %}
+          <input type="hidden" name="version" value="{{ viewing_version.version }}">
+          <button type="submit" title="Delete this (latest) version — only works if unused by runs/monitors" class="px-2 py-1 rounded text-xs bg-red-900/30 text-red-400 hover:bg-red-900/50">🗑 Delete v{{ viewing_version.version }}</button>
+        </form>
+        {% endif %}
       </div>
       {% endif %}
 

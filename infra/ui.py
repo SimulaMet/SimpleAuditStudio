@@ -2203,6 +2203,46 @@ class ScenarioSetDeleteView(ProjectMixin, View):
         return redirect("/scenarios/")
 
 
+class ScenarioSetVersionDeleteView(ProjectMixin, View):
+    """Delete the latest version of a scenario set (only if unused by runs/monitors)."""
+
+    def post(self, request, set_id):
+        blocked = _require_write_access(request)
+        if blocked:
+            return blocked
+        sset = ScenarioSet.objects.filter(pk=set_id, project=request.project).first()
+        if not sset:
+            return redirect("/scenarios/")
+        latest = sset.versions.order_by("-version").first()
+        if not latest:
+            messages.error(request, "No versions to delete.")
+            return redirect(f"/scenarios/?set={set_id}")
+        # Only allow deleting the latest version (historical versions are immutable)
+        version_num = _int(request.POST.get("version"))
+        target = sset.versions.filter(version=version_num).first()
+        if not target:
+            messages.error(request, "Version not found.")
+            return redirect(f"/scenarios/?set={set_id}")
+        if target.version != latest.version:
+            messages.error(request, "Only the latest version can be deleted.")
+            return redirect(f"/scenarios/?set={set_id}")
+        # Block if any audit runs or monitors reference this version
+        from audits.models import AuditRun
+        run_count = AuditRun.objects.filter(scenario_set_version=target).count()
+        if run_count > 0:
+            messages.error(request, f"Cannot delete v{target.version}: {run_count} audit run(s) reference it.")
+            return redirect(f"/scenarios/?set={set_id}")
+        monitor_count = target.monitors.count()
+        if monitor_count > 0:
+            messages.error(request, f"Cannot delete v{target.version}: {monitor_count} monitor(s) reference it.")
+            return redirect(f"/scenarios/?set={set_id}")
+        # Safe to delete
+        ver_label = f"v{target.version}"
+        target.delete()
+        messages.success(request, f"Deleted {ver_label}.")
+        return redirect(f"/scenarios/?set={set_id}")
+
+
 class ScenarioCreateView(ProjectMixin, View):
     def post(self, request):
         blocked = _require_write_access(request)
