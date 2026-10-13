@@ -442,7 +442,11 @@ class RepeatFlowTests(_ClientMixin, MonitorTestBase):
         resp = self.client.post("/experiments/new/", self._design())
         run = AuditRun.objects.get()
         m = Monitor.objects.get()
-        self.assertRedirects(resp, f"/runs/{run.id}/", fetch_redirect_response=False)
+        # A single run is a singleton experiment; its results page is the target.
+        exp = run.experiment
+        self.assertIsNotNone(exp)
+        self.assertRedirects(resp, f"/experiments/{exp.id}/", fetch_redirect_response=False)
+        self.assertEqual(m.experiment, exp)
         self.assertEqual(run.monitor_id, m.id)
         self.assertEqual(m.last_run_id, run.id)
         self.assertEqual(m.scenario_set_version_id, self.v1.id)  # always pinned
@@ -453,7 +457,10 @@ class RepeatFlowTests(_ClientMixin, MonitorTestBase):
     def test_start_at_creates_monitor_only(self):
         resp = self.client.post("/experiments/new/", self._design(start="at", first_run_at="2099-03-01T09:00"))
         m = Monitor.objects.get()
-        self.assertRedirects(resp, f"/monitors/{m.id}/", fetch_redirect_response=False)
+        # No run yet (later start), but the singleton experiment exists.
+        exp = m.experiment
+        self.assertIsNotNone(exp)
+        self.assertRedirects(resp, f"/experiments/{exp.id}/", fetch_redirect_response=False)
         self.assertFalse(AuditRun.objects.exists())
         self.assertEqual(m.next_run_at.isoformat(), "2099-03-01T09:00:00+00:00")
 

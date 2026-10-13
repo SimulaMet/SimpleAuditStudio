@@ -1258,14 +1258,23 @@ class NewExperimentView(ProjectMixin, TemplateView):
         except ValueError as e:  # DesignError is a ValueError too
             return self._redesign(request.POST, str(e))
         if len(specs) == 1:
+            # One run still becomes an Experiment (a singleton): anything
+            # launched from New Experiment gets its own results page. The
+            # review screen is only for multi-run designs.
             return self._launch_single(request, specs[0], repeat)
         return self._review(request, design, specs, repeat)
 
     def _launch_single(self, request, spec, repeat):
-        """One run setup: launch it (unless starting later) and, if repeating, monitor it."""
+        """One run setup, always wrapped in a singleton Experiment.
+
+        Anything launched from New Experiment is an Experiment, even a single
+        run (empty factors — there is nothing to compare), so every launch has
+        its own shareable results page. Also monitors it when repeating.
+        """
         from django.db import transaction
 
-        from audits.experiments import spec_to_run
+        from audits.experiments import factors_from_runs, spec_to_run
+        from audits.models import Experiment
         from audits.monitors import create_monitor
 
         p = request.project
@@ -1274,6 +1283,12 @@ class NewExperimentView(ProjectMixin, TemplateView):
         run = monitor = None
         try:
             with transaction.atomic():
+                experiment = Experiment.objects.create(
+                    project=p,
+                    name=custom_name or f"{spec['target'].display_name} · {spec['scenario_set'].label}",
+                    factors=factors_from_runs([run_spec]),
+                    created_by=request.user,
+                )
                 if not repeat or repeat["start"] == "now":
                     run = create_audit_run(
                         project=p,
@@ -1290,6 +1305,7 @@ class NewExperimentView(ProjectMixin, TemplateView):
                         gen_config_override=run_spec["gen_config"],
                         agent=run_spec.get("agent"),
                         trace_config={} if run_spec.get("target_trace") is False else None,
+                        experiment=experiment,
                     )
                 if repeat:
                     first_point = run
@@ -1301,6 +1317,7 @@ class NewExperimentView(ProjectMixin, TemplateView):
                         name=custom_name or f"{spec['target'].display_name} · {ex_label(spec)}",
                         run=run_spec,
                         repeat=repeat,
+                        experiment=experiment,
                         first_point=first_point,
                     )
         except Exception as e:  # noqa: BLE001 - surface any creation failure to the user
@@ -1309,7 +1326,7 @@ class NewExperimentView(ProjectMixin, TemplateView):
             submit_audit_run(run)
         if monitor:
             messages.success(request, f"Monitor “{monitor.name}” created: next run {monitor.next_run_at:%Y-%m-%d %H:%M} UTC.")
-        return redirect(f"/runs/{run.id}/" if run else f"/monitors/{monitor.id}/")
+        return redirect(f"/experiments/{experiment.id}/")
 
     # --- Review -------------------------------------------------------------
     # Rows carry the fixed part of a run (scenario version + models) as a JSON

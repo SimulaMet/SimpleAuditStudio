@@ -4,7 +4,8 @@ The design form lets every input take one or more values. Inputs with one
 value are *fixed*; inputs with several are *factors* (what the experiment
 compares). The cartesian product of all values is the list of runs, each an
 ordinary frozen AuditRun linked to the Experiment. A design that expands to a
-single run launches it directly, without an Experiment.
+single run still becomes an Experiment: a singleton with empty factors, so
+every launch from New Experiment has its own shareable results page.
 """
 from __future__ import annotations
 
