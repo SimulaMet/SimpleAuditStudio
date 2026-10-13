@@ -361,6 +361,10 @@ else:
     # Set to "tls" or "mtls" (with HATCHET_CLIENT_TLS_* env vars) for TLS deployments.
     HATCHET_TLS_STRATEGY = os.environ.get("HATCHET_TLS_STRATEGY", "none")
 WORKER_POOL = os.environ.get("WORKER_POOL", "cpu")
+# Max concurrent scenario repetitions the worker claims from Hatchet. Each slot
+# holds one in-flight scenario task; keep this within what the model API rate
+# limits and container memory can sustain.
+WORKER_SLOT_COUNT = int(os.environ.get("WORKER_SLOT_COUNT", "8"))
 # NOTE: SimpleAudit engine provenance (version + optional commit) is NOT a
 # setting here. It is resolved from the installed package metadata at runtime by
 # infra.simpleaudit_package.resolve_engine_provenance(), so the web and worker

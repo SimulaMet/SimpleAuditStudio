@@ -1016,7 +1016,7 @@ def build_worker() -> Worker:
     return Worker(
         name=f"simpleaudit-audit-worker-{settings.WORKER_POOL}",
         config=client.config,
-        slot_config={"default": 4},
+        slot_config={"default": settings.WORKER_SLOT_COUNT},
         labels={"pool": settings.WORKER_POOL},
         workflows=[_scenario_task, _finalize_task],
     )
