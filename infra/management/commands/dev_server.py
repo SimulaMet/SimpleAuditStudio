@@ -78,7 +78,11 @@ def _sync_chat_models() -> str:
     except ChatAPIError as exc:
         return f"Models not synced to chat: {exc}"
     kept = f", kept {result['kept']} added in chat" if result["kept"] else ""
-    return f"Synced {result['pushed']} model connection(s) to chat{kept}."
+    message = f"Synced {result['pushed']} model connection(s) to chat{kept}."
+    from chat.sync import ensure_tracing_function
+
+    message += f" {ensure_tracing_function()}"
+    return message
 
 
 def _backfill_demo_chat() -> str:
