@@ -1166,6 +1166,7 @@ def _clone_from_run(source: AuditRun) -> dict:
         "auditor_model_id": source.auditor_model_id,
         "judge_model_id": source.judge_model_id,
         "judge_version_id": source.judge_version_id,
+        "system_prompt_version_id": source.system_prompt_version_id,
         "agent_id": source.agent_id,
         "max_turns": params.get("max_turns", ""),
         "language": params.get("language", ""),
@@ -1192,6 +1193,7 @@ def _design_selection(post=None, clone=None) -> dict:
             "judge": post.getlist("judge"),
             "agent_id": agent_id,
             "agent_trace": "1" in post.getlist(f"agent_trace_{agent_id}") if agent_id else True,
+            "system_prompt_version": (post.get("system_prompt_version") or "").strip(),
         }
     if clone:
         # Clone pins the cloned run's exact version.
@@ -1205,8 +1207,9 @@ def _design_selection(post=None, clone=None) -> dict:
             "judge": [str(clone["judge_version_id"])],
             "agent_id": agent_id,
             "agent_trace": True,
+            "system_prompt_version": str(clone.get("system_prompt_version_id") or ""),
         }
-    return {"sets": [], "versions": [], "target": [], "auditor": [], "judge_model": [], "judge": [], "agent_id": "", "agent_trace": True}
+    return {"sets": [], "versions": [], "target": [], "auditor": [], "judge_model": [], "judge": [], "agent_id": "", "agent_trace": True, "system_prompt_version": ""}
 
 
 def ex_repeat(repeat: dict) -> str:
@@ -1340,18 +1343,31 @@ class NewExperimentView(ProjectMixin, TemplateView):
         for model in agent_models:
             model.agent = agent_by_external_id[model.model_id]
             model.has_otlp = model.connection_id in otlp_connection_ids
-        # Versioned system prompts for the "pick a predefined prompt" dropdown.
-        from prompts.models import SystemPrompt
+        # Versioned system prompts for the picker: each row lists its versions
+        # (newest first) and which are ticked — same shape as the scenario-set
+        # rows so the template + JS can mirror that picker exactly.
+        from prompts.models import SystemPrompt, SystemPromptVersion
+
+        system_prompts = list(
+            SystemPrompt.objects.filter(project=p)
+            .prefetch_related(
+                Prefetch("versions", queryset=SystemPromptVersion.objects.order_by("-version"))
+            )
+            .order_by("name")
+        )
+        spv_selected = sel["system_prompt_version"]
+        for sp in system_prompts:
+            sp.version_list = list(sp.versions.all())
+            latest_id = str(sp.version_list[0].id) if sp.version_list else None
+            sp.ticked = {spv_selected} if spv_selected in {str(v.id) for v in sp.version_list} else set()
+            # Open the version list when a non-latest version is selected.
+            sp.show_versions = bool(sp.ticked - {latest_id})
 
         kw.update(
             sets=sets,
             connections=connections,
             agent_models=agent_models,
-            system_prompts=list(
-                SystemPrompt.objects.filter(project=p)
-                .prefetch_related("versions")
-                .order_by("name")
-            ),
+            system_prompts=system_prompts,
             model_roles=[
                 ("target", "Target", "The model under test.", sel["target"]),
                 ("auditor", "Auditor", "Plays the user and probes the target.", sel["auditor"]),
@@ -3858,13 +3874,30 @@ class AgentDetailView(ProjectMixin, TemplateView):
         # Gate the "+ New" deep links: without the chat proxy there is no
         # embedded workspace to create in.
         ctx["chat_enabled"] = chat_enabled()
-        # Versioned system prompts for the agent's instructions picker.
-        from prompts.models import SystemPrompt
-        ctx["system_prompts"] = list(
+        # Versioned system prompts for the agent's instructions picker — same
+        # row shape as the experiment picker (versions newest first, ticked).
+        # Pre-tick the version whose content matches the agent's current text so
+        # a re-opened agent shows which predefined prompt it uses.
+        from django.db.models import Prefetch
+
+        from prompts.models import SystemPrompt, SystemPromptVersion
+
+        agent_prompt_text = (agent.system_prompt or "").strip() if agent else ""
+        system_prompts = list(
             SystemPrompt.objects.filter(project=project)
-            .prefetch_related("versions")
+            .prefetch_related(
+                Prefetch("versions", queryset=SystemPromptVersion.objects.order_by("-version"))
+            )
             .order_by("name")
         )
+        for sp in system_prompts:
+            sp.version_list = list(sp.versions.all())
+            latest_id = str(sp.version_list[0].id) if sp.version_list else None
+            match = next((v for v in sp.version_list if (v.content or "").strip() == agent_prompt_text), None)
+            matched_id = str(match.id) if match else None
+            sp.ticked = {matched_id} if matched_id else set()
+            sp.show_versions = bool(sp.ticked - {latest_id})
+        ctx["system_prompts"] = system_prompts
         # Live Open WebUI model entry (None when unsynced or OWUI is down).
         if agent is not None and chat_enabled():
             from model_registry.services import agent_live_openwebui

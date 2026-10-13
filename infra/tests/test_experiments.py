@@ -490,9 +490,12 @@ class JudgeAndSystemPromptTests(_ExperimentBase):
         prompt = system_prompt_for(self.project, name="Support bot", content="You are the Acme support bot.")
         version = prompt.latest
         page = self.client.get("/experiments/new/")
-        # Rendered as the same searchable list as Models / Scenario sets: radio rows.
+        # Rendered like the Scenario-sets block: a row per prompt with an
+        # expandable Versions list of radios (single selection, no row checkbox).
         self.assertContains(page, f'type="radio" name="system_prompt_version" value="{version.id}"')
-        self.assertContains(page, "Support bot v1")
+        self.assertNotContains(page, 'data-prompt-toggle')
+        self.assertContains(page, "Support bot")
+        self.assertContains(page, "Versions ▾")
         self.assertIn(prompt, page.context["system_prompts"])
 
     def test_picking_a_predefined_prompt_bakes_content_and_source_into_the_run(self):

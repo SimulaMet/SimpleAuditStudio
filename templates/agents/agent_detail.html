@@ -98,26 +98,46 @@
     <fieldset class="bg-surface-raised rounded-xl border border-gray-800 p-4 space-y-4">
       <legend class="px-2 text-xs font-semibold text-gray-300 uppercase tracking-wide">Instructions</legend>
       {% if system_prompts %}
-      <fieldset>
-        <legend class="px-2 text-xs font-semibold text-gray-300 uppercase tracking-wide mb-1">System Prompt (versioned)</legend>
-        <input type="search" data-filter placeholder="Search prompts…" aria-label="Search predefined prompts"
-               class="w-full mb-1.5 px-2.5 py-1.5 rounded-lg bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-2 focus:ring-accent/50">
-        <div data-filter-list class="h-48 overflow-y-auto rounded-lg border border-gray-800 bg-surface-overlay/40 divide-y divide-gray-800/60">
-          {% for sp in system_prompts %}{% if sp.versions.all %}
-          <p data-filter-group="{{ sp.pk }}" class="px-2.5 pt-2 pb-1 text-[10px] uppercase tracking-wide text-gray-600">{{ sp.name }}</p>
-          {% for v in sp.versions.all %}
-          <label data-filter-item data-group="{{ sp.pk }}" title="{{ v.content|truncatechars:200 }}" class="flex items-start gap-2 px-2.5 py-1.5 text-sm cursor-pointer hover:bg-surface-overlay">
-            <input type="radio" name="system_prompt_version" value="{{ v.id }}" data-content="{{ v.content|escapejs }}" class="mt-0.5 accent-emerald-500">
-            <span class="min-w-0">
-              <span class="text-gray-200 block truncate">{{ sp.name }} v{{ v.version }}{% if v.note %} · {{ v.note|truncatechars:50 }}{% endif %}</span>
-              <span class="text-[11px] text-gray-500 block truncate">{{ v.content|truncatechars:90 }}</span>
-            </span>
-          </label>
-          {% endfor %}
+      <fieldset data-axis="system_prompt_version">
+        <legend class="px-2 text-xs font-semibold text-gray-300 uppercase tracking-wide mb-1">System Prompt</legend>
+        <p class="text-xs text-gray-500 mb-2">Pick one prompt to fill the box below; open <em>Versions</em> to choose an older one. Type your own to override.</p>
+        <div class="flex items-center gap-2 mb-2">
+          <input type="search" data-filter placeholder="Search prompts…" aria-label="Search predefined prompts"
+                 class="flex-1 px-2.5 py-1.5 rounded-lg bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-2 focus:ring-accent/50">
+          <a href="{% url 'prompts' %}" target="_blank" class="shrink-0 text-xs text-accent hover:text-accent-hover hover:underline">＋ New</a>
+        </div>
+        <div data-filter-list class="space-y-1.5 h-60 overflow-y-auto pr-1">
+          {% for sp in system_prompts %}{% if sp.version_list %}
+          <div data-filter-item data-prompt-row="system_prompt_version" class="rounded-lg border border-gray-800 bg-surface-overlay/40 text-sm">
+            <div class="flex items-start gap-2 px-2.5 py-2">
+              <label for="sp-{{ sp.id }}" class="flex items-start gap-2 min-w-0 flex-1 cursor-pointer">
+                <input type="radio" name="system_prompt_version" value="{{ sp.version_list.0.id }}" data-content="{{ sp.version_list.0.content|escapejs }}" data-version="{{ sp.version_list.0.version }}" data-latest data-row-radio id="sp-{{ sp.id }}" class="mt-0.5 accent-emerald-500" {% if sp.ticked %}checked{% endif %}>
+                <span class="min-w-0">
+                  <span class="text-gray-200 block truncate">{{ sp.name }}</span>
+                  <span class="text-[11px] text-gray-500" data-prompt-summary>v{{ sp.version_list.0.version }} · latest</span>
+                </span>
+              </label>
+              <button type="button" data-version-toggle aria-expanded="{% if sp.show_versions %}true{% else %}false{% endif %}"
+                      class="shrink-0 text-[11px] text-gray-400 hover:text-accent px-1.5 py-0.5 rounded hover:bg-surface-overlay">Versions {% if sp.show_versions %}▴{% else %}▾{% endif %}</button>
+            </div>
+            <div data-version-list class="{% if not sp.show_versions %}hidden{% endif %} border-t border-gray-800 px-2.5 py-1.5 space-y-0.5 max-h-44 overflow-y-auto">
+              {% for v in sp.version_list %}
+              <div class="flex items-baseline gap-2 text-xs py-0.5">
+                <label class="flex items-baseline gap-2 min-w-0 flex-1 cursor-pointer">
+                  <input type="radio" name="system_prompt_version" value="{{ v.id }}" data-content="{{ v.content|escapejs }}" data-version="{{ v.version }}" {% if forloop.first %}data-latest{% endif %}
+                         {% if v.id|stringformat:"d" in sp.ticked %}checked{% endif %}>
+                  <span class="text-gray-200 shrink-0">v{{ v.version }}{% if forloop.first %} <span class="text-accent">latest</span>{% endif %}</span>
+                  <span class="text-gray-500 truncate" title="{{ v.content|truncatechars:300 }}">{% if v.note %}{{ v.note|truncatechars:60 }}{% else %}{{ v.content|truncatechars:60 }}{% endif %}</span>
+                </label>
+                <a href="{% url 'prompt_detail' sp.id %}?v={{ v.version }}" target="_blank" rel="noopener"
+                   title="Open v{{ v.version }} of {{ sp.name }} in a new tab" class="shrink-0 text-gray-500 hover:text-accent">View ↗</a>
+              </div>
+              {% endfor %}
+            </div>
+          </div>
           {% endif %}{% endfor %}
           <div data-filter-empty class="hidden px-2.5 py-2 text-xs text-gray-500">No matches.</div>
         </div>
-        <p class="mt-1.5 text-xs text-gray-500">Pick a versioned prompt to fill the box below, or type your own to override it. <a href="{% url 'prompts' %}" target="_blank" class="text-accent hover:underline">Manage prompts →</a></p>
       </fieldset>
       {% endif %}
       <div>
@@ -441,20 +461,42 @@
     input.addEventListener('keydown', e => { if (e.key === 'Enter') e.preventDefault(); });
   });
 
-  // --- Predefined system prompt: picking a version fills the textarea; typing
-  //     your own clears the selection so it can't silently override your text. ---
+  // --- System Prompt picker: one selectable prompt. Each prompt row has a radio
+  //     on its name (= latest) plus a "Versions ▾" expander with a radio per
+  //     version. All radios share one name → exactly one is selected; picking
+  //     any fills the box below. Typing your own text clears the selection. ---
   (function() {
-    const list = document.querySelector('[name="system_prompt_version"]')?.closest('[data-filter-list]');
+    const fieldset = document.querySelector('[data-axis="system_prompt_version"]');
     const ta = document.getElementById('system_prompt');
-    if (!list || !ta) return;
-    list.addEventListener('change', function(e) {
-      if (e.target.name === 'system_prompt_version') {
-        ta.value = e.target.dataset.content || '';
-      }
+    if (!fieldset || !ta) return;
+    const allRadios = () => [...fieldset.querySelectorAll('input[name="system_prompt_version"]')];
+    function syncAll() {
+      const checked = allRadios().find(r => r.checked);
+      fieldset.querySelectorAll('[data-prompt-row]').forEach(row => {
+        const rs = [...row.querySelectorAll('input[name="system_prompt_version"]')];
+        const rowChecked = rs.find(r => r.checked);
+        const summary = row.querySelector('[data-prompt-summary]');
+        if (!summary) return;
+        if (rowChecked) summary.textContent = `v${rowChecked.dataset.version}` + (rowChecked.hasAttribute('data-latest') ? ' · latest' : ' · older version');
+        else { const latest = rs.find(r => 'latest' in r.dataset); summary.textContent = latest ? `v${latest.dataset.version} · latest` : ''; }
+      });
+      if (checked && ta.value !== checked.dataset.content) ta.value = checked.dataset.content || '';
+    }
+    allRadios().forEach(r => r.addEventListener('change', syncAll));
+    fieldset.querySelectorAll('[data-prompt-row]').forEach(row => {
+      const btn = row.querySelector('[data-version-toggle]');
+      if (btn) btn.addEventListener('click', () => {
+        const list = row.querySelector('[data-version-list]');
+        const open = list.classList.toggle('hidden') === false;
+        btn.setAttribute('aria-expanded', String(open));
+        btn.textContent = open ? 'Versions ▴' : 'Versions ▾';
+      });
     });
-    ta.addEventListener('input', function() {
-      list.querySelectorAll('input[name="system_prompt_version"]:checked').forEach(r => { r.checked = false; });
+    ta.addEventListener('input', () => {
+      allRadios().forEach(r => { r.checked = false; });
+      fieldset.querySelectorAll('[data-prompt-summary]').forEach(s => s.textContent = 'custom');
     });
+    syncAll();
   })();
 
   // --- Sync button: POST to /agents/sync/ then reload ---
