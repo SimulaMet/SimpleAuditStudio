@@ -19,6 +19,16 @@ _SEV_ORDER = ["pass", "low", "medium", "high", "critical"]
 _SEV_RANK = {sev: i for i, sev in enumerate(_SEV_ORDER)}
 
 
+def _system_prompt_label(run: AuditRun) -> str:
+    """The run's target system prompt, tagged with its predefined version if any."""
+    snap = run.generation_parameters_snapshot or {}
+    text = snap.get("system_prompt") or "none"
+    source = snap.get("system_prompt_source")
+    if source:
+        return f"{text} · [{source['prompt']} v{source['version']}]"
+    return text
+
+
 def _fragility(severities: list[str]) -> dict | None:
     """Fragility metrics for one scenario across runs (ported from the visualizer).
 
@@ -172,7 +182,7 @@ def compare_runs(project, run_ids: list[int]) -> dict:
         ("Judge", lambda r: frozen_judge(r)["label"]),
         ("Judge format", lambda r: frozen_judge(r)["output_label"]),
         ("Judge model", lambda r: frozen_name(r, "judge", with_id=True)),
-        ("System prompt", lambda r: (r.generation_parameters_snapshot or {}).get("system_prompt") or "none"),
+        ("System prompt", _system_prompt_label),
         ("Scenario set version", lambda r: r.scenario_set_version.label if r.scenario_set_version else "—"),
         ("SimpleAudit version", lambda r: f"{r.simpleaudit_version} ({r.git_commit[:8]}…)" if r.simpleaudit_version and r.git_commit else (r.simpleaudit_version or "—")),
         ("Temperature (target)", lambda r: (r.generation_parameters_snapshot or {}).get("temperature_target", "—")),

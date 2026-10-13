@@ -22,6 +22,7 @@ from infra.tests.factories import (
     ScenarioSetVersionFactory,
     UserFactory,
     judge_for,
+    system_prompt_for,
 )
 
 _PROVENANCE = mock.Mock(version="0.2.1", commit="", source="metadata")
@@ -480,6 +481,85 @@ class JudgeAndSystemPromptTests(_ExperimentBase):
         prompts = [r.generation_parameters_snapshot.get("system_prompt") for r in exp.runs.order_by("id")]
         self.assertEqual(prompts, ["You are Acme's bot.", None])
         self.assertEqual(exp.factors, ["target", "system_prompt"])
+
+    def test_predefined_prompt_picker_is_offered_when_prompts_exist(self):
+        # No prompts → context empty and no radio rows rendered.
+        page = self.client.get("/experiments/new/")
+        self.assertEqual(page.context["system_prompts"], [])
+        self.assertNotContains(page, 'type="radio" name="system_prompt_version"')
+        prompt = system_prompt_for(self.project, name="Support bot", content="You are the Acme support bot.")
+        version = prompt.latest
+        page = self.client.get("/experiments/new/")
+        # Rendered as the same searchable list as Models / Scenario sets: radio rows.
+        self.assertContains(page, f'type="radio" name="system_prompt_version" value="{version.id}"')
+        self.assertContains(page, "Support bot v1")
+        self.assertIn(prompt, page.context["system_prompts"])
+
+    def test_picking_a_predefined_prompt_bakes_content_and_source_into_the_run(self):
+        prompt = system_prompt_for(self.project, name="Support bot", content="You are the Acme support bot.")
+        version = prompt.latest
+        # One target → a singleton launches straight away (no review screen).
+        self.client.post(
+            "/experiments/new/",
+            self._design(target_model=[self.t1.id], max_turns="3",
+                         system_prompt=version.content, system_prompt_version=str(version.id)),
+        )
+        run = AuditRun.objects.get()
+        snap = run.generation_parameters_snapshot
+        self.assertEqual(snap["system_prompt"], "You are the Acme support bot.")
+        self.assertEqual(snap["system_prompt_source"], {"prompt": "Support bot", "version": 1})
+        self.assertEqual(run.system_prompt_version_id, version.id)
+
+    def test_free_text_prompt_has_no_source_in_manifest(self):
+        self.client.post(
+            "/experiments/new/",
+            self._design(target_model=[self.t1.id], max_turns="3", system_prompt="Typed by hand."),
+        )
+        run = AuditRun.objects.get()
+        snap = run.generation_parameters_snapshot
+        self.assertEqual(snap["system_prompt"], "Typed by hand.")
+        self.assertNotIn("system_prompt_source", snap)
+        self.assertIsNone(run.system_prompt_version_id)
+
+    def test_predefined_prompt_shows_on_review_and_survives_launch(self):
+        prompt = system_prompt_for(self.project, name="Support bot", content="You are the Acme support bot.")
+        version = prompt.latest
+        # Two targets → multi-run design → review screen shows the resolved prompt.
+        review = self.client.post(
+            "/experiments/new/",
+            self._design(max_turns="",
+                         system_prompt=version.content, system_prompt_version=str(version.id)),
+        )
+        self.assertEqual({r["system_prompt"] for r in review.context["rows"]}, {version.content})
+        # The row spec carries the version id so it survives the review round-trip.
+        specs = [json.loads(r["spec"]) for r in review.context["rows"]]
+        self.assertTrue(all(s.get("spv") == version.id for s in specs))
+        self.client.post("/experiments/new/", self._review_to_launch_payload(review))
+        runs = list(Experiment.objects.get().runs.all())
+        prompts = [r.generation_parameters_snapshot.get("system_prompt") for r in runs]
+        self.assertEqual(prompts, ["You are the Acme support bot.", "You are the Acme support bot."])
+        sources = [r.generation_parameters_snapshot.get("system_prompt_source") for r in runs]
+        self.assertEqual(sources, [{"prompt": "Support bot", "version": 1}] * 2)
+        self.assertTrue(all(r.system_prompt_version_id == version.id for r in runs))
+
+    def test_predefined_prompt_wins_over_textarea_without_js(self):
+        # Server re-resolves the picked version even when JS never filled the box.
+        prompt = system_prompt_for(self.project, name="Support bot", content="Picked prompt text.")
+        version = prompt.latest
+        self.client.post(
+            "/experiments/new/",
+            self._design(target_model=[self.t1.id], max_turns="3",
+                         system_prompt="", system_prompt_version=str(version.id)),
+        )
+        self.assertEqual(AuditRun.objects.get().generation_parameters_snapshot["system_prompt"], "Picked prompt text.")
+
+    def test_unknown_prompt_version_falls_back_to_textarea(self):
+        self.client.post(
+            "/experiments/new/",
+            self._design(target_model=[self.t1.id], max_turns="3",
+                         system_prompt="Typed by hand.", system_prompt_version="999999"),
+        )
+        self.assertEqual(AuditRun.objects.get().generation_parameters_snapshot["system_prompt"], "Typed by hand.")
 
     def test_clone_prefills_judge_and_system_prompt(self):
         self.client.post("/experiments/new/", self._design(target_model=[self.t1.id], max_turns="3", system_prompt="Be terse."))

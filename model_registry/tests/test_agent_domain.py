@@ -14,6 +14,7 @@ from infra.tests.factories import (
     RegisteredModelFactory,
     ToolFactory,
     UserFactory,
+    system_prompt_for,
 )
 from model_registry.models import (
     Agent,
@@ -383,6 +384,26 @@ class AgentUITest(TestCase):
         resp = self.client.get(f"/agents/{agent.id}/")
         self.assertEqual(resp.status_code, 200)
         self.assertContains(resp, agent.name)
+
+    def test_agent_prompt_picker_renders_as_list_and_resolves_version(self):
+        model = RegisteredModelFactory(project=self.project)
+        prompt = system_prompt_for(self.project, name="Support bot", content="You are the Acme support bot.")
+        version = prompt.latest
+        # The picker is the same searchable list (radio rows), not a <select>.
+        page = self.client.get("/agents/new/")
+        self.assertContains(page, f'type="radio" name="system_prompt_version" value="{version.id}"')
+        self.assertNotContains(page, '<select id="system_prompt_version"')
+        # Picking a version resolves to that version's text on save.
+        resp = self.client.post("/agents/new/", {
+            "name": "Prompted Agent",
+            "base_model": model.id,
+            "system_prompt": version.content,
+            "system_prompt_version": str(version.id),
+            "enabled": "on",
+        })
+        self.assertEqual(resp.status_code, 302)
+        agent = Agent.objects.get(name="Prompted Agent")
+        self.assertEqual(agent.system_prompt, "You are the Acme support bot.")
 
     def test_agent_delete_via_ui(self):
         agent = AgentFactory(project=self.project)

@@ -1,8 +1,23 @@
 {% comment %}
-Behaviour for run_settings.html: generation-config normalisation and
-submit-time JSON validation.
+Behaviour for run_settings.html: predefined-prompt picker sync, generation-config
+normalisation and submit-time JSON validation.
 {% endcomment %}
 <script>
+// Predefined system prompt: picking a versioned prompt fills the textarea;
+// typing your own clears the selection so it can't silently override your text.
+(function() {
+  const list = document.querySelector('[name="system_prompt_version"]')?.closest('[data-filter-list]');
+  const ta = document.getElementById('system-prompt');
+  if (!list || !ta) return;
+  list.addEventListener('change', function(e) {
+    if (e.target.name === 'system_prompt_version') {
+      ta.value = e.target.dataset.content || '';
+    }
+  });
+  ta.addEventListener('input', function() {
+    list.querySelectorAll('input[name="system_prompt_version"]:checked').forEach(r => { r.checked = false; });
+  });
+})();
 // Keep only real overrides: drop empty/null entries and retry values equal to
 // the engine defaults, so no-op keys aren't frozen into the manifest.
 function cleanGenConfig(obj) {

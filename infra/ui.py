@@ -1340,10 +1340,18 @@ class NewExperimentView(ProjectMixin, TemplateView):
         for model in agent_models:
             model.agent = agent_by_external_id[model.model_id]
             model.has_otlp = model.connection_id in otlp_connection_ids
+        # Versioned system prompts for the "pick a predefined prompt" dropdown.
+        from prompts.models import SystemPrompt
+
         kw.update(
             sets=sets,
             connections=connections,
             agent_models=agent_models,
+            system_prompts=list(
+                SystemPrompt.objects.filter(project=p)
+                .prefetch_related("versions")
+                .order_by("name")
+            ),
             model_roles=[
                 ("target", "Target", "The model under test.", sel["target"]),
                 ("auditor", "Auditor", "Plays the user and probes the target.", sel["auditor"]),
@@ -1439,6 +1447,7 @@ class NewExperimentView(ProjectMixin, TemplateView):
                         language_override=run_spec["language"],
                         n_repetitions_override=run_spec["n_repetitions"],
                         gen_config_override=run_spec["gen_config"],
+                        system_prompt_version=run_spec.get("system_prompt_version"),
                         agent=run_spec.get("agent"),
                         trace_config={} if run_spec.get("target_trace") is False else None,
                         experiment=experiment,
@@ -1475,7 +1484,8 @@ class NewExperimentView(ProjectMixin, TemplateView):
                      duplicate=False):
         from audits import experiments as ex
 
-        spec = {"scenario_set": spec_objs["version"], **{r: spec_objs[r] for r in ("target", "auditor", "judge_model", "judge")}}
+        spec = {"scenario_set": spec_objs["version"], **{r: spec_objs[r] for r in ("target", "auditor", "judge_model", "judge")},
+                "system_prompt_version": spec_objs.get("system_prompt_version")}
         return {
             "i": i,
             "spec": ex.spec_to_row(spec),
@@ -1539,7 +1549,8 @@ class NewExperimentView(ProjectMixin, TemplateView):
             self._row_context(
                 i,
                 {"version": spec["scenario_set"], "target": spec["target"], "auditor": spec["auditor"],
-                 "judge_model": spec["judge_model"], "judge": spec["judge"]},
+                 "judge_model": spec["judge_model"], "judge": spec["judge"],
+                 "system_prompt_version": spec.get("system_prompt_version")},
                 name=ex.spec_label(spec, factors),
                 max_turns=spec["max_turns"],
                 language=spec["language"],
@@ -1591,6 +1602,11 @@ class NewExperimentView(ProjectMixin, TemplateView):
         judges = JudgeVersion.objects.select_related("judge").filter(
             judge__project=project
         ).in_bulk({spec["j"] for spec in specs.values()})
+        from prompts.models import SystemPromptVersion
+
+        prompt_versions = SystemPromptVersion.objects.filter(
+            prompt__project=project
+        ).in_bulk({spec.get("spv") for spec in specs.values() if spec.get("spv")})
 
         def lookup(found, pk, model):
             if pk not in found:
@@ -1655,6 +1671,7 @@ class NewExperimentView(ProjectMixin, TemplateView):
                 gen_config = {**(gen_config or {}), "system_prompt": system_prompt}
             elif gen_config:
                 gen_config.pop("system_prompt", None)   # cleared on review
+            prompt_version = prompt_versions.get(spec.get("spv")) if spec.get("spv") else None
             runs.append({
                 "name": name,
                 **objs,
@@ -1662,6 +1679,7 @@ class NewExperimentView(ProjectMixin, TemplateView):
                 "language": lang or None,
                 "n_repetitions": n_reps if n_reps and n_reps > 1 else None,
                 "gen_config": gen_config or None,
+                "system_prompt_version": prompt_version,
             })
         return rows, runs, errors
 
@@ -3036,7 +3054,9 @@ class RunDetailView(PublicReadableMixin, DetailView):
 
         ctx["frozen_models"] = [frozen_model(run, role) for role in ROLES]
         ctx["judge"] = frozen_judge(run)
-        ctx["system_prompt"] = (run.generation_parameters_snapshot or {}).get("system_prompt", "")
+        snap = run.generation_parameters_snapshot or {}
+        ctx["system_prompt"] = snap.get("system_prompt", "")
+        ctx["system_prompt_source"] = snap.get("system_prompt_source")
         ctx["frozen_agent"] = frozen_agent(run)
         ctx["public_header"] = True
         return ctx

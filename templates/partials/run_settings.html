@@ -27,12 +27,37 @@ Include run_settings_js.html after the form.
     </div>
   </div>
 
-  <div class="mt-4">
-    <label for="system-prompt" class="block text-xs font-medium text-gray-500 mb-1 uppercase tracking-wide">Target system prompt <span class="normal-case font-normal text-gray-600">(optional)</span></label>
-    <textarea name="system_prompt" id="system-prompt" rows="3" maxlength="20000"
-              placeholder="e.g. You are the support assistant for Acme Health. Answer only questions about our services."
-              class="w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-accent/50 resize-y">{{ clone.system_prompt|default:'' }}</textarea>
-    <p class="mt-1 text-xs text-gray-600">Sent to the target model as its system prompt, like your product would. Leave empty to test the bare model. Edit per run on review to compare prompts.</p>
+  <div class="mt-4 space-y-3">
+    {% if system_prompts %}
+    <fieldset>
+      <legend class="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">Predefined prompt <span class="normal-case font-normal text-gray-600">(pick one to fill the box)</span></legend>
+      <input type="search" data-filter placeholder="Search prompts…" aria-label="Search predefined prompts"
+             class="w-full mb-1.5 px-2.5 py-1.5 rounded-lg bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-2 focus:ring-accent/50">
+      <div data-filter-list class="h-48 overflow-y-auto rounded-lg border border-gray-800 bg-surface-overlay/40 divide-y divide-gray-800/60">
+        {% for sp in system_prompts %}{% if sp.versions.all %}
+        <p data-filter-group="{{ sp.pk }}" class="px-2.5 pt-2 pb-1 text-[10px] uppercase tracking-wide text-gray-600">{{ sp.name }}</p>
+        {% for v in sp.versions.all %}
+        <label data-filter-item data-group="{{ sp.pk }}" title="{{ v.content|truncatechars:200 }}" class="flex items-start gap-2 px-2.5 py-1.5 text-sm cursor-pointer hover:bg-surface-overlay">
+          <input type="radio" name="system_prompt_version" value="{{ v.id }}" data-content="{{ v.content|escapejs }}" class="mt-0.5 accent-emerald-500">
+          <span class="min-w-0">
+            <span class="text-gray-200 block truncate">{{ sp.name }} v{{ v.version }}{% if v.note %} · {{ v.note|truncatechars:50 }}{% endif %}</span>
+            <span class="text-[11px] text-gray-500 block truncate">{{ v.content|truncatechars:90 }}</span>
+          </span>
+        </label>
+        {% endfor %}
+        {% endif %}{% endfor %}
+        <div data-filter-empty class="hidden px-2.5 py-2 text-xs text-gray-500">No matches.</div>
+      </div>
+      <p class="mt-1 text-xs text-gray-600"><a href="{% url 'prompts' %}" target="_blank" class="text-accent hover:underline">Manage prompts →</a></p>
+    </fieldset>
+    {% endif %}
+    <div>
+      <label for="system-prompt" class="block text-xs font-medium text-gray-500 mb-1 uppercase tracking-wide">Target system prompt <span class="normal-case font-normal text-gray-600">(optional)</span></label>
+      <textarea name="system_prompt" id="system-prompt" rows="3" maxlength="20000"
+                placeholder="e.g. You are the support assistant for Acme Health. Answer only questions about our services."
+                class="w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-accent/50 resize-y">{{ clone.system_prompt|default:'' }}</textarea>
+      <p class="mt-1 text-xs text-gray-600">Sent to the target model as its system prompt, like your product would. Leave empty to test the bare model. Edit per run on review to compare prompts.</p>
+    </div>
   </div>
 
   <!-- Advanced: Generation config override -->

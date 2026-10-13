@@ -43,6 +43,14 @@ class AuditRun(models.Model):
     # How the run is graded (criteria, output format, probe prompt) and the model that grades.
     judge_version = models.ForeignKey("judges.JudgeVersion", on_delete=models.RESTRICT, related_name="audit_runs")
     judge_model = models.ForeignKey("model_registry.RegisteredModel", on_delete=models.RESTRICT, related_name="judge_audit_runs")
+    # The versioned system prompt the target used, when a predefined one was
+    # picked. Null for free-text / bare-model runs; the actual text still lives
+    # in ``generation_parameters_snapshot["system_prompt"]``. Frozen like every
+    # other input so historical runs stay reproducible.
+    system_prompt_version = models.ForeignKey(
+        "prompts.SystemPromptVersion", on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="audit_runs",
+    )
     target_config_snapshot = models.JSONField()
     auditor_config_snapshot = models.JSONField()
     judge_config_snapshot = models.JSONField()
