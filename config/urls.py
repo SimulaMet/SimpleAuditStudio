@@ -280,6 +280,7 @@ urlpatterns = [
 # /chat/ by Caddy (the subpath build); Studio owns /playground/ — the wrapper page with
 # the model-picker bar — plus /chat/authz, the forward-auth endpoint Caddy
 # calls. All 404 unless SIMPLEAUDIT_CHAT is set. See chat/config.py.
+from chat import api_passthrough
 from chat.views import authz as _chat_authz
 from chat.views import css_mask as _chat_css_mask
 from chat.views import loader_mask as _chat_loader_mask
@@ -289,6 +290,15 @@ urlpatterns += [
     path("chat/authz", _chat_authz, name="chat_authz"),
     path("chat/css-mask", _chat_css_mask, name="chat_css_mask"),
     path("chat/loader-mask", _chat_loader_mask, name="chat_loader_mask"),
+    # Studio's OpenAI-compatible model API (issue #24): external clients call
+    # these with a personal API key (Authorization: Bearer sa_api_…). They live
+    # under Studio's own routing — NOT /chat/* — so Caddy's forward-auth (which
+    # bounces cookie-less requests to /login/) never sees them. All 404 unless
+    # SIMPLEAUDIT_CHAT is set (checked inside each view).
+    path("api/v1/models", api_passthrough.api_models, name="api-v1-models"),
+    path("api/v1/chat/completions", api_passthrough.api_chat_completions, name="api-v1-chat-completions"),
+    path("api/v1/keys/issue/", api_passthrough.issue_api_key, name="api-v1-key-issue"),
+    path("api/v1/keys/revoke/", api_passthrough.revoke_api_key, name="api-v1-key-revoke"),
 ]
 
 # OTLP listener (machine-to-machine span ingestion + credential management).

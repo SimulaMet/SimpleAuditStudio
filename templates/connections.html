@@ -602,6 +602,7 @@
     catch { $('#otlp-copy').textContent = 'Copy failed'; }
     setTimeout(() => { $('#otlp-copy').textContent = 'Copy env vars'; }, 1500);
   });
+
   list.addEventListener('change', refreshSubmit);
   $('#manual-id').addEventListener('input', refreshSubmit);
   $('#discover-filter').addEventListener('input', e => {

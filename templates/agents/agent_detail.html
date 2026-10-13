@@ -37,12 +37,23 @@
     <fieldset class="bg-surface-raised rounded-xl border border-gray-800 p-4">
       <legend class="px-2 text-xs font-semibold text-gray-300 uppercase tracking-wide flex items-center justify-between gap-4 w-full">
         <span>Chat availability</span>
-        <a href="{% url 'agent_test_chat' agent.id %}" title="Open a chat with {{ agent.name }}"
-           aria-label="Chat with {{ agent.name }}"
-           class="inline-flex items-center gap-1.5 normal-case tracking-normal text-[11px] text-gray-400 hover:text-accent">
-          <svg class="w-3.5 h-3.5" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 1.5A6.5 6.5 0 0 0 1.5 8c0 1.1.27 2.15.75 3.08L1.5 14.5l3.55-.72A6.5 6.5 0 1 0 8 1.5Zm0 1.5a5 5 0 1 1-2.55 9.3l-.34-.18-2.06.42.43-1.98-.22-.34A5 5 0 0 1 8 3Z"/></svg>
-          Test in Chat
-        </a>
+        <span class="flex items-center gap-3 normal-case tracking-normal">
+          {% if agent.external_id %}
+          <button type="button" data-expose
+                  title="Get an API endpoint + key so other apps can call this agent"
+                  aria-label="Expose {{ agent.name }} via API"
+                  class="inline-flex items-center gap-1.5 text-[11px] text-gray-400 hover:text-accent">
+            <svg class="w-3.5 h-3.5" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M9.5 1 3 9h3.5L6 15l6.5-8H9l1-6z"/></svg>
+            Expose via API
+          </button>
+          {% endif %}
+          <a href="{% url 'agent_test_chat' agent.id %}" title="Open a chat with {{ agent.name }}"
+             aria-label="Chat with {{ agent.name }}"
+             class="inline-flex items-center gap-1.5 text-[11px] text-gray-400 hover:text-accent">
+            <svg class="w-3.5 h-3.5" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 1.5A6.5 6.5 0 0 0 1.5 8c0 1.1.27 2.15.75 3.08L1.5 14.5l3.55-.72A6.5 6.5 0 1 0 8 1.5Zm0 1.5a5 5 0 1 1-2.55 9.3l-.34-.18-2.06.42.43-1.98-.22-.34A5 5 0 0 1 8 3Z"/></svg>
+            Test in Chat
+          </a>
+        </span>
       </legend>
       {% if agent.external_id %}
         {% if openwebui_live %}
@@ -280,6 +291,129 @@
   </form>
   {% endif %}
 </div>
+
+{% if agent and chat_enabled and agent.external_id %}
+<!-- Expose this agent via API (endpoint + personal key, issue #24) -->
+<dialog id="expose-dialog" class="sa-dialog w-[min(40rem,calc(100vw-2rem))] rounded-xl border border-gray-700 bg-surface-raised p-0 shadow-2xl">
+  <div class="p-5 space-y-4">
+    <div class="flex items-center justify-between">
+      <h2 class="text-base font-semibold text-gray-100">Expose <span id="expose-model-name"></span> via API</h2>
+      <button type="button" data-dialog-close aria-label="Close" title="Close" class="w-7 h-7 rounded text-gray-500 hover:text-gray-200">✕</button>
+    </div>
+    <p class="text-xs text-gray-400">Point any OpenAI-compatible client at this endpoint with your personal API key. The key acts as you — it can only call agents you can see.</p>
+
+    <div class="space-y-3 text-xs">
+      <div>
+        <p class="text-gray-500 mb-1">Endpoint base URL</p>
+        <div class="flex items-center gap-2">
+          <code id="expose-endpoint" class="flex-1 bg-surface-overlay border border-gray-700 rounded-lg px-3 py-2 font-mono text-[11px] text-gray-200 break-all"></code>
+          <button type="button" data-copy-target="expose-endpoint" class="px-2.5 py-2 rounded-lg text-xs text-gray-300 bg-surface-overlay hover:text-white whitespace-nowrap">Copy</button>
+        </div>
+      </div>
+      <div>
+        <p class="text-gray-500 mb-1">Model ID</p>
+        <div class="flex items-center gap-2">
+          <code id="expose-model-id" class="flex-1 bg-surface-overlay border border-gray-700 rounded-lg px-3 py-2 font-mono text-[11px] text-gray-200 break-all"></code>
+          <button type="button" data-copy-target="expose-model-id" class="px-2.5 py-2 rounded-lg text-xs text-gray-300 bg-surface-overlay hover:text-white whitespace-nowrap">Copy</button>
+        </div>
+      </div>
+      <div>
+        <p class="text-gray-500 mb-1">Personal API key</p>
+        <div class="flex items-center gap-2">
+          <code id="expose-key" class="flex-1 bg-surface-overlay border border-gray-700 rounded-lg px-3 py-2 font-mono text-[11px] text-gray-200 break-all min-h-[2.35rem]">—</code>
+          <button type="button" id="expose-issue" class="px-2.5 py-2 rounded-lg bg-accent text-white text-xs font-medium hover:bg-accent-hover whitespace-nowrap">Generate my key</button>
+          <button type="button" id="expose-revoke" class="px-2.5 py-2 rounded-lg text-xs text-gray-300 bg-surface-overlay hover:text-red-300 whitespace-nowrap" disabled>Revoke</button>
+        </div>
+        <p id="expose-key-warning" class="hidden mt-1.5 text-amber-300 bg-amber-900/20 rounded px-2 py-1.5">Copy your key now — it's shown only once and can't be retrieved later.</p>
+      </div>
+    </div>
+
+    <div>
+      <p class="text-gray-500 mb-1">Example (Python)</p>
+      <pre id="expose-snippet" class="bg-surface-overlay border border-gray-700 rounded-lg p-3 font-mono text-[11px] text-gray-200 whitespace-pre-wrap break-all"></pre>
+    </div>
+
+    <p id="expose-error" class="hidden text-xs text-red-300 bg-red-900/20 rounded px-2 py-1.5"></p>
+  </div>
+</dialog>
+<script>
+(function() {
+  // --- Expose this agent via API (endpoint + personal key) ---
+  const exposeDialog = document.getElementById('expose-dialog');
+  if (exposeDialog) {
+    const $ = sel => document.querySelector(sel);
+    const AGENT_ID = "{{ agent.external_id|escapejs }}";
+    function endpointBase() { return location.origin.replace(/\/$/, '') + '/api/v1'; }
+    function updateSnippet() {
+      const ep = $('#expose-endpoint').textContent.trim();
+      const mid = $('#expose-model-id').textContent.trim();
+      const key = $('#expose-key').textContent.trim();
+      const shownKey = key && key !== '—' ? key : 'sk-your-api-key';
+      $('#expose-snippet').textContent =
+        `from openai import OpenAI\n\n` +
+        `client = OpenAI(\n` +
+        `    base_url="${ep}",\n` +
+        `    api_key="${shownKey}",\n` +
+        `)\n\n` +
+        `resp = client.chat.completions.create(\n` +
+        `    model="${mid}",\n` +
+        `    messages=[{"role": "user", "content": "Hello"}],\n` +
+        `)\nprint(resp.choices[0].message.content)`;
+    }
+    function setError(msg) {
+      const el = $('#expose-error');
+      if (!msg) { el.classList.add('hidden'); el.textContent = ''; return; }
+      el.classList.remove('hidden'); el.textContent = msg;
+    }
+    function openExpose() {
+      $('#expose-model-name').textContent = "{{ agent.name|escapejs }}";
+      $('#expose-endpoint').textContent = endpointBase();
+      $('#expose-model-id').textContent = AGENT_ID;
+      $('#expose-key').textContent = '—';
+      $('#expose-key-warning').classList.add('hidden');
+      $('#expose-revoke').disabled = true;
+      $('#expose-issue').textContent = 'Generate my key';
+      setError('');
+      updateSnippet();
+      exposeDialog.showModal();
+    }
+    document.querySelectorAll('[data-expose]').forEach(b => b.addEventListener('click', openExpose));
+    document.addEventListener('click', e => { if (e.target.closest('[data-dialog-close]')) e.target.closest('dialog').close(); });
+    document.addEventListener('click', async e => {
+      const btn = e.target.closest('[data-copy-target]'); if (!btn) return;
+      const val = $(`#${btn.dataset.copyTarget}`).textContent.trim();
+      try { await navigator.clipboard.writeText(val); btn.textContent = 'Copied!'; }
+      catch { btn.textContent = 'Failed'; }
+      setTimeout(() => { btn.textContent = 'Copy'; }, 1500);
+    });
+    $('#expose-issue').addEventListener('click', async () => {
+      const btn = $('#expose-issue'); btn.disabled = true; btn.textContent = 'Generating…';
+      setError('');
+      try {
+        const data = await apiFetch('{% url "api-v1-key-issue" %}', { body: { origin: location.origin } });
+        $('#expose-key').textContent = data.token;
+        $('#expose-key-warning').classList.remove('hidden');
+        $('#expose-revoke').disabled = false;
+        updateSnippet();
+      } catch (err) { setError(err.message); }
+      finally { btn.disabled = false; btn.textContent = 'Regenerate my key'; }
+    });
+    $('#expose-revoke').addEventListener('click', async () => {
+      if (!confirm('Revoke your current API key? Anything using it stops working immediately.')) return;
+      const btn = $('#expose-revoke'); btn.disabled = true;
+      try {
+        await apiFetch('{% url "api-v1-key-revoke" %}');
+        $('#expose-key').textContent = '—';
+        $('#expose-key-warning').classList.add('hidden');
+        $('#expose-revoke').disabled = true;
+        $('#expose-issue').textContent = 'Generate my key';
+        updateSnippet();
+      } catch (err) { setError(err.message); btn.disabled = false; }
+    });
+  }
+})();
+</script>
+{% endif %}
 
 <script>
 (function() {
