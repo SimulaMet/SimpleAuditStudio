@@ -26,7 +26,6 @@ from __future__ import annotations
 
 import json as jsonlib
 import logging
-import uuid
 from typing import Any
 
 import httpx

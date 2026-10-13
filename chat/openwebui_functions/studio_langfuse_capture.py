@@ -68,8 +68,8 @@ class Filter:
         try:
             async with httpx.AsyncClient(timeout=5) as client:
                 await client.post(f"{url}/v1/{PIPELINE_ID}/filter/inlet", json=payload, headers=self._headers())
-        except Exception:
-            pass  # tracing must never break chat
+        except Exception:  # noqa: S110,BLE001 - tracing must never break chat
+            pass
         return user_message
 
     async def after_chat_completion(self, content, context=None, __user__=None, **kwargs):
@@ -94,6 +94,6 @@ class Filter:
         try:
             async with httpx.AsyncClient(timeout=5) as client:
                 await client.post(f"{url}/v1/{PIPELINE_ID}/filter/outlet", json=payload, headers=self._headers())
-        except Exception:
+        except Exception:  # noqa: S110,BLE001 - tracing must never break chat
             pass
         return content
