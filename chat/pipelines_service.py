@@ -112,7 +112,7 @@ _chat_trace_ids: dict[str, str] = {}
 
 def _chat_id(body: dict) -> str:
     metadata = body.get("metadata") or {}
-    chat_id = metadata.get("chat_id") or "local"
+    chat_id = body.get("chat_id") or metadata.get("chat_id") or "local"
     if chat_id == "local":
         session_id = metadata.get("session_id")
         chat_id = f"temporary-session-{session_id}" if session_id else str(uuid.uuid4())
