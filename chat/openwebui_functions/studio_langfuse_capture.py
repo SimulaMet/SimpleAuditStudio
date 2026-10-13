@@ -11,15 +11,28 @@ requirements: httpx>=0.27
 """
 
 import os
+import socket
 import uuid
 
 import httpx
 
-# Base URL of the Studio pipelines service (no trailing slash). The Open WebUI
-# container and Studio are on the same Docker network, so the studio container
-# name works from inside OWUI. Override with STUDIO_PIPELINES_URL if your
-# topology differs. Leave empty to disable capturing.
-STUDIO_PIPELINES_URL = os.environ.get("STUDIO_PIPELINES_URL", "http://helsedir-studio:9099").rstrip("/")
+
+# Base URL of the Studio pipelines service (no trailing slash). In dev /
+# single-container setups Open WebUI and Studio share one host, so loopback
+# works; in the Azure multi-container deploy set STUDIO_PIPELINES_URL to the
+# studio container name (e.g. http://helsedir-studio:9099). Leave empty to
+# disable capturing.
+def _default_pipelines_url() -> str:
+    if os.environ.get("STUDIO_PIPELINES_URL"):
+        return os.environ["STUDIO_PIPELINES_URL"].rstrip("/")
+    try:
+        socket.create_connection(("helsedir-studio", 9099), timeout=0.2)
+        return "http://helsedir-studio:9099"
+    except OSError:
+        return "http://127.0.0.1:9099"
+
+
+STUDIO_PIPELINES_URL = _default_pipelines_url()
 PIPELINE_ID = os.environ.get("STUDIO_PIPELINES_ID", "studio_capture")
 # Optional bearer key; the Studio stub accepts a missing or matching key.
 STUDIO_PIPELINES_KEY = os.environ.get("STUDIO_PIPELINES_API_KEY", "")
