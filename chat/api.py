@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import json as jsonlib
 import logging
+import uuid
 from typing import Any
 
 import httpx
@@ -249,23 +250,29 @@ class ChatAPI:
 
     # --- functions (user/model hooks) ---------------------------------------
     def list_functions(self) -> list[dict[str, Any]]:
-        return self.request("GET", "/functions/") or []
+        return self.request("GET", "/api/v1/functions/") or []
 
     def get_function(self, function_id: str) -> dict[str, Any]:
-        return self.request("GET", f"/functions/{function_id}")
+        return self.request("GET", f"/api/v1/functions/id/{function_id}")
 
-    def update_function_content(self, function_id: str, content: str) -> dict[str, Any]:
+    def update_function_content(
+        self, function_id: str, name: str, content: str
+    ) -> dict[str, Any]:
         """Replace a function's code. Open WebUI validates + re-registers it."""
-        return self.request("PUT", f"/functions/{function_id}/update", json={"content": content})
-
-    def create_function(self, name: str, content: str) -> dict[str, Any]:
-        return self.request("POST", "/functions/create", json={"name": name, "content": content})
-
-    def set_function_access(self, function_id: str, access_grants: list[dict[str, str]]) -> Any:
-        """Who may run the function; ``{"tab": "user"}`` means every user."""
         return self.request(
-            "POST", f"/functions/{function_id}/access-rights", json={"data": access_grants}
+            "POST", f"/api/v1/functions/id/{function_id}/update",
+            json={"id": function_id, "name": name, "content": content, "meta": {}},
         )
+
+    def create_function(self, name: str, content: str, function_id: str | None = None) -> dict[str, Any]:
+        """Create a function; ``id`` is Open WebUI's slug for it."""
+        payload = {
+            "id": function_id or "studio_langfuse_capture",
+            "name": name,
+            "content": content,
+            "meta": {},
+        }
+        return self.request("POST", "/api/v1/functions/create", json=payload)
 
     def create_tool(self, tool_id: str, name: str, content: str, description: str = "") -> dict[str, Any]:
         """Register a Python tool in Open WebUI's toolkit (the Tools page).

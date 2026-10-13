@@ -184,11 +184,10 @@ def ensure_tracing_function(api: ChatAPI | None = None) -> str:
         existing = next((f for f in functions if f.get("name") == TRACING_FUNCTION_NAME), None)
         if existing is None:
             created = api.create_function(TRACING_FUNCTION_NAME, content)
-            function_id = created.get("id") or created.get("function_id") or ""
-            api.set_function_access(function_id, [{"tab": "user"}])
-            return "Tracing function installed."
+            # New functions are active for all users by default; nothing to grant.
+            return f"Tracing function installed ({created.get('id', '?')})."
         if (existing.get("content") or "") != content:
-            api.update_function_content(existing["id"], content)
+            api.update_function_content(existing["id"], TRACING_FUNCTION_NAME, content)
             return "Tracing function updated."
         return "Tracing function up to date."
     except ChatAPIError as exc:
