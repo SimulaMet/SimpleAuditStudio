@@ -146,12 +146,14 @@
                 <input type="checkbox" name="agentic_scenario" value="1" {% if item.revision.metadata.agentic %}checked{% endif %}>
                 Agentic scenario
               </label>
-              <div>
-                <label class="text-xs text-gray-500">Agentic metadata (JSON)</label>
-                <p class="text-[11px] text-gray-600 mb-1">Advanced editor for trace, tool, retrieval, trajectory, budget, policy, and enforcement expectations. It is preserved on revisions and exports.</p>
-                <textarea name="metadata" rows="5" spellcheck="false" class="w-full px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs font-mono focus:outline-none focus:ring-1 focus:ring-accent/50">{{ item.revision.metadata|jsonify }}</textarea>
+              <div data-agentic-section{% if not item.revision.metadata.agentic %} style="display:none"{% endif %}>
+                <div>
+                  <label class="text-xs text-gray-500">Agentic metadata (JSON)</label>
+                  <p class="text-[11px] text-gray-600 mb-1">Advanced editor for trace, tool, retrieval, trajectory, budget, policy, and enforcement expectations. It is preserved on revisions and exports.</p>
+                  <textarea name="metadata" rows="5" spellcheck="false" class="w-full px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs font-mono focus:outline-none focus:ring-1 focus:ring-accent/50">{{ item.revision.metadata|jsonify }}</textarea>
+                </div>
+                {% include "partials/agentic_controls.html" with agentic=item.revision.metadata.agentic %}
               </div>
-              {% include "partials/agentic_controls.html" with agentic=item.revision.metadata.agentic %}
               <details class="group">
                 <summary class="text-xs text-gray-500 cursor-pointer select-none hover:text-gray-400">Advanced (severity ceiling, documents, file URI)</summary>
                 <div class="space-y-2 mt-2 pl-3 border-l border-gray-800">
@@ -217,12 +219,14 @@
           <input type="checkbox" name="agentic_scenario" value="1">
           Agentic scenario
         </label>
-        <div>
-          <label class="text-xs text-gray-500">Agentic metadata (JSON)</label>
-          <p class="text-[11px] text-gray-600 mb-1">Use the advanced JSON editor for trace, tool, retrieval, trajectory, budget, policy, and enforcement expectations.</p>
-          <textarea name="metadata" rows="5" spellcheck="false" placeholder='{"agentic":{"schema_version":1,"tools":{},"retrieval":{},"rerank":{},"policy":{},"budgets":{},"trajectory":{},"enforcement":{"mode":"advisory"}}}' class="w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-accent/50"></textarea>
+        <div data-agentic-section style="display:none">
+          <div>
+            <label class="text-xs text-gray-500">Agentic metadata (JSON)</label>
+            <p class="text-[11px] text-gray-600 mb-1">Use the advanced JSON editor for trace, tool, retrieval, trajectory, budget, policy, and enforcement expectations.</p>
+            <textarea name="metadata" rows="5" spellcheck="false" placeholder='{"agentic":{"schema_version":1,"tools":{},"retrieval":{},"rerank":{},"policy":{},"budgets":{},"trajectory":{},"enforcement":{"mode":"advisory"}}}' class="w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-accent/50"></textarea>
+          </div>
+          {% include "partials/agentic_controls.html" with agentic=None %}
         </div>
-        {% include "partials/agentic_controls.html" with agentic=None %}
         <details class="group">
           <summary class="text-xs text-gray-500 cursor-pointer select-none hover:text-gray-400">Advanced (severity ceiling, documents, file URI)</summary>
           <div class="space-y-2 mt-2 pl-3 border-l border-gray-800">
@@ -439,6 +443,15 @@ function filterScenarios(query) {
   </div>
 </div>
 <script>
+// Show/hide the agentic JSON editor + structured controls based on the checkbox.
+// The backend already strips agentic metadata on save when the box is off, so
+// hiding these fields keeps the UI consistent with what actually gets stored.
+function toggleAgenticSection(form) {
+  const toggle = form.querySelector('[name="agentic_scenario"]');
+  const section = form.querySelector('[data-agentic-section]');
+  if (section) section.style.display = toggle && toggle.checked ? '' : 'none';
+}
+
 function syncAgenticFields(form) {
   const toggle = form.querySelector('[name="agentic_scenario"]');
   if (!toggle || !toggle.checked) return true;
@@ -498,6 +511,13 @@ function syncAgenticFields(form) {
   metadataField.value = JSON.stringify(metadata, null, 2);
   return true;
 }
+
+// Wire up live show/hide for every form with an agentic toggle (inline edit + add).
+document.querySelectorAll('[name="agentic_scenario"]').forEach(toggle => {
+  const form = toggle.closest('form');
+  if (!form) return;
+  toggle.addEventListener('change', () => toggleAgenticSection(form));
+});
 
 async function submitImport(setId) {
   const fileInput = document.getElementById('import-file-input');
