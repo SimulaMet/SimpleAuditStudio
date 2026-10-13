@@ -18,6 +18,7 @@ from model_registry.models import (
     RegisteredModel,
     Tool,
 )
+from prompts.models import SystemPrompt, SystemPromptVersion
 from scenarios.models import (
     Scenario,
     ScenarioRevision,
@@ -118,6 +119,30 @@ class RegisteredModelFactory(DjangoModelFactory):
     display_name = factory.Sequence(lambda n: f"Model {n}")
     model_id = factory.Sequence(lambda n: f"model-{n}")
     enabled = True
+
+
+class SystemPromptFactory(DjangoModelFactory):
+    class Meta:
+        model = SystemPrompt
+    project = factory.SubFactory(ProjectFactory)
+    name = factory.Sequence(lambda n: f"Prompt {n}")
+
+
+class SystemPromptVersionFactory(DjangoModelFactory):
+    class Meta:
+        model = SystemPromptVersion
+    prompt = factory.SubFactory(SystemPromptFactory)
+    version = factory.Sequence(lambda n: n)
+    content = factory.Sequence(lambda n: f"You are a helpful assistant (prompt v{n}).")
+
+
+def system_prompt_for(project, *, name=None, content=None):
+    """A prompt with one version in ``project`` (one per call, so ids stay unique)."""
+    prompt = SystemPrompt.objects.create(
+        project=project, name=name or f"Prompt {SystemPrompt.objects.filter(project=project).count() + 1}"
+    )
+    SystemPromptVersion.objects.create(prompt=prompt, version=1, content=content or "You are the support bot.")
+    return prompt
 
 
 class JudgeFactory(DjangoModelFactory):

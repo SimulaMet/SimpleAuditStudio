@@ -84,14 +84,26 @@ def delete_version(version: SystemPromptVersion) -> None:
 
 
 def delete_prompt(prompt: SystemPrompt) -> None:
-    """Delete a prompt and all its versions. Raises ProtectedError if agents reference it."""
+    """Delete a prompt and all its versions.
+
+    Blocked while anything references it, so history stays reproducible:
+    - an audit run froze one of its versions (``system_prompt_version`` FK), or
+    - an agent's instructions match one of its version texts.
+
+    Raises ``ValueError`` with the reason when it can't be deleted.
+    """
+    from audits.models import AuditRun
     from model_registry.models import Agent
 
-    if Agent.objects.filter(project=prompt.project).exists():
-        # Check if any agent's current system_prompt matches this prompt's latest content
-        latest = prompt.latest
-        if latest and Agent.objects.filter(project=prompt.project, system_prompt=latest.content).exists():
-            raise ValueError(
-                f"Agents still use \u201c{prompt.name}\u201d's latest prompt text. "
-                "Detach it from those agents first."
-            )
+    # A run pins the exact version it used; deleting the prompt would break that.
+    if AuditRun.objects.filter(system_prompt_version__prompt=prompt).exists():
+        raise ValueError(
+            f"\u201c{prompt.name}\u201d is pinned by one or more audit runs, so it is kept for reproducibility."
+        )
+    # Agents store raw text; block when their instructions match any version here.
+    contents = list(prompt.versions.values_list("content", flat=True))
+    if contents and Agent.objects.filter(project=prompt.project, system_prompt__in=contents).exists():
+        raise ValueError(
+            f"An agent still uses \u201c{prompt.name}\u201d's text. Detach it from that agent first."
+        )
+    prompt.delete()

@@ -139,6 +139,7 @@ def _generation_parameters(
     language_override: str | None = None,
     n_repetitions_override: int | None = None,
     gen_config_override: dict | None = None,
+    system_prompt_version=None,
 ) -> dict:
     params = {}
     # Raw JSON override provides the base (e.g. cloned generation config),
@@ -155,6 +156,13 @@ def _generation_parameters(
         params["language"] = language_override
     if n_repetitions_override is not None:
         params["n_repetitions"] = n_repetitions_override
+    # Provenance of a predefined prompt, so the manifest records *which* version
+    # was used (the text itself lives under "system_prompt").
+    if system_prompt_version is not None:
+        params["system_prompt_source"] = {
+            "prompt": system_prompt_version.prompt.name,
+            "version": system_prompt_version.version,
+        }
     return params
 
 
@@ -168,6 +176,7 @@ def frozen_inputs(
     language_override: str | None = None,
     n_repetitions_override: int | None = None,
     gen_config_override: dict | None = None,
+    system_prompt_version=None,
 ) -> dict:
     """The snapshots a run freezes: the three endpoints, the judge and the
     generation settings. Shared by ``create_audit_run`` and script generation
@@ -183,6 +192,7 @@ def frozen_inputs(
             language_override=language_override,
             n_repetitions_override=n_repetitions_override,
             gen_config_override=gen_config_override,
+            system_prompt_version=system_prompt_version,
         ),
     }
 
@@ -202,6 +212,7 @@ def create_audit_run(
     language_override: str | None = None,
     n_repetitions_override: int | None = None,
     gen_config_override: dict | None = None,
+    system_prompt_version=None,
     trace_config: dict | None = None,
     monitor=None,
     experiment=None,
@@ -310,10 +321,12 @@ def create_audit_run(
         auditor_model=auditor_model,
         judge_version=judge,
         judge_model=judge_model,
+        system_prompt_version=system_prompt_version,
         **frozen_inputs(
             target_model=target_model, auditor_model=auditor_model, judge_model=judge_model, judge=judge,
             max_turns_override=max_turns_override, language_override=language_override,
             n_repetitions_override=n_repetitions_override, gen_config_override=gen_config_override,
+            system_prompt_version=system_prompt_version,
         ),
         agent_config_snapshot=agent_snapshot,
         simpleaudit_version=resolved_version,

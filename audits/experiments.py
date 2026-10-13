@@ -197,8 +197,21 @@ def parse_design(post, project) -> dict:
     languages = _split_values(post.get("language", ""), str)
 
     # The target's system prompt lives in the generation config (the engine
-    # reads it there); the field wins over a key typed into the JSON.
+    # reads it there). A picked versioned prompt fills the textarea client-side,
+    # but we re-resolve it server-side so a non-JS post is still correct; the
+    # resolved text then wins over a key typed into the JSON. We keep the
+    # resolved version object too so the run can freeze *which* prompt was used.
     system_prompt = (post.get("system_prompt") or "").strip()
+    prompt_version = None
+    prompt_version_id = (post.get("system_prompt_version") or "").strip()
+    if prompt_version_id:
+        from prompts.models import SystemPromptVersion
+
+        pv = SystemPromptVersion.objects.filter(
+            pk=prompt_version_id, prompt__project=project).select_related("prompt").first()
+        if pv is not None:
+            prompt_version = pv
+            system_prompt = pv.content.strip()
     if system_prompt:
         gen_config = {**(gen_config or {}), "system_prompt": system_prompt}
 
@@ -247,6 +260,7 @@ def parse_design(post, project) -> dict:
         "language": languages,
         "n_repetitions": n_reps if n_reps and n_reps > 1 else None,
         "gen_config": gen_config or None,
+        "system_prompt_version": prompt_version,
         "target_trace": target_trace,
         "target_trace_by_model": target_trace_by_model,
     }
@@ -280,6 +294,7 @@ def expand(design: dict) -> list[dict]:
         spec = dict(zip(DESIGN_AXES, combo, strict=True))
         spec["n_repetitions"] = design["n_repetitions"]
         spec["gen_config"] = design["gen_config"]
+        spec["system_prompt_version"] = design.get("system_prompt_version")
         spec["agent"] = design.get("agent")
         if design.get("agent") is not None:
             spec["target_trace"] = design.get("target_trace")
@@ -306,6 +321,7 @@ def spec_to_run(spec: dict, name: str) -> dict:
         "language": spec["language"],
         "n_repetitions": spec["n_repetitions"],
         "gen_config": spec["gen_config"],
+        "system_prompt_version": spec.get("system_prompt_version"),
         "target_trace": spec.get("target_trace"),
     }
 
@@ -402,7 +418,7 @@ def factors_from_runs(runs: list[dict]) -> list[str]:
 
 def spec_to_row(spec: dict) -> str:
     """Serialise the non-editable part of a spec for the review form."""
-    return json.dumps({
+    row = {
         "v": spec["scenario_set"].pk,
         "f": 1 if is_follow(spec["scenario_set"]) else 0,
         "t": spec["target"].pk,
@@ -410,7 +426,11 @@ def spec_to_row(spec: dict) -> str:
         "jm": spec["judge_model"].pk,
         "j": spec["judge"].pk,
         "jf": 1 if is_follow(spec["judge"]) else 0,
-    })
+    }
+    spv = spec.get("system_prompt_version")
+    if spv is not None:
+        row["spv"] = spv.pk
+    return json.dumps(row)
 
 
 def launch_experiment(*, project, user, name: str, runs: list[dict], repeat: dict | None = None) -> Experiment:
@@ -454,6 +474,7 @@ def launch_experiment(*, project, user, name: str, runs: list[dict], repeat: dic
                 language_override=r["language"],
                 n_repetitions_override=r["n_repetitions"],
                 gen_config_override=r["gen_config"],
+                system_prompt_version=r.get("system_prompt_version"),
                 experiment=experiment,
                 agent=r.get("agent"),
                 trace_config={} if r.get("target_trace") is False else None,

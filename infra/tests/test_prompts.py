@@ -5,9 +5,24 @@ Run:
 """
 from django.test import Client, TestCase, tag
 
-from infra.tests.factories import MembershipFactory, ProjectFactory, UserFactory
+from infra.tests.factories import (
+    AgentFactory,
+    MembershipFactory,
+    ModelConnectionFactory,
+    ProjectFactory,
+    RegisteredModelFactory,
+    ScenarioSetFactory,
+    ScenarioSetVersionFactory,
+    UserFactory,
+)
 from prompts.models import SystemPrompt
-from prompts.services import create_prompt, delete_version, save_version, unique_name
+from prompts.services import (
+    create_prompt,
+    delete_prompt,
+    delete_version,
+    save_version,
+    unique_name,
+)
 
 
 @tag("slow")
@@ -69,6 +84,47 @@ class PromptServiceTests(_Base):
         delete_version(mid)
         numbers = sorted(p.versions.values_list("version", flat=True))
         self.assertEqual(numbers, [1, 3])   # gap kept; numbers not renumbered
+
+    def _run_using(self, version):
+        """A minimal AuditRun that pins ``version`` (no engine submission)."""
+        from audits.models import AuditRun
+        from judges.models import Judge, JudgeVersion
+
+        conn = ModelConnectionFactory(project=self.project)
+        target = RegisteredModelFactory(connection=conn, display_name="T")
+        judge_model = RegisteredModelFactory(connection=conn, display_name="J")
+        sset = ScenarioSetFactory(project=self.project, name="S")
+        sver = ScenarioSetVersionFactory(scenario_set=sset, version=1)
+        judge, _ = Judge.objects.get_or_create(project=self.project, name="Test judge")
+        jv = JudgeVersion.objects.create(judge=judge, version=1, base="safety")
+        return AuditRun.objects.create(
+            project=self.project, name="R", scenario_set_version=sver, target_model=target,
+            auditor_model=target, judge_version=jv, judge_model=judge_model,
+            simpleaudit_version="0.2.1", git_commit="", system_prompt_version=version,
+            target_config_snapshot={}, auditor_config_snapshot={}, judge_config_snapshot={},
+            generation_parameters_snapshot={"system_prompt": version.content},
+        )
+
+    def test_delete_prompt_blocked_when_run_pins_it(self):
+        p = create_prompt(project=self.project, name="Pinned", content="used text")
+        self._run_using(p.latest)
+        with self.assertRaises(ValueError, msg="pinned"):
+            delete_prompt(p)
+        self.assertTrue(SystemPrompt.objects.filter(pk=p.pk).exists())
+
+    def test_delete_prompt_blocked_when_agent_uses_its_text(self):
+        p = create_prompt(project=self.project, name="Agent used", content="agent text")
+        conn = ModelConnectionFactory(project=self.project)
+        model = RegisteredModelFactory(connection=conn, display_name="M")
+        AgentFactory(project=self.project, base_model=model, system_prompt="agent text")
+        with self.assertRaises(ValueError, msg="agent"):
+            delete_prompt(p)
+        self.assertTrue(SystemPrompt.objects.filter(pk=p.pk).exists())
+
+    def test_delete_prompt_allowed_when_unused(self):
+        p = create_prompt(project=self.project, name="Unused", content="free text")
+        delete_prompt(p)
+        self.assertFalse(SystemPrompt.objects.filter(pk=p.pk).exists())
 
 
 class PromptPageTests(_Base):

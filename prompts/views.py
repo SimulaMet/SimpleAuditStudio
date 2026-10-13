@@ -9,7 +9,13 @@ from django.views.generic import TemplateView
 
 from infra.ui import ProjectMixin, _require_write_access
 from prompts.models import SystemPrompt, SystemPromptVersion
-from prompts.services import create_prompt, delete_version, save_version, unique_name
+from prompts.services import (
+    create_prompt,
+    delete_prompt,
+    delete_version,
+    save_version,
+    unique_name,
+)
 
 
 def _diff_entry(version: SystemPromptVersion) -> dict:
@@ -67,7 +73,7 @@ class PromptsView(ProjectMixin, TemplateView):
             prompt = SystemPrompt.objects.filter(pk=request.POST.get("prompt_id") or 0, project=p).first()
             if prompt is not None:
                 try:
-                    prompt.delete()
+                    delete_prompt(prompt)
                     messages.success(request, f"Deleted system prompt \u201c{prompt.name}\u201d.")
                 except ValueError as e:
                     messages.error(request, str(e))
