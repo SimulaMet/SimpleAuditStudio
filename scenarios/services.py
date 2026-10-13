@@ -183,6 +183,7 @@ def _version_contents(version: ScenarioSetVersion) -> dict[str, dict]:
             "revision": item.revision.revision,
             "description": item.revision.description,
             "expected_behavior": item.revision.expected_behavior or [],
+            "metadata": item.revision.metadata or {},
         }
         for item in version.items.select_related("scenario", "revision")
     }
@@ -202,7 +203,7 @@ def version_diff(old: ScenarioSetVersion, new: ScenarioSetVersion) -> dict:
             added.append(b)
         elif b is None:
             removed.append(a)
-        elif (a["description"], a["expected_behavior"]) != (b["description"], b["expected_behavior"]):
+        elif (a["description"], a["expected_behavior"], a.get("metadata")) != (b["description"], b["expected_behavior"], b.get("metadata")):
             changed.append({"key": key, "title": b["title"], "from": a, "to": b})
         else:
             unchanged += 1
