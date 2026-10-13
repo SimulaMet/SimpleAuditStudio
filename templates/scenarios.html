@@ -442,11 +442,20 @@ function setDiffHtml(d) {
     VersionDiff.fields([{ label: 'Description', from: '', to: s.description }, { label: 'Expected behaviour', from: [], to: s.expected_behavior }], { unchanged: false }) + '</div>');
   html += section('Removed', 'text-red-400', d.removed, s => scenario(s, '−', 'border-red-800', `rev ${s.revision}`) +
     `<p class="text-gray-500 line-through whitespace-pre-wrap">${esc(s.description)}</p></div>`);
-  html += section('Changed', 'text-yellow-400', d.changed, s => scenario(s, '~', 'border-yellow-800', `rev ${s.from.revision} → rev ${s.to.revision}`) +
-    VersionDiff.fields([
+  html += section('Changed', 'text-yellow-400', d.changed, s => {
+    const fields = [
       { label: 'Description', from: s.from.description, to: s.to.description },
       { label: 'Expected behaviour', from: s.from.expected_behavior, to: s.to.expected_behavior },
-    ], { unchanged: false }) + '</div>');
+    ];
+    // Show metadata diff if it changed
+    const mFrom = JSON.stringify(s.from.metadata || {}, null, 2);
+    const mTo = JSON.stringify(s.to.metadata || {}, null, 2);
+    if (mFrom !== mTo) {
+      fields.push({ label: 'Metadata (agentic controls)', from: mFrom, to: mTo });
+    }
+    return scenario(s, '~', 'border-yellow-800', `rev ${s.from.revision} → rev ${s.to.revision}`) +
+      VersionDiff.fields(fields, { unchanged: false }) + '</div>';
+  });
   return html;
 }
 
