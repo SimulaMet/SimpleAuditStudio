@@ -1,0 +1,83 @@
+{% extends "base.html" %}
+{% block title %}System Prompts — SimpleAudit{% endblock %}
+{% block content %}
+<div class="flex flex-wrap items-start justify-between gap-3 mb-5">
+  <div>
+    <h1 class="text-lg font-semibold text-gray-100">System Prompts</h1>
+    <p class="text-sm text-gray-500 mt-0.5 max-w-2xl">
+      Versioned instruction blocks for your agents and audit targets. Editing a prompt saves a new version with a note; runs keep the version they used, so you can compare how prompt changes affected results.
+    </p>
+  </div>
+  <div class="flex flex-wrap items-center gap-2 w-full sm:w-auto">
+    {% if prompts %}
+    <input type="search" id="prompt-search" placeholder="Filter prompts…" aria-label="Filter prompts"
+           class="flex-1 min-w-0 sm:flex-none sm:w-56 px-2.5 py-1.5 rounded-lg bg-surface-overlay border border-gray-700 text-xs text-gray-200 focus:outline-none focus:ring-2 focus:ring-accent/50">
+    {% endif %}
+    <a href="{% url 'prompt_new' %}" data-write title="Create a versioned system prompt"
+       class="px-3 py-1.5 rounded-lg bg-accent text-white text-xs font-medium hover:bg-accent-hover whitespace-nowrap">+ New prompt</a>
+  </div>
+</div>
+
+{% if prompts %}
+<div class="grid grid-cols-1 lg:grid-cols-2 gap-4" id="prompt-list">
+  {% for p in prompts %}
+  <section class="bg-surface-raised rounded-xl border border-gray-800 flex flex-col min-w-0"
+           data-prompt data-search="{{ p.name|lower }} {{ p.description|lower }}">
+    <header class="flex items-start gap-3 px-4 pt-4">
+      <span class="w-9 h-9 shrink-0 rounded-lg bg-accent/15 text-accent flex items-center justify-center" aria-hidden="true">¶</span>
+      <div class="min-w-0 flex-1">
+        <div class="flex flex-wrap items-center gap-2">
+          <a href="{% url 'prompt_detail' p.id %}" class="text-sm font-semibold text-gray-100 hover:text-accent">{{ p.name }}</a>
+          {% if p.current %}{% include "partials/version_badge.html" with number=p.current.version count=p.version_count %}{% endif %}
+        </div>
+        {% if p.description %}<p class="text-xs text-gray-400 mt-0.5 line-clamp-2" title="{{ p.description }}">{{ p.description }}</p>{% endif %}
+      </div>
+    </header>
+    {% if p.current %}
+    <dl class="grid grid-cols-[auto,1fr] gap-x-3 gap-y-1 px-4 py-3 text-xs">
+      <dt class="text-gray-500">Latest note</dt>
+      <dd class="min-w-0 truncate text-gray-300">{{ p.current.note|default:"—" }}</dd>
+      <dt class="text-gray-500">Updated</dt>
+      <dd class="text-gray-400">{{ p.current.created_at|date:"M j, Y H:i" }}</dd>
+    </dl>
+    {% endif %}
+    <footer class="mt-auto flex items-center gap-1.5 px-4 py-2.5 border-t border-gray-800">
+      <a href="{% url 'prompt_detail' p.id %}" title="View content and version history, or edit"
+         class="px-2.5 py-1 rounded-lg text-xs text-gray-300 bg-surface-overlay hover:text-white">Open</a>
+      {% if p.current %}
+      <a href="{% url 'prompt_new' %}?clone={{ p.current.id }}" data-write title="Start a new prompt prefilled from v{{ p.current.version }}"
+         class="px-2.5 py-1 rounded-lg text-xs text-gray-300 bg-surface-overlay hover:text-white">Clone</a>
+      {% endif %}
+      <span class="flex-1"></span>
+      <form method="post" data-write data-confirm="Delete system prompt “{{ p.name }}” and its {{ p.version_count }} version{{ p.version_count|pluralize }}?">
+        {% csrf_token %}<input type="hidden" name="action" value="delete"><input type="hidden" name="prompt_id" value="{{ p.id }}">
+        <button title="Delete prompt" aria-label="Delete prompt {{ p.name }}" class="w-7 h-7 rounded-lg text-gray-500 hover:text-red-400 hover:bg-surface-overlay">✕</button>
+      </form>
+    </footer>
+  </section>
+  {% endfor %}
+</div>
+<p id="filter-empty" class="hidden text-sm text-gray-500 text-center py-6">Nothing matches this filter.</p>
+{% else %}
+<div class="bg-surface-raised rounded-xl border border-gray-800 p-8 text-center">
+  <p class="text-base text-gray-200 font-medium">No system prompts yet</p>
+  <p class="text-sm text-gray-500 mt-1 mb-5 max-w-lg mx-auto">Create versioned system prompts to manage agent instructions with full change history. Each edit saves a new version with a note explaining what changed and why.</p>
+  <a href="{% url 'prompt_new' %}" data-write class="inline-block px-4 py-2 rounded-lg bg-accent text-white text-sm font-medium hover:bg-accent-hover">Create your first prompt</a>
+</div>
+{% endif %}
+
+<script>
+(function () {
+  const search = document.getElementById('prompt-search');
+  search?.addEventListener('input', () => {
+    const q = search.value.trim().toLowerCase();
+    let shown = 0;
+    document.querySelectorAll('[data-prompt]').forEach(card => {
+      card.hidden = !card.dataset.search.includes(q);
+      shown += !card.hidden;
+    });
+    document.getElementById('filter-empty').classList.toggle('hidden', shown > 0);
+  });
+})();
+</script>
+{% endblock %}

@@ -82,6 +82,7 @@ from infra.visualizer import (
 )
 from judges.views import JudgeDetailView, JudgePreviewView, JudgesView
 from model_registry import otlp_config, otlp_views
+from prompts.views import PromptDetailView, PromptsView
 
 # --- Static file serving ---------------------------------------------------
 # For the canonical Docker Compose self-hosted deployment Django serves its
@@ -243,6 +244,9 @@ urlpatterns = [
     path("judges/new/", JudgeDetailView.as_view(), name="judge_new"),
     path("judges/preview/", JudgePreviewView.as_view(), name="judge_preview"),
     path("judges/<int:judge_id>/", JudgeDetailView.as_view(), name="judge_detail"),
+    path("prompts/", PromptsView.as_view(), name="prompts"),
+    path("prompts/new/", PromptDetailView.as_view(), name="prompt_new"),
+    path("prompts/<int:prompt_id>/", PromptDetailView.as_view(), name="prompt_detail"),
     path("compare/", CompareView.as_view(), name="compare"),
     path("runs/<int:run_id>/", RunDetailView.as_view(), name="run_detail"),
     path("runs/<int:run_id>/cancel/", RunCancelView.as_view(), name="run_cancel"),

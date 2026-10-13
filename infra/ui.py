@@ -3790,6 +3790,13 @@ class AgentDetailView(ProjectMixin, TemplateView):
         # Gate the "+ New" deep links: without the chat proxy there is no
         # embedded workspace to create in.
         ctx["chat_enabled"] = chat_enabled()
+        # Versioned system prompts for the agent's instructions picker.
+        from prompts.models import SystemPrompt
+        ctx["system_prompts"] = list(
+            SystemPrompt.objects.filter(project=project)
+            .prefetch_related("versions")
+            .order_by("name")
+        )
         # Live Open WebUI model entry (None when unsynced or OWUI is down).
         if agent is not None and chat_enabled():
             from model_registry.services import agent_live_openwebui
@@ -3876,11 +3883,21 @@ class AgentDetailView(ProjectMixin, TemplateView):
             retrieval[field] = _optional_float(field)
         retrieval["full_context"] = request.POST.get("full_context") == "on"
 
+        # Resolve the system prompt: a versioned prompt picker or a raw textarea.
+        from prompts.models import SystemPromptVersion
+        prompt_version_id = request.POST.get("system_prompt_version") or ""
+        if prompt_version_id:
+            pv = SystemPromptVersion.objects.filter(
+                pk=prompt_version_id, prompt__project=project).first()
+            system_prompt_text = pv.content if pv else ""
+        else:
+            system_prompt_text = request.POST.get("system_prompt", "")
+
         if agent:
             agent.name = name
             agent.description = request.POST.get("description", "")
             agent.base_model = base_model
-            agent.system_prompt = request.POST.get("system_prompt", "")
+            agent.system_prompt = system_prompt_text
             agent.retrieval_settings = retrieval
             agent.enabled = request.POST.get("enabled") == "on"
             agent.save()
@@ -3904,7 +3921,7 @@ class AgentDetailView(ProjectMixin, TemplateView):
                 name=name,
                 description=request.POST.get("description", ""),
                 base_model=base_model,
-                system_prompt=request.POST.get("system_prompt", ""),
+                system_prompt=system_prompt_text,
                 retrieval_settings=retrieval,
                 capabilities=caps,
                 created_by=request.user,

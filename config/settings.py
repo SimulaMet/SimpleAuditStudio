@@ -132,6 +132,7 @@ INSTALLED_APPS = [
     "scenarios",
     "model_registry",
     "judges",
+    "prompts",
     "audits",
     "infra",
     # Optional module: its URLs 404 and nothing runs unless SIMPLEAUDIT_CHAT is

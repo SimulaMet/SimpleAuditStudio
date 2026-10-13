@@ -102,6 +102,7 @@ _NAV = (
     )),
     ("connections", "Connections", "⬡", ("/connections/",), False, ()),
     ("judges", "Judges", "⚖", ("/judges/",), False, ()),
+    ("prompts", "System Prompts", "¶", ("/prompts/",), False, ()),
     ("compare", "Compare", "⇄", ("/compare/",), False, ()),
     ("visualizer", "Visualizer", "◫", ("/visualizer/",), False, ()),
     ("health", "Health", "⚕", ("/health/",), True, ()),
