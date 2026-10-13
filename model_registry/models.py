@@ -203,6 +203,40 @@ class OTLPCredential(models.Model):
         return self.username or self.target_id
 
 
+class ApiCredential(models.Model):
+    """A personal API key that lets an external client call Studio's models.
+
+    One credential per user. The client authenticates Studio's OpenAI-compatible
+    passthrough (``/api/v1/chat/completions`` and ``/api/v1/models``) with
+    ``Authorization: ****** The key acts as its owner: every request is scoped to
+    the models the owner can see in their active workspace, and the completion
+    is proxied to Open WebUI running as that user.
+
+    Only a salted hash of the token is stored — the plaintext ``sa_api_…`` token
+    is shown once at creation and cannot be read back. Mirrors :class:`OTLPCredential`.
+    """
+
+    project = models.ForeignKey("accounts.Project", on_delete=models.CASCADE, related_name="api_credentials")
+    user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="api_credential")
+    # Salted SHA-256 of the bearer token.
+    secret_hash = models.BinaryField()
+    salt = models.BinaryField()
+    # Non-secret lookup prefix of the token (e.g. "sa_api_abc123def456"). Lets
+    # verification do an indexed lookup instead of hashing against every row.
+    # Never used for authentication — only the salted hash is.
+    token_prefix = models.CharField(max_length=32, blank=True, default="", db_index=True)
+    enabled = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "core_api_credential"
+        ordering = ["project__name", "user__email"]
+
+    def __str__(self) -> str:
+        return f"API key {self.user.email or self.user.username}"
+
+
 class KnowledgeReindex(models.Model):
     """Record the last instance-wide knowledge vector rebuild requested by Studio."""
 

@@ -404,6 +404,17 @@ class ChatAPI:
             if isinstance(model, dict) and model.get("id")
         ]
 
+    def chat_completion(self, payload: dict[str, Any]) -> Any:
+        """Run an OpenAI-shaped completion through Open WebUI, as this user.
+
+        ``payload`` is passed through to OWUI's ``/api/v1/chat/completions``
+        unchanged (it must carry ``model`` — the prefixed id
+        ``<connection id>.<model id>`` — and ``messages``). Returns OWUI's JSON
+        response, which is already OpenAI-compatible, so callers can hand it
+        back to their client verbatim.
+        """
+        return self.request("POST", "/api/v1/chat/completions", json=payload)
+
 
 
 # --- pure helpers (no I/O, so they are cheap to test) ----------------------
