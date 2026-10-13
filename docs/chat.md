@@ -229,6 +229,11 @@ unset: the iframe loads the same-origin `/chat/`.
 | `SIMPLEAUDIT_CHAT_OTLP`         | `false` outside embedded CLI; `true` for `uvx` | export Open WebUI's spans to Studio's OTLP listener |
 | `SIMPLEAUDIT_CHAT_OTLP_ENDPOINT`| full OTLP listener URL   | the `/otlp/v1/traces` ingestion URL (embedded: `http://127.0.0.1:<port>/otlp/v1/traces`, docker: `http://web:8000/otlp/v1/traces`) — the exporter uses it as-is |
 | `SIMPLEAUDIT_CHAT_OTLP_SERVICE_NAME` | `open-webui`         | the service name Open WebUI tags its spans with |
+| `SIMPLEAUDIT_PIPELINES`             | off                  | run the Pipelines filter service (chat → Langfuse tracing) as a sidecar |
+| `SIMPLEAUDIT_PIPELINES_PORT`        | `9099`               | port the filter service listens on (loopback only) |
+| `SIMPLEAUDIT_PIPELINES_FORWARD`     | unset                | upstream OpenAI-compatible base to forward model calls to; unset = canned replies (pure capture) |
+| `SIMPLEAUDIT_PIPELINES_FORWARD_KEY` | unset                | bearer key for the forwarded upstream |
+| `LANGFUSE_SECRET_KEY` / `_PUBLIC_KEY` / `_HOST` | unset | Langfuse Cloud credentials + host; traces are sent only when both keys are set |
 
 ## Exporting Open WebUI's spans to Studio (OTLP)
 
@@ -281,6 +286,85 @@ OTEL_BASIC_AUTH_PASSWORD=<password>          # shown once at creation
 
 If no enabled `none` credential exists and no auth is set, the listener answers
 401 and Open WebUI drops the spans.
+
+## Chat tracing to Langfuse (Pipelines filter service)
+
+A separate way to get Open WebUI chat into [Langfuse](https://langfuse.com)
+(issue #21): a tiny, self-contained **Pipelines filter service** that Studio runs
+as a background process — no Docker, no extra container, and none of the
+`open-webui/pipelines` torch/opencv dependency pile. It lives in one file
+(`chat/pipelines_service.py`) and speaks just the two seams Open WebUI calls on
+every chat turn:
+
+- `POST /v1/{id}/filter/inlet` — the user request; the service opens/updates a
+  Langfuse trace for the chat.
+- `POST /v1/{id}/filter/outlet` — the assistant reply; the service records a
+  generation span with token usage.
+- `POST /v1/chat/completions` — the model call; captured, then forwarded to the
+  real backend (or answered with a canned completion when no upstream is set).
+
+It is **opt-in** (`SIMPLEAUDIT_PIPELINES=on`) so existing deployments are
+untouched. When it starts, `manage.py dev` / `spin` print its endpoint. To
+actually send traces you must set both `LANGFUSE_SECRET_KEY` and
+`LANGFUSE_PUBLIC_KEY` (plus `LANGFUSE_HOST`); without them the service still
+runs and captures, but skips the Langfuse write.
+
+There are two capture seams, and which one fires depends on how Open WebUI is
+wired:
+
+- **As a provider (recommended):** add an Open WebUI connection whose base URL
+  is the service (`http://127.0.0.1:9099/v1`, key `0p3n-w3bu!`). Every chat
+  turn then flows through `POST /v1/chat/completions`, which records one trace
+  per chat (request + response + token usage) and forwards the call upstream.
+  This is what Open WebUI actually calls for an OpenAI-compatible connection.
+- **As a filter:** if your client drives the Pipelines filter protocol directly,
+  `POST /v1/{id}/filter/inlet` (user request → span) and
+  `POST /v1/{id}/filter/outlet` (assistant reply → generation) also record
+  traces.
+
+Set `SIMPLEAUDIT_PIPELINES_FORWARD` to the real provider base so model calls
+pass through to the actual model (leave it unset to answer canned completions):
+
+```bash
+# .env
+SIMPLEAUDIT_PIPELINES=on
+SIMPLEAUDIT_PIPELINES_PORT=9099
+SIMPLEAUDIT_PIPELINES_FORWARD=http://127.0.0.1:8080   # your provider base
+SIMPLEAUDIT_PIPELINES_FORWARD_KEY=sk-...
+LANGFUSE_SECRET_KEY=sk-lf-...
+LANGFUSE_PUBLIC_KEY=pk-lf-...
+LANGFUSE_HOST=https://cloud.langfuse.com
+```
+
+**What gets captured** (per chat turn, all at no cost — already in the
+request/response):
+
+- Full `messages` array verbatim (system prompt, history, user turn) as the
+  trace `input`; assistant reply as `output`.
+- `model_parameters` — sampling options Langfuse renders natively:
+  `temperature`, `top_p`, `max_tokens`, `max_completion_tokens`,
+  `frequency_penalty`, `presence_penalty`, `seed`, `stop`, `n`,
+  `response_format`, `logit_bias`, `tools`, `tool_choice`,
+  `parallel_tool_calls`, `stream`, `user`.
+- Token usage (`usage_details`: input + output tokens).
+- Metadata: `finish_reason`, `requested_model`, `interface`, and
+  `raw_params` — a catch-all of every other request-body field not surfaced
+  above, so nothing is silently dropped.
+- **First-class `session_id` and `user_id`** (via Langfuse's
+  `propagate_attributes`), which power the [Sessions](https://langfuse.com/docs/observability/features/sessions)
+  and [Users](https://langfuse.com/docs/observability/features/users) views:
+  - `session_id` = the chat id (`metadata.chat_id`), so every turn in a
+    conversation groups into one replayable session.
+  - `user_id` = the best available identity — `metadata.user.email` / `.name` /
+    `.id`, else the OpenAI-standard top-level `user` field. Left unset when no
+    identity is present (never fabricated).
+- Tags: `simpleauditstudio`.
+
+**Scope:** this captures **chat-level** input/output (one trace per chat, a
+generation span per turn). It does *not* automatically produce full internal
+agent/tool/RAG span tracing — those components would need their own
+instrumentation. For structural Open WebUI spans (operation names, timing), see
+the OTLP section above instead.
 
 ## Syncing with Studio (scaffolding)
 

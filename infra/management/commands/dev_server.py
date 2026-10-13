@@ -239,6 +239,10 @@ class Command(BaseCommand):
         # the stack, mirroring the uvx CLI.
         chat_process = self.start_chat_if_enabled(options["port"], web_port)
 
+        # Optional Pipelines filter service (chat tracing to Langfuse). Opt-in via
+        # SIMPLEAUDIT_PIPELINES; a failed start never blocks the stack.
+        self.start_pipelines_if_enabled()
+
         # Zero-Docker mode: spin up embedded Hatchet (sidecar + embedded Postgres)
         # and point the worker's shared client at it. Setting _CLIENT directly
         # avoids touching infra.worker.get_client() (which is gated on
@@ -327,6 +331,7 @@ class Command(BaseCommand):
             finally:
                 self._stop_web(web_proc)
                 self._stop_chat()
+                self._stop_pipelines()
             return
 
         # --- Worker in the MAIN thread (required for signal handlers) ---
@@ -340,6 +345,7 @@ class Command(BaseCommand):
         finally:
             self._stop_web(web_proc)
             self._stop_chat()
+            self._stop_pipelines()
 
     def start_chat_if_enabled(self, public_port: int, internal_port: int):
         """Start Open WebUI + its front door when SIMPLEAUDIT_CHAT is on.
@@ -401,6 +407,43 @@ class Command(BaseCommand):
             stop_open_webui()
         except Exception:  # chat teardown must never block shutdown
             logger.exception("Chat teardown skipped")
+
+    def start_pipelines_if_enabled(self):
+        """Start the Studio Pipelines filter service when SIMPLEAUDIT_PIPELINES is on.
+
+        A failed start never blocks the stack — it logs and returns, exactly like
+        chat. Returns the process, or None when disabled or failed.
+        """
+        from chat import pipelines_sidecar
+
+        if not pipelines_sidecar.enabled():
+            return None
+        self.stdout.write(self.style.NOTICE(
+            "Starting pipelines filter service (chat tracing)..."))
+        try:
+            process = pipelines_sidecar.start()
+        except (OSError, RuntimeError) as exc:
+            self.stdout.write(self.style.WARNING(
+                f"\n⚠️  Pipelines service could not start ({exc}); continuing without it.\n"
+            ))
+            return None
+        if process is None:
+            self.stdout.write(self.style.WARNING(
+                "\n⚠️  Pipelines service did not come up; continuing without it.\n"
+            ))
+            return None
+        self.stdout.write(
+            f"   Chat tracing endpoint: http://127.0.0.1:{pipelines_sidecar.port()}/v1/models\n"
+        )
+        return process
+
+    def _stop_pipelines(self):
+        try:
+            from chat.pipelines_sidecar import stop
+
+            stop()
+        except Exception:  # teardown must never block shutdown
+            logger.exception("Pipelines teardown skipped")
 
     def prepare_database(self):
         """Apply migrations and make sure the bootstrap admin (a superuser) exists."""
