@@ -875,6 +875,52 @@ class SubagentSettingsView(SuperuserRequiredMixin, TemplateView):
         return redirect(f"{reverse('admin_settings')}?tab=sub-agents")
 
 
+class EmbeddingModelSearchView(SuperuserRequiredMixin, View):
+    """Proxy to the HuggingFace model API for sentence-transformers models.
+
+    The admin knowledge tab uses this so a superuser can browse and pick a
+    local embedding model without leaving the page.  Only ``sentence-transformers``
+    tagged repos are returned — those are the ones Open WebUI can load with its
+    built-in local embedding engine.
+    """
+
+    HF_URL = "https://huggingface.co/api/models"
+    MAX_RESULTS = 30
+
+    def get(self, request):
+        query = (request.GET.get("q") or "").strip()[:200]
+        limit = min(int(request.GET.get("limit", 15)), self.MAX_RESULTS)
+        params = {
+            "filter": "sentence-transformers",
+            "limit": str(limit),
+            "sort": "downloads",
+            "direction": "-1",
+        }
+        if query:
+            params["search"] = query
+        try:
+            import requests
+
+            resp = requests.get(self.HF_URL, params=params, timeout=8)
+            resp.raise_for_status()
+            models = resp.json()
+        except (requests.ConnectionError, requests.Timeout, requests.HTTPError):
+            return JsonResponse(
+                {"error": "Could not reach the HuggingFace model registry."},
+                status=502,
+            )
+        results = [
+            {
+                "id": m["id"],
+                "downloads": m.get("downloads", 0),
+                "likes": m.get("likes", 0),
+            }
+            for m in models
+            if isinstance(m, dict) and m.get("id")
+        ]
+        return JsonResponse({"results": results})
+
+
 # ─── Profile ─────────────────────────────────────────────────────────────────
 
 

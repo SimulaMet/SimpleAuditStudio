@@ -181,6 +181,71 @@ class AdminPageAccessTest(TestCase):
         self.assertEqual(reindex.success, 3)
 
 
+class EmbeddingModelSearchTest(TestCase):
+    """Tests for the HuggingFace embedding model search proxy endpoint."""
+
+    def setUp(self):
+        self.client = Client(SERVER_NAME="localhost")
+
+    @mock.patch("requests.get")
+    def test_superuser_can_search_models(self, mock_get):
+        admin = superuser()
+        login(self.client, admin)
+        mock_get.return_value.status_code = 200
+        mock_get.return_value.json.return_value = [
+            {"id": "sentence-transformers/all-MiniLM-L6-v2", "downloads": 1000000, "likes": 500},
+            {"id": "nomic-ai/nomic-embed-text-v1.5", "downloads": 500000, "likes": 200},
+        ]
+        resp = self.client.get("/api/admin/embedding-models/search/?q=minilm")
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertIn("results", data)
+        self.assertEqual(len(data["results"]), 2)
+        self.assertEqual(data["results"][0]["id"], "sentence-transformers/all-MiniLM-L6-v2")
+        # Verify the query was passed through
+        call_params = mock_get.call_args.kwargs.get("params") or {}
+        self.assertEqual(call_params.get("search"), "minilm")
+        self.assertEqual(call_params.get("filter"), "sentence-transformers")
+
+    @mock.patch("requests.get")
+    def test_empty_query_returns_popular_models(self, mock_get):
+        admin = superuser()
+        login(self.client, admin)
+        mock_get.return_value.status_code = 200
+        mock_get.return_value.json.return_value = [
+            {"id": "sentence-transformers/all-MiniLM-L6-v2", "downloads": 999, "likes": 1},
+        ]
+        resp = self.client.get("/api/admin/embedding-models/search/")
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertEqual(len(data["results"]), 1)
+        # No 'search' param when query is empty
+        call_params = mock_get.call_args.kwargs.get("params") or {}
+        self.assertNotIn("search", call_params)
+
+    def test_anonymous_redirected_to_login(self):
+        resp = self.client.get("/api/admin/embedding-models/search/")
+        self.assertEqual(resp.status_code, 302)
+        self.assertIn("/login/", resp.url)
+
+    def test_non_superuser_forbidden(self):
+        from infra.tests.factories import UserFactory
+        user = UserFactory()
+        user.set_password("testpass123")
+        user.save()
+        login(self.client, user)
+        resp = self.client.get("/api/admin/embedding-models/search/")
+        self.assertEqual(resp.status_code, 403)
+
+    @mock.patch("requests.get", side_effect=__import__("requests").ConnectionError("network down"))
+    def test_hf_unreachable_returns_502(self, mock_get):
+        admin = superuser()
+        login(self.client, admin)
+        resp = self.client.get("/api/admin/embedding-models/search/")
+        self.assertEqual(resp.status_code, 502)
+        self.assertIn("error", resp.json())
+
+
 class AdminPageChatTabsOffTest(TestCase):
     """The Open WebUI-backed tabs are hidden and unreachable with chat off."""
 

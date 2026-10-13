@@ -35,7 +35,21 @@
             </select>
             <span class="label-text-alt mt-1 text-gray-600">Only the selected service’s connection fields are shown.</span>
           </label>
-          <label class="form-control"><span class="label-text text-xs text-gray-400">Embedding model</span><input type="text" name="RAG_EMBEDDING_MODEL" value="{{ embedding.RAG_EMBEDDING_MODEL|default:'' }}" placeholder="sentence-transformers/all-MiniLM-L6-v2" class="input input-sm mt-1 w-full bg-surface-overlay text-gray-100"><span class="label-text-alt mt-1 text-gray-600">The model used to turn document text into vectors.</span></label>
+          <div class="form-control">
+            <span class="label-text text-xs text-gray-400">Embedding model</span>
+            <div class="flex gap-2 mt-1">
+              <input id="embedding-model-input" type="text" name="RAG_EMBEDDING_MODEL" value="{{ embedding.RAG_EMBEDDING_MODEL|default:'' }}" placeholder="sentence-transformers/all-MiniLM-L6-v2" class="input input-sm w-full bg-surface-overlay text-gray-100">
+              <button type="button" id="browse-models-btn" class="btn btn-sm btn-outline border-gray-600 text-gray-300 hover:bg-surface-overlay whitespace-nowrap" title="Browse HuggingFace sentence-transformers models">Browse</button>
+            </div>
+            <span class="label-text-alt mt-1 text-gray-600">The model used to turn document text into vectors. Use Browse to search HuggingFace for sentence-transformers compatible models.</span>
+          </div>
+          <div id="model-search-panel" class="hidden rounded-lg border border-gray-700 bg-surface-overlay p-3 space-y-2">
+            <div class="flex items-center gap-2">
+              <input id="model-search-input" type="text" placeholder="Search models… (e.g. MiniLM, nomic, paraphrase)" class="input input-sm w-full bg-surface text-gray-100" autocomplete="off">
+              <button type="button" id="model-search-clear" class="btn btn-sm btn-ghost text-gray-500 hover:text-gray-300" title="Close">×</button>
+            </div>
+            <div id="model-search-results" class="max-h-64 overflow-y-auto divide-y divide-gray-800"></div>
+          </div>
           <label class="form-control"><span class="label-text text-xs text-gray-400">Batch size</span><input type="number" min="1" name="RAG_EMBEDDING_BATCH_SIZE" value="{{ embedding.RAG_EMBEDDING_BATCH_SIZE|default:'' }}" class="input input-sm mt-1 w-full bg-surface-overlay text-gray-100"></label>
           <label class="form-control"><span class="label-text text-xs text-gray-400">Concurrent requests</span><input type="number" min="1" name="RAG_EMBEDDING_CONCURRENT_REQUESTS" value="{{ embedding.RAG_EMBEDDING_CONCURRENT_REQUESTS|default:'' }}" class="input input-sm mt-1 w-full bg-surface-overlay text-gray-100"></label>
         </div>
@@ -139,6 +153,75 @@
     };
     engine.addEventListener('change', updateProvider);
     updateProvider();
+
+    // ── HuggingFace model browser ────────────────────────────────────────
+    const browseBtn = document.getElementById('browse-models-btn');
+    const searchPanel = document.getElementById('model-search-panel');
+    const searchInput = document.getElementById('model-search-input');
+    const searchClear = document.getElementById('model-search-clear');
+    const resultsDiv = document.getElementById('model-search-results');
+    const modelInput = document.getElementById('embedding-model-input');
+    let debounceTimer = null;
+
+    function togglePanel(show) {
+      searchPanel.classList.toggle('hidden', !show);
+      if (show) {
+        searchInput.value = '';
+        resultsDiv.innerHTML = '';
+        searchInput.focus();
+      }
+    }
+
+    async function fetchModels(query) {
+      const url = '/api/admin/embedding-models/search/?q=' + encodeURIComponent(query || '');
+      try {
+        const resp = await fetch(url, { headers: { 'X-Requested-With': 'XMLHttpRequest' } });
+        if (!resp.ok) throw new Error('Request failed');
+        const data = await resp.json();
+        renderResults(data.results || []);
+      } catch (err) {
+        resultsDiv.innerHTML = '<p class="text-xs text-red-400 p-2">Could not load models. Check your connection.</p>';
+      }
+    }
+
+    function renderResults(models) {
+      if (!models.length) {
+        resultsDiv.innerHTML = '<p class="text-xs text-gray-500 p-2">No models found.</p>';
+        return;
+      }
+      resultsDiv.innerHTML = models.map(m => `
+        <button type="button" data-model="${m.id}" class="model-result w-full text-left px-3 py-2 hover:bg-surface-raised transition-colors group">
+          <div class="flex items-center justify-between gap-2">
+            <span class="text-sm text-gray-100 font-mono truncate group-hover:text-accent">${m.id}</span>
+            <span class="text-xs text-gray-500 whitespace-nowrap">${(m.downloads / 1e6).toFixed(1)}M dl · ${m.likes} ★</span>
+          </div>
+        </button>`).join('');
+      resultsDiv.querySelectorAll('.model-result').forEach(btn => {
+        btn.addEventListener('click', () => {
+          modelInput.value = btn.dataset.model;
+          togglePanel(false);
+        });
+      });
+    }
+
+    if (browseBtn && searchPanel) {
+      browseBtn.addEventListener('click', () => {
+        const isHidden = searchPanel.classList.contains('hidden');
+        togglePanel(isHidden);
+        if (isHidden) fetchModels('');
+      });
+      searchClear.addEventListener('click', () => togglePanel(false));
+      searchInput.addEventListener('input', () => {
+        clearTimeout(debounceTimer);
+        debounceTimer = setTimeout(() => fetchModels(searchInput.value.trim()), 300);
+      });
+      // Close on outside click
+      document.addEventListener('click', (e) => {
+        if (!searchPanel.contains(e.target) && e.target !== browseBtn && !browseBtn.contains(e.target)) {
+          if (!searchPanel.classList.contains('hidden')) togglePanel(false);
+        }
+      });
+    }
   })();
 </script>
 {% endblock %}
