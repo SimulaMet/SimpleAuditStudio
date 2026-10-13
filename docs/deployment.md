@@ -87,7 +87,10 @@ The full stack, each piece in its own container (`docker-compose.yml`):
 - `web` — the app at <http://localhost:8000> (gunicorn). On start it applies
   the database updates, creates the admin and workspace, and seeds scenario
   packs (`SEED_ON_BOOT=false` skips seeding; `SEED_DEMO_AUDITS=false` keeps
-  only the demo runs).
+  only the demo runs). Gunicorn is configured in `gunicorn.conf.py` with
+  threaded workers; each open live audit-run event stream holds one thread, so
+  `GUNICORN_WORKERS` × `GUNICORN_THREADS` (default 2 × 16) caps concurrent
+  viewers plus regular requests. Tune via those env vars.
 - `open-webui`, `chat-proxy` — the chat assistant at `/chat/` (on by
   default, below).
 - `mock-model` — optional profile `mock`; a fake model API for testing.
