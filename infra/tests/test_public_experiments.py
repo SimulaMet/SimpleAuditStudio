@@ -117,6 +117,89 @@ class PublicExperimentsTest(TestCase):
         self.assertIn(b"Public Exp", gallery.content)
         self.assertNotIn(b"Private Exp", gallery.content)
 
+    # ── SEO metadata on public pages ─────────────────────────────────────────
+
+    def test_anon_public_experiment_detail_has_seo_metadata(self):
+        resp = self.anon.get(f"/experiments/{self.public_exp.id}/")
+        self.assertEqual(resp.status_code, 200)
+        html = resp.content.decode()
+        # Indexable by search engines.
+        self.assertIn('<meta name="robots" content="index,follow">', html)
+        # Share card: title, description, and an absolute og:image with
+        # declared dimensions (so crawlers precache the image synchronously).
+        self.assertIn(
+            '<meta property="og:title" content="Public Exp — SimpleAudit Studio">', html
+        )
+        self.assertIn('<meta property="og:description" content="', html)
+        self.assertIn(
+            '<meta property="og:image" content="http://localhost/static/og-image.png">', html
+        )
+        self.assertIn('<meta property="og:image:width" content="1200">', html)
+        self.assertIn('<meta property="og:image:height" content="630">', html)
+        # Canonical points at the experiment URL itself.
+        self.assertIn(
+            f'<link rel="canonical" href="http://localhost/experiments/{self.public_exp.id}/">', html
+        )
+
+    def test_anon_public_gallery_has_seo_metadata(self):
+        resp = self.anon.get("/public-experiments/")
+        self.assertEqual(resp.status_code, 200)
+        html = resp.content.decode()
+        self.assertIn('<meta name="robots" content="index,follow">', html)
+        self.assertIn(
+            '<meta property="og:image" content="http://localhost/static/og-image.png">', html
+        )
+        self.assertIn('<meta property="og:image:width" content="1200">', html)
+        self.assertIn('<meta property="og:image:height" content="630">', html)
+        self.assertIn(
+            '<link rel="canonical" href="http://localhost/public-experiments/">', html
+        )
+
+    def test_signed_in_experiment_detail_stays_noindex(self):
+        # Signed-in users see their workspace-scoped page, which must not be
+        # indexed (only anonymous-public pages carry indexable metadata).
+        resp = self.admin_client.get(f"/experiments/{self.public_exp.id}/")
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn('<meta name="robots" content="noindex,nofollow">', resp.content.decode())
+
+    def test_sitemap_lists_public_experiment_pages(self):
+        resp = self.anon.get("/sitemap.xml")
+        self.assertEqual(resp.status_code, 200)
+        body = resp.content.decode()
+        self.assertIn(f"<loc>http://localhost/experiments/{self.public_exp.id}/</loc>", body)
+        # Private experiments are never listed.
+        self.assertNotIn(f"/experiments/{self.private_exp.id}/", body)
+        self.assertIn("<loc>http://localhost/public-experiments/</loc>", body)
+
+    def test_login_page_has_seo_metadata(self):
+        # Unauthenticated visitors (and bots) land on /login/ when following a
+        # shared link, so it needs share-card metadata too. The canonical points
+        # at the public gallery — the indexable equivalent of this page.
+        resp = self.anon.get("/login/")
+        self.assertEqual(resp.status_code, 200)
+        html = resp.content.decode()
+        self.assertIn('<meta name="robots" content="index,follow">', html)
+        self.assertIn(
+            '<meta property="og:image" content="http://localhost/static/og-image.png">', html
+        )
+        self.assertIn('<meta property="og:image:width" content="1200">', html)
+        self.assertIn('<meta property="og:image:height" content="630">', html)
+        self.assertIn(
+            '<link rel="canonical" href="http://localhost/public-experiments/">', html
+        )
+
+    def test_robots_allows_social_crawlers_to_fetch_share_image(self):
+        resp = self.anon.get("/robots.txt")
+        self.assertEqual(resp.status_code, 200)
+        lines = [ln.strip() for ln in resp.content.decode().splitlines()]
+        allow_og = "Allow: /static/og-image.png"
+        disallow_static = "Disallow: /static/"
+        # The more specific Allow must come before the blanket Disallow so the
+        # longest-match precedence resolves to "allowed".
+        self.assertIn(allow_og, lines)
+        self.assertIn(disallow_static, lines)
+        self.assertLess(lines.index(allow_og), lines.index(disallow_static))
+
     # ── Authenticated behavior unchanged (no cross-project leak) ─────────────
 
     def test_member_sees_own_project_experiments(self):
