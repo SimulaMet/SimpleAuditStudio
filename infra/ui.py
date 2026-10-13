@@ -168,14 +168,22 @@ def _merge_structured_agentic_fields(metadata: dict, post) -> dict:
 
     def json_value(name):
         value = post.get(name, "").strip()
-        return json.loads(value) if value else []
+        if not value:
+            return []
+        parsed = json.loads(value)
+        if not isinstance(parsed, list):
+            raise TypeError(f"Field '{name}' must be a JSON array, got {type(parsed).__name__}")
+        return parsed
 
     def set_value(section, key, value):
         current = dict(agentic.get(section) or {})
         current[key] = value
         agentic[section] = current
 
-    set_value("tools", "expected", csv("agentic_tools_expected"))
+    # The expected-tools field holds plain names; wrap each in the rich spec the
+    # engine checks against ({name, min_calls, max_calls}). Per-tool call bounds
+    # and argument matching are authored via import / the read-only JSON preview.
+    set_value("tools", "expected", [{"name": name, "min_calls": 1, "max_calls": None} for name in csv("agentic_tools_expected")])
     set_value("tools", "forbidden", csv("agentic_tools_forbidden"))
     sources = csv("agentic_sources")
     set_value("retrieval", "sources", sources)
@@ -2208,18 +2216,20 @@ class ScenarioCreateView(ProjectMixin, View):
         test_prompt = request.POST.get("test_prompt", "").strip()
         severity_ceiling = request.POST.get("severity_ceiling", "").strip().lower()
         documents_raw = request.POST.get("documents", "").strip()
-        metadata_raw = request.POST.get("metadata", "").strip()
+        documents_raw = request.POST.get("documents", "").strip()
         try:
             documents = json.loads(documents_raw) if documents_raw else []
-            metadata = json.loads(metadata_raw) if metadata_raw else {}
         except json.JSONDecodeError:
             messages.error(request, "Documents and agentic metadata must be valid JSON.")
             return _scenario_redirect(request.POST.get("set_id", "").strip() or None)
+        # The raw metadata box is a read-only preview; the structured controls
+        # are the single source of truth. A new scenario has no prior revision
+        # to preserve, so unknown fields start empty.
         if not request.POST.get("agentic_scenario"):
             metadata = {}
         else:
             try:
-                metadata = _merge_structured_agentic_fields(metadata, request.POST)
+                metadata = _merge_structured_agentic_fields({}, request.POST)
             except (ValueError, json.JSONDecodeError):
                 messages.error(request, "Structured agentic controls must contain valid numbers and JSON.")
                 return _scenario_redirect(request.POST.get("set_id", "").strip() or None)
@@ -2259,10 +2269,8 @@ class ScenarioEditView(ProjectMixin, View):
             test_prompt = request.POST.get("test_prompt", "").strip()
             severity_ceiling = request.POST.get("severity_ceiling", "").strip().lower()
             documents_raw = request.POST.get("documents", "").strip()
-            metadata_raw = request.POST.get("metadata", "").strip()
             try:
                 documents = json.loads(documents_raw) if documents_raw else []
-                metadata = json.loads(metadata_raw) if metadata_raw else {}
             except json.JSONDecodeError:
                 messages.error(request, "Documents and agentic metadata must be valid JSON.")
                 return _scenario_redirect(set_id or None)
@@ -2275,14 +2283,19 @@ class ScenarioEditView(ProjectMixin, View):
 
             # update_scenario_content handles change detection (returns latest if unchanged)
             latest_rev_before = scenario.revisions.order_by("-revision").first()
+            # The raw metadata box is a read-only preview; the structured controls
+            # are the single source of truth. Unknown top-level fields survive an
+            # edit because they are carried over from the previous revision rather
+            # than re-read from the (now non-editable) textarea.
+            prior_metadata = dict(latest_rev_before.metadata or {}) if latest_rev_before else {}
             if not request.POST.get("agentic_scenario"):
                 # The toggle disables agentic expectations, but must not erase
                 # unrelated metadata authored by older clients or imports.
-                metadata = dict(latest_rev_before.metadata or {}) if latest_rev_before else {}
+                metadata = prior_metadata
                 metadata.pop("agentic", None)
             else:
                 try:
-                    metadata = _merge_structured_agentic_fields(metadata, request.POST)
+                    metadata = _merge_structured_agentic_fields(prior_metadata, request.POST)
                 except (ValueError, json.JSONDecodeError):
                     messages.error(request, "Structured agentic controls must contain valid numbers and JSON.")
                     return _scenario_redirect(set_id or None)

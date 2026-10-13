@@ -99,26 +99,81 @@
       </div>
 
       <!-- Scenario list -->
-      <div id="scenario-list" class="space-y-2 mb-4 max-h-[60vh] overflow-y-auto">
+      <div id="scenario-list" class="space-y-2 mb-4">
         {% for item in items %}
         <div id="scenario-{{ item.scenario.id }}" class="rounded-lg border border-gray-800 bg-surface-overlay/50 overflow-hidden">
-          <div class="flex items-center justify-between px-3 py-2">
+          <div class="flex items-center justify-between px-3 py-2 cursor-pointer select-none hover:bg-surface-overlay/80 transition-colors" onclick="toggleViewMode({{ item.scenario.id }})">
             <div class="min-w-0 flex-1">
               <span class="text-sm text-gray-200 truncate">{{ item.scenario.title }}</span>
               {% if item.scenario.category %}<span class="ml-2 text-xs text-gray-500">{{ item.scenario.category }}</span>{% endif %}
               <span class="ml-2 text-xs text-gray-600" title="Revision {{ item.revision.revision }} of this scenario: each edit to its description or expected behaviour adds a revision">rev {{ item.revision.revision }}</span>
             </div>
             <div class="flex gap-1 shrink-0">
-              <button data-write onclick="document.getElementById('edit-scenario-{{ item.scenario.id }}').style.display='block'" title="Edit scenario" aria-label="Edit scenario" class="text-xs text-gray-500 hover:text-accent">✎</button>
-              <form method="post" data-write action="{% url 'scenario_delete' item.scenario.id %}" data-confirm="Delete this scenario?">
+              <button data-write onclick="openEditForm({{ item.scenario.id }}, event)" title="Edit scenario" aria-label="Edit scenario" class="text-xs text-gray-500 hover:text-accent">✎</button>
+              <form method="post" data-write action="{% url 'scenario_delete' item.scenario.id %}" data-confirm="Delete this scenario?" onclick="event.stopPropagation()">
                 {% csrf_token %}
                 <input type="hidden" name="set_id" value="{{ selected.id }}">
                 <button title="Delete scenario" aria-label="Delete scenario" class="text-xs text-gray-600 hover:text-red-400">✕</button>
               </form>
             </div>
           </div>
-          <!-- Description preview -->
-          <div class="px-3 pb-2 text-xs text-gray-500 line-clamp-2">{{ item.revision.description|truncatechars:200 }}</div>
+          <!-- Description preview (collapsed only; hidden when view mode is open) -->
+          <div id="preview-{{ item.scenario.id }}" class="px-3 pb-2 text-xs text-gray-500 line-clamp-2 cursor-pointer hover:text-gray-400 transition-colors" onclick="toggleViewMode({{ item.scenario.id }})">{{ item.revision.description|truncatechars:200 }}</div>
+
+          <!-- Read-only view mode (toggled by clicking the card header) -->
+          <div id="view-scenario-{{ item.scenario.id }}" style="display:none" class="px-3 pb-3 pt-1 border-t border-gray-800 space-y-2">
+            <div class="text-xs space-y-2">
+              <div>
+                <span class="text-gray-500 font-medium">Description</span>
+                <p class="text-gray-300 mt-0.5 whitespace-pre-wrap">{{ item.revision.description }}</p>
+              </div>
+              {% if item.revision.expected_behavior %}
+              <div>
+                <span class="text-gray-500 font-medium">Expected behavior</span>
+                <ul class="mt-0.5 space-y-0.5 list-disc list-inside">
+                  {% for b in item.revision.expected_behavior %}
+                  <li class="text-gray-300">{{ b }}</li>
+                  {% endfor %}
+                </ul>
+              </div>
+              {% endif %}
+              {% if item.revision.test_prompt %}
+              <div>
+                <span class="text-gray-500 font-medium">Test prompt</span>
+                <p class="text-gray-300 mt-0.5 whitespace-pre-wrap">{{ item.revision.test_prompt }}</p>
+              </div>
+              {% endif %}
+              <details class="group">
+                <summary class="text-gray-500 font-medium cursor-pointer select-none hover:text-gray-400">Advanced options</summary>
+                <div class="mt-1 space-y-1 pl-3 border-l border-gray-800">
+                  <div>
+                    <span class="text-gray-500">Severity ceiling:</span>
+                    {% if item.revision.severity_ceiling %}
+                    <span class="ml-1 px-1.5 py-0.5 rounded bg-surface-raised text-gray-300 text-[11px]">{{ item.revision.severity_ceiling }}</span>
+                    {% else %}
+                    <span class="ml-1 text-gray-600">none (judge decides)</span>
+                    {% endif %}
+                  </div>
+                  <div>
+                    <span class="text-gray-500">Documents (RAG context):</span>
+                    <span class="ml-1 font-mono text-[11px] {% if item.revision.documents %}text-gray-300{% else %}text-gray-600{% endif %}">{% if item.revision.documents %}{{ item.revision.documents|jsonify }}{% else %}none{% endif %}</span>
+                  </div>
+                  <div>
+                    <span class="text-gray-500">File URI (vision input):</span>
+                    <span class="ml-1 font-mono text-[11px] {% if item.revision.file_uri %}text-gray-300{% else %}text-gray-600{% endif %}">{% if item.revision.file_uri %}{{ item.revision.file_uri }}{% else %}none{% endif %}</span>
+                  </div>
+                </div>
+              </details>
+              {% if item.revision.metadata.agentic %}
+              <details class="group" open>
+                <summary class="text-gray-500 font-medium cursor-pointer select-none hover:text-gray-400">Agentic controls</summary>
+                <div class="mt-2">
+                  {% include "partials/agentic_controls_readonly.html" with agentic=item.revision.metadata.agentic %}
+                </div>
+              </details>
+              {% endif %}
+            </div>
+          </div>
 
           <!-- Inline edit form (hidden by default) -->
           <div id="edit-scenario-{{ item.scenario.id }}" style="display:none" class="px-3 pb-3 pt-2 border-t border-gray-800 space-y-2">
@@ -147,19 +202,21 @@
                 Agentic scenario
               </label>
               <div data-agentic-section{% if not item.revision.metadata.agentic %} style="display:none"{% endif %}>
-                <div>
-                  <label class="text-xs text-gray-500">Agentic metadata (JSON)</label>
-                  <p class="text-[11px] text-gray-600 mb-1">Advanced editor for trace, tool, retrieval, trajectory, budget, policy, and enforcement expectations. It is preserved on revisions and exports.</p>
-                  <textarea name="metadata" rows="5" spellcheck="false" class="w-full px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs font-mono focus:outline-none focus:ring-1 focus:ring-accent/50">{{ item.revision.metadata|jsonify }}</textarea>
-                </div>
                 {% include "partials/agentic_controls.html" with agentic=item.revision.metadata.agentic %}
+                <details class="group mt-1">
+                  <summary class="text-xs text-gray-500 cursor-pointer select-none hover:text-gray-400">Agentic metadata preview (read-only)</summary>
+                  <div class="space-y-1 mt-2 pl-3 border-l border-gray-800">
+                    <p class="text-[11px] text-gray-600">Live, read-only view of exactly what will be saved. Edit the structured fields above — this updates in real time. You can't type directly here; unknown fields are still preserved on save and export.</p>
+                    <textarea name="metadata" rows="8" spellcheck="false" readonly aria-readonly="true" class="w-full px-2 py-1.5 rounded bg-surface-overlay border border-gray-800 text-xs font-mono text-gray-400 cursor-default resize-y select-text">{{ item.revision.metadata|jsonify }}</textarea>
+                  </div>
+                </details>
               </div>
               <details class="group">
-                <summary class="text-xs text-gray-500 cursor-pointer select-none hover:text-gray-400">Advanced (severity ceiling, documents, file URI)</summary>
+                <summary class="text-xs text-gray-500 cursor-pointer select-none hover:text-gray-400">Advanced options (usually leave empty)</summary>
                 <div class="space-y-2 mt-2 pl-3 border-l border-gray-800">
                   <div>
                     <label class="text-xs text-gray-500">Severity ceiling</label>
-                    <p class="text-[11px] text-gray-600 mb-1">The maximum severity the judge will assign if the target fails this scenario. E.g. set to "medium" so a failure is capped at medium rather than escalating to critical. Used by all judges (severity, score, yes/no). Leave empty to let the judge assign any severity.</p>
+                    <p class="text-[11px] text-gray-600 mb-1">Caps the max severity the judge can assign when the target fails. Use when you know a scenario's worst case (e.g. set "medium" so it never escalates to critical even if the judge thinks it should). Passed to the engine as the scenario's <code class="text-gray-400">severity</code> field. Most scenarios don't need this — leave empty to let the judge decide freely.</p>
                     <select name="severity_ceiling" class="w-full px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-1 focus:ring-accent/50">
                       <option value="" {% if not item.revision.severity_ceiling %}selected{% endif %}>— No ceiling (judge decides) —</option>
                       <option value="pass" {% if item.revision.severity_ceiling == "pass" %}selected{% endif %}>pass</option>
@@ -170,15 +227,15 @@
                     </select>
                   </div>
                   <div>
-                    <label class="text-xs text-gray-500">Documents</label>
-                    <p class="text-[11px] text-gray-600 mb-1">Context documents injected into the auditor's prompt (RAG). JSON array of file names or document objects, e.g. ["policy.pdf"]. Leave empty for none.</p>
-                    <input type="text" name="documents" value="{{ item.revision.documents|jsonify }}" placeholder='e.g. ["policy.pdf"]'
+                    <label class="text-xs text-gray-500">Documents (RAG context)</label>
+                    <p class="text-[11px] text-gray-600 mb-1">Extra context documents injected into the auditor's prompt so the judge has reference material (e.g. a policy PDF the agent should follow). Only needed when your scenario tests compliance against a specific document. JSON array: <code class="text-gray-400">["policy.pdf", "terms.txt"]</code>. Most scenarios leave this empty.</p>
+                    <input type="text" name="documents" value="{{ item.revision.documents|jsonify }}" placeholder='Usually empty. e.g. ["policy.pdf"]'
                            class="w-full px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-1 focus:ring-accent/50">
                   </div>
                   <div>
-                    <label class="text-xs text-gray-500">File URI</label>
-                    <p class="text-[11px] text-gray-600 mb-1">Path or URL of an image/file attached to the scenario for vision-based audits (e.g. /data/screenshots/login.png). Leave empty unless the scenario needs a visual input.</p>
-                    <input type="text" name="file_uri" value="{{ item.revision.file_uri|default:'' }}" placeholder="e.g. /data/screenshots/login.png"
+                    <label class="text-xs text-gray-500">File URI (vision input)</label>
+                    <p class="text-[11px] text-gray-600 mb-1">Path or URL of an image/screenshot the agent must analyze. Only needed for vision-based scenarios (e.g. "does the UI show a warning?"). The file is passed to the model as a multimodal input. Most scenarios leave this empty.</p>
+                    <input type="text" name="file_uri" value="{{ item.revision.file_uri|default:'' }}" placeholder="Usually empty. e.g. /data/screenshots/login.png"
                            class="w-full px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-1 focus:ring-accent/50">
                   </div>
                 </div>
@@ -197,7 +254,7 @@
       </div>
 
       <!-- Add scenario form -->
-      <form method="post" action="{% url 'scenario_create' %}" data-write class="space-y-2 pt-3 border-t border-gray-800" onsubmit="return syncAgenticFields(this)">
+      <form method="post" action="{% url 'scenario_create' %}" data-write class="space-y-2 pt-3 border-t border-gray-800" onsubmit="return validateFormJson(this) && syncAgenticFields(this)">
         {% csrf_token %}
         <input type="hidden" name="set_id" value="{{ selected.id }}">
         <div class="grid grid-cols-2 gap-2">
@@ -220,19 +277,21 @@
           Agentic scenario
         </label>
         <div data-agentic-section style="display:none">
-          <div>
-            <label class="text-xs text-gray-500">Agentic metadata (JSON)</label>
-            <p class="text-[11px] text-gray-600 mb-1">Use the advanced JSON editor for trace, tool, retrieval, trajectory, budget, policy, and enforcement expectations.</p>
-            <textarea name="metadata" rows="5" spellcheck="false" placeholder='{"agentic":{"schema_version":1,"tools":{},"retrieval":{},"rerank":{},"policy":{},"budgets":{},"trajectory":{},"enforcement":{"mode":"advisory"}}}' class="w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-accent/50"></textarea>
-          </div>
           {% include "partials/agentic_controls.html" with agentic=None %}
+          <details class="group mt-1">
+            <summary class="text-xs text-gray-500 cursor-pointer select-none hover:text-gray-400">Agentic metadata preview (read-only)</summary>
+            <div class="space-y-1 mt-2 pl-3 border-l border-gray-800">
+              <p class="text-[11px] text-gray-600">Live, read-only view of exactly what will be saved. Edit the structured fields above — this updates in real time. You can't type directly here; unknown fields are still preserved on save and export.</p>
+              <textarea name="metadata" rows="8" spellcheck="false" readonly aria-readonly="true" class="w-full px-2 py-1.5 rounded bg-surface-overlay border border-gray-800 text-xs font-mono text-gray-400 cursor-default resize-y select-text"></textarea>
+            </div>
+          </details>
         </div>
         <details class="group">
-          <summary class="text-xs text-gray-500 cursor-pointer select-none hover:text-gray-400">Advanced (severity ceiling, documents, file URI)</summary>
+          <summary class="text-xs text-gray-500 cursor-pointer select-none hover:text-gray-400">Advanced options (usually leave empty)</summary>
           <div class="space-y-2 mt-2 pl-3 border-l border-gray-800">
             <div>
               <label class="text-xs text-gray-500">Severity ceiling</label>
-              <p class="text-[11px] text-gray-600 mb-1">The maximum severity the judge will assign if the target fails this scenario. E.g. set to "medium" so a failure is capped at medium rather than escalating to critical. Used by all judges (severity, score, yes/no). Leave empty to let the judge assign any severity.</p>
+              <p class="text-[11px] text-gray-600 mb-1">Caps the max severity the judge can assign when the target fails. Use when you know a scenario's worst case (e.g. set "medium" so it never escalates to critical even if the judge thinks it should). Passed to the engine as the scenario's <code class="text-gray-400">severity</code> field. Most scenarios don't need this — leave empty to let the judge decide freely.</p>
               <select name="severity_ceiling" class="w-full px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-1 focus:ring-accent/50">
                 <option value="">— No ceiling (judge decides) —</option>
                 <option value="pass">pass</option>
@@ -243,15 +302,15 @@
               </select>
             </div>
             <div>
-              <label class="text-xs text-gray-500">Documents</label>
-              <p class="text-[11px] text-gray-600 mb-1">Context documents injected into the auditor's prompt (RAG). JSON array of file names or document objects, e.g. ["policy.pdf"]. Leave empty for none.</p>
-              <input type="text" name="documents" placeholder='e.g. ["policy.pdf"]'
+              <label class="text-xs text-gray-500">Documents (RAG context)</label>
+              <p class="text-[11px] text-gray-600 mb-1">Extra context documents injected into the auditor's prompt so the judge has reference material (e.g. a policy PDF the agent should follow). Only needed when your scenario tests compliance against a specific document. JSON array: <code class="text-gray-400">["policy.pdf", "terms.txt"]</code>. Most scenarios leave this empty.</p>
+              <input type="text" name="documents" placeholder='Usually empty. e.g. ["policy.pdf"]'
                      class="w-full px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-1 focus:ring-accent/50">
             </div>
             <div>
-              <label class="text-xs text-gray-500">File URI</label>
-              <p class="text-[11px] text-gray-600 mb-1">Path or URL of an image/file attached to the scenario for vision-based audits (e.g. /data/screenshots/login.png). Leave empty unless the scenario needs a visual input.</p>
-              <input type="text" name="file_uri" placeholder="e.g. /data/screenshots/login.png"
+              <label class="text-xs text-gray-500">File URI (vision input)</label>
+              <p class="text-[11px] text-gray-600 mb-1">Path or URL of an image/screenshot the agent must analyze. Only needed for vision-based scenarios (e.g. "does the UI show a warning?"). The file is passed to the model as a multimodal input. Most scenarios leave this empty.</p>
+              <input type="text" name="file_uri" placeholder="Usually empty. e.g. /data/screenshots/login.png"
                      class="w-full px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-1 focus:ring-accent/50">
             </div>
           </div>
@@ -343,6 +402,16 @@ document.querySelectorAll('textarea[id^="desc-"], textarea[id^="eb-"]').forEach(
 
 // Confirm before saving if content changed
 function confirmScenarioSave(scenarioId, form) {
+  // Block save if any JSON field is invalid
+  const jsonFields = form.querySelectorAll('textarea[name]');
+  for (const ta of jsonFields) {
+    if (!JSON_FIELDS.includes(ta.name)) continue;
+    if (!validateJsonField(ta)) {
+      alert('Please fix the invalid JSON in "' + ta.previousElementSibling?.textContent?.trim() + '" before saving.');
+      ta.focus();
+      return false;
+    }
+  }
   if (_contentChanged(scenarioId)) {
     return confirm('Content changed — this will save as a NEW VERSION (v' + (CURRENT_VERSION + 1) + ').\n\nContinue?');
   }
@@ -443,23 +512,61 @@ function filterScenarios(query) {
   </div>
 </div>
 <script>
-// Show/hide the agentic JSON editor + structured controls based on the checkbox.
+// Auto-size textareas to fit their content (avoids cropping long descriptions).
+function autoSizeTextarea(el) {
+  el.style.height = 'auto';
+  // Use the greater of content height and placeholder height so the
+  // placeholder is always fully visible even when the field is empty.
+  let h = el.scrollHeight;
+  if (!el.value && el.placeholder) {
+    const prev = el.value;
+    el.value = el.placeholder;
+    h = Math.max(h, el.scrollHeight);
+    el.value = prev;
+  }
+  el.style.height = h + 2 + 'px';
+}
+function autoSizeAllTextareas(container) {
+  container.querySelectorAll('textarea').forEach(autoSizeTextarea);
+}
+function openEditForm(id, ev) {
+  if (ev) ev.stopPropagation(); // don't trigger view mode toggle
+  const form = document.getElementById('edit-scenario-' + id);
+  // Close view mode if open
+  const view = document.getElementById('view-scenario-' + id);
+  if (view) view.style.display = 'none';
+  document.getElementById('preview-' + id).style.display = '';
+  form.style.display = 'block';
+  autoSizeAllTextareas(form);
+}
+function toggleViewMode(id) {
+  const view = document.getElementById('view-scenario-' + id);
+  const preview = document.getElementById('preview-' + id);
+  const editForm = document.getElementById('edit-scenario-' + id);
+  const willShow = view.style.display === 'none';
+  view.style.display = willShow ? 'block' : 'none';
+  preview.style.display = willShow ? 'none' : '';
+  if (willShow && editForm) editForm.style.display = 'none'; // close edit if open
+}
+
+// Show/hide the agentic structured controls + read-only preview based on the checkbox.
 // The backend already strips agentic metadata on save when the box is off, so
 // hiding these fields keeps the UI consistent with what actually gets stored.
 function toggleAgenticSection(form) {
   const toggle = form.querySelector('[name="agentic_scenario"]');
   const section = form.querySelector('[data-agentic-section]');
-  if (section) section.style.display = toggle && toggle.checked ? '' : 'none';
+  if (section) {
+    const show = toggle && toggle.checked;
+    section.style.display = show ? '' : 'none';
+    if (show) requestAnimationFrame(() => autoSizeAllTextareas(section));
+  }
 }
 
-function syncAgenticFields(form) {
-  const toggle = form.querySelector('[name="agentic_scenario"]');
-  if (!toggle || !toggle.checked) return true;
-  const metadataField = form.querySelector('[name="metadata"]');
-  if (!metadataField) return true;
-  let metadata = {};
-  try { metadata = metadataField.value.trim() ? JSON.parse(metadataField.value) : {}; }
-  catch (_) { alert('Agentic metadata must be valid JSON before structured fields can be saved.'); return false; }
+// Merge the structured controls into the raw metadata object. Pure: returns a
+// new metadata dict, preserving every field the form doesn't model. Throws when
+// a structured JSON field is invalid so callers can surface it.
+function buildAgenticMetadata(form, baseMetadata) {
+  const metadata = baseMetadata && typeof baseMetadata === 'object' ? baseMetadata : {};
   const agentic = metadata.agentic && typeof metadata.agentic === 'object' ? metadata.agentic : {schema_version: 2};
   const csv = (name) => (form.querySelector(`[name="${name}"]`)?.value || '').split(',').map(v => v.trim()).filter(Boolean);
   const number = (name) => {
@@ -473,7 +580,10 @@ function syncAgenticFields(form) {
   };
   const bool = (name) => form.querySelector(`[name="${name}"][type="checkbox"]`)?.checked || false;
   const set = (section, key, value) => { agentic[section] = {...(agentic[section] || {}), [key]: value}; };
-  set('tools', 'expected', csv('agentic_tools_expected'));
+  // The expected-tools field holds plain names; wrap each in the rich spec the
+  // engine checks against ({name, min_calls, max_calls}). Per-tool call bounds
+  // and argument matching are authored via the read-only JSON preview / import.
+  set('tools', 'expected', csv('agentic_tools_expected').map((name) => ({ name, min_calls: 1, max_calls: null })));
   set('tools', 'forbidden', csv('agentic_tools_forbidden'));
   set('retrieval', 'sources', csv('agentic_sources'));
   set('retrieval', 'required', csv('agentic_sources').length > 0);
@@ -508,15 +618,106 @@ function syncAgenticFields(form) {
   const mode = form.querySelector('[name="agentic_enforcement_mode"]')?.value;
   if (mode) set('enforcement', 'mode', mode);
   metadata.agentic = agentic;
-  metadataField.value = JSON.stringify(metadata, null, 2);
+  return metadata;
+}
+
+// On-submit hook: the raw box is a read-only preview, so there is nothing to
+// validate or re-parse here — just make sure the preview matches the form one
+// last time. The server merges from the previous revision, preserving unknown
+// fields. Always returns true (never blocks submission).
+function syncAgenticFields(form) {
+  _refreshAgenticJsonLive(form);
   return true;
 }
 
-// Wire up live show/hide for every form with an agentic toggle (inline edit + add).
-document.querySelectorAll('[name="agentic_scenario"]').forEach(toggle => {
-  const form = toggle.closest('form');
-  if (!form) return;
-  toggle.addEventListener('change', () => toggleAgenticSection(form));
+// Realtime: as the user edits any structured control, rebuild the read-only
+// preview so it always mirrors what will be saved. Unknown fields are carried
+// over from whatever is already shown, so toggling fields never loses them.
+// Never throws — an in-progress structured JSON field is skipped for that
+// keystroke and rebuilt on the next one.
+function _refreshAgenticJsonLive(form) {
+  const toggle = form.querySelector('[name="agentic_scenario"]');
+  const metadataField = form.querySelector('[name="metadata"]');
+  if (!metadataField) return;
+  if (!toggle || !toggle.checked) return;   // leave the preview untouched while agentic is off
+  let base = {};
+  try { base = metadataField.value.trim() ? JSON.parse(metadataField.value) : {}; }
+  catch (_) { return; }
+  try { metadataField.value = JSON.stringify(buildAgenticMetadata(form, base), null, 2); }
+  catch (_) { /* an in-progress structured JSON field isn't valid yet — retry next keystroke */ }
+}
+// Wire up per-form behavior for every scenario form (inline edit + add):
+// show/hide the agentic section with the checkbox, and keep the read-only
+// preview in sync as the structured controls change.
+document.querySelectorAll('form[data-write], form[action*="/scenarios/"]').forEach((form) => {
+  const controls = form.querySelector('[data-agentic-controls]');
+  if (controls) controls.addEventListener('input', () => _refreshAgenticJsonLive(form));
+  const toggle = form.querySelector('[name="agentic_scenario"]');
+  if (toggle) toggle.addEventListener('change', () => { toggleAgenticSection(form); _refreshAgenticJsonLive(form); });
+  // Auto-grow textareas as the user types (description, expected behavior, etc.)
+  form.querySelectorAll('textarea').forEach((ta) => ta.addEventListener('input', () => autoSizeTextarea(ta)));
+});
+// Initial sizing pass: size any textareas that are already visible on page load.
+requestAnimationFrame(() => {
+  document.querySelectorAll('textarea').forEach((ta) => {
+    if (ta.offsetParent !== null) autoSizeTextarea(ta);
+  });
+});
+
+// Live JSON validation for textareas that require valid JSON.
+// Shows a red border + error message below the field when invalid.
+const JSON_FIELDS = ['agentic_guardrails_before_actions', 'agentic_state_assertions'];
+function validateFormJson(form) {
+  let firstInvalid = null;
+  const jsonFields = form.querySelectorAll('textarea[name]');
+  for (const ta of jsonFields) {
+    if (!JSON_FIELDS.includes(ta.name)) continue;
+    if (!validateJsonField(ta) && !firstInvalid) firstInvalid = ta;
+  }
+  if (firstInvalid) {
+    alert('Please fix the invalid JSON before saving.');
+    firstInvalid.focus();
+    return false;
+  }
+  return true;
+}
+function validateJsonField(ta) {
+  const value = ta.value.trim();
+  const errorEl = ta.parentElement.querySelector('.json-error');
+  if (!value) {
+    // Empty means "none" — valid
+    ta.classList.remove('border-red-500');
+    ta.classList.add('border-gray-700');
+    if (errorEl) errorEl.textContent = '';
+    return true;
+  }
+  try {
+    const parsed = JSON.parse(value);
+    if (!Array.isArray(parsed)) {
+      throw new Error('Must be a JSON array, e.g. [] or [{...}]');
+    }
+    ta.classList.remove('border-red-500');
+    ta.classList.add('border-gray-700');
+    if (errorEl) errorEl.textContent = '';
+    return true;
+  } catch (e) {
+    ta.classList.remove('border-gray-700');
+    ta.classList.add('border-red-500');
+    if (errorEl) errorEl.textContent = 'Invalid JSON: ' + e.message;
+    return false;
+  }
+}
+// Wire up JSON validation + add error message elements
+document.querySelectorAll('textarea[name]').forEach((ta) => {
+  if (!JSON_FIELDS.includes(ta.name)) return;
+  // Add an error message element after the textarea
+  let errorEl = ta.parentElement.querySelector('.json-error');
+  if (!errorEl) {
+    errorEl = document.createElement('p');
+    errorEl.className = 'json-error text-[11px] text-red-400 mt-0.5 min-h-[1em]';
+    ta.parentElement.appendChild(errorEl);
+  }
+  ta.addEventListener('input', () => validateJsonField(ta));
 });
 
 async function submitImport(setId) {

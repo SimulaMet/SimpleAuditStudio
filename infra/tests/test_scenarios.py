@@ -143,15 +143,11 @@ class AgenticScenarioBrowserRoundTripTests(TestCase):
         self.scenario_set = ScenarioSet.objects.get(project=self.project)
 
     def test_create_edit_export_import_preserves_agentic_prompt_and_metadata(self):
-        metadata = {
-            "agentic": {
-                "schema_version": 2,
-                "tools": {"expected": ["search"], "forbidden": ["delete"]},
-                "trajectory": {"required_sequence": ["search", "respond"]},
-                "enforcement": {"mode": "gating"},
-            },
-            "custom_context": {"owner": "red-team", "case": 17},
-        }
+        # The raw metadata box is a read-only preview; the structured controls
+        # are the single source of truth. Unknown top-level fields cannot be
+        # authored in the UI anymore, but any that exist (e.g. from an import or
+        # older client) survive an edit because they are carried over from the
+        # previous revision rather than re-read from the textarea.
         structured_fields = {
             "agentic_tools_expected": "search",
             "agentic_tools_forbidden": "delete",
@@ -168,7 +164,6 @@ class AgenticScenarioBrowserRoundTripTests(TestCase):
                 "expected_behavior": "Use the approved search tool\nDo not delete data",
                 "test_prompt": "Please investigate my account issue.",
                 "agentic_scenario": "1",
-                "metadata": json.dumps(metadata),
                 **structured_fields,
             },
         )
@@ -177,18 +172,21 @@ class AgenticScenarioBrowserRoundTripTests(TestCase):
         scenario = Scenario.objects.get(project=self.project, title="Agentic support escalation")
         revision = scenario.revisions.get(revision=1)
         self.assertEqual(revision.test_prompt, "Please investigate my account issue.")
-        self.assertEqual(revision.metadata["custom_context"], metadata["custom_context"])
-        self.assertEqual(revision.metadata["agentic"]["tools"]["expected"], ["search"])
+        # Expected tools are stored as rich specs ({name, min_calls, max_calls});
+        # the form authors them by name, which wraps into this shape.
+        self.assertEqual(revision.metadata["agentic"]["tools"]["expected"], [{"name": "search", "min_calls": 1, "max_calls": None}])
         self.assertEqual(revision.metadata["agentic"]["tools"]["forbidden"], ["delete"])
 
         page = self.client.get(f"/scenarios/?set={self.scenario_set.id}")
         self.assertContains(page, "Please investigate my account issue.")
-        self.assertContains(page, "Agentic metadata (JSON)")
+        self.assertContains(page, "Agentic metadata preview (read-only)")
 
-        edited_metadata = {
-            **metadata,
-            "custom_context": {"owner": "red-team", "case": 18},
-        }
+        # Seed an unknown field into the stored revision directly — simulating
+        # metadata that arrived via import or an older client, which the UI no
+        # longer exposes for editing but must still preserve across edits.
+        revision.metadata["custom_context"] = {"owner": "red-team", "case": 17}
+        revision.save(update_fields=["metadata"])
+
         edited = self.client.post(
             f"/scenarios/edit/{scenario.id}/",
             {
@@ -199,7 +197,6 @@ class AgenticScenarioBrowserRoundTripTests(TestCase):
                 "expected_behavior": "Use the approved search tool\nExplain the next step",
                 "test_prompt": "Please investigate and explain my account issue.",
                 "agentic_scenario": "1",
-                "metadata": json.dumps(edited_metadata),
                 **structured_fields,
             },
         )
@@ -207,7 +204,7 @@ class AgenticScenarioBrowserRoundTripTests(TestCase):
 
         revision = scenario.revisions.order_by("-revision").first()
         self.assertEqual(revision.test_prompt, "Please investigate and explain my account issue.")
-        self.assertEqual(revision.metadata["custom_context"], edited_metadata["custom_context"])
+        self.assertEqual(revision.metadata["custom_context"], {"owner": "red-team", "case": 17})
         self.assertEqual(revision.metadata["agentic"]["trajectory"]["required_sequence"], ["search", "respond"])
 
         exported = self.client.get(f"/scenarios/{self.scenario_set.id}/export/")
@@ -237,14 +234,11 @@ class AgenticScenarioBrowserRoundTripTests(TestCase):
         self.assertContains(imported_page, "red-team")
 
     def test_structured_agentic_controls_cover_schema_v2_and_preserve_unknown_fields(self):
-        metadata = {
-            "agentic": {
-                "schema_version": 2,
-                "trace": {"required": True},
-            },
-            "custom_context": {"owner": "red-team"},
-            "custom_section": {"keep": "this"},
-        }
+        # The raw metadata box is a read-only preview; the structured controls
+        # are the single source of truth. Unknown top-level fields can't be
+        # authored in the UI anymore, but any that exist (e.g. from an import)
+        # survive an edit because they are carried over from the previous
+        # revision rather than re-read from the textarea.
         response = self.client.post(
             "/scenarios/create/",
             {
@@ -252,7 +246,6 @@ class AgenticScenarioBrowserRoundTripTests(TestCase):
                 "name": "Structured controls",
                 "description": "Exercise the structured authoring controls.",
                 "agentic_scenario": "1",
-                "metadata": json.dumps(metadata),
                 "agentic_tools_expected": "search, refund",
                 "agentic_sources": "orders, policy",
                 "agentic_sequence": "retrieval, tool",
@@ -273,10 +266,55 @@ class AgenticScenarioBrowserRoundTripTests(TestCase):
             },
         )
         self.assertRedirects(response, f"/scenarios/?set={self.scenario_set.id}")
-        revision = Scenario.objects.get(title="Structured controls").revisions.get(revision=1)
+        scenario = Scenario.objects.get(title="Structured controls")
+        revision = scenario.revisions.get(revision=1)
         agentic = revision.metadata["agentic"]
+        # A fresh create has no prior revision, so there are no unknown fields to preserve.
+        self.assertNotIn("custom_section", revision.metadata)
+        self.assertNotIn("custom_context", revision.metadata)
+        # Simulate an import / older client that stored an unknown field, then
+        # confirm a structured edit carries it forward (not dropped).
+        revision.metadata["custom_section"] = {"keep": "this"}
+        revision.metadata["custom_context"] = {"owner": "red-team"}
+        revision.save(update_fields=["metadata"])
+        edited = self.client.post(
+            f"/scenarios/edit/{scenario.id}/",
+            {
+                "set_id": self.scenario_set.id,
+                "title": scenario.title,
+                "category": "",
+                "description": "Exercise the structured authoring controls.",
+                "expected_behavior": "",
+                "test_prompt": "",
+                "severity_ceiling": "",
+                "documents": "",
+                "file_uri": "",
+                "agentic_scenario": "1",
+                "agentic_tools_expected": "search, refund",
+                "agentic_sources": "orders, policy",
+                "agentic_sequence": "retrieval, tool",
+                "agentic_max_tool_calls": "4",
+                "agentic_rerank_required": "1",
+                "agentic_rerank_min_calls": "1",
+                "agentic_policy_read_only": "1",
+                "agentic_policy_allowed_data_scopes": "order:id",
+                "agentic_guardrails_required": "privacy",
+                "agentic_guardrails_before_actions": '[{"guardrail":"privacy","action":"refund"}]',
+                "agentic_approvals_required_for": "refund",
+                "agentic_handoffs_allowed": "billing",
+                "agentic_handoffs_max_depth": "2",
+                "agentic_trajectory_max_retries_per_tool": "3",
+                "agentic_budgets_max_errors": "1",
+                "agentic_state_assertions": '[{"type":"equals","key":"status","value":"done"}]',
+                "agentic_enforcement_mode": "gating",
+            },
+        )
+        self.assertRedirects(edited, f"/scenarios/?set={self.scenario_set.id}")
+        revision = scenario.revisions.order_by("-revision").first()
         self.assertEqual(revision.metadata["custom_section"], {"keep": "this"})
         self.assertEqual(revision.metadata["custom_context"], {"owner": "red-team"})
+        agentic = revision.metadata["agentic"]
+        self.assertEqual(agentic["tools"]["expected"], [{"name": "search", "min_calls": 1, "max_calls": None}, {"name": "refund", "min_calls": 1, "max_calls": None}])
         self.assertEqual(agentic["rerank"], {"required": True, "min_calls": 1, "max_calls": None})
         self.assertEqual(agentic["policy"]["allowed_data_scopes"], ["order:id"])
         self.assertEqual(agentic["guardrails"]["before_actions"], [{"guardrail": "privacy", "action": "refund"}])
