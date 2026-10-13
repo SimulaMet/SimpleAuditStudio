@@ -16,6 +16,7 @@
           <th class="text-left px-3 py-2 font-medium">Name</th>
           <th class="text-left px-3 py-2 font-medium">Compares</th>
           <th class="text-left px-3 py-2 font-medium">Progress</th>
+          <th class="text-left px-3 py-2 font-medium">Visibility</th>
           <th class="text-left px-3 py-2 font-medium">Created</th>
         </tr>
       </thead>
@@ -28,6 +29,20 @@
             {{ e.summary.done }}/{{ e.summary.total }} runs done
             {% if e.summary.active %}<span class="text-amber-400">· {{ e.summary.active }} active</span>{% endif %}
             {% if e.summary.failed %}<span class="text-red-400">· {{ e.summary.failed }} failed</span>{% endif %}
+          </td>
+          <td class="px-3 py-2.5 whitespace-nowrap" onclick="event.stopPropagation()">
+            {% if e.is_public %}
+            <span class="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] bg-emerald-900/40 text-emerald-300 border border-emerald-800/50">Public</span>
+            {% else %}
+            <span class="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] bg-gray-800/60 text-gray-400 border border-gray-700/50">Private</span>
+            {% endif %}
+            {% if can_manage_visibility %}
+            <form method="post" action="{% url 'experiment_set_visibility' e.id %}" class="inline ml-2">
+              {% csrf_token %}
+              <input type="hidden" name="visibility" value="{% if e.is_public %}private{% else %}public{% endif %}">
+              <button type="submit" class="text-[11px] text-gray-500 hover:text-accent underline underline-offset-2">{% if e.is_public %}Make private{% else %}Make public{% endif %}</button>
+            </form>
+            {% endif %}
           </td>
           <td class="px-3 py-2.5 text-xs text-gray-500 whitespace-nowrap"><time data-local datetime="{{ e.created_at|date:'c' }}">{{ e.created_at|date:"M j, H:i" }} UTC</time>{% if e.created_by %} · {{ e.created_by.username }}{% endif %}</td>
         </tr>

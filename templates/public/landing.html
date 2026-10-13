@@ -52,6 +52,10 @@
          class="glow-pulse shimmer-btn relative overflow-hidden px-6 py-3 rounded-xl bg-accent hover:bg-accent-hover text-white font-semibold transition-colors shadow-lg">
         {% if user.is_authenticated %}Open dashboard{% else %}Get started{% endif %}
       </a>
+      <a href="{% url 'public_experiments' %}"
+         class="px-6 py-3 rounded-xl border border-gray-700 hover:border-accent/50 text-gray-200 font-medium transition-colors">
+        See public experiments
+      </a>
       <a href="https://github.com/SimulaMet/SimpleAuditStudio" target="_blank" rel="noopener"
          class="px-6 py-3 rounded-xl border border-gray-700 hover:border-accent/50 text-gray-200 font-medium transition-colors">
         View on GitHub

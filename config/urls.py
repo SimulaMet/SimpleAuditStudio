@@ -29,6 +29,7 @@ from infra.ui import (
     DiscoverModelsView,
     ExperimentDetailView,
     ExperimentRenameView,
+    ExperimentSetVisibilityView,
     ExperimentsView,
     HealthView,
     JudgeScriptView,
@@ -41,6 +42,7 @@ from infra.ui import (
     OTLPCredentialRotateView,
     OTLPCredentialToggleView,
     ProfileView,
+    PublicExperimentsView,
     RegisterView,
     RunArchiveView,
     RunCancelView,
@@ -167,6 +169,9 @@ urlpatterns = [
     # "/" is the dashboard when signed in and the public landing page otherwise.
     path("", home_view, name="dashboard"),
     path("landing/", LandingView.as_view(always_show=True), name="landing_page"),
+    # Public experiment gallery — readable without login (the target of the
+    # "See public experiments" buttons on / and /login/).
+    path("public-experiments/", PublicExperimentsView.as_view(), name="public_experiments"),
     # UI (server-rendered CBVs)
     path("login/", LoginView.as_view(), name="login"),
     # Local one-liner demo only (404 unless MINIMAL_CONFIG): the CLI opens this
@@ -184,6 +189,11 @@ urlpatterns = [
     path("experiments/", ExperimentsView.as_view(), name="experiments"),
     path("experiments/<int:experiment_id>/", ExperimentDetailView.as_view(), name="experiment_detail"),
     path("experiments/<int:experiment_id>/rename/", ExperimentRenameView.as_view(), name="experiment_rename"),
+    path(
+        "experiments/<int:experiment_id>/set-visibility/",
+        ExperimentSetVisibilityView.as_view(),
+        name="experiment_set_visibility",
+    ),
     path("monitors/", MonitorsView.as_view(), name="monitors"),
     path("monitors/<int:monitor_id>/", MonitorDetailView.as_view(), name="monitor_detail"),
     path(

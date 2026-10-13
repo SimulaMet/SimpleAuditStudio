@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import re
+from datetime import UTC, datetime
 
 from django.contrib import messages
 from django.contrib.auth import login, logout
@@ -46,6 +47,50 @@ logger = logging.getLogger(__name__)
 
 class ProjectMixin(LoginRequiredMixin):
     """Scope all queries to request.project (set by ProjectMiddleware)."""
+
+
+def _public_experiment_filter(request) -> dict:
+    """Query kwargs that scope an Experiment lookup to what ``request`` may read.
+
+    Authenticated users see only their active workspace's experiments (the
+    existing behavior — no cross-project leak). Anonymous visitors see only
+    public experiments, across every project.
+    """
+    from audits.models import Experiment
+
+    if request.user.is_authenticated:
+        return {"project": request.project}
+    return {"visibility": Experiment.Visibility.PUBLIC}
+
+
+def _public_run_queryset(request):
+    """An AuditRun queryset scoped to what ``request`` may read.
+
+    Authenticated: the active workspace's runs (unchanged). Anonymous: runs
+    whose parent experiment is public. A run with no experiment is never
+    publicly readable, so guessing a run id yields 404 rather than a leak.
+    """
+    from audits.models import Experiment
+
+    qs = AuditRun.objects.all()
+    if request.user.is_authenticated:
+        return qs.filter(project=request.project)
+    return qs.filter(
+        experiment__isnull=False,
+        experiment__visibility=Experiment.Visibility.PUBLIC,
+    )
+
+
+class PublicReadableMixin:
+    """Allow anonymous reads of PUBLIC experiments/runs/results.
+
+    Replaces LoginRequiredMixin on views that expose public content. When the
+    user is signed in it behaves exactly like before (scoped to
+    request.project); when anonymous it restricts lookups to public objects
+    via ``_public_experiment_filter`` / ``_public_run_queryset``. Private
+    objects are invisible to anonymous users (404, not 403, so existence is
+    not leaked).
+    """
 
 
 class AdminRequiredMixin(LoginRequiredMixin):
@@ -1529,15 +1574,23 @@ def _experiment_summary(runs) -> dict:
     }
 
 
-class ExperimentsView(ProjectMixin, TemplateView):
+class ExperimentsView(PublicReadableMixin, TemplateView):
     template_name = "experiments.html"
+
+    def dispatch(self, request, *args, **kwargs):
+        # Anonymous visitors are routed to the dedicated public gallery, which
+        # uses the public (no-sidebar) layout and lists the same public
+        # experiments. Signed-in users get the full workspace page below.
+        if not request.user.is_authenticated:
+            return redirect("public_experiments")
+        return super().dispatch(request, *args, **kwargs)
 
     def get_context_data(self, **kw):
         from audits.experiments import FACTORS
         from audits.models import Experiment
 
         experiments = list(
-            Experiment.objects.filter(project=self.request.project)
+            Experiment.objects.filter(**_public_experiment_filter(self.request))
             .select_related("created_by")
             .prefetch_related("runs")
         )
@@ -1545,10 +1598,16 @@ class ExperimentsView(ProjectMixin, TemplateView):
             e.summary = _experiment_summary(list(e.runs.all()))
             e.factor_labels = [FACTORS.get(f, f) for f in e.factors]
         kw["experiments"] = experiments
+        kw["can_manage_visibility"] = self._is_admin()
         return super().get_context_data(**kw)
 
+    def _is_admin(self) -> bool:
+        from accounts.services import is_any_project_admin
 
-class ExperimentDetailView(ProjectMixin, TemplateView):
+        return is_any_project_admin(self.request.user)
+
+
+class ExperimentDetailView(PublicReadableMixin, TemplateView):
     template_name = "experiment_detail.html"
 
     def get_context_data(self, **kw):
@@ -1556,7 +1615,9 @@ class ExperimentDetailView(ProjectMixin, TemplateView):
         from audits.models import Experiment
         from audits.monitors import can_manage_monitor, drift_series, pass_counts
 
-        experiment = get_object_or_404(Experiment, pk=kw["experiment_id"], project=self.request.project)
+        experiment = get_object_or_404(
+            Experiment, pk=kw["experiment_id"], **_public_experiment_filter(self.request)
+        )
         runs = list(
             experiment.runs.select_related(
                 "scenario_set_version__scenario_set", "target_model", "auditor_model", "judge_model"
@@ -1612,8 +1673,15 @@ class ExperimentDetailView(ProjectMixin, TemplateView):
             summary=_experiment_summary(current),
             monitors=monitors,
             run_ids=",".join(str(r.id) for r in current),
+            can_manage_visibility=self._is_admin(),
+            public_header=True,
         )
         return super().get_context_data(**kw)
+
+    def _is_admin(self) -> bool:
+        from accounts.services import is_any_project_admin
+
+        return is_any_project_admin(self.request.user)
 
 
 # ─── Monitors (recurring runs / drift) ──────────────────────────────────────
@@ -2731,7 +2799,7 @@ class RunResultsFragmentView(ProjectMixin, View):
         return HttpResponse(html)
 
 
-class RunDetailView(ProjectMixin, DetailView):
+class RunDetailView(PublicReadableMixin, DetailView):
     template_name = "run_detail.html"
     context_object_name = "run"
     pk_url_kwarg = "run_id"
@@ -2740,7 +2808,15 @@ class RunDetailView(ProjectMixin, DetailView):
     )
 
     def get_queryset(self):
-        return self.queryset.filter(project=self.request.project)
+        # Authenticated: active workspace. Anonymous: runs of public experiments.
+        base = AuditRun.objects.select_related(
+            "scenario_set_version__scenario_set", "target_model", "auditor_model", "judge_model", "monitor", "experiment"
+        )
+        if self.request.user.is_authenticated:
+            return base.filter(project=self.request.project)
+        return _public_run_queryset(self.request).select_related(
+            "scenario_set_version__scenario_set", "target_model", "auditor_model", "judge_model", "monitor", "experiment"
+        )
 
     def get_context_data(self, **kw):
         ctx = super().get_context_data(**kw)
@@ -2780,6 +2856,7 @@ class RunDetailView(ProjectMixin, DetailView):
         ctx["judge"] = frozen_judge(run)
         ctx["system_prompt"] = (run.generation_parameters_snapshot or {}).get("system_prompt", "")
         ctx["frozen_agent"] = frozen_agent(run)
+        ctx["public_header"] = True
         return ctx
 
 
@@ -2829,6 +2906,71 @@ class ExperimentRenameView(ProjectMixin, View):
         else:
             messages.error(request, "Name must be 1-250 characters.")
         return redirect("experiment_detail", experiment_id)
+
+
+class ExperimentSetVisibilityView(LoginRequiredMixin, View):
+    """Toggle an experiment between private and public. Admins only.
+
+    Only admins of the owning workspace may change visibility, so a member who
+    is not an admin (auditor/viewer) cannot expose their workspace's data to
+    anonymous visitors. Anonymous users are redirected to login by
+    LoginRequiredMixin; non-admins get a 403.
+    """
+
+    def post(self, request, experiment_id):
+        from accounts.services import is_any_project_admin
+        from audits.models import Experiment
+
+        if not is_any_project_admin(request.user):
+            return HttpResponseForbidden("Admin access required.")
+        # Scope to the active workspace so an admin of one workspace can't flip
+        # another workspace's experiment.
+        experiment = get_object_or_404(Experiment, pk=experiment_id, project=request.project)
+        value = request.POST.get("visibility")
+        valid = dict(Experiment.Visibility.choices)
+        if value not in valid:
+            messages.error(request, "Invalid visibility value.")
+            return redirect("experiment_detail", experiment_id)
+        experiment.visibility = value
+        experiment.save(update_fields=["visibility", "updated_at"])
+        label = "public" if value == Experiment.Visibility.PUBLIC else "private"
+        messages.success(request, f"Experiment marked {label}.")
+        return redirect("experiment_detail", experiment_id)
+
+
+class PublicExperimentsView(TemplateView):
+    """Anonymous-readable list of all public experiments (no login required).
+
+    Uses the public base template (no app sidebar) and shows only experiments
+    whose visibility is PUBLIC. This is the target of the "See public
+    experiments" buttons on the landing page and login screen.
+    """
+
+    template_name = "public_experiments.html"
+
+    def get_context_data(self, **kw):
+        from audits.experiments import FACTORS
+        from audits.models import Experiment
+
+        experiments = list(
+            Experiment.objects.filter(visibility=Experiment.Visibility.PUBLIC)
+            .select_related("created_by")
+            .prefetch_related("runs")
+        )
+        for e in experiments:
+            e.summary = _experiment_summary(list(e.runs.all()))
+            e.factor_labels = [FACTORS.get(f, f) for f in e.factors]
+        kw["experiments"] = experiments
+        kw["public_header"] = True
+        kw["page_title"] = "Public Experiments — SimpleAudit Studio"
+        kw["page_description"] = (
+            "Publicly shared audit experiments from SimpleAudit Studio. "
+            "Reproducible AI model auditing results, viewable without an account."
+        )
+        kw["page_robots"] = "index,follow"
+        kw["page_canonical"] = self.request.build_absolute_uri("/public-experiments/")
+        kw["current_year"] = datetime.now(UTC).year
+        return super().get_context_data(**kw)
 
 
 class RunRenameView(ProjectMixin, View):
@@ -3068,13 +3210,16 @@ def _rep_view(rep: dict, index: int) -> dict:
     }
 
 
-class RunResultView(ProjectMixin, TemplateView):
+class RunResultView(PublicReadableMixin, TemplateView):
     template_name = "run_result.html"
 
     def get_context_data(self, **kw):
         run_id = self.kwargs["run_id"]
         result_id = self.kwargs["result_id"]
-        run = get_object_or_404(AuditRun, pk=run_id, project=self.request.project)
+        # Scope the run to what this request may read (workspace for signed-in
+        # users, public experiments for anonymous). The result is then fetched
+        # by run_id only, so it inherits the run's access decision.
+        run = get_object_or_404(_public_run_queryset(self.request), pk=run_id)
         sr = get_object_or_404(ScenarioResult, pk=result_id, run_id=run_id)
 
         item = (
@@ -3130,6 +3275,7 @@ class RunResultView(ProjectMixin, TemplateView):
             ],
             error=result_data.get("error", "") if sr.status != "completed" else "",
             raw_json=json.dumps(result_data, indent=2, ensure_ascii=False) if result_data else "",
+            public_header=True,
         )
         return super().get_context_data(**kw)
 

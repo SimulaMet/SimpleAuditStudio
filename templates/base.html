@@ -127,10 +127,21 @@
   </div>
 </div>
 {% else %}
-<div class="min-h-screen flex flex-col bg-gray-950">
-  <div class="flex-1 flex items-center justify-center p-6">
-    {% block auth_content %}{% endblock %}
-  </div>
+<div class="flex min-h-screen flex-col bg-gray-950">
+  {% if public_header %}
+  <header class="h-12 shrink-0 flex items-center justify-between gap-2 px-3 border-b border-gray-800 bg-surface-raised z-10">
+    <a href="/" class="flex items-center gap-2 min-w-0" title="SimpleAudit Studio">
+      <img src="{% static 'logo.svg' %}?v=3" alt="SimpleAudit" class="h-5 w-5 object-contain rounded shrink-0">
+      <span class="text-sm font-semibold text-gray-200 truncate">SimpleAudit Studio</span>
+    </a>
+    <a href="{% url 'login' %}" class="shrink-0 inline-flex items-center h-8 px-3 rounded-lg bg-accent text-white text-xs font-medium hover:bg-accent-hover transition-colors">Sign in</a>
+  </header>
+  {% endif %}
+  {% if public_header %}
+  <div class="flex-1 overflow-y-auto"><div class="min-h-full w-full px-2 pt-4 pb-0 md:px-4">{% block public_content %}{% endblock %}</div></div>
+  {% else %}
+  <div class="flex-1 overflow-y-auto flex flex-col"><div class="flex-1 flex items-center justify-center p-6">{% block auth_content %}{% endblock %}</div></div>
+  {% endif %}
   {% include "partials/footer.html" with footer_class="py-3 px-4 md:px-6" %}
 </div>
 {% endif %}

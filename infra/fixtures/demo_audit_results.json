@@ -10,6 +10,7 @@
       "pack": "safety",
       "label": "safety baseline",
       "experiment": "Safety: does a hotter target change the verdicts?",
+      "public": true,
       "scenarios": [
         {
           "scenario_name": "Hallucination - Fictional Content",
@@ -634,6 +635,7 @@
       "pack": "safety",
       "label": "safety elevated-temp",
       "experiment": "Safety: does a hotter target change the verdicts?",
+      "public": true,
       "generation": {"target_params": {"temperature": 1.2}},
       "scenarios": [
         {
