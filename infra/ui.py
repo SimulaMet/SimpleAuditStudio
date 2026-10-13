@@ -940,6 +940,107 @@ class SubagentSettingsView(SuperuserRequiredMixin, TemplateView):
         return redirect(f"{reverse('admin_settings')}?tab=sub-agents")
 
 
+class EmbeddingModelSearchView(SuperuserRequiredMixin, View):
+    """Proxy to the HuggingFace model API for sentence-transformers models.
+
+    The admin knowledge tab uses this so a superuser can browse and pick a
+    local embedding model without leaving the page.  Only ``sentence-transformers``
+    tagged repos are returned — those are the ones Open WebUI can load with its
+    built-in local embedding engine.
+    """
+
+    HF_URL = "https://huggingface.co/api/models"
+    MAX_RESULTS = 30
+
+    def get(self, request):
+        query = (request.GET.get("q") or "").strip()[:200]
+        limit = min(int(request.GET.get("limit", 15)), self.MAX_RESULTS)
+        params = {
+            "filter": "sentence-transformers",
+            "limit": str(limit),
+            "sort": "downloads",
+            "direction": "-1",
+        }
+        if query:
+            params["search"] = query
+        try:
+            import requests
+
+            resp = requests.get(self.HF_URL, params=params, timeout=8)
+            resp.raise_for_status()
+            models = resp.json()
+        except (requests.ConnectionError, requests.Timeout, requests.HTTPError):
+            return JsonResponse(
+                {"error": "Could not reach the HuggingFace model registry."},
+                status=502,
+            )
+        results = [
+            {
+                "id": m["id"],
+                "downloads": m.get("downloads", 0),
+                "likes": m.get("likes", 0),
+            }
+            for m in models
+            if isinstance(m, dict) and m.get("id")
+        ]
+        return JsonResponse({"results": results})
+
+
+class EmbeddingModelDetailView(SuperuserRequiredMixin, View):
+    """Fetch full details for a single HuggingFace model.
+
+    Returns architecture, parameter count, languages, tags, license, and
+    other metadata so the admin can make an informed selection before
+    committing to a model.
+    """
+
+    HF_URL = "https://huggingface.co/api/models/{model_id}"
+
+    def get(self, request):
+        model_id = (request.GET.get("model") or "").strip()[:200]
+        if not model_id or not re.match(r"^[a-zA-Z0-9._/-]+$", model_id):
+            return JsonResponse({"error": "Invalid model ID."}, status=400)
+        try:
+            import requests
+
+            resp = requests.get(
+                self.HF_URL.format(model_id=model_id), timeout=8
+            )
+            resp.raise_for_status()
+            data = resp.json()
+        except (requests.ConnectionError, requests.Timeout, requests.HTTPError):
+            return JsonResponse(
+                {"error": "Could not fetch model details from HuggingFace."},
+                status=502,
+            )
+        config = data.get("config") or {}
+        safetensors = data.get("safetensors") or {}
+        params_total = (safetensors.get("parameters") or {}).get("total") or safetensors.get("total")
+        tags = data.get("tags") or []
+        # Language tags are short ISO codes (e.g. "en", "fr", "de") but exclude
+        # known non-language short tags like "tf" (TensorFlow) or "onnx".
+        _NON_LANG = {"tf", "onnx", "rust"}
+        languages = [t for t in tags if len(t) <= 3 and t.isalpha() and t not in _NON_LANG]
+        license_tag = next((t.split(":", 1)[1] for t in tags if t.startswith("license:")), None)
+        return JsonResponse({
+            "id": data.get("id", model_id),
+            "pipeline_tag": data.get("pipeline_tag", ""),
+            "architecture": (config.get("architectures") or [""])[0],
+            "model_type": config.get("model_type", ""),
+            "parameters": params_total,
+            "downloads": data.get("downloads", 0),
+            "likes": data.get("likes", 0),
+            "last_modified": data.get("lastModified", ""),
+            "languages": languages,
+            "license": license_tag,
+            "tags": [
+                t for t in tags
+                if not t.startswith(("dataset:", "arxiv:", "base_model:", "deploy:", "region:", "eval"))
+            ],
+            "gated": data.get("gated", False),
+        })
+
+
 # ─── Profile ─────────────────────────────────────────────────────────────────
 
 
