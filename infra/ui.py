@@ -28,6 +28,7 @@ from audits.events import ScenarioResult
 from audits.models import AuditRun
 from audits.services import create_audit_run, frozen_name, submit_audit_run
 from infra.chat_feature import chat_enabled
+from infra.seo import SITE_NAME, _share_context
 from scenarios.models import (
     Scenario,
     ScenarioSet,
@@ -258,6 +259,20 @@ class LoginView(TemplateView):
             kw["demo_password"] = settings.DEMO_PASSWORD
         kw["workos_enabled"] = getattr(settings, "WORKOS_ENABLED", False)
         kw["registration_enabled"] = registration_enabled()
+        # The login page is what unauthenticated visitors land on when they
+        # share a link (and the entry point for bot traffic), so it carries
+        # full share-card metadata pointing at the public gallery.
+        kw.update(
+            _share_context(
+                self.request,
+                title=f"{SITE_NAME} — Reproducible AI Model Auditing Platform",
+                description=(
+                    "SimpleAudit Studio is a self-hostable platform for running reproducible AI "
+                    "model audits. Browse public experiments without an account."
+                ),
+            )
+        )
+        kw["page_canonical"] = self.request.build_absolute_uri("/public-experiments/")
         return super().get_context_data(**kw)
 
     def post(self, request, *args, **kwargs):
@@ -1712,6 +1727,28 @@ def _experiment_summary(runs) -> dict:
     }
 
 
+def _public_experiment_description(experiment, runs) -> str:
+    """Meta description for a public experiment page (share-card friendly)."""
+    from audits.experiments import FACTORS, run_factor_values
+
+    labels = [FACTORS.get(f, f) for f in experiment.factors]
+    varied = [run_factor_values(r) for r in runs]
+    targets = sorted({v["target"] for v in varied})[:3]
+    bits = []
+    if labels:
+        bits.append("comparing " + ", ".join(labels))
+    if targets:
+        shown = " vs. ".join(targets)
+        if len({v["target"] for v in varied}) > len(targets):
+            shown += " and more"
+        bits.append(f"testing {shown}")
+    if not bits:
+        bits.append("reproducible AI model audit results")
+    summary = _experiment_summary(runs)
+    detail = f"{summary['done']} of {summary['total']} runs complete."
+    return f"Public audit experiment from SimpleAudit Studio: {' '.join(bits)}. {detail}"
+
+
 class ExperimentsView(PublicReadableMixin, TemplateView):
     template_name = "experiments.html"
 
@@ -1795,6 +1832,12 @@ class ExperimentDetailView(PublicReadableMixin, TemplateView):
             m.latest_point = judged[-1] if judged else None
             m.drops = sum(1 for pt in points if pt["change"] == "drop")
             m.can_manage = can_manage_monitor(self.request.user, m)
+        # Public experiments are indexable and shareable; signed-in views of
+        # the same page stay noindex (the app default in base.html).
+        seo_kw = {}
+        if not self.request.user.is_authenticated:
+            description = _public_experiment_description(experiment, runs)
+            seo_kw = _share_context(self.request, title=f"{experiment.name} — {SITE_NAME}", description=description)
         kw.update(
             experiment=experiment,
             runs=runs,
@@ -1813,6 +1856,7 @@ class ExperimentDetailView(PublicReadableMixin, TemplateView):
             run_ids=",".join(str(r.id) for r in current),
             can_manage_visibility=self._is_admin(),
             public_header=True,
+            **seo_kw,
         )
         return super().get_context_data(**kw)
 
@@ -3100,13 +3144,17 @@ class PublicExperimentsView(TemplateView):
             e.factor_labels = [FACTORS.get(f, f) for f in e.factors]
         kw["experiments"] = experiments
         kw["public_header"] = True
-        kw["page_title"] = "Public Experiments — SimpleAudit Studio"
-        kw["page_description"] = (
-            "Publicly shared audit experiments from SimpleAudit Studio. "
-            "Reproducible AI model auditing results, viewable without an account."
+        # Indexable public page: full share-card metadata (og:image + dims).
+        kw.update(
+            _share_context(
+                self.request,
+                title=f"Public Experiments — {SITE_NAME}",
+                description=(
+                    "Publicly shared audit experiments from SimpleAudit Studio. "
+                    "Reproducible AI model auditing results, viewable without an account."
+                ),
+            )
         )
-        kw["page_robots"] = "index,follow"
-        kw["page_canonical"] = self.request.build_absolute_uri("/public-experiments/")
         kw["current_year"] = datetime.now(UTC).year
         return super().get_context_data(**kw)
 

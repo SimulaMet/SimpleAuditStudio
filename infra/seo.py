@@ -41,6 +41,16 @@ def _base_context(request) -> dict:
     }
 
 
+def _share_context(request, *, title: str, description: str) -> dict:
+    """SEO head context for an indexable public page (og:image + alt + dims)."""
+    ctx = _base_context(request)
+    ctx["page_title"] = title
+    ctx["page_description"] = description
+    ctx["page_robots"] = "index,follow"
+    ctx["page_canonical"] = request.build_absolute_uri()
+    return ctx
+
+
 # ─── Structured data builders ────────────────────────────────────────────────
 
 def _organization_schema(request) -> dict:
@@ -120,24 +130,33 @@ class LandingView(TemplateView):
 
 # ─── Technical SEO endpoints ─────────────────────────────────────────────────
 
-# Only these routes are indexable; everything else is app UI behind login.
-# Paths are absolute (leading slash) so build_absolute_uri resolves them
-# correctly regardless of the current request path.
-_INDEXABLE_ROUTES = [
-    ("/", "landing"),
-]
+# Indexable app routes beyond the landing page. Kept separate from the static
+# list below because they depend on DB state (public experiments).
+def _indexable_experiment_paths() -> list[str]:
+    from audits.models import Experiment
+
+    return [
+        f"/experiments/{pk}/"
+        for pk in Experiment.objects.filter(visibility=Experiment.Visibility.PUBLIC).values_list("pk", flat=True)
+    ]
 
 
 def sitemap_xml(request):
     """XML sitemap listing only the public, indexable pages."""
     now = datetime.now(UTC).strftime("%Y-%m-%d")
+    # (path, lastmod, changefreq, priority); the landing page is first and
+    # highest-priority. Public experiment pages are discovered at request
+    # time so visibility changes show up without a deploy.
+    entries: list[tuple[str, str, str, str]] = [("/", now, "weekly", "1.0")]
+    entries.append(("/public-experiments/", now, "daily", "0.8"))
+    for path in _indexable_experiment_paths():
+        entries.append((path, now, "daily", "0.7"))
     urls = []
-    for path, _name in _INDEXABLE_ROUTES:
+    for path, lastmod, changefreq, priority in entries:
         loc = _absolute_url(request, path)
-        priority = "1.0" if path == "/" else "0.8"
         urls.append(
             f"  <url>\n    <loc>{loc}</loc>\n    "
-            f"<lastmod>{now}</lastmod>\n    <changefreq>weekly</changefreq>\n"
+            f"<lastmod>{lastmod}</lastmod>\n    <changefreq>{changefreq}</changefreq>\n"
             f"    <priority>{priority}</priority>\n  </url>"
         )
     body = (
@@ -162,10 +181,13 @@ def robots_txt(request):
         # block social crawlers (facebookexternalhit, Twitterbot, etc.) from
         # fetching it, so they report the share image as "could not be
         # processed". A more-specific Allow wins over the Disallow (robots.txt
-        # precedence: longest matching path), so the share card renders while
-        # the rest of /static/ stays out of search indexes.
+        # precedence: longest matching path). These lines are listed BEFORE
+        # the Disallow on purpose — some strict parsers stop at the first
+        # matching line, and order guarantees both interpretations allow the
+        # image while keeping the rest of /static/ out of search indexes.
         "Allow: /static/og-image.png",
         "Allow: /static/logo.png",
+        "Disallow: /static/",
         "Disallow: /admin/",
         "Disallow: /api/",
         "Disallow: /login/",
@@ -178,7 +200,6 @@ def robots_txt(request):
         "Disallow: /connections/",
         "Disallow: /compare/",
         "Disallow: /auth/",
-        "Disallow: /static/",
         "",
         f"Sitemap: {_absolute_url(request, '/sitemap.xml')}",
     ]
