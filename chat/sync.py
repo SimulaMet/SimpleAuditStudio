@@ -50,13 +50,18 @@ def connections_to_push() -> list[dict]:
 
 
 def push_now(payloads: list[dict] | None = None) -> dict[str, int]:
-    """Push connections (all of them by default). Raises ChatAPIError on refusal."""
+    """Push connections (all of them by default). Raises ChatAPIError on refusal.
+
+    Also installs/updates the bundled tracing function (``ensure_tracing_function``);
+    that part never raises — connection sync stays the only failure path here.
+    """
     api = ChatAPI.as_user(_admin())
     pushed = connections_to_push() if payloads is None else payloads
     result = api.push_connections(pushed)
     # Studio never serves Ollama; leaving it on costs a failing request per page
     # load and an empty section in Open WebUI's settings.
     api.disable_ollama()
+    ensure_tracing_function(api)
     _reconcile_model_ids(api, pushed)
     from chat.access_sync import reconcile_safely
 
@@ -147,3 +152,50 @@ def _admin():
     if user is None:
         raise NoAdminError("No superuser to act as; Open WebUI's provider config needs an admin.")
     return user
+
+
+# --- tracing function (auto-installed on every push) ------------------------
+
+#: The bundled Open WebUI filter that taps every chat turn to the pipelines
+#: service for Langfuse tracing. Kept in sync with this file, so code changes
+#: are re-pushed automatically on the next startup/signal push.
+TRACING_FUNCTION_NAME = "Studio Langfuse Capture"
+TRACING_FUNCTION_FILE = os.path.join(
+    os.path.dirname(__file__), "openwebui_functions", "studio_langfuse_capture.py"
+)
+
+
+def ensure_tracing_function(api: ChatAPI | None = None) -> str:
+    """Install or update the tracing function in Open WebUI. Returns a report line.
+
+    Best-effort: any failure is logged and reported, never raised — tracing is
+    additive and must not block connection sync. Idempotent; content is only
+    pushed when it actually changed.
+    """
+    api = api or ChatAPI.as_user(_admin())
+    try:
+        with open(TRACING_FUNCTION_FILE, encoding="utf-8") as fh:
+            content = fh.read()
+    except OSError as exc:
+        return f"Tracing function unavailable ({exc})"
+
+    try:
+        functions = api.list_functions()
+        existing = next((f for f in functions if f.get("name") == TRACING_FUNCTION_NAME), None)
+        if existing is None:
+            created = api.create_function(TRACING_FUNCTION_NAME, content)
+            function_id = created.get("id") or created.get("function_id") or ""
+            api.set_function_access(function_id, [{"tab": "user"}])
+            return "Tracing function installed."
+        if (existing.get("content") or "") != content:
+            api.update_function_content(existing["id"], content)
+            return "Tracing function updated."
+        return "Tracing function up to date."
+    except ChatAPIError as exc:
+        logger.info("Tracing function sync skipped: %s", exc)
+        return f"Tracing function not synced: {exc}"
+    except Exception:
+        # Tracing is additive; anything unexpected (odd API shape, chat down)
+        # must never break connection sync or startup.
+        logger.info("Tracing function sync skipped", exc_info=True)
+        return "Tracing function sync skipped (see logs)."

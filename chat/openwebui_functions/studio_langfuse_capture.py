@@ -15,10 +15,11 @@ import uuid
 
 import httpx
 
-# Base URL of the Studio pipelines service (no trailing slash). In the Azure
-# deploy this is the studio container on the shared network; locally use
-# http://127.0.0.1:9099. Leave empty to disable capturing.
-STUDIO_PIPELINES_URL = os.environ.get("STUDIO_PIPELINES_URL", "http://127.0.0.1:9099").rstrip("/")
+# Base URL of the Studio pipelines service (no trailing slash). The Open WebUI
+# container and Studio are on the same Docker network, so the studio container
+# name works from inside OWUI. Override with STUDIO_PIPELINES_URL if your
+# topology differs. Leave empty to disable capturing.
+STUDIO_PIPELINES_URL = os.environ.get("STUDIO_PIPELINES_URL", "http://helsedir-studio:9099").rstrip("/")
 PIPELINE_ID = os.environ.get("STUDIO_PIPELINES_ID", "studio_capture")
 # Optional bearer key; the Studio stub accepts a missing or matching key.
 STUDIO_PIPELINES_KEY = os.environ.get("STUDIO_PIPELINES_API_KEY", "")
