@@ -72,9 +72,9 @@ class Filter:
             return user_message
         payload = {
             "body": {
+                "chat_id": chat_id or str(uuid.uuid4()),
                 "messages": [dict(m) for m in (history or [])] + [{"role": "user", "content": user_message}],
                 "model": kwargs.get("model") or {},
-                "metadata": {"chat_id": chat_id or str(uuid.uuid4())},
             },
             "user": self._user_payload(__user__),
         }
@@ -100,7 +100,6 @@ class Filter:
             "body": {
                 "chat_id": ctx.get("chat_id") or "local",
                 "messages": messages,
-                "metadata": ctx.get("metadata") or {},
             },
             "user": self._user_payload(__user__),
         }
