@@ -2,6 +2,7 @@ import json
 import logging
 import time
 
+from django.db import close_old_connections
 from django.http import StreamingHttpResponse
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
@@ -255,19 +256,32 @@ def stream_audit_run_events(request, project_id, run_id):
     def event_stream():
         sent_after = after_id
         start = time.monotonic()
-        while True:
-            if time.monotonic() - start > _SSE_MAX_DURATION_SECONDS:
-                yield "event: timeout\ndata: {}\n\n"
-                break
-            events = list_events(run.id, after_id=sent_after, limit=_SSE_BATCH_SIZE)
-            for e in events:
-                sent_after = e["id"]
-                data = json.dumps({"kind": e["kind"], "version_item_id": e["version_item_id"], "payload": e["payload"], "ts": e["created_at"]})
-                yield f"id: {e['id']}\nevent: {e['kind']}\ndata: {data}\n\n"
-                if e["kind"] in _TERMINAL_EVENT_KINDS:
-                    return
-            if len(events) < _SSE_BATCH_SIZE:
-                time.sleep(_SSE_POLL_INTERVAL_SECONDS)
+        try:
+            while True:
+                if time.monotonic() - start > _SSE_MAX_DURATION_SECONDS:
+                    yield "event: timeout\ndata: {}\n\n"
+                    break
+                events = list_events(run.id, after_id=sent_after, limit=_SSE_BATCH_SIZE)
+                for e in events:
+                    sent_after = e["id"]
+                    data = json.dumps({"kind": e["kind"], "version_item_id": e["version_item_id"], "payload": e["payload"], "ts": e["created_at"]})
+                    yield f"id: {e['id']}\nevent: {e['kind']}\ndata: {data}\n\n"
+                    if e["kind"] in _TERMINAL_EVENT_KINDS:
+                        return
+                if len(events) < _SSE_BATCH_SIZE:
+                    # Release (or recycle) the DB connection while idle so a
+                    # long-lived stream does not pin a Postgres connection per thread.
+                    close_old_connections()
+                    time.sleep(_SSE_POLL_INTERVAL_SECONDS)
+        except (GeneratorExit, SystemExit, KeyboardInterrupt):
+            # Normal stream teardown: the client disconnected (GeneratorExit is
+            # raised when the response iterator is closed), or the worker process
+            # is shutting down / interrupted (SystemExit / Ctrl+C). These are
+            # expected during an hour-long poll loop — swallow them so they don't
+            # surface as noise in error tracking. Re-raising lets Python run any
+            # pending finally blocks and propagate the correct close semantics.
+            logger.debug("SSE stream for run %s ended early (client disconnect or shutdown)", run.id)
+            raise
 
     response = StreamingHttpResponse(event_stream(), content_type="text/event-stream")
     response["Cache-Control"] = "no-cache"
