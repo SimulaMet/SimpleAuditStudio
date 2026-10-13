@@ -610,14 +610,21 @@ def run_scenario(
             # post-processor reads). When tracing, the engine propagates the
             # traceparent per turn, records the trace ids in correlation, and
             # calls the evidence_resolver after target execution but before judge.
+            # Close the auditor's async HTTP clients inside this loop; left to
+            # GC they'd try to close transports bound to the closed loop.
+            from infra.trace_target import run_with_client_cleanup
+
             results = asyncio.run(
-                auditor_instance.run_async(
-                    [scenario],
-                    language=language,
-                    on_turn=on_turn,
-                    audit_run_id=audit_run_id,
-                    trace_correlation=correlation,
-                    evidence_resolver=evidence_resolver,
+                run_with_client_cleanup(
+                    lambda: auditor_instance.run_async(
+                        [scenario],
+                        language=language,
+                        on_turn=on_turn,
+                        audit_run_id=audit_run_id,
+                        trace_correlation=correlation,
+                        evidence_resolver=evidence_resolver,
+                    ),
+                    [auditor_instance],
                 )
             )
             # Collect full evidence tiers after run for persistence. The resolver
@@ -798,12 +805,20 @@ def run_scenario_repeated(
 
     try:
         with (provider or nullcontext()):
+            # AuditExperiment builds a fresh TraceContextModelAuditor per rep;
+            # the cleanup wrapper captures each one and closes its async HTTP
+            # clients before asyncio.run() closes the loop that owns them.
+            from infra.trace_target import run_with_client_cleanup
+
             results = asyncio.run(
-                experiment.run_scenario_reps(
-                    model_index=0, scenario=scenario, max_turns=max_turns, language=language,
-                    on_turn=on_turn,
-                    audit_run_id=getattr(provider, "_audit_run_id", None) if provider else None,
-                    trace_correlation=_tracing_correlation,
+                run_with_client_cleanup(
+                    lambda: experiment.run_scenario_reps(
+                        model_index=0, scenario=scenario, max_turns=max_turns, language=language,
+                        on_turn=on_turn,
+                        audit_run_id=getattr(provider, "_audit_run_id", None) if provider else None,
+                        trace_correlation=_tracing_correlation,
+                    ),
+                    [experiment],
                 )
             )
             # Collect per-rep evidence tiers while the provider is still alive.

@@ -7,6 +7,9 @@ headers to the target request.
 """
 from __future__ import annotations
 
+import contextvars
+import inspect
+import logging
 from typing import Any
 from uuid import uuid4
 
@@ -286,6 +289,99 @@ def install_trace_context_target(auditor: Any) -> None:
     )
 
 
+logger = logging.getLogger(__name__)
+
+# Collects every TraceContextModelAuditor built while a list is installed, so
+# the engine can close their async HTTP clients before the event loop that
+# owns their pooled connections is shut down by ``asyncio.run()``.
+_auditor_registry: contextvars.ContextVar[list[Any] | None] = contextvars.ContextVar(
+    "simpleaudit_studio_auditor_registry", default=None
+)
+
+_SKIP_TYPES = (str, bytes, int, float, bool, type(None))
+
+
+def _async_close_method(obj: Any):
+    """Return a bound coroutine close method (``aclose`` or ``close``) or None."""
+    for name in ("aclose", "close"):
+        method = getattr(type(obj), name, None)
+        if method is not None and inspect.iscoroutinefunction(method):
+            return getattr(obj, name)
+    return None
+
+
+def _collect_async_clients(root: Any, *, max_depth: int = 3) -> list[Any]:
+    """Find objects with an async close method reachable from ``root``'s attributes."""
+    found: list[Any] = []
+    seen: set[int] = {id(root)}
+
+    def _walk(obj: Any, depth: int) -> None:
+        if depth > max_depth:
+            return
+        if isinstance(obj, dict):
+            attrs = list(obj.values())
+        elif isinstance(obj, (list, tuple, set, frozenset)):
+            attrs = list(obj)
+        else:
+            try:
+                attrs = list(vars(obj).values())
+            except TypeError:
+                return
+        for value in attrs:
+            if isinstance(value, _SKIP_TYPES) or inspect.isroutine(value) or isinstance(value, type):
+                continue
+            if id(value) in seen:
+                continue
+            seen.add(id(value))
+            if _async_close_method(value) is not None:
+                found.append(value)
+                continue
+            _walk(value, depth + 1)
+
+    _walk(root, 1)
+    return found
+
+
+async def aclose_auditor_clients(auditors: list[Any]) -> None:
+    """Close the async HTTP clients held by ``auditors`` on the running loop.
+
+    Must be awaited inside the same event loop the clients were used in.
+    Otherwise their garbage-collection finalizer schedules ``aclose()`` on a
+    later loop while the pooled transports still belong to the closed one,
+    which raises ``RuntimeError: Event loop is closed``.
+    """
+    closed: set[int] = set()
+    for auditor in auditors:
+        if auditor is None:
+            continue
+        for client in _collect_async_clients(auditor):
+            if id(client) in closed:
+                continue
+            closed.add(id(client))
+            close = _async_close_method(client)
+            if close is None:
+                continue
+            try:
+                await close()
+            except Exception:  # cleanup must never fail the scenario
+                logger.debug("Failed to close async client %r", client, exc_info=True)
+
+
+async def run_with_client_cleanup(coro_factory, auditors: list[Any] | None = None):
+    """Await ``coro_factory()`` then close every auditor's async clients.
+
+    Auditors constructed while the coroutine runs (e.g. the fresh per-rep
+    auditors AuditExperiment builds) are captured via the registry.
+    """
+    registry: list[Any] = list(auditors or [])
+    token = _auditor_registry.set(registry)
+    try:
+        return await coro_factory()
+    finally:
+        _auditor_registry.reset(token)
+        await aclose_auditor_clients(registry)
+
+
 from simpleaudit.model_auditor import ModelAuditor as _SimpleAuditModelAuditor
 
 
@@ -295,3 +391,6 @@ class TraceContextModelAuditor(_SimpleAuditModelAuditor):
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         install_trace_context_target(self)
+        registry = _auditor_registry.get()
+        if registry is not None:
+            registry.append(self)
