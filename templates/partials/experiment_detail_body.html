@@ -6,7 +6,7 @@
     {% url 'experiment_rename' experiment.id as rename_url %}
     {% include "partials/rename_title.html" with name=experiment.name action=rename_url kind="experiment" hide_rename=user.is_anonymous %}
     <p class="text-xs text-gray-500 mt-1">
-      {{ summary.total }} run setup{{ summary.total|pluralize }}{% if monitors %} · repeats {{ monitors.0.interval_display }}{% endif %} · compares {{ factor_labels|join:" × "|default:"—" }}
+      {% if runs|length == 1 %}Single run (no comparison){% else %}{{ summary.total }} run setup{{ summary.total|pluralize }}{% if monitors %} · repeats {{ monitors.0.interval_display }}{% endif %} · compares {{ factor_labels|join:" × "|default:"—" }}{% endif %}
       · created <time data-local datetime="{{ experiment.created_at|date:'c' }}">{{ experiment.created_at|date:"M j, H:i" }} UTC</time>{% if experiment.created_by %} by {{ experiment.created_by.username }}{% endif %}
     </p>
   </div>
@@ -17,7 +17,8 @@
     <span class="inline-flex items-center px-2 py-1 rounded-full text-[11px] bg-gray-800/60 text-gray-400 border border-gray-700/50" title="Only visible to members of this workspace">Private</span>
     {% endif %}
     {% if can_manage_visibility %}
-    <form method="post" action="{% url 'experiment_set_visibility' experiment.id %}" class="inline">
+    <form method="post" action="{% url 'experiment_set_visibility' experiment.id %}" class="inline"
+          data-confirm="{% if experiment.is_public %}Make this experiment private again? Only workspace members will be able to see it.{% else %}Make this experiment public? Anyone with the URL will be able to view it — including its runs and results — without an account.{% endif %}">
       {% csrf_token %}
       <input type="hidden" name="visibility" value="{% if experiment.is_public %}private{% else %}public{% endif %}">
       <button type="submit" class="px-3 py-1.5 rounded-lg bg-surface-overlay text-gray-300 text-xs font-medium hover:text-white">{% if experiment.is_public %}Make private{% else %}Make public{% endif %}</button>

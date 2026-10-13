@@ -114,13 +114,29 @@ class ExperimentFlowTests(_ExperimentBase):
         self.assertContains(page, f'name="agent_id" value="{agent.id}"')
         self.assertContains(page, 'name="scenario_version"')
 
-    def test_single_combination_launches_directly(self):
+    def test_single_combination_becomes_a_singleton_experiment(self):
+        # Anything launched from New Experiment is an Experiment, even one run.
         resp = self.client.post("/experiments/new/", self._design(target_model=[self.t1.id], max_turns="3"))
+        exp = Experiment.objects.get()
         run = AuditRun.objects.get()
-        self.assertRedirects(resp, f"/runs/{run.id}/", fetch_redirect_response=False)
-        self.assertIsNone(run.experiment_id)
-        self.assertFalse(Experiment.objects.exists())
+        self.assertRedirects(resp, f"/experiments/{exp.id}/", fetch_redirect_response=False)
+        self.assertEqual(exp.factors, [])  # nothing varies across one run
+        self.assertEqual(list(exp.runs.all()), [run])
+        self.assertEqual(run.experiment, exp)
         self.assertEqual(run.generation_parameters_snapshot["max_turns"], 3)
+
+    def test_singleton_experiment_page_renders(self):
+        self.client.post("/experiments/new/", self._design(target_model=[self.t1.id], max_turns="3"))
+        exp = Experiment.objects.get()
+        page = self.client.get(f"/experiments/{exp.id}/")
+        self.assertContains(page, "Single run")
+        self.assertContains(page, "Pass rate")
+        self.assertEqual(page.context["row_factor"], None)
+        self.assertEqual(page.context["col_factor"], None)
+        # The list page shows it with a single-run badge instead of factors.
+        listing = self.client.get("/experiments/")
+        self.assertContains(listing, exp.name)
+        self.assertContains(listing, "single run")
 
     def test_multi_design_shows_review_without_launching(self):
         resp = self.client.post("/experiments/new/", self._design())
