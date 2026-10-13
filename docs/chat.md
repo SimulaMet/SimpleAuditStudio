@@ -309,16 +309,30 @@ actually send traces you must set both `LANGFUSE_SECRET_KEY` and
 `LANGFUSE_PUBLIC_KEY` (plus `LANGFUSE_HOST`); without them the service still
 runs and captures, but skips the Langfuse write.
 
-There are two capture seams, and which one fires depends on how Open WebUI is
-wired:
+There are three ways to wire Open WebUI to the service, in order of
+recommendation:
 
-- **As a provider (recommended):** add an Open WebUI connection whose base URL
-  is the service (`http://127.0.0.1:9099/v1`, key `0p3n-w3bu!`). Every chat
-  turn then flows through `POST /v1/chat/completions`, which records one trace
-  per chat (request + response + token usage) and forwards the call upstream.
-  This is what Open WebUI actually calls for an OpenAI-compatible connection.
-- **As a filter:** if your client drives the Pipelines filter protocol directly,
-  `POST /v1/{id}/filter/inlet` (user request → span) and
+- **As an Open WebUI Function (recommended — traces ALL connections):** install
+  the bundled filter function `chat/openwebui_functions/studio_langfuse_capture.py`
+  (Open WebUI admin → Functions → paste the file). It runs *inside* Open WebUI's
+  own backend, so no connection base URLs change and every provider works
+  (OpenAI, Anthropic-compatible, local models — anything). On each chat turn it
+  posts the request to `POST /v1/{id}/filter/inlet` before the model call and
+  the reply to `POST /v1/{id}/filter/outlet` after; both return the payload
+  untouched, so this is a pure tap. Set the function's `pipelines_url` valve
+  (or `STUDIO_PIPELINES_URL`) to the service base (e.g.
+  `http://helsedir-studio:9099`). Tracing failures never break chat. The
+  official Open WebUI Pipelines sidecar is *not* needed — its own README
+  recommends Functions over Pipelines for exactly this kind of lightweight
+  filter.
+- **As a provider:** add an Open WebUI connection whose base URL is the
+  service (`http://127.0.0.1:9099/v1`, key `0p3n-w3bu!`). Every chat turn then
+  flows through `POST /v1/chat/completions`, which records one trace per chat
+  (request + response + token usage) and forwards the call upstream via
+  `SIMPLEAUDIT_PIPELINES_FORWARD`. Only chats using that connection are traced,
+  and the upstream must be OpenAI-compatible.
+- **As a raw filter endpoint:** if your client drives the Pipelines filter
+  protocol directly, `POST /v1/{id}/filter/inlet` (user request → span) and
   `POST /v1/{id}/filter/outlet` (assistant reply → generation) also record
   traces.
 
