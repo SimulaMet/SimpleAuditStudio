@@ -12,6 +12,7 @@ requirements: httpx>=0.27
 
 import os
 import socket
+import time
 import uuid
 
 import httpx
@@ -65,47 +66,75 @@ class Filter:
             "email": __user__.get("email"),
         }
 
-    async def user_message(self, message, history, user_message, chat_id=None, __user__=None, **kwargs):
-        """Before the model call: report the request to the Studio stub."""
+    async def inlet(self, body, __model__=None, __chat_id__=None, __user__=None, **kwargs):
+        """Before the model call: report the full request to the Studio stub."""
         url = self._url()
         if not url:
-            return user_message
+            return body
+        messages = body.get("messages") or []
+        cid = __chat_id__ or body.get("chat_id") or str(uuid.uuid4())
+        model_info = __model__ or {}
+        # Capture everything available: params, features, metadata.
+        params = body.get("params") or {}
         payload = {
             "body": {
-                "chat_id": chat_id or str(uuid.uuid4()),
-                "messages": [dict(m) for m in (history or [])] + [{"role": "user", "content": user_message}],
-                "model": kwargs.get("model") or {},
+                "chat_id": cid,
+                "messages": [dict(m) for m in messages],
+                "model": model_info.get("id", ""),
+                "model_name": model_info.get("name", ""),
+                "params": params,
+                "features": body.get("features") or {},
+                "stream": body.get("stream", False),
+                "timestamp": time.time(),
             },
             "user": self._user_payload(__user__),
         }
         try:
             async with httpx.AsyncClient(timeout=5) as client:
                 await client.post(f"{url}/v1/{PIPELINE_ID}/filter/inlet", json=payload, headers=self._headers())
-        except Exception:  # noqa: S110,BLE001 - tracing must never break chat
-            pass
-        return user_message
+        except Exception as exc:  # noqa: BLE001 - tracing must never break chat
+            print(f"[studio-capture] inlet failed: {exc!r}")
+        return body
 
-    async def after_chat_completion(self, content, context=None, __user__=None, **kwargs):
-        """After the model reply: report the assistant message to the Studio stub."""
+    async def outlet(self, body, __model__=None, __chat_id__=None, __user__=None, **kwargs):
+        """After the model reply: report full response data to the Studio stub.
+
+        ``body`` is a dict with keys: model, messages, chat_id, session_id, id.
+        Each message has role, content, info, timestamp, usage (on assistant).
+        """
         url = self._url()
         if not url:
-            return content
-        ctx = context or {}
-        messages = list(ctx.get("messages") or [])
-        if isinstance(content, str):
-            messages.append({"role": "assistant", "content": content})
-        elif isinstance(content, dict):
-            messages.append(content)
+            return body
+        cid = body.get("chat_id") or __chat_id__ or "local"
+        messages = body.get("messages") or []
+        # Keep all fields from each message — content, usage, info, timestamp.
+        slim_messages = [
+            {
+                "role": m.get("role"),
+                "content": m.get("content", ""),
+                **({"usage": m["usage"]} if m.get("usage") else {}),
+                **({"info": m["info"]} if m.get("info") else {}),
+                **({"timestamp": m["timestamp"]} if m.get("timestamp") is not None else {}),
+            }
+            for m in messages
+        ]
+        model_info = __model__ or {}
+        model_id = model_info.get("id") if isinstance(model_info, dict) else None
         payload = {
             "body": {
-                "chat_id": ctx.get("chat_id") or "local",
-                "messages": messages,
+                "chat_id": cid,
+                "messages": slim_messages,
+                "model": model_id or body.get("model") or "",
+                "model_name": model_info.get("name", "") if isinstance(model_info, dict) else "",
+                "session_id": body.get("session_id"),
+                "message_id": body.get("id"),
+                "timestamp": time.time(),
             },
             "user": self._user_payload(__user__),
         }
         try:
             async with httpx.AsyncClient(timeout=5) as client:
                 await client.post(f"{url}/v1/{PIPELINE_ID}/filter/outlet", json=payload, headers=self._headers())
-        except Exception:  # noqa: S110,BLE001 - tracing must never break chat
-            pass
-        return content
+        except Exception as exc:  # noqa: BLE001 - tracing must never break chat
+            print(f"[studio-capture] outlet failed: {exc!r}")
+        return body

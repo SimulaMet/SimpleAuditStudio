@@ -159,14 +159,53 @@ def _admin():
 #: The bundled Open WebUI filter that taps every chat turn to the pipelines
 #: service for Langfuse tracing. Kept in sync with this file, so code changes
 #: are re-pushed automatically on the next startup/signal push.
-TRACING_FUNCTION_NAME = "Studio Langfuse Capture"
+TRACING_FUNCTION_ID = "studio_langfuse_capture"
 TRACING_FUNCTION_FILE = os.path.join(
     os.path.dirname(__file__), "openwebui_functions", "studio_langfuse_capture.py"
 )
 
 
+def _bind_tracing_filter_to_models(api: ChatAPI, function_id: str) -> None:
+    """Ensure every workspace model has the tracing filter in its ``meta.filterIds``.
+
+    Open WebUI v0.11+ resolves filter functions per-model via the
+    ``info.meta.filterIds`` field (not ``meta.functions``). Without this
+    binding the filter is loaded but never invoked for any chat.
+    Best-effort: failures are logged and swallowed.
+    """
+    try:
+        resp = api.request("GET", "/api/v1/models")
+        models = resp.get("data", []) if isinstance(resp, dict) else []
+        for m in models:
+            mid = m.get("id", "")
+            if not mid:
+                continue
+            meta = m.get("meta") or {}
+            filter_ids = list(meta.get("filterIds") or [])
+            if function_id in filter_ids:
+                continue
+            filter_ids.append(function_id)
+            meta["filterIds"] = filter_ids
+            payload = {
+                "id": mid,
+                "name": m.get("name", mid),
+                "params": m.get("params") or {},
+                "meta": meta,
+            }
+            try:
+                api.request("POST", "/api/v1/models/model/update", json=payload)
+            except ChatAPIError as exc:
+                # System-owned models (arena, mock) may reject updates; skip them.
+                logger.debug("Tracing filter bind skipped %s: %s", mid, exc)
+    except Exception:
+        logger.debug("Tracing filter model-bind pass failed", exc_info=True)
+
+
 def ensure_tracing_function(api: ChatAPI | None = None) -> str:
     """Install or update the tracing function in Open WebUI. Returns a report line.
+
+    Also binds the filter to every workspace model via ``meta.filterIds`` so
+    that Open WebUI actually invokes it during chat completion.
 
     Best-effort: any failure is logged and reported, never raised — tracing is
     additive and must not block connection sync. Idempotent; content is only
@@ -179,17 +218,22 @@ def ensure_tracing_function(api: ChatAPI | None = None) -> str:
     except OSError as exc:
         return f"Tracing function unavailable ({exc})"
 
+    report: str | None = None
+    function_id: str | None = None
     try:
         functions = api.list_functions()
-        existing = next((f for f in functions if f.get("name") == TRACING_FUNCTION_NAME), None)
+        existing = next((f for f in functions if f.get("id") == TRACING_FUNCTION_ID), None)
         if existing is None:
-            created = api.create_function(TRACING_FUNCTION_NAME, content)
-            # New functions are active for all users by default; nothing to grant.
-            return f"Tracing function installed ({created.get('id', '?')})."
-        if (existing.get("content") or "") != content:
-            api.update_function_content(existing["id"], TRACING_FUNCTION_NAME, content)
-            return "Tracing function updated."
-        return "Tracing function up to date."
+            created = api.create_function(TRACING_FUNCTION_ID, content)
+            function_id = created.get("id", TRACING_FUNCTION_ID)
+            report = f"Tracing function installed ({function_id})."
+        else:
+            function_id = existing["id"]
+            if (existing.get("content") or "") != content:
+                api.update_function_content(function_id, TRACING_FUNCTION_ID, content)
+                report = "Tracing function updated."
+            else:
+                report = "Tracing function up to date."
     except ChatAPIError as exc:
         logger.info("Tracing function sync skipped: %s", exc)
         return f"Tracing function not synced: {exc}"
@@ -198,3 +242,9 @@ def ensure_tracing_function(api: ChatAPI | None = None) -> str:
         # must never break connection sync or startup.
         logger.info("Tracing function sync skipped", exc_info=True)
         return "Tracing function sync skipped (see logs)."
+
+    # Bind the filter to every workspace model so OWUI actually invokes it.
+    if function_id:
+        _bind_tracing_filter_to_models(api, function_id)
+
+    return report  # type: ignore[return-value]

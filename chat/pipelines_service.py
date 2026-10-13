@@ -108,6 +108,9 @@ def _get_langfuse():
 # Stable Langfuse trace id per chat, so the inlet span and the outlet generation
 # land on the same trace. A valid Langfuse trace id is 32 lowercase hex chars.
 _chat_trace_ids: dict[str, str] = {}
+# In-flight request data keyed by chat_id; the inlet stores it so the outlet
+# can pair input+output into a single Langfuse generation.
+_pending_requests: dict[str, dict] = {}
 
 
 def _chat_id(body: dict) -> str:
@@ -154,7 +157,12 @@ def _trace_id_for(chat_id: str) -> str:
 
 
 def _record_inlet(body: dict, user: dict | None) -> None:
-    """Open/update the chat's trace with the user request (a span)."""
+    """Store the request context so the outlet can build a full generation.
+
+    Also opens the trace (span) immediately so that even if the model call
+    fails and no outlet arrives, the user's request is still visible in
+    Langfuse as a span with the input.
+    """
     lf = _get_langfuse()
     if lf is None:
         return
@@ -163,6 +171,17 @@ def _record_inlet(body: dict, user: dict | None) -> None:
 
     chat_id = _chat_id(body)
     user_id = _user_id(body, user)
+    # Stash request data for the outlet to pair input+output into one generation.
+    _pending_requests[chat_id] = {
+        "messages": body.get("messages"),
+        "model": body.get("model", ""),
+        "model_name": body.get("model_name", ""),
+        "params": body.get("params") or {},
+        "features": body.get("features") or {},
+        "stream": body.get("stream", False),
+        "user_id": user_id,
+        "ts": body.get("timestamp") or time.time(),
+    }
     try:
         with propagate_attributes(
             session_id=chat_id,
@@ -173,7 +192,13 @@ def _record_inlet(body: dict, user: dict | None) -> None:
             as_type="span",
             trace_context=TraceContext(trace_id=_trace_id_for(chat_id)),
             input=body.get("messages"),
-            metadata={"interface": "open-webui"},
+            metadata={
+                "interface": "open-webui",
+                "model": body.get("model", ""),
+                "model_name": body.get("model_name", ""),
+                "params": body.get("params") or {},
+                "stream": body.get("stream", False),
+            },
         ):
             pass
     except Exception:
@@ -181,7 +206,12 @@ def _record_inlet(body: dict, user: dict | None) -> None:
 
 
 def _record_outlet(body: dict, user: dict | None) -> None:
-    """Record the assistant reply as a generation on the chat's trace."""
+    """Record the assistant reply as a generation on the chat's trace.
+
+    Pairs the stored inlet (input messages, model, params) with the outlet
+    (assistant content, usage, timestamps) into a single Langfuse GENERATION
+    observation — the same shape the official OpenAI SDK integration produces.
+    """
     lf = _get_langfuse()
     if lf is None:
         return
@@ -189,32 +219,47 @@ def _record_outlet(body: dict, user: dict | None) -> None:
     from langfuse.types import TraceContext
 
     chat_id = _chat_id(body)
-    user_id = _user_id(body, user)
-    messages = body.get("messages") or []
+    user_id = _user_id(body, user) or (_pending_requests.get(chat_id) or {}).get("user_id")
+    pending = _pending_requests.pop(chat_id, None)
+
+    messages = body.get("messages") or (pending or {}).get("messages") or []
     last_assistant = next(
         (m for m in reversed(messages) if m.get("role") == "assistant"), {}
     )
+    model_name = body.get("model") or (pending or {}).get("model") or ""
+    display_name = body.get("model_name") or (pending or {}).get("model_name") or ""
     usage = last_assistant.get("usage") or {}
     prompt_tokens = usage.get("prompt_tokens") or usage.get("prompt_eval_count")
     completion_tokens = usage.get("completion_tokens") or usage.get("completion_eval_count")
     usage_details = None
     if prompt_tokens is not None:
         usage_details = {"input": int(prompt_tokens), "output": int(completion_tokens or 0)}
+    # Build rich metadata from everything we captured.
+    metadata: dict = {"interface": "open-webui"}
+    if pending:
+        metadata["params"] = pending.get("params") or {}
+        metadata["stream"] = pending.get("stream", False)
+    if body.get("session_id"):
+        metadata["session_id"] = body["session_id"]
+    if body.get("message_id"):
+        metadata["message_id"] = body["message_id"]
     try:
         with propagate_attributes(
             session_id=chat_id,
             user_id=user_id,
             tags=["simpleauditstudio"],
         ), lf.start_as_current_observation(
-            name="generation",
+            name=display_name or model_name or "generation",
             as_type="generation",
             trace_context=TraceContext(trace_id=_trace_id_for(chat_id)),
-            model=body.get("model"),
-            input=messages,
+            model=model_name or None,
+            input=(pending or {}).get("messages") or messages,
             output=last_assistant.get("content"),
             usage_details=usage_details,
+            metadata=metadata,
         ):
             pass
+        lf.flush()
     except Exception:
         logger.warning("Langfuse outlet failed for %s", chat_id, exc_info=True)
 
