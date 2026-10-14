@@ -5,6 +5,7 @@ development (SIMPLEAUDIT_LOCAL_SQLITE) and the single-container demo
 (see infra/minimal_config.py).
 """
 import os
+import re
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -18,12 +19,29 @@ def env_bool(name: str, default: bool = False) -> bool:
 
 
 def _pkg_version() -> str:
+    """Version of SimpleAudit Studio itself.
+
+    Prefers the installed distribution's metadata (uvx / pip installs); in a
+    source checkout the package is not installed, so fall back to the
+    pyproject.toml ``[project] version`` next to this file.
+    """
     from importlib.metadata import PackageNotFoundError, version
 
     try:
         return version("simpleaudit-studio")
     except PackageNotFoundError:
-        return "dev"
+        pass
+    try:
+        from pathlib import Path
+
+        pyproject = Path(__file__).resolve().parent.parent / "pyproject.toml"
+        for line in pyproject.read_text(encoding="utf-8").splitlines():
+            m = re.match(r'^version\s*=\s*"([^"]+)"', line.strip())
+            if m:
+                return m.group(1)
+    except OSError:
+        pass
+    return "dev"
 
 
 def env_list(name: str, default: str = "") -> list[str]:
