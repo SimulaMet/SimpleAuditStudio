@@ -379,8 +379,8 @@ class WheelMarkerTests(SimpleTestCase):
     """
 
     def test_default_wheel_is_content_capture_release(self):
-        self.assertIn("v0.11.4.3-subpath", proxy.OWUI_WHEEL_URL)
-        self.assertIn("open_webui-0.11.4.3-py3-none-any.whl", proxy.OWUI_WHEEL_URL)
+        self.assertIn("v0.12.0-subpath", proxy.OWUI_WHEEL_URL)
+        self.assertIn("open_webui-0.12.0-py3-none-any.whl", proxy.OWUI_WHEEL_URL)
 
     def test_install_requirement_includes_observability_extra(self):
         requirement = proxy._owui_install_requirement()
