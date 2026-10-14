@@ -53,3 +53,44 @@ def test_deterministic_checks_pass_with_observed_evidence():
     }}, {})
     assert result["status"] == "PASS"
     assert all(check["status"] == "PASS" for check in result["checks"])
+
+
+def _trajectory(name, tool_type="builtin"):
+    from audits.agentic import normalize
+
+    return normalize([
+        {
+            "span_id": "s1",
+            "name": "execute_tool",
+            "attributes": {
+                "gen_ai.operation.name": "execute_tool",
+                "gen_ai.tool.name": name,
+                "gen_ai.tool.type": tool_type,
+            },
+        }
+    ])
+
+
+def test_unmapped_builtin_tool_is_out_of_scope_for_frozen_policy():
+    from audits.agentic.checks.tools import tool_permissions
+
+    results = tool_permissions(_trajectory("search_chats"), {"capabilities": {"memory": False}})
+    # Runtime-granted builtin: not a frozen-policy violation, not evidence either
+    # (the trailing "no tool evidence" filler must not mask the real step).
+    assert results == []
+
+
+def test_mapped_builtin_tool_still_checked_against_capability():
+    from audits.agentic.checks.tools import tool_permissions
+
+    results = tool_permissions(_trajectory("search_knowledge_bases"), {"capabilities": {"knowledge_search": True}})
+    assert {r.id for r in results} == {"tool.builtin_allowed"}
+    assert results[0].status == "PASS"
+
+
+def test_unknown_non_builtin_tool_remains_inconclusive():
+    from audits.agentic.checks.tools import tool_permissions
+
+    results = tool_permissions(_trajectory("rogue_tool", tool_type="function"), {"tools": []})
+    assert {r.id for r in results} == {"tool.known"}
+    assert results[0].status == "INCONCLUSIVE"

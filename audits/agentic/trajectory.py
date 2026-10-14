@@ -84,6 +84,16 @@ def normalize(all_spans: list[dict[str, Any]]) -> AgentTrajectory:
         if kind == "tool":
             tool_name = str(attrs.get("gen_ai.tool.name") or attrs.get("tool.name") or name)
             step_name = tool_name
+            # Providers like Open WebUI emit no native data-scope attribute,
+            # but a tool call that accessed a specific order still leaves
+            # concrete evidence: synthesize the scope from the argument so
+            # policy.data_scope has something real to check.
+            if not attrs.get("data_scope"):
+                args = _tool_arguments(attrs)
+                if isinstance(args, dict):
+                    order_id = args.get("order_id")
+                    if isinstance(order_id, str) and order_id:
+                        attrs = {**attrs, "data_scope": [f"order:{order_id}"]}
         steps.append(TrajectoryStep(
             trace_id=str(span.get("trace_id") or ""),
             span_id=str(span.get("span_id") or ""),

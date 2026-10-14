@@ -23,6 +23,12 @@ class Command(BaseCommand):
             default=None,
             help="Project slug (defaults to first project)",
         )
+        parser.add_argument(
+            "--reseed",
+            action="store_true",
+            help="Publish a new scenario set version from the current fixture "
+                 "content (kept versions stay frozen for past runs)",
+        )
 
     def handle(self, *args, **options):
         project_slug = options["project"]
@@ -41,7 +47,9 @@ class Command(BaseCommand):
 
         from infra.fixtures.agentic_scenarios import seed_agentic_scenarios
 
-        scenario_set, version, status = seed_agentic_scenarios(project, user, log=self._log)
+        scenario_set, version, status = seed_agentic_scenarios(
+            project, user, log=self._log, reseed=options["reseed"],
+        )
 
         if status == "skipped":
             self.stdout.write(self.style.WARNING(f"Already seeded: {scenario_set.name}"))

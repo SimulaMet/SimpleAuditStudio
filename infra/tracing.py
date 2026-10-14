@@ -31,6 +31,12 @@ from typing import Any, Self
 
 logger = logging.getLogger("simpleaudit.tracing")
 
+# Dedicated pool for the studio span-store DB reads (see
+# StudioTraceProvider._fetch_db). Never used for writes.
+from concurrent.futures import ThreadPoolExecutor as _ThreadPoolExecutor
+
+_SPAN_FETCH_POOL = _ThreadPoolExecutor(max_workers=2, thread_name_prefix="otlp-span-fetch")
+
 
 class TempoTraceProvider:
     """Fetch traces from a Grafana Tempo backend by trace id.
@@ -202,11 +208,36 @@ class StudioTraceProvider:
 
     @staticmethod
     def _fetch_db(target_id: str, trace_id: str) -> list[dict[str, Any]]:
-        """One read of the listener's persisted spans (no retry here)."""
+        """One read of the listener's persisted spans (no retry here).
+
+        The engine can call ``fetch`` from inside its asyncio loop (per-turn
+        evidence collection). The Django ORM cannot run on a thread with a
+        live event loop (``SynchronousOnlyOperation``), so when a loop is
+        running the DB read is pushed onto a dedicated sync thread; from a
+        plain sync context it runs inline (which also keeps transactional
+        tests, whose rows are only visible on the test thread, working).
+        """
         from model_registry.otlp_views import get_spans_for_trace_db
 
-        try:
+        def _read() -> list[dict[str, Any]]:
+            from django.db import close_old_connections
+
+            close_old_connections()  # the pool thread's connection may be stale
             return get_spans_for_trace_db(target_id, trace_id)
+
+        import asyncio
+
+        try:
+            in_loop = asyncio.get_running_loop() is not None
+        except RuntimeError:
+            in_loop = False
+
+        try:
+            if in_loop:
+                # Shared executor: the sync read is isolated from the engine's
+                # loop thread.
+                return _SPAN_FETCH_POOL.submit(_read).result(timeout=30)
+            return _read()
         except Exception as exc:  # noqa: BLE001 - tracing must not break the run
             logger.warning("Studio span fetch failed for %s/%s: %s", target_id, trace_id, exc)
             return []

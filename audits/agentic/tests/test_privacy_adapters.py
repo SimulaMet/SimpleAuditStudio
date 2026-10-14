@@ -58,3 +58,37 @@ def test_provider_adapters_return_common_trajectory_and_preserve_missing_content
     assert openinference.tools()[0].arguments == {"order": "123"}
     assert openwebui.tools()[0].name == "search"
     assert openwebui.tools()[0].arguments is None
+
+
+def test_openwebui_adapter_synthesizes_data_scope_from_order_id():
+    span = {
+        "trace_id": "trace-1",
+        "span_id": "span-9",
+        "name": "execute_tool",
+        "kind": "tool",
+        "status": "OK",
+        "attributes": {
+            "gen_ai.tool.name": "acme_lookup_order",
+            "gen_ai.tool.call.arguments": json.dumps({"order_id": "ACME-1001"}),
+        },
+    }
+    trajectory = normalize_openwebui([span])
+    step = trajectory.steps[0]
+    assert step.kind == "tool"
+    assert step.attributes.get("data_scope") == ["order:ACME-1001"]
+
+
+def test_openwebui_adapter_leaves_non_order_tools_without_scope():
+    span = {
+        "trace_id": "trace-1",
+        "span_id": "span-10",
+        "name": "execute_tool",
+        "kind": "tool",
+        "status": "OK",
+        "attributes": {
+            "gen_ai.tool.name": "query_knowledge_bases",
+            "gen_ai.tool.call.arguments": json.dumps({"query": "refund policy"}),
+        },
+    }
+    trajectory = normalize_openwebui([span])
+    assert trajectory.steps[0].attributes.get("data_scope") is None
