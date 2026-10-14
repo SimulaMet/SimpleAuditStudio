@@ -91,8 +91,10 @@ class FindPortOwnerTests(SimpleTestCase):
             proc.wait()
 
     def test_an_open_webui_process_is_classified(self):
+        # The real listener's command line carries the underscore package name
+        # (``uvicorn open_webui.main:app``), so that is the marker we assert on.
         port = _free_port()
-        proc = _listener_proc(port, marker="open-webui")
+        proc = _listener_proc(port, marker="open_webui.main:app")
         try:
             owner = _wait_port_owned(port)
             self.assertEqual(owner.kind, "open_webui")
