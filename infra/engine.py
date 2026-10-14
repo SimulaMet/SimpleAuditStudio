@@ -17,6 +17,7 @@ are never persisted in the database.
 from __future__ import annotations
 
 import asyncio
+import functools
 import os
 from contextlib import nullcontext
 from typing import Any
@@ -527,7 +528,65 @@ def auditor_kwargs(*, target: dict, auditor: dict, judge: dict, generation: dict
             extra_body = {**(extra_body or {}), **_p.pop("extra_body")}
     if extra_body is not None:
         kwargs["extra_body"] = extra_body
+    # A decision model answers once and cannot take part in a follow-up turn
+    # (``DecisionTarget.max_turns`` is 1), so the generation config's max_turns
+    # must not reach it. Forced here rather than at either construction site so
+    # the single-repetition path and the repetition runner agree — the latter
+    # also derives max_retries_per_rep and its model entry from these kwargs.
+    from model_registry.decision import is_decision_snapshot
+
+    if is_decision_snapshot(target):
+        kwargs["max_turns"] = 1
     return kwargs, gen.get("language") or "English"
+
+
+def decision_target_for(target: dict, *, resolve_key=snapshot_api_key):
+    """The ``DecisionTarget`` a target snapshot calls for, or ``None``.
+
+    The capability was settled when the model was registered (the /connections/
+    probe writes ``capabilities["decision"]``, read by
+    ``RegisteredModel.is_decision``) and frozen into the run's snapshot, so a
+    run never re-probes. An OpenRouter decision model needs its key, resolved
+    here from the snapshot's ``secret_reference`` like every other role.
+    """
+    from model_registry.decision import decision_target_for_snapshot
+
+    return decision_target_for_snapshot(target, api_key=resolve_key(target) or "")
+
+
+@functools.cache
+def without_target_client(auditor_cls):
+    """``auditor_cls`` built without its (unused) AnyLLM chat client.
+
+    SimpleAudit's own ``Auditor`` facade does exactly this when an explicit
+    Target is supplied: the chat client is never called, and building it would
+    demand the provider's any_llm extra and an API key for nothing. A decision
+    run is that case — a local Ollama decision model would otherwise fail on
+    ``any-llm-sdk[ollama]`` not being installed.
+
+    A subclass rather than a flag set on the shared class: scenarios run in
+    worker threads, and a chat auditor built meanwhile must keep its client.
+    """
+    return type(auditor_cls.__name__, (auditor_cls,), {"_skip_target_client": True})
+
+
+def install_target(instance, decision_target) -> bool:
+    """Install the Target a run sends to; ``True`` if it is a decision target.
+
+    A decision model answers on ``/v1/systemone`` and is not a chat client, so
+    it replaces the target outright rather than being wrapped by the
+    trace-context adapter.
+    """
+    if decision_target is not None:
+        instance.set_target(decision_target)
+        return True
+    # SimpleAudit 0.3.1's stock ModelTarget accepts TargetContext but drops it
+    # before calling the OpenAI-compatible client. Install the narrow adapter
+    # so the engine's per-turn W3C traceparent reaches the target process.
+    from infra.trace_target import install_trace_context_target
+
+    install_trace_context_target(instance)
+    return False
 
 
 def build_model_auditor(*, target: dict, auditor: dict, judge: dict, generation: dict | None = None):
@@ -545,20 +604,25 @@ def build_model_auditor(*, target: dict, auditor: dict, judge: dict, generation:
     _kw, language = auditor_kwargs(target=target, auditor=auditor, judge=judge, generation=generation)
     extra_body = _kw.pop("extra_body", None)
     try:
-        instance = ModelAuditor(**_kw)
+        # Inside the try: a decision snapshot that cannot be turned into a
+        # target (no base URL, no key) is an auditor that cannot be built.
+        decision = decision_target_for(target)
+        auditor_cls = ModelAuditor if decision is None else without_target_client(ModelAuditor)
+        instance = auditor_cls(**_kw)
     except Exception as exc:
         raise EngineError(f"Failed to construct ModelAuditor: {type(exc).__name__}: {exc}") from exc
-    # SimpleAudit 0.3.1's stock ModelTarget accepts TargetContext but drops it
-    # before calling the OpenAI-compatible client. Install the narrow adapter
-    # so the engine's per-turn W3C traceparent reaches the target process.
-    from infra.trace_target import install_trace_context_target
-
-    install_trace_context_target(instance)
+    # Exactly one target is installed: both paths call ``set_target``, so the
+    # trace-context adapter must not run after a decision target (it would put
+    # a ModelTarget over the skipped chat client back in its place). A decision
+    # target still carries the traceparent: ``DecisionTarget.send`` merges
+    # ``TargetContext.trace_headers`` into its own request headers.
+    install_target(instance, decision)
     # ``extra_body`` (session_id / tool_ids for Open WebUI's saved-chat path)
     # is a per-request parameter. The engine merges self.target_params over
     # its own base params on every turn, so injecting it here is what makes
     # TraceContextModelTarget route agent turns through OWUI's server-side
-    # tool-execution chat.
+    # tool-execution chat. A DecisionTarget ignores per-request params, so
+    # there it is inert.
     if extra_body:
         tp = dict(instance.target_params or {})
         tp["extra_body"] = {**(tp.get("extra_body") or {}), **extra_body}
@@ -1069,9 +1133,24 @@ def run_scenario_repeated(
     # subclass used by the single-repetition path.
     import simpleaudit.experiment as experiment_module
 
-    from infra.trace_target import TraceContextModelAuditor
+    from infra.trace_target import TraceContextModelAuditor, decision_auditor_class
 
-    experiment_module.ModelAuditor = TraceContextModelAuditor
+    # A decision run replaces the auditor's target entirely; a chat run gets
+    # the trace-context adapter. The repetition runner builds its own
+    # auditors, so the choice has to be made on the class.
+    # Built once here so a malformed decision snapshot fails before the
+    # experiment is set up; each auditor then gets its own (a DecisionTarget
+    # owns an HTTP client).
+    if decision_target_for(target) is None:
+        experiment_module.ModelAuditor = TraceContextModelAuditor
+    else:
+        # The key is resolved here, before the loop, as auditor_kwargs does for
+        # every role: AuditExperiment builds each repetition's auditor inside
+        # the running event loop, where Django refuses the connection lookup.
+        target_key = snapshot_api_key(target) or ""
+        experiment_module.ModelAuditor = decision_auditor_class(
+            lambda: decision_target_for(target, resolve_key=lambda _s: target_key)
+        )
 
     kwargs, language = auditor_kwargs(target=target, auditor=auditor, judge=judge, generation=generation)
     max_turns = kwargs["max_turns"]
