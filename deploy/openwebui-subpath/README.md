@@ -117,20 +117,21 @@ git -C o apply --check subpath.patch      # non-zero = needs a rebase
 **Full procedure: [`UPGRADE.md`](./UPGRADE.md)** — including a copy-paste
 agent prompt with the subpath invariants to preserve and the evidence bar to
 hit. v0.11.4 drift was 33/121 files clean, 88 with conflicts (8 of the 9 core
-files) and was **ported on 2026-10-04** (see UPGRADE.md outcome log). Treat
-each upstream bump as a porting task, not a re-apply. **Do not** promote a
-SHA until `apply --check` passes and the E2E (WS 101 + one LLM round-trip)
-re-passes. Distribution context (fork, ghcr.io, pip caveats): [`DESIGN.md`](./DESIGN.md).
+files) and was **ported on 2026-10-04**; v0.12.0 was **ported on 2026-10-14**
+(see UPGRADE.md outcome log). Treat each upstream bump as a porting task, not
+a re-apply. **Do not** promote a SHA until `apply --check` passes and the E2E
+(WS 101 + one LLM round-trip) re-passes. Distribution context (fork, ghcr.io,
+pip caveats): [`DESIGN.md`](./DESIGN.md).
 
 ## Status
 
-**Built, E2E-verified, published, and wired in (2026-10-04).**
-`subpath.patch` is the v0.11.4 port (123 files) pinned to `8bd8b4f`; the fork
-`github.com/sushantgautam/open-webui` ships `main` = v0.11.4 + subpath with CI
+**Built, E2E-verified, published, and wired in (2026-10-14).**
+`subpath.patch` is the v0.12.0 port (198 files) pinned to `15818d88`; the fork
+`github.com/sushantgautam/open-webui` ships `main` = v0.12.0 + subpath with CI
 publishing to ghcr.io (root on push, `-subpath` on `webui_subpath` dispatch).
 
 The cutover is done: `docker-compose.yml` pulls
-`ghcr.io/sushantgautam/open-webui:v0.11.4.3-subpath` (set `WEBUI_SUBPATH=/chat`),
+`ghcr.io/sushantgautam/open-webui:v0.12.0-subpath` (set `WEBUI_SUBPATH=/chat`),
 `chat-proxy` (Caddy, no profile) is the **only published port** and runs
 `Caddyfile.subpath`, Studio's wrapper page moved to `/playground/`, and
 `Caddyfile.chat` + the separate cross-origin port are retired. Embedded
