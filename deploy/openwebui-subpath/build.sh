@@ -18,8 +18,8 @@
 set -euo pipefail
 
 REPO="https://github.com/open-webui/open-webui.git"
-# Pinned upstream commit the patch was verified against (open-webui PR #25590).
-SHA="${SHA:-8bd8b4fac5e059578ac0c74b3c18d11139f88b7d}"
+# Pinned upstream commit the patch was verified against (upstream v0.12.0).
+SHA="${SHA:-15818d88fd7bde1b73de33590f50d15d21e8d7c1}"
 SUBPATH="${SUBPATH:-/chat}"
 TAG="${TAG:-simpleaudit/open-webui-subpath:chat}"
 

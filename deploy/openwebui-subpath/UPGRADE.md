@@ -1,8 +1,9 @@
 # Upgrading the subpath Open WebUI to a new upstream version
 
 Run this when you want to move the subpath build to a newer upstream version.
-**Current pinned base: `8bd8b4f` (v0.11.4)** — the subpath feature is merged
-on top as commit `42ac2ae70`. The design and rationale live in `DESIGN.md`.
+**Current pinned base: `15818d88` (v0.12.0)** — the subpath feature is merged
+on top; the published functional head is tag `v0.12.0-subpath` (`92f0108`).
+The design and rationale live in `DESIGN.md`.
 
 ## Drift experience (measured 2026-10-04)
 
@@ -27,7 +28,7 @@ Give this to an agent (or yourself), substituting the version:
 Upgrade deploy/openwebui-subpath to Open WebUI <NEW_VERSION>.
 
 Facts:
-- Current pinned base: 8bd8b4fac5e059578ac0c74b3c18d11139f88b7d (v0.11.4).
+- Current pinned base: 15818d88fd7bde1b73de33590f50d15d21e8d7c1 (v0.12.0).
 - Patch: deploy/openwebui-subpath/subpath.patch (185 files, the port of the
   spencercjh fork's subpath support onto v0.11.4; makes svelte/vite base,
   constants.ts WEBUI_BASE_URL, FastAPI root_path, socketio_path, redirects,
@@ -123,4 +124,6 @@ half-port; staying on the proven base is the fallback.
 | 2026-10-04 | v0.11.4 (`8bd8b4f`) | **not ported** | 33/121 clean, 88 conflicts (8/9 core; `svelte.config.js` was the one clean core file). Stayed on 02dc3e68 base. |
 | 2026-10-04 | v0.11.4 (`8bd8b4f`) | **ported ✓** | Re-ran as a `git merge` of the 02dc3e68 subpath branch onto v0.11.4 (git-apply `--3way` aborts whole-batch on deleted files). 79 conflicts resolved merge-both: v0.11.4 features kept, `${base}` prefix applied; LICENSE branding comments preserved. Port commit `42ac2ae70` (123 files, +1017/−305). `build.sh` now pins `8bd8b4f`. Old 121-file patch kept as `subpath-v0.9.6.patch` for reference. |
 | 2026-10-04 | v0.11.4 (`8bd8b4f`) | **published ✓** | E2E-verified in a real browser (chat → streamed LLM reply under `/chat/`, 7-point bar + screenshot). Fork `sushantgautam/open-webui`: `main` = functional head `8a71dc87d` (port + ruff + i18n + prettier), `dev` pristine, tag + branch `v0.11.4` = `8bd8b4f`. Final `subpath.patch` = `8bd8b4f..8a71dc87d` EXCLUDING `.github/`+`FORK.md` (4711 lines, 185 files), `git apply --check` clean on pristine. CI: fork GITHUB_TOKEN cannot push ghcr (→ `GHCR_TOKEN` secret fallback in docker.yaml); PyPI workflow manual-only (trusted publishing is upstream's); repo `actions=write`. Images: `ghcr.io/sushantgautam/open-webui:v0.11.4-arm64` + `:v0.11.4-subpath` (arm64, local build + imagetools); multi-arch `:v0.11.4` via CI tag dispatch. |
+| 2026-10-14 | v0.12.0 (`15818d88`) | **ported ✓** | Ported in the fork as a `git merge` of the v0.11.4 subpath head onto pristine v0.12.0; functional head = tag `v0.12.0-subpath` (`92f0108`, == `main`). New upstream features (realtime voice calls, VRM avatars, 2FA sign-in) carried through with `${base}` prefixes preserved. Regenerated `subpath.patch` = `15818d88..92f0108` EXCLUDING `.github/`+`FORK.md` (198 files, 6671 lines); `git apply --check` clean on pristine v0.12.0 alongside `0002-node-build-heap.patch` + `0003-otel-wheel-dependencies.patch`. `build.sh` now pins `15818d88`; old patch kept as `subpath-v0.11.4.patch`. |
+| 2026-10-14 | v0.12.0 (`15818d88`) | **published ✓** | Multi-arch image `ghcr.io/sushantgautam/open-webui:v0.12.0-subpath` (amd64 + arm64) confirmed present via `docker manifest inspect`. `docker-compose.yml` `OPEN_WEBUI_IMAGE` default bumped to `:v0.12.0-subpath`. |
 | | | | |
