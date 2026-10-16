@@ -283,6 +283,46 @@ def _is_cancelled(run_id: str) -> bool:
 # Defined before the module-level registration below so the registered tasks
 # can reference these callables directly.
 
+def _build_semantic_judge_llm(judge_snapshot: dict | None):
+    """Build the LLM callable for the agentic semantic judge, or None.
+
+    Reuses the frozen judge endpoint snapshot and the same resolution path as
+    classic judges (``infra.engine`` snapshot mapping + any_llm). Returns None
+    when no usable endpoint/config exists — the semantic judge then degrades
+    to UNCERTAIN/llm_unavailable instead of fabricating a verdict.
+    """
+    if not isinstance(judge_snapshot, dict):
+        return None
+    try:
+        from infra.engine import _auditor_kwargs_from_snapshot
+
+        cfg = _auditor_kwargs_from_snapshot(judge_snapshot)
+        if not cfg.get("model"):
+            return None
+        from any_llm import AnyLLM
+
+        client = AnyLLM.create(
+            cfg["provider"], api_key=cfg["api_key"], api_base=cfg.get("base_url"),
+            **(cfg.get("kwargs") or {}),
+        )
+        model = cfg["model"]
+        gen_params = cfg.get("gen_params") or {}
+        temperature = gen_params.pop("temperature", 0)
+
+        def llm(prompt: str) -> str:
+            response = client.completion(
+                model=model,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=temperature,
+            )
+            return response.choices[0].message.content or ""
+
+        return llm
+    except Exception:  # unavailable judge endpoint degrades to UNCERTAIN, never breaks the run
+        logger.warning("semantic judge LLM unavailable; judgement will be UNCERTAIN", exc_info=True)
+        return None
+
+
 def _scenario_execute_impl(workflow_input: ScenarioInput, ctx: Context) -> dict:
     """Execute one scenario for an audit run.
 
@@ -631,20 +671,136 @@ def _scenario_execute_impl(workflow_input: ScenarioInput, ctx: Context) -> dict:
     # A failed attempt is final on the last attempt or for errors a retry can't fix;
     # otherwise it is provisional, stored as failed with attempts < max (so not terminal).
     final = not failed or attempt >= MAX_SCENARIO_ATTEMPTS or _is_permanent_error(error)
-    if run.agent_config_snapshot and trace_config:
+    # Agentic post-hoc: the engine's evidence resolver already ran
+    # deterministic checks and passed them to the judge (unified verdict).
+    # Here we only fill in the deferred semantic dimensions (needs LLM) and
+    # recompute the agentic status for UI display. For non-traced agentic
+    # scenarios (no spans available in the resolver), we do the full eval.
+    if trace_config or (revision.metadata or {}).get("agentic"):
+        _agentic_trace_cfg = (revision.metadata or {}).get("agentic", {}).get("trace") or {}
+        if isinstance(_agentic_trace_cfg.get("content_capture"), str):
+            trace_config = {**(trace_config or {}), "content_capture": _agentic_trace_cfg["content_capture"]}
         try:
-            from audits.agentic.evaluate import evaluate as evaluate_agentic
-            from audits.agentic.expectations import validate_agentic_metadata
+            from audits.agentic.semantic_judge import run_semantic_judge
             from audits.agentic.trajectory import normalize
+            from audits.agentic.verdict_policy import compute_overall_verdict
 
-            expectations = validate_agentic_metadata(revision.metadata or {})
+            judge_llm = _build_semantic_judge_llm(run.judge_config_snapshot)
+            semantic_cfg = (revision.metadata or {}).get("agentic", {}).get("semantic_judge") or {}
             reps = result_payload.get("reps") if isinstance(result_payload, dict) else None
             targets = reps if isinstance(reps, list) else [result_payload]
             for target in targets:
-                evidence = (target.get("judgment") or {}).get("evidence_spans", [])
-                target["agentic_evaluation"] = evaluate_agentic(
-                    normalize(evidence), expectations, run.agent_config_snapshot
-                )
+                # If the engine's resolver already produced an evaluation
+                # (deterministic checks ran pre-judge), augment it with
+                # semantic dimensions. Otherwise, do the full evaluation.
+                existing_eval = target.get("agentic_evaluation")
+                if isinstance(existing_eval, dict) and existing_eval.get("checks"):
+                    evaluation = existing_eval
+                else:
+                    # No resolver result (non-traced or resolver failed).
+                    # Agentic audit requires real OTLP spans — skip entirely
+                    # when none are available.
+                    from audits.agentic.expectations import validate_agentic_metadata
+
+                    all_spans = []
+                    trace_evidence = target.get("trace_evidence")
+                    if isinstance(trace_evidence, dict):
+                        candidate = trace_evidence.get("all_spans")
+                        if isinstance(candidate, list):
+                            all_spans = [s for s in candidate if isinstance(s, dict)]
+                    if not all_spans:
+                        fallback = (target.get("judgment") or {}).get("evidence_spans")
+                        if isinstance(fallback, list):
+                            all_spans = [s for s in fallback if isinstance(s, dict)]
+
+                    from audits.agentic.evaluate import evaluate as evaluate_agentic
+                    conv = target.get("conversation") or []
+                    trajectory = normalize(all_spans, conversation=conv or None)
+                    expectations = validate_agentic_metadata(revision.metadata or {})
+                    evaluation = evaluate_agentic(
+                        trajectory, expectations, run.agent_config_snapshot,
+                        llm=None, task=revision.test_prompt or "",
+                    )
+                    complete = bool(trajectory.steps)
+                    derived_from_conv = not all_spans and complete
+                    evaluation["trace_completeness"] = {
+                        "complete": complete,
+                        "derived_from_conversation": derived_from_conv,
+                        "span_count": len(trajectory.steps),
+                        "captured_kinds": sorted({step.kind for step in trajectory.steps}),
+                        "missing_reason": (
+                            "Derived from conversation markers (no OTLP spans captured)."
+                            if derived_from_conv
+                            else (None if complete else "No trace spans were captured.")
+                        ),
+                    }
+                    if not complete:
+                        evaluation.update(compute_overall_verdict({
+                            "missing_trace": True,
+                            "deterministic_fail": any(c.get("status") == "FAIL" for c in evaluation.get("checks", [])),
+                        }))
+
+                # Run semantic dimensions (deferred from the resolver).
+                # Falls back to conversation-derived trajectory when no
+                # OTLP spans exist (same policy as deterministic checks).
+                if judge_llm is not None and semantic_cfg.get("enabled") and semantic_cfg.get("criteria"):
+                    all_spans = []
+                    trace_evidence = target.get("trace_evidence")
+                    if isinstance(trace_evidence, dict):
+                        candidate = trace_evidence.get("all_spans")
+                        if isinstance(candidate, list):
+                            all_spans = [s for s in candidate if isinstance(s, dict)]
+                    if not all_spans:
+                        fallback = (target.get("judgment") or {}).get("evidence_spans")
+                        if isinstance(fallback, list):
+                            all_spans = [s for s in fallback if isinstance(s, dict)]
+                    conv = target.get("conversation") or []
+                    trajectory = normalize(all_spans, conversation=conv or None)
+                    if not trajectory.steps:
+                        evaluation["semantic_judgement"] = {
+                            "status": "INCONCLUSIVE",
+                            "rationale": "No trace evidence available for semantic evaluation.",
+                            "dimensions": {},
+                        }
+                        evaluation["verdict"] = {"status": "INCONCLUSIVE", "reason": "No trace captured"}
+                    else:
+                        _fr = (target.get("judgment") or {}).get("final_response", "")
+                        if not _fr:
+                            for _step in reversed(trajectory.steps):
+                                if getattr(_step, "kind", None) == "inference" and getattr(_step, "result", None):
+                                    _fr = _step.result
+                                    break
+                        expected_behavior = list(revision.expected_behavior or []) or None
+                        evaluation["semantic_judgement"] = run_semantic_judge(
+                            trajectory=trajectory,
+                            criteria=list(semantic_cfg["criteria"]),
+                            llm=judge_llm,
+                            task=revision.test_prompt or "",
+                            expectations=expected_behavior,
+                            final_response=_fr,
+                        )
+                        # Recompute verdict.
+                        dimensions = evaluation["semantic_judgement"]["dimensions"]
+                        enforcement_mode = (
+                            (revision.metadata or {}).get("agentic", {}).get("enforcement") or {}
+                        ).get("mode", "gating")
+                        new_verdict = compute_overall_verdict({
+                            "deterministic_fail": any(c.get("status") == "FAIL" for c in evaluation.get("checks", [])),
+                            "has_inconclusive": any(c.get("status") == "INCONCLUSIVE" for c in evaluation.get("checks", [])),
+                            "semantic_fail": (
+                                enforcement_mode != "advisory"
+                                and any(d.get("status") == "FAIL" for d in dimensions.values())
+                            ),
+                        })
+                        if (
+                            new_verdict["status"] == "PASS"
+                            and any(d.get("status") not in ("PASS", "FAIL") for d in dimensions.values())
+                        ):
+                            new_verdict = {"status": "INCONCLUSIVE", "reason": "Semantic observation insufficient"}
+                        evaluation["status"] = new_verdict["status"]
+                        evaluation["reason"] = new_verdict["reason"]
+                        evaluation["verdict"] = new_verdict
+                target["agentic_evaluation"] = evaluation
         except Exception as exc:  # noqa: BLE001 - optional analysis cannot break persistence
             result_payload["agentic_evaluation"] = {
                 "status": "ERROR", "checks": [{"id": "agentic.evaluate", "category": "system",
@@ -731,10 +887,19 @@ def _refresh_run_summary_metrics(run_id: str) -> None:
     from audits.events import ScenarioResult
     from audits.models import AuditRun
 
-    results = list(ScenarioResult.objects.filter(run_id=int(run_id)).values_list("result", flat=True))
-    if not any(isinstance(result, dict) and "agentic_evaluation" in result for result in results):
+    results = [r for r in ScenarioResult.objects.filter(run_id=int(run_id)).values_list("result", flat=True) if isinstance(r, dict)]
+    # Agentic evaluation may be at the top level (single-rep) or nested inside
+    # each rep (multi-rep). Check both locations.
+    def _has_agentic(result: dict) -> bool:
+        if "agentic_evaluation" in result:
+            return True
+        return any(
+            isinstance(rep, dict) and "agentic_evaluation" in rep
+            for rep in (result.get("reps") or [])
+        )
+    if not any(_has_agentic(r) for r in results):
         return
-    metrics = compute_run_metrics([result for result in results if isinstance(result, dict)])
+    metrics = compute_run_metrics(results)
     AuditRun.objects.filter(pk=int(run_id)).update(summary_metrics=metrics, updated_at=timezone.now())
 
 

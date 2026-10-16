@@ -298,8 +298,22 @@ class Command(BaseCommand):
             import secrets
 
             os.environ["SIMPLEAUDIT_AUTO_LOGIN_TOKEN"] = secrets.token_urlsafe(32)
+            # Prefer Caddy (:8000) when it's running so the browser session
+            # matches the user-facing URL; fall back to the direct Studio port.
+            # SIMPLEAUDIT_BROWSER_PORT overrides (set by devctl.sh when Caddy
+            # is known to be part of the stack but may not be up yet at check time).
+            _browser_port = int(os.environ.get("SIMPLEAUDIT_BROWSER_PORT", "0")) or options["port"]
+            if not os.environ.get("SIMPLEAUDIT_BROWSER_PORT"):
+                try:
+                    import requests as _req
+
+                    _caddy_ok = _req.get("http://127.0.0.1:8000/", timeout=1).status_code < 500
+                except (_req.RequestException, OSError):
+                    _caddy_ok = False
+                if _caddy_ok:
+                    _browser_port = 8000
             auto_login_url = (
-                f"http://localhost:{options['port']}/auto-login/?"
+                f"http://localhost:{_browser_port}/auto-login/?"
                 f"token={os.environ['SIMPLEAUDIT_AUTO_LOGIN_TOKEN']}"
             )
 

@@ -142,6 +142,115 @@ class AgenticScenarioBrowserRoundTripTests(TestCase):
         self.assertRedirects(create_set, "/scenarios/")
         self.scenario_set = ScenarioSet.objects.get(project=self.project)
 
+    def test_sparse_create_stores_only_active_sections(self):
+        """A tool-only scenario must not materialize dormant sections."""
+        response = self.client.post(
+            "/scenarios/create/",
+            {
+                "set_id": self.scenario_set.id,
+                "name": "Sparse tool check",
+                "description": "Only the tools section is active.",
+                "agentic_scenario": "1",
+                "agentic_tools_expected": "acme_get_order",
+                "agentic_enforcement_mode": "gating",
+            },
+        )
+        self.assertRedirects(response, f"/scenarios/?set={self.scenario_set.id}")
+        revision = Scenario.objects.get(title="Sparse tool check").revisions.get(revision=1)
+        agentic = revision.metadata["agentic"]
+        self.assertEqual(agentic["tools"]["expected"], [
+            {"name": "acme_get_order", "min_calls": 1, "max_calls": None},
+        ])
+        # Dormant list sections never materialize; checkbox sentinels record
+        # explicit false/0 assertions only (no criteria, no scopes, no budgets).
+        for section in ("retrieval", "trajectory", "budgets", "handoffs",
+                        "guardrails", "state", "trace", "goal"):
+            self.assertNotIn(section, agentic)
+        # Checkbox sentinels record explicit false assertions only.
+        self.assertEqual(agentic["rerank"], {"required": False})
+        self.assertEqual(agentic["policy"], {"read_only": False, "allow_side_effects": False})
+        self.assertEqual(agentic["approvals"], {"must_precede_execution": False})
+        self.assertEqual(agentic["semantic_judge"], {"enabled": False})
+        # The listing renders the read-only summary with the active tool only;
+        # dormant-section labels (e.g. forbidden data scopes) never appear.
+        page = self.client.get(f"/scenarios/?set={self.scenario_set.id}")
+        self.assertContains(page, "acme_get_order")
+        self.assertNotContains(page, "Forbidden data scopes:")
+        self.assertNotContains(page, "Required sources:")
+
+
+    def test_clearing_a_section_drops_it_from_saved_metadata(self):
+        """Clearing all fields of an active section removes the assertion."""
+        self.client.post(
+            "/scenarios/create/",
+            {
+                "set_id": self.scenario_set.id,
+                "name": "Section clearing",
+                "description": "Tools are active, then cleared.",
+                "agentic_scenario": "1",
+                "agentic_tools_forbidden": "acme_create_refund_request",
+            },
+        )
+        scenario = Scenario.objects.get(title="Section clearing")
+        first = scenario.revisions.get(revision=1)
+        self.assertEqual(first.metadata["agentic"]["tools"], {"forbidden": ["acme_create_refund_request"]})
+
+        # The browser submits every rendered control; empty values clear the
+        # assertion, checkbox sentinels carry explicit false.
+        edited = self.client.post(
+            f"/scenarios/edit/{scenario.id}/",
+            {
+                "set_id": self.scenario_set.id,
+                "title": scenario.title,
+                "category": "",
+                "description": "Tools are active, then cleared.",
+                "expected_behavior": "",
+                "test_prompt": "",
+                "severity_ceiling": "",
+                "documents": "",
+                "file_uri": "",
+                "agentic_scenario": "1",
+                "agentic_tools_expected": "",
+                "agentic_tools_forbidden": "",
+                "agentic_tools_allowed": "",
+                "agentic_sources": "",
+                "agentic_retrieval_min_documents": "",
+                "agentic_retrieval_max_documents": "",
+                "agentic_rerank_required": "0",
+                "agentic_rerank_min_calls": "",
+                "agentic_rerank_max_calls": "",
+                "agentic_policy_read_only": "0",
+                "agentic_policy_allowed_data_scopes": "",
+                "agentic_policy_forbidden_data_scopes": "",
+                "agentic_policy_forbidden_side_effects": "",
+                "agentic_policy_allowed_destinations": "",
+                "agentic_policy_allow_side_effects": "0",
+                "agentic_guardrails_required": "",
+                "agentic_guardrails_must_pass": "",
+                "agentic_guardrails_before_actions": "",
+                "agentic_approvals_required_for": "",
+                "agentic_approvals_must_precede_execution": "0",
+                "agentic_handoffs_allowed": "",
+                "agentic_handoffs_forbidden": "",
+                "agentic_handoffs_required": "",
+                "agentic_handoffs_max_handoffs": "",
+                "agentic_handoffs_max_depth": "",
+                "agentic_sequence": "",
+                "agentic_trajectory_max_steps": "",
+                "agentic_trajectory_max_retries_per_tool": "",
+                "agentic_trajectory_max_identical_consecutive_calls": "",
+                "agentic_max_tool_calls": "",
+                "agentic_budgets_max_errors": "",
+                "agentic_state_assertions": "",
+                "agentic_semantic_judge_enabled": "0",
+                "agentic_semantic_judge_criteria": "",
+            },
+        )
+        self.assertRedirects(edited, f"/scenarios/?set={self.scenario_set.id}")
+        latest = scenario.revisions.order_by("-revision").first()
+        self.assertNotIn("tools", latest.metadata["agentic"])
+
+
     def test_create_edit_export_import_preserves_agentic_prompt_and_metadata(self):
         # The raw metadata box is a read-only preview; the structured controls
         # are the single source of truth. Unknown top-level fields cannot be
@@ -315,13 +424,25 @@ class AgenticScenarioBrowserRoundTripTests(TestCase):
         self.assertEqual(revision.metadata["custom_context"], {"owner": "red-team"})
         agentic = revision.metadata["agentic"]
         self.assertEqual(agentic["tools"]["expected"], [{"name": "search", "min_calls": 1, "max_calls": None}, {"name": "refund", "min_calls": 1, "max_calls": None}])
-        self.assertEqual(agentic["rerank"], {"required": True, "min_calls": 1, "max_calls": None})
+        # Sparse semantics: sections whose form fields were left empty are not
+        # stored at all (absent = not checked), and no null-valued keys leak in.
+        self.assertEqual(agentic["rerank"], {"required": True, "min_calls": 1})
+        self.assertNotIn("max_calls", agentic["rerank"])
         self.assertEqual(agentic["policy"]["allowed_data_scopes"], ["order:id"])
+        self.assertNotIn("forbidden_data_scopes", agentic["policy"])
         self.assertEqual(agentic["guardrails"]["before_actions"], [{"guardrail": "privacy", "action": "refund"}])
         self.assertEqual(agentic["handoffs"]["max_depth"], 2)
+        self.assertNotIn("forbidden", agentic["handoffs"])
         self.assertEqual(agentic["trajectory"]["max_retries_per_tool"], 3)
+        self.assertNotIn("max_steps", agentic["trajectory"])
         self.assertEqual(agentic["budgets"]["max_errors"], 1)
+        self.assertEqual(agentic["budgets"]["max_tool_calls"], 4)
         self.assertEqual(agentic["state"]["assertions"][0]["type"], "equals")
+        # Dormant sections never materialize; semantic_judge appears only as an
+        # explicit disabled assertion (checkbox sentinel), not with criteria.
+        for section in ("trace", "goal"):
+            self.assertNotIn(section, agentic)
+        self.assertEqual(agentic.get("semantic_judge"), {"enabled": False})
 
 
 class ConflictHandlingTests(TestCase):

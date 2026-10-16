@@ -14,8 +14,22 @@ from .checks.trajectory import sequence_checks
 from .judge_composition import compose_agentic_judge
 from .schema import AgentTrajectory
 from .schema_v2 import validate_agentic_metadata
-from .semantic_judge import build_agentic_judge_prompt_extension
+from .semantic_judge import (
+    PROMPT_VERSION,
+    build_agentic_judge_prompt_extension,
+    run_semantic_judge,
+)
 from .verdict_policy import compute_overall_verdict
+
+
+def _final_response_from(run_result: dict[str, Any]) -> str:
+    """Best-effort final response text from the engine result payload."""
+    judgment = run_result.get("judgment") or {}
+    for key in ("final_response", "response"):
+        value = judgment.get(key)
+        if isinstance(value, str) and value.strip():
+            return value
+    return ""
 
 
 def orchestrate_agentic_audit(
@@ -23,6 +37,10 @@ def orchestrate_agentic_audit(
     trajectory: AgentTrajectory,
     scenario_metadata: dict[str, Any],
     agent_snapshot: dict[str, Any] | None = None,
+    *,
+    llm=None,
+    task: str = "",
+    expectations: list[str] | None = None,
 ) -> dict[str, Any]:
     """Execute complete agentic audit flow.
 
@@ -86,18 +104,52 @@ def orchestrate_agentic_audit(
     for check in all_checks:
         apply_severity(check, severity_overrides, default_severity="medium")
 
-    # Determine verdict (T15)
+    semantic_cfg = agentic_config.get("semantic_judge") or {}
+    semantic_enabled = bool(semantic_cfg.get("enabled")) and bool(semantic_cfg.get("criteria"))
+    enforcement_mode = (agentic_config.get("enforcement") or {}).get("mode", "gating")
+
+    # Execute the semantic judge over the observed trajectory (T10). A
+    # disabled judge leaves the ``semantic_judgement`` key absent so
+    # consumers can tell "not configured" from an executed (possibly
+    # UNCERTAIN) judgement; without an LLM endpoint the judgement degrades
+    # to UNCERTAIN/llm_unavailable — it is never fabricated.
+    semantic_judgement = None
+    if semantic_enabled:
+        semantic_judgement = run_semantic_judge(
+            trajectory=trajectory,
+            criteria=list(semantic_cfg["criteria"]),
+            llm=llm,
+            task=task,
+            expectations=expectations,
+            final_response=_final_response_from(run_result),
+        )
+
+    # Determine verdict (T15). Semantic FAIL fails the run only when the
+    # enforcement mode is not advisory; insufficient observation (UNCERTAIN on
+    # an enabled criterion) keeps the run INCONCLUSIVE. Deterministic FAIL
+    # always stays FAIL regardless of semantic outcomes.
+    semantic_dimensions = (semantic_judgement or {}).get("dimensions", {})
     evaluation = {
         "deterministic_checks": all_checks,
         "deterministic_fail": any(c.status == "FAIL" for c in all_checks),
         "has_inconclusive": any(c.status == "INCONCLUSIVE" for c in all_checks),
+        "semantic_fail": (
+            semantic_enabled
+            and enforcement_mode != "advisory"
+            and any(d.get("status") == "FAIL" for d in semantic_dimensions.values())
+        ),
     }
-
     verdict = compute_overall_verdict(evaluation)
+    if (
+        verdict.get("status") == "PASS"
+        and semantic_enabled
+        and any(d.get("status") not in ("PASS", "FAIL") for d in semantic_dimensions.values())
+    ):
+        verdict = {"status": "INCONCLUSIVE", "reason": "Semantic observation insufficient"}
 
     # Build judge extension prompt (T10)
     judge_extension = ""
-    if agentic_config.get("semantic_judge", {}).get("enabled"):
+    if semantic_enabled:
         traj_summary = f"Trajectory: {len(trajectory.steps)} steps, {len(trajectory.errors())} errors"
         judge_extension = build_agentic_judge_prompt_extension(traj_summary)
 
@@ -105,8 +157,11 @@ def orchestrate_agentic_audit(
     base_judge_spec = run_result.get("judgment", {}).get("judge_spec", {})
     composed_judge = compose_agentic_judge(base_judge_spec, agentic_config)
 
-    # Return structured result
-    return {
+    # Return structured result. When the semantic judge is disabled (or no
+    # criteria were configured) the ``semantic_judgement`` key is omitted so
+    # consumers can distinguish "not configured" from an executed judgement
+    # that came back UNCERTAIN.
+    evaluation = {
         "status": verdict.get("status"),
         "reason": verdict.get("reason"),
         "checks": [
@@ -126,9 +181,13 @@ def orchestrate_agentic_audit(
         "verdict": verdict,
         "judge_extension": judge_extension,
         "composed_judge": composed_judge,
+        "prompt_version": PROMPT_VERSION if semantic_enabled else None,
         "trajectory_stats": {
             "total_steps": len(trajectory.steps),
             "tool_calls": len(trajectory.tools()),
             "errors": len(trajectory.errors()),
         },
     }
+    if semantic_judgement is not None:
+        evaluation["semantic_judgement"] = semantic_judgement
+    return evaluation

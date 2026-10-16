@@ -63,6 +63,24 @@
       html.sidebar-open #sidebar { transform: none; box-shadow: 0 0 40px rgb(0 0 0 / .5); }
       html.sidebar-open body { overflow: hidden; }
     }
+    /* ── Agentic timeline focus mode ─────────────────────────────────── */
+    /* The "Focus" button on a trajectory timeline pushes the app chrome aside
+       so the timeline owns the viewport (wide panel). Only applied while the
+       flag is set, so it never affects other pages or print output. */
+    @media (min-width: 768px) {
+      html.agentic-focus-mode #sidebar { display: none; }
+      html.agentic-focus-mode header { display: none !important; }
+      html.agentic-focus-mode main { padding-left: 0 !important; padding-right: 0 !important; }
+    }
+    /* Overflow guards for the agentic result blocks at every width: long span
+       ids, tool arguments and JSON wrap or scroll inside their card instead of
+       widening the page (no horizontal scroll at 390px or 1280px+). */
+    .agentic-timeline { overflow-x: visible; }
+    .agentic-tl-card summary { min-width: 0; }
+    .agentic-finding-card code, .agentic-span-link span { max-width: 100%; }
+    @media (max-width: 639.98px) {
+      .agentic-tl-row { gap: .5rem; }
+    }
   </style>
 {% include "partials/ui_js.html" %}
 </head>

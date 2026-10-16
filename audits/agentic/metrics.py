@@ -97,7 +97,7 @@ def compute_run_metrics(results: list[dict[str, Any]]) -> dict[str, Any]:
                 deterministic_statuses["INCONCLUSIVE"] += 1
             else:
                 deterministic_statuses["PASS"] += 1
-            semantic = payload.get("agentic_evaluation", {}).get("semantic")
+            semantic = (payload.get("agentic_evaluation") or {}).get("semantic_judgement") or payload.get("agentic_evaluation", {}).get("semantic")
             if isinstance(semantic, dict):
                 semantic_status = str(semantic.get("status", "INCONCLUSIVE")).upper()
                 semantic_statuses[semantic_status if semantic_status in {"PASS", "FAIL", "INCONCLUSIVE"} else "INCONCLUSIVE"] += 1

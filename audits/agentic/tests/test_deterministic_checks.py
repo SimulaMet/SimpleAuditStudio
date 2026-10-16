@@ -94,3 +94,63 @@ def test_unknown_non_builtin_tool_remains_inconclusive():
     results = tool_permissions(_trajectory("rogue_tool", tool_type="function"), {"tools": []})
     assert {r.id for r in results} == {"tool.known"}
     assert results[0].status == "INCONCLUSIVE"
+
+
+def _builtin_step(span, name):
+    return TrajectoryStep(span, "tool", name, index=int(span[1:]), attributes={
+        "gen_ai.tool.type": "builtin",
+    })
+
+
+def test_runtime_builtin_not_counted_as_domain_tool_in_allowlist():
+    # get_current_timestamp is a runtime builtin: it must not trip tool.allowed
+    # even when the allow-list only covers domain tools.
+    from audits.agentic.checks.tools import tool_selection
+
+    trajectory = AgentTrajectory([
+        _step("s1", "tool", "lookup"),
+        _builtin_step("s2", "get_current_timestamp"),
+    ])
+    statuses = {r.id: r.status for r in tool_selection(trajectory, {
+        "allowed": ["lookup"],
+    })}
+    assert statuses["tool.allowed"] == "PASS"
+
+
+def test_runtime_builtin_not_counted_against_expected_domain_tools():
+    # A builtin call is not evidence of (or against) expected domain tools.
+    from audits.agentic.checks.tools import tool_selection
+
+    trajectory = AgentTrajectory([_builtin_step("s1", "search_chats")])
+    statuses = {r.id: r.status for r in tool_selection(trajectory, {
+        "expected": [{"name": "lookup"}],
+    })}
+    assert statuses["tool.required"] == "FAIL"
+
+
+def test_runtime_builtin_named_in_forbidden_list_still_fails():
+    from audits.agentic.checks.tools import tool_selection
+
+    trajectory = AgentTrajectory([
+        _builtin_step("s1", "search_chats"),
+        _step("s2", "tool", "lookup"),
+    ])
+    statuses = {r.id: r.status for r in tool_selection(trajectory, {
+        "forbidden": ["search_chats"],
+    })}
+    assert statuses["tool.forbidden"] == "FAIL"
+
+
+def test_runtime_builtin_without_type_attribute_is_still_excluded_from_allowlist():
+    # Even if the trace omits gen_ai.tool.type, known OWUI runtime builtins
+    # are recognized by name and excluded from domain-tool allowlists.
+    from audits.agentic.checks.tools import tool_selection
+
+    trajectory = AgentTrajectory([
+        _step("s1", "tool", "get_current_timestamp"),
+        _step("s2", "tool", "lookup"),
+    ])
+    statuses = {r.id: r.status for r in tool_selection(trajectory, {
+        "allowed": ["lookup"],
+    })}
+    assert statuses["tool.allowed"] == "PASS"

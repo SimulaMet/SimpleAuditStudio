@@ -1,4 +1,5 @@
 """Standard-first normalization of OTEL agent spans."""
+import json
 from typing import Any
 
 from .schema import AgentTrajectory, TrajectoryStep
@@ -70,7 +71,160 @@ def _content(attrs: dict[str, Any], *keys: str) -> Any:
     return raw
 
 
-def normalize(all_spans: list[dict[str, Any]]) -> AgentTrajectory:
+def from_conversation(conversation: list[dict[str, Any]] | None) -> AgentTrajectory:
+    """Build a trajectory from the recorded conversation.
+
+    Used as a fallback when no OTLP spans were captured (e.g. bare-model
+    targets on SimulaChat that don't export traces). Parses native
+    ``tool_calls``, ``[TOOL_CALL name(args)]`` markers, and
+    ``[TOOL_RESULT name]{...}`` markers that Studio's streaming adapter
+    injects into the content. Also captures the final assistant text as an
+    inference step so the semantic judge can evaluate task completion.
+    """
+    steps: list[TrajectoryStep] = []
+    index = 0
+    for msg in conversation or []:
+        role = msg.get("role", "")
+        if role != "assistant":
+            continue
+        # Native OpenAI tool_calls field.
+        for tc in msg.get("tool_calls") or []:
+            fn = tc.get("function") or {}
+            name = fn.get("name", "unknown")
+            raw_args = fn.get("arguments", "{}")
+            try:
+                args = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
+            except (json.JSONDecodeError, TypeError):
+                args = raw_args
+            steps.append(TrajectoryStep(
+                span_id=f"conv-tool-{index}",
+                kind="tool",
+                name=name,
+                tool_name=name,
+                tool_call_id=tc.get("id"),
+                arguments=args,
+                index=index,
+            ))
+            index += 1
+        # Parse [TOOL_CALL] and [TOOL_RESULT] markers from content.
+        content = msg.get("content") or ""
+        tool_steps = _conversation_tool_steps([msg])
+        for ts in tool_steps:
+            ts.index = index
+            steps.append(ts)
+            index += 1
+        # Capture the final text response (after all tool markers) as an
+        # inference step so the semantic judge sees the agent's answer.
+        # In Studio's serialization, tool markers + results are concatenated
+        # at the start, followed by a blank line, then the model's text.
+        import re as _re
+        stripped = ""
+        # Primary: split on the first blank line (double newline).
+        parts = _re.split(r"\n\s*\n", content, maxsplit=1)
+        if len(parts) > 1:
+            candidate = parts[1].strip()
+            # Verify it doesn't look like pure JSON (tool result leak).
+            if candidate and not candidate.startswith(("{", "[")):
+                stripped = candidate
+        # Fallback: strip all [TOOL_*] markers and their immediate JSON.
+        if not stripped or len(stripped) < 20:
+            no_markers = _re.sub(
+                r"\[(?:TOOL_CALL|TOOL_RESULT)\s+\w+(?:\([^)]*\))?\][^\n]*",
+                "", content,
+            ).strip()
+            if no_markers and not no_markers.startswith(("{", "[")):
+                stripped = no_markers
+        if stripped and len(stripped) > 20:
+            steps.append(TrajectoryStep(
+                span_id=f"conv-response-{index}",
+                kind="inference",
+                name="final_response",
+                result=stripped[:2000],
+                index=index,
+            ))
+            index += 1
+    return AgentTrajectory(steps=steps)
+
+
+def _conversation_tool_steps(conversation: list[dict[str, Any]]) -> list[TrajectoryStep]:
+    """Extract tool-call steps from [TOOL_CALL]/[TOOL_RESULT] markers.
+
+    Used to merge locally-executed tools (which may not emit OTLP spans) into
+    a trajectory that already has OTLP-derived steps. Also captures tool
+    results so the semantic judge can evaluate grounding.
+    """
+    import json as _json
+    import re
+
+    # Parse all markers in order to pair calls with results.
+    steps: list[TrajectoryStep] = []
+    pending_calls: dict[str, TrajectoryStep] = {}  # name+args_sig -> step
+    index = 0
+    for msg in conversation or []:
+        if msg.get("role") != "assistant":
+            continue
+        content = msg.get("content") or ""
+        # Match both TOOL_CALL and TOOL_RESULT markers in document order.
+        pat_call = re.compile(r"\[TOOL_CALL\s+(\w+)\(([^)]*)\)\]")
+        # Result payload ends at the next [TOOL_ marker or blank line.
+        pat_result = re.compile(r"\[TOOL_RESULT\s+(\w+)\]((?:(?!\[TOOL_).)*?)(?=\[TOOL_|\n\s*\n|$)")
+        events: list[tuple[int, str, str, str]] = []  # (pos, type, name, payload)
+        for m in pat_call.finditer(content):
+            events.append((m.start(), "call", m.group(1), m.group(2).strip()))
+        for m in pat_result.finditer(content):
+            events.append((m.start(), "result", m.group(1), m.group(2)))
+        events.sort(key=lambda e: e[0])
+        for pos, etype, name, payload in events:
+            if etype == "call":
+                try:
+                    args = _json.loads(payload) if payload else {}
+                except (_json.JSONDecodeError, TypeError):
+                    args = {"raw": payload}
+                step = TrajectoryStep(
+                    span_id=f"conv-tool-{index}",
+                    kind="tool",
+                    name=name,
+                    tool_name=name,
+                    arguments=args,
+                    index=index,
+                )
+                steps.append(step)
+                pending_calls[(name, _json.dumps(args, sort_keys=True, default=str))] = step
+                index += 1
+            elif etype == "result":
+                # Find the matching call by name (most recent unmatched).
+                result_val = payload.strip()
+                matched = False
+                for key, step in reversed(list(pending_calls.items())):
+                    if key[0] == name and step.result is None:
+                        try:
+                            parsed = _json.loads(result_val) if result_val else None
+                        except (_json.JSONDecodeError, TypeError):
+                            parsed = result_val
+                        step.result = parsed
+                        # Also populate the OTLP-style attribute so checks
+                        # that read gen_ai.tool.call.result can find it.
+                        step.attributes["gen_ai.tool.call.result"] = parsed
+                        del pending_calls[key]
+                        matched = True
+                        break
+                if not matched:
+                    # No matching call; create a result-only step.
+                    steps.append(TrajectoryStep(
+                        span_id=f"conv-tool-result-{index}",
+                        kind="tool",
+                        name=name,
+                        tool_name=name,
+                        result=result_val,
+                        index=index,
+                    ))
+                    index += 1
+    return steps
+
+
+def normalize(all_spans: list[dict[str, Any]],
+              conversation: list[dict[str, Any]] | None = None) -> AgentTrajectory:
+    """Normalize OTLP spans; merge conversation tool markers for local tools."""
     steps = []
     for index, span in enumerate(all_spans):
         attrs = _attrs(span)
@@ -127,4 +281,26 @@ def normalize(all_spans: list[dict[str, Any]]) -> AgentTrajectory:
             attributes=attrs,
             events=span.get("events") or [],
         ))
+    # When no OTLP spans were captured at all (bare-model targets that don't
+    # export traces), derive the entire trajectory from the conversation.
+    if not steps and conversation:
+        return from_conversation(conversation)
+
+    # Merge: even when OTLP spans exist, locally-executed tools (Studio's
+    # execution loop) may not emit their own spans. Parse [TOOL_CALL] markers
+    # from the conversation and append any tool steps not already present in
+    # the OTLP-derived steps (matched by name + argument signature).
+    if conversation:
+        existing_sigs = {
+            (s.name, json.dumps(s.arguments, sort_keys=True, default=str) if s.arguments else "")
+            for s in steps if s.kind == "tool"
+        }
+        conv_steps = _conversation_tool_steps(conversation)
+        for cs in conv_steps:
+            sig = (cs.name, json.dumps(cs.arguments, sort_keys=True, default=str) if cs.arguments else "")
+            if sig not in existing_sigs:
+                cs.index = len(steps)
+                steps.append(cs)
+                existing_sigs.add(sig)
+
     return AgentTrajectory(steps=steps)

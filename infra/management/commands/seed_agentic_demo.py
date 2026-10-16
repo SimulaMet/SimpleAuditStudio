@@ -258,6 +258,10 @@ class Command(BaseCommand):
                     "rationale": "This is a demonstration result, not a live model judgment.",
                     "evidence_spans": [_evidence_span(span) for span in span_payloads],
                 },
+                # Full captured trace for this invocation (mirrors the engine's
+                # trace_evidence tier), so the completeness card and the worker
+                # lane both see every span.
+                "trace_evidence": {"all_spans": list(span_payloads)},
                 "agentic_evaluation": evaluation,
                 "trace_ids": [trace_id],
                 "demo_fixture": {"source": "synthetic", "content_capture": capture_content},

@@ -134,7 +134,12 @@ def _split_endpoint_params(params: dict[str, Any]) -> tuple[dict | None, dict | 
     gen_params: dict[str, Any] = {}
     client_kwargs: dict[str, Any] = {}
     for k, v in params.items():
-        if k in _GENERATION_PARAM_KEYS:
+        if k in _GENERATION_PARAM_KEYS or k == "extra_body":
+            # ``extra_body`` is a per-request parameter (session_id / tool_ids
+            # for Open WebUI's saved-chat path), not a client constructor arg.
+            # It rides the same per-request channel as the generation fields;
+            # auditor_kwargs() later pops it out of the merged dicts so it
+            # never leaks into AsyncOpenAI.__init__.
             gen_params[k] = v
         else:
             client_kwargs[k] = v
@@ -219,10 +224,79 @@ def augment_agent_generation(generation: dict | None, agent_snapshot: dict | Non
     if not agent_snapshot:
         return result
     result["_agent_target"] = True
+    # Carry the resolved base model connection so auditor_kwargs can execute
+    # against it directly (bypassing the OWUI wrapper endpoint).
+    base_model = agent_snapshot.get("base_model") or {}
+    if base_model.get("connection_id"):
+        result["_agent_base_model"] = {
+            "connection_id": base_model["connection_id"],
+            "model_id": base_model.get("model_id"),
+        }
+    # The frozen Agent snapshot is the execution source of truth for the
+    # target's persona. When a run does not carry an explicit system prompt,
+    # use the agent's — this also makes bare-model targets (e.g. SimulaChat
+    # directly) behave as the audited agent instead of a generic assistant.
+    if not result.get("system_prompt"):
+        prompt = (agent_snapshot.get("system_prompt") or "").strip()
+        if prompt:
+            result["system_prompt"] = prompt
     target_params = dict(result.get("target_params") or {})
     # Open WebUI's Agent compatibility endpoint does not accept provider-only
     # reasoning controls; the Agent's base provider owns that configuration.
     target_params.pop("reasoning_effort", None)
+    # Inject the agent's tools as OpenAI function-calling definitions so a
+    # bare-model target (e.g. SimulaChat directly) can actually invoke them.
+    # Without this the LLM has no idea which functions are available and the
+    # deterministic tool.required check always fails.
+    agent_tools = []
+    for tool in agent_snapshot.get("tools") or []:
+        if not (isinstance(tool, dict) and tool.get("external_id")):
+            continue
+        raw_schema = tool.get("input_schema")
+        # The schema may be stored as a JSON string in the DB — parse it.
+        if isinstance(raw_schema, str) and raw_schema.strip():
+            import json as _json
+            try:
+                raw_schema = _json.loads(raw_schema)
+            except (_json.JSONDecodeError, ValueError):
+                raw_schema = None
+        # Case 1: input_schema is a list of OpenAI function definitions
+        # (one OWUI tool can expose multiple sub-functions).
+        if isinstance(raw_schema, list):
+            for entry in raw_schema:
+                if isinstance(entry, dict) and "function" in entry:
+                    agent_tools.append(entry)
+            continue
+        # Case 2: single function wrapper or bare schema.
+        if isinstance(raw_schema, dict) and raw_schema:
+            if "function" in raw_schema and isinstance(raw_schema["function"], dict):
+                agent_tools.append(raw_schema)
+            else:
+                agent_tools.append({
+                    "type": "function",
+                    "function": {
+                        "name": tool["external_id"],
+                        "description": tool.get("description") or "",
+                        "parameters": raw_schema,
+                    },
+                })
+        else:
+            # No schema — register by name with empty params so the model
+            # at least knows the tool exists.
+            agent_tools.append({
+                "type": "function",
+                "function": {
+                    "name": tool["external_id"],
+                    "description": tool.get("description") or "",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            })
+    if agent_tools:
+        existing = target_params.get("tools") or []
+        seen = {t.get("function", {}).get("name") for t in existing if isinstance(t, dict)}
+        merged = list(existing) + [t for t in agent_tools if t["function"]["name"] not in seen]
+        if merged:
+            target_params["tools"] = merged
     extra_body = dict(target_params.get("extra_body") or {})
     if not extra_body.get("session_id") and agent_snapshot.get("agent_id") is not None:
         extra_body["session_id"] = f"simpleaudit-agent-{agent_snapshot['agent_id']}"
@@ -233,6 +307,15 @@ def augment_agent_generation(generation: dict | None, agent_snapshot: dict | Non
     ]
     if tool_ids and "tool_ids" not in extra_body:
         extra_body["tool_ids"] = tool_ids
+    # Pass KB external IDs so the OWUI internal call path can include them
+    # as ``files`` for real vector retrieval.
+    kb_ids = [
+        kb.get("external_id")
+        for kb in agent_snapshot.get("knowledge_bases") or []
+        if isinstance(kb, dict) and kb.get("external_id")
+    ]
+    if kb_ids:
+        extra_body["kb_ids"] = kb_ids
     if extra_body:
         target_params["extra_body"] = extra_body
         result["target_params"] = target_params
@@ -270,10 +353,61 @@ def auditor_kwargs(*, target: dict, auditor: dict, judge: dict, generation: dict
         target_cfg["gen_params"] = {
             key: value
             for key, value in (target_cfg["gen_params"] or {}).items()
-            if key != "reasoning_effort"
+            if key not in ("reasoning_effort", "tools")
         } or None
+        # When the agent's base model differs from the OWUI wrapper endpoint,
+        # execute against the base model directly. The frozen agent snapshot
+        # carries the resolved base_model connection; use it to override the
+        # wrapper's base_url/api_key/model so the target actually runs.
+        agent_snap = gen.get("_agent_base_model") or {}
+        if agent_snap.get("connection_id") and agent_snap.get("model_id"):
+            from model_registry.models import ModelConnection, RegisteredModel
+            try:
+                base_conn = ModelConnection.objects.get(id=agent_snap["connection_id"])
+                base_model_row = RegisteredModel.objects.filter(
+                    connection=base_conn, model_id=agent_snap["model_id"]
+                ).first()
+                if base_model_row:
+                    raw_params = dict(base_model_row.default_parameters or {})
+                    bp_gen, bp_kw = _split_endpoint_params(raw_params)
+                    provider = _normalize_provider(
+                        base_conn.provider, base_conn.base_url
+                    )
+                    # Resolve the API key from the base connection (not the
+                    # wrapper's secret_reference which points at OWUI).
+                    from model_registry.services import connection_api_key
+                    base_key = connection_api_key(base_conn) or "no-auth"
+                    # Merge base-model params over the existing gen_params so
+                    # that injected agent tools / extra_body survive the override.
+                    merged_gen = dict(bp_gen or {})
+                    for _k, _v in (target_cfg.get("gen_params") or {}).items():
+                        if _k not in merged_gen:
+                            merged_gen[_k] = _v
+                    target_cfg.update({
+                        "model": base_model_row.model_id,
+                        "provider": provider,
+                        "base_url": base_conn.base_url,
+                        "api_key": base_key,
+                        "kwargs": {**_client_defaults(provider), **(bp_kw or {})} or None,
+                        "gen_params": merged_gen or None,
+                    })
+            except Exception as _exc:  # noqa: BLE001 - fall back to wrapper endpoint
+                import logging
+                logging.getLogger(__name__).debug(
+                    "Agent base-model override failed, using wrapper: %s", _exc
+                )
     auditor_cfg = _auditor_kwargs_from_snapshot(auditor, resolve_key)
     judge_cfg = _auditor_kwargs_from_snapshot(judge, resolve_key)
+    # ``tools`` is a request-shaping parameter for the TARGET role (it makes
+    # the model emit tool calls). It is meaningless for auditor/judge roles
+    # and some OpenAI-compatible gateways reject it outright (HTTP 400), so
+    # drop it from their generation params; per-role overrides (auditor_params
+    # / judge_params) can still add tools back explicitly.
+    for _cfg in (auditor_cfg, judge_cfg):
+        if isinstance(_cfg.get("gen_params"), dict):
+            _cfg["gen_params"].pop("tools", None)
+            if not _cfg["gen_params"]:
+                _cfg["gen_params"] = None
 
     kwargs = {
         "model": target_cfg["model"],
@@ -307,6 +441,18 @@ def auditor_kwargs(*, target: dict, auditor: dict, judge: dict, generation: dict
         "show_progress": False,
         "verbose": False,
     }
+    # ``extra_body`` is a per-request parameter (session_id / tool_ids for
+    # Open WebUI's saved-chat path), not a ModelAuditor/AsyncOpenAI
+    # constructor argument. Pop it out of the merged target param dicts and
+    # hand it back to the caller, which injects it into the auditor's
+    # ``target_params`` where TraceContextModelTarget reads it per request.
+    extra_body = None
+    for _pk in ("params", "target_params"):
+        _p = kwargs.get(_pk)
+        if isinstance(_p, dict) and "extra_body" in _p:
+            extra_body = {**(extra_body or {}), **_p.pop("extra_body")}
+    if extra_body is not None:
+        kwargs["extra_body"] = extra_body
     return kwargs, gen.get("language") or "English"
 
 
@@ -322,9 +468,10 @@ def build_model_auditor(*, target: dict, auditor: dict, judge: dict, generation:
     except Exception as exc:
         raise EngineError(f"Failed to import SimpleAudit ModelAuditor: {exc}") from exc
 
-    kwargs, language = auditor_kwargs(target=target, auditor=auditor, judge=judge, generation=generation)
+    _kw, language = auditor_kwargs(target=target, auditor=auditor, judge=judge, generation=generation)
+    extra_body = _kw.pop("extra_body", None)
     try:
-        instance = ModelAuditor(**kwargs)
+        instance = ModelAuditor(**_kw)
     except Exception as exc:
         raise EngineError(f"Failed to construct ModelAuditor: {type(exc).__name__}: {exc}") from exc
     # SimpleAudit 0.3.1's stock ModelTarget accepts TargetContext but drops it
@@ -333,6 +480,15 @@ def build_model_auditor(*, target: dict, auditor: dict, judge: dict, generation:
     from infra.trace_target import install_trace_context_target
 
     install_trace_context_target(instance)
+    # ``extra_body`` (session_id / tool_ids for Open WebUI's saved-chat path)
+    # is a per-request parameter. The engine merges self.target_params over
+    # its own base params on every turn, so injecting it here is what makes
+    # TraceContextModelTarget route agent turns through OWUI's server-side
+    # tool-execution chat.
+    if extra_body:
+        tp = dict(instance.target_params or {})
+        tp["extra_body"] = {**(tp.get("extra_body") or {}), **extra_body}
+        instance.target_params = tp
     return instance, language
 
 
@@ -465,6 +621,8 @@ def _collect_evidence_spans(
         return None
     from audits.agentic.privacy import apply_content_capture_level
 
+    # Redact once at the requested level; re-applying a stricter level is a
+    # no-op over already-sanitized spans (content keys are simply absent).
     all_spans = apply_content_capture_level(_drop_connection_noise(all_spans), capture_level)
     # ``selector_version`` was added after the first public tracing release;
     # keep Studio compatible with both the released engine and newer git builds.
@@ -485,6 +643,11 @@ def _collect_evidence_spans(
 
     return {
         "trace_ids": correlation.all_trace_ids(),
+        # Full captured span set (de-duplicated, capture-level sanitized) so the
+        # agentic lane can evaluate every span of the audited invocation, not
+        # just the selection's evidence subset. ``all_span_refs`` stays as the
+        # compact index; ``all_spans`` is the complete payload.
+        "all_spans": all_spans,
         "all_span_refs": [
             {"span_id": s.get("span_id"), "name": s.get("name"), "kind": s.get("kind")}
             for s in all_spans
@@ -524,6 +687,29 @@ def _drop_connection_noise(spans: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
     kept = [s for s in spans if not _noise(s)]
     return kept or list(spans)
+
+
+def _attach_final_response(payload: dict[str, Any]) -> None:
+    """Surface the last assistant turn as ``judgment["final_response"]``.
+
+    The agentic semantic judge's evidence packet needs the response it is
+    judging; without it the packet carries an empty final_response and the
+    judge can only reason from spans. The conversation on the result payload
+    is authoritative (it is what the target actually said).
+    """
+    conversation = payload.get("conversation")
+    if not isinstance(conversation, list):
+        return
+    for turn in reversed(conversation):
+        if isinstance(turn, dict) and turn.get("role") == "assistant":
+            content = turn.get("content")
+            if isinstance(content, str) and content.strip():
+                judgment = payload.get("judgment")
+                if not isinstance(judgment, dict):
+                    judgment = {}
+                judgment.setdefault("final_response", content)
+                payload["judgment"] = judgment
+                return
 
 
 def run_scenario(
@@ -578,6 +764,7 @@ def run_scenario(
     correlation = None
     audit_run_id = None
     evidence_resolver = None
+    _resolver_agentic_result: dict[str, Any] = {}  # populated by resolver for agentic scenarios
     if trace_config:
         from simpleaudit.tracing.context import TraceCorrelation, new_trace_id
 
@@ -590,19 +777,104 @@ def run_scenario(
 
             # Supply evidence resolver to the engine. It runs after target
             # execution, before judge, and has access to correlation IDs.
+            # For agentic scenarios, it also runs deterministic checks so the
+            # judge sees evaluated execution facts alongside raw spans.
+            _agentic_meta = (metadata or {}).get("agentic")
+            # Agentic guidance: judge-level option takes priority over scenario metadata.
+            _judge_spec = (judge.get("judge") or {}).get("spec") or {}
+            _agentic_guidance = (
+                (_judge_spec.get("options") or {}).get("agentic_guidance")
+                or (_agentic_meta or {}).get("judge_guidance")
+                or None
+            )
+            import time as _t
+            _exec_start_ts = _t.time()
+
             def _evidence_resolver(execution):
+                # Window: from just before execution started to now (plus a
+                # small buffer for late-arriving spans).  Enables the
+                # fetch_window fallback for targets that don't propagate
+                # the W3C traceparent (e.g. OpenWebUI).
+                _window = (_exec_start_ts - 2.0, _t.time() + 5.0)
                 evidence = _collect_evidence_spans(
                     execution.trace_correlation, provider, settle_timeout=10.0,
+                    window=_window,
                     capture_level=(trace_config or {}).get("content_capture", "structural"),
                     structured=True,
                 )
-                # Extract selected_spans for the judge (backward compat with
-                # evidence_spans parameter). The full trace_evidence dict is
-                # attached to the result separately for later analysis.
-                return (evidence or {}).get("selected_spans") if evidence else None
+                selected = (evidence or {}).get("selected_spans") if evidence else None
+                if not _agentic_meta:
+                    return selected
+                # Agentic scenario: run deterministic checks on the captured
+                # spans and return a combined dict so the judge gets both raw
+                # traces and structured check results in one prompt.
+                # SKIP entirely when there are no real OTLP spans — agentic
+                # audit requires actual tool/retrieval traces, not conversation
+                # text synthesized into fake "inference" steps.
+                try:
+                    from audits.agentic.evaluate import evaluate as evaluate_agentic
+                    from audits.agentic.expectations import validate_agentic_metadata
+                    from audits.agentic.trajectory import normalize
+                    from audits.agentic.verdict_policy import compute_overall_verdict
+
+                    all_spans = (evidence or {}).get("all_spans") or []
+                    conv = list(execution.conversation) if hasattr(execution, "conversation") else []
+                    # When no real OTLP spans exist, fall back to the
+                    # conversation-derived trajectory (parses [TOOL_CALL]
+                    # markers). This lets the judge evaluate actual agent
+                    # behaviour even when the target doesn't export traces.
+                    trajectory = normalize(all_spans, conversation=conv or None)
+                    expectations = validate_agentic_metadata(metadata or {})
+
+                    evaluation = evaluate_agentic(
+                        trajectory, expectations, None,
+                        llm=None, task=test_prompt or "",
+                    )
+                    complete = bool(trajectory.steps)
+                    derived_from_conv = not all_spans and complete
+                    evaluation["trace_completeness"] = {
+                        "complete": complete,
+                        "derived_from_conversation": derived_from_conv,
+                        "span_count": len(trajectory.steps),
+                        "captured_kinds": sorted({step.kind for step in trajectory.steps}),
+                        "missing_reason": (
+                            "Derived from conversation markers (no OTLP spans captured)."
+                            if derived_from_conv
+                            else (None if complete else "No trace spans were captured.")
+                        ),
+                    }
+                    if not complete:
+                        evaluation.update(compute_overall_verdict({
+                            "missing_trace": True,
+                            "deterministic_fail": any(c.get("status") == "FAIL" for c in evaluation.get("checks", [])),
+                        }))
+                    # Mark semantic as deferred (needs LLM; worker handles post-hoc).
+                    semantic_cfg = _agentic_meta.get("semantic_judge") or {}
+                    if semantic_cfg.get("enabled") and semantic_cfg.get("criteria"):
+                        evaluation["semantic_judgement"] = {
+                            "status": "DEFERRED",
+                            "rationale": "Semantic dimensions evaluated post-hoc by worker.",
+                            "dimensions": {},
+                        }
+                    _resolver_agentic_result.clear()
+                    _resolver_agentic_result.update(evaluation)
+                    return {
+                        "selected_spans": selected,
+                        "agentic_evaluation": evaluation,
+                        "agentic_guidance": _agentic_guidance,
+                    }
+                except Exception:
+                    import logging
+                    logging.getLogger("infra.engine").warning(
+                        "Agentic evaluation in evidence resolver failed; falling back to spans only",
+                        exc_info=True,
+                    )
+                    return selected
             evidence_resolver = _evidence_resolver
 
     full_trace_evidence = None
+    import time as _t
+    _exec_start_ts_outer = _t.time()
     try:
         with (provider or nullcontext()):
             # run_async maps the scenario dict onto run_scenario (file_uri,
@@ -630,11 +902,13 @@ def run_scenario(
             # Collect full evidence tiers after run for persistence. The resolver
             # above only passes selected_spans to the judge; this captures all
             # tiers (trace_ids, all_spans, selected_spans, selection metadata).
-            full_trace_evidence = _collect_evidence_spans(
-                correlation, provider, settle_timeout=10.0,
-                capture_level=(trace_config or {}).get("content_capture", "structural"),
-                structured=True,
-            )
+            if provider is not None and correlation is not None:
+                full_trace_evidence = _collect_evidence_spans(
+                    correlation, provider, settle_timeout=10.0,
+                    window=(_exec_start_ts_outer - 2.0, _t.time() + 5.0),
+                    capture_level=(trace_config or {}).get("content_capture", "structural"),
+                    structured=True,
+                )
     except Exception as exc:
         raise EngineError(f"Scenario execution crashed: {type(exc).__name__}: {exc}") from exc
 
@@ -648,6 +922,14 @@ def run_scenario(
             judgment = {}
         judgment["evidence_spans"] = full_trace_evidence.get("selected_spans") or []
         payload["judgment"] = judgment
+        # The agentic semantic judge needs the agent's actual final response
+        # (the last assistant turn) as ground truth for its evidence packet;
+        # the engine's AuditResult.to_dict() does not surface it.
+        _attach_final_response(payload)
+    # Attach agentic evaluation from the evidence resolver (deterministic
+    # checks ran pre-judge; semantic dimensions are deferred to the worker).
+    if _resolver_agentic_result:
+        payload["agentic_evaluation"] = _resolver_agentic_result
     if correlation is not None:
         # The W3C trace ids the engine propagated this scenario's turns under;
         # persisted on the ScenarioResult so the UI can re-fetch the spans by
@@ -732,7 +1014,14 @@ def run_scenario_repeated(
     # The model entry carries every ModelAuditor kwarg (target, auditor and
     # judge alike): AuditExperiment passes it through _merge_common to
     # ModelAuditor(**entry), and entry values win over experiment-level ones.
+    # ``extra_body`` is a per-request parameter (session_id / tool_ids for
+    # Open WebUI's saved-chat path), not a ModelAuditor constructor argument.
+    # TraceContextModelAuditor.__init__ pops it and injects it into its own
+    # target_params so the engine merges it into every turn's request params.
+    extra_body = kwargs.pop("extra_body", None)
     model_entry = {k: v for k, v in kwargs.items() if v is not None}
+    if extra_body is not None:
+        model_entry["extra_body"] = extra_body
     model_entry["label"] = f"{kwargs['model']} (platform)"
 
     # Tracing: build a provider + a per-rep TraceCorrelation. Each rep gets its
@@ -803,6 +1092,67 @@ def run_scenario_repeated(
     def _tracing_correlation() -> Any:
         return current_correlation["corr"]
 
+    # Evidence resolver for agentic multi-rep runs: uses the per-rep
+    # correlation to fetch spans and run deterministic checks pre-judge.
+    _agentic_meta_rep = (metadata or {}).get("agentic")
+    _resolver_agentic_results: list[dict[str, Any]] = []  # per-rep results
+    if _agentic_meta_rep and provider is not None:
+        def _rep_evidence_resolver(execution):
+            corr = current_correlation["corr"]
+            evidence = _collect_evidence_spans(
+                corr, provider, settle_timeout=10.0,
+                capture_level=(trace_config or {}).get("content_capture", "structural"),
+                structured=True,
+            )
+            selected = (evidence or {}).get("selected_spans") if evidence else None
+            try:
+                from audits.agentic.evaluate import evaluate as evaluate_agentic
+                from audits.agentic.expectations import validate_agentic_metadata
+                from audits.agentic.trajectory import normalize
+                from audits.agentic.verdict_policy import compute_overall_verdict
+
+                all_spans = (evidence or {}).get("all_spans") or []
+                conv = list(execution.conversation) if hasattr(execution, "conversation") else []
+                trajectory = normalize(all_spans, conversation=conv or None)
+                expectations = validate_agentic_metadata(metadata or {})
+                evaluation = evaluate_agentic(
+                    trajectory, expectations, None,
+                    llm=None, task=test_prompt or "",
+                )
+                complete = bool(trajectory.steps)
+                evaluation["trace_completeness"] = {
+                    "complete": complete,
+                    "span_count": len(trajectory.steps),
+                    "captured_kinds": sorted({step.kind for step in trajectory.steps}),
+                    "missing_reason": None if complete else "No trace spans were captured.",
+                }
+                if not complete:
+                    evaluation.update(compute_overall_verdict({
+                        "missing_trace": True,
+                        "deterministic_fail": any(c.get("status") == "FAIL" for c in evaluation.get("checks", [])),
+                    }))
+                semantic_cfg = _agentic_meta_rep.get("semantic_judge") or {}
+                if semantic_cfg.get("enabled") and semantic_cfg.get("criteria"):
+                    evaluation["semantic_judgement"] = {
+                        "status": "DEFERRED",
+                        "rationale": "Semantic dimensions evaluated post-hoc by worker.",
+                        "dimensions": {},
+                    }
+                _resolver_agentic_results.append(evaluation)
+                return {
+                    "selected_spans": selected,
+                    "agentic_evaluation": evaluation,
+                    "agentic_guidance": (_agentic_meta_rep.get("judge_guidance") or None),
+                }
+            except Exception:
+                import logging
+                logging.getLogger("infra.engine").warning(
+                    "Agentic eval in multi-rep resolver failed; spans only", exc_info=True,
+                )
+                return selected
+    else:
+        _rep_evidence_resolver = None
+
     try:
         with (provider or nullcontext()):
             # AuditExperiment builds a fresh TraceContextModelAuditor per rep;
@@ -817,13 +1167,14 @@ def run_scenario_repeated(
                         on_turn=on_turn,
                         audit_run_id=getattr(provider, "_audit_run_id", None) if provider else None,
                         trace_correlation=_tracing_correlation,
+                        evidence_resolver=_rep_evidence_resolver,
                     ),
                     [experiment],
                 )
             )
             # Collect per-rep evidence tiers while the provider is still alive.
             if provider is not None:
-                for rep in reps:
+                for idx, rep in enumerate(reps):
                     corr = rep_correlations.get(rep.get("_rep_index"))
                     full_trace_evidence = _collect_evidence_spans(corr, provider, structured=True)
                     if full_trace_evidence:
@@ -835,8 +1186,12 @@ def run_scenario_repeated(
                             judgment = {}
                         judgment["evidence_spans"] = full_trace_evidence.get("selected_spans") or []
                         rep["judgment"] = judgment
+                        _attach_final_response(rep)
                     if corr is not None:
                         rep["trace_ids"] = corr.all_trace_ids()
+                    # Attach per-rep agentic evaluation from the resolver.
+                    if idx < len(_resolver_agentic_results):
+                        rep["agentic_evaluation"] = _resolver_agentic_results[idx]
     except Exception as exc:
         raise EngineError(f"Scenario execution crashed: {type(exc).__name__}: {exc}") from exc
 
