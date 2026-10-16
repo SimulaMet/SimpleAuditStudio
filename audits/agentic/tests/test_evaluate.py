@@ -104,7 +104,11 @@ def test_retrieval_source_resolves_search_result_file_to_attached_knowledge_base
     assert source_check["evidence_span_ids"] == ["search"]
 
 
-def test_retrieval_source_uses_single_attached_kb_for_truncated_search_result():
+def test_retrieval_source_unresolvable_file_is_inconclusive_without_listing():
+    # A truncated search result carries a file identifier that is not backed
+    # by any observable evidence (no list_knowledge mapping, no matching
+    # snapshot entry). Source identity is UNKNOWN -> INCONCLUSIVE; the single
+    # attached KB must not be attributed as the source.
     import json
 
     from audits.agentic.expectations import validate_agentic_metadata
@@ -135,8 +139,7 @@ def test_retrieval_source_uses_single_attached_kb_for_truncated_search_result():
         check for check in result["checks"] if check["id"] == "retrieval.source_allowed"
     )
 
-    assert source_check["status"] == "PASS"
-    assert source_check["observed"] == ["Acme Retail Policy"]
+    assert source_check["status"] == "INCONCLUSIVE"
 
 
 def test_required_retrieval_fails_when_trace_has_no_retrieval_operation():

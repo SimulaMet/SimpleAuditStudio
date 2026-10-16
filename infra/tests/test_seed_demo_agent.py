@@ -1,12 +1,20 @@
 """Tests for the demo support-agent seed (infra.seed.seed_demo_agent)."""
 
+import hashlib
+from pathlib import Path
 from unittest import mock
 
 from django.core.management import call_command
 from django.test import TestCase
 
 from accounts.models import Project
-from infra.seed import DEMO_AGENT, backfill_demo_chat_resources, seed_demo_agent
+from infra.seed import (
+    DEMO_AGENT,
+    _fixture_dir,
+    _push_to_openwebui,
+    backfill_demo_chat_resources,
+    seed_demo_agent,
+)
 from infra.tests.factories import (
     ProjectFactory,
     RegisteredModelFactory,
@@ -23,6 +31,24 @@ def _project_with_model():
     project = ProjectFactory()
     model = RegisteredModelFactory(project=project, display_name="GPT-4o", model_id="gpt-4o")
     return user, project, model
+
+
+def _doc_digest(filename: str) -> str:
+    """The sha256 of a fixture doc — OWUI file ids embed this prefix."""
+    content = (Path(_fixture_dir("sample_docs")) / filename).read_bytes()
+    return hashlib.sha256(content).hexdigest()
+
+
+def _linked_files_payload() -> list[dict]:
+    """KB detail files as if every expected doc were already uploaded+linked.
+
+    The id embeds the first 16 hex chars of the content sha256 (no separator),
+    matching what ``_push_to_openwebui`` checks via ``startswith(digest[:16])``.
+    """
+    return [
+        {"id": f"file-{_doc_digest(name)[:16]}", "name": name}
+        for name, _title in DEMO_AGENT["docs"]
+    ]
 
 
 class SeedDemoAgentLocalTests(TestCase):
@@ -106,10 +132,16 @@ class SeedDemoAgentPushTests(TestCase):
         self.user, self.project, self.model = _project_with_model()
 
     def _patched_api(self):
+        """Fresh OWUI: no KB, no tool; uploads mint hash-prefixed file ids."""
         api = mock.Mock()
         api.knowledge_bases.return_value = []
         api.create_knowledge_base.return_value = {"id": "kb-abc"}
-        api.upload_file.side_effect = lambda name, content, ct: {"id": f"file-{name}"}
+        api.knowledge_base.return_value = {"id": "kb-abc", "files": []}
+        api.upload_file.side_effect = (
+            lambda name, content, ct: {
+                "id": f"file-{hashlib.sha256(content).hexdigest()}-owui"
+            }
+        )
         api.tools.return_value = []
         return api
 
@@ -121,9 +153,11 @@ class SeedDemoAgentPushTests(TestCase):
         self.assertEqual(status["openwebui"], "pushed")
         as_user.assert_called_once_with(self.user)
         api.create_knowledge_base.assert_called_once()
-        # Two documents uploaded and linked.
-        self.assertEqual(api.upload_file.call_count, 2)
-        self.assertEqual(api.add_file_to_knowledge_base.call_count, 2)
+        # Every expected document uploaded and linked.
+        self.assertEqual(api.upload_file.call_count, len(DEMO_AGENT["docs"]))
+        self.assertEqual(
+            api.add_file_to_knowledge_base.call_count, len(DEMO_AGENT["docs"])
+        )
         api.create_tool.assert_called_once()
         self.assertEqual(api.create_tool.call_args.args[0], DEMO_AGENT["tool"]["owui_tool_id"])
 
@@ -135,6 +169,7 @@ class SeedDemoAgentPushTests(TestCase):
     def test_skips_existing_kb_and_function_in_openwebui(self):
         api = mock.Mock()
         api.knowledge_bases.return_value = [{"id": "kb-existing", "name": DEMO_AGENT["knowledge_base"]["name"]}]
+        api.knowledge_base.return_value = {"id": "kb-existing", "files": []}
         api.upload_file.return_value = {"id": "file-1"}
         api.tools.return_value = [
             {"id": DEMO_AGENT["tool"]["owui_tool_id"], "name": "x"}
@@ -144,7 +179,211 @@ class SeedDemoAgentPushTests(TestCase):
 
         api.create_knowledge_base.assert_not_called()
         api.create_tool.assert_not_called()
-        self.assertEqual(api.add_file_to_knowledge_base.call_count, 2)
+        self.assertEqual(
+            api.add_file_to_knowledge_base.call_count, len(DEMO_AGENT["docs"])
+        )
+
+    # --- version-aware reconciliation ---------------------------------------
+
+    def _api_with_linked_assets(self):
+        """An OWUI that already holds the KB (with matching doc hashes) and
+        the tool; a fresh upload mints a hash-prefixed file id."""
+        api = self._patched_api()
+        api.knowledge_bases.return_value = [
+            {"id": "kb-existing", "name": DEMO_AGENT["knowledge_base"]["name"]}
+        ]
+        api.knowledge_base.return_value = {
+            "id": "kb-existing", "files": _linked_files_payload()
+        }
+        api.tools.return_value = [
+            {"id": DEMO_AGENT["tool"]["owui_tool_id"], "name": "x"}
+        ]
+        return api
+
+    def _agent_row(self):
+        # These tests exercise the OWUI push directly; seed_demo_agent has not
+        # run yet in some of them, so create a minimal agent row if needed.
+        agent, _ = Agent.objects.get_or_create(
+            project=self.project,
+            name=DEMO_AGENT["name"],
+            defaults={
+                "base_model": self.model,
+                "capabilities": DEMO_AGENT["capabilities"],
+                "created_by": self.user,
+            },
+        )
+        agent.external_id = f"studio.agent-{agent.pk}"
+        agent.save(update_fields=["external_id"])
+        return agent
+
+    def _stub_live_model(self, api, kb_ids: list[str], tool_ids: list[str]):
+        api.get_workspace_model.return_value = {
+            "id": "studio.agent-1",
+            "meta": {
+                "knowledge": [{"id": i, "type": "collection"} for i in kb_ids],
+                "toolIds": list(tool_ids),
+            },
+        }
+
+    def test_second_run_makes_zero_create_or_upload_calls(self):
+        with mock.patch("chat.api.ChatAPI.as_user", return_value=self._patched_api()):
+            seed_demo_agent(self.project, self.user)
+
+        api = self._api_with_linked_assets()
+        self._agent_row()
+        self._stub_live_model(
+            api, ["kb-existing"], [DEMO_AGENT["tool"]["owui_tool_id"]]
+        )
+        with mock.patch("chat.api.ChatAPI.as_user", return_value=api):
+            status = seed_demo_agent(self.project, self.user)
+
+        api.create_knowledge_base.assert_not_called()
+        api.upload_file.assert_not_called()
+        api.add_file_to_knowledge_base.assert_not_called()
+        api.create_tool.assert_not_called()
+        api.update_workspace_model.assert_not_called()
+        self.assertEqual(status["openwebui"], "pushed")
+
+    def test_changed_doc_content_triggers_exactly_one_reupload(self):
+        filename, _title = DEMO_AGENT["docs"][0]
+        path = Path(_fixture_dir("sample_docs")) / filename
+        original = path.read_bytes()
+        try:
+            # Run 1: fresh upload.
+            with mock.patch("chat.api.ChatAPI.as_user", return_value=self._patched_api()):
+                seed_demo_agent(self.project, self.user)
+
+            # OWUI now holds the OLD content for the changed doc; every other
+            # doc's linked id still matches its current hash.
+            old_digest = _doc_digest(filename)
+            path.write_bytes(b"# changed policy\n")
+            api = self._api_with_linked_assets()
+            api.knowledge_base.return_value = {
+                "id": "kb-existing",
+                "files": [
+                    {"id": f"file-{old_digest[:16]}-owui", "name": name}
+                    if name == filename
+                    else {"id": f"file-{_doc_digest(name)[:16]}-owui", "name": name}
+                    for name, _title in DEMO_AGENT["docs"]
+                ],
+            }
+            self._agent_row()
+            self._stub_live_model(
+                api, ["kb-existing"], [DEMO_AGENT["tool"]["owui_tool_id"]]
+            )
+            with mock.patch("chat.api.ChatAPI.as_user", return_value=api):
+                seed_demo_agent(self.project, self.user)
+
+            uploaded_names = [c.args[0] for c in api.upload_file.call_args_list]
+            self.assertEqual(uploaded_names, [filename])
+            new_digest = hashlib.sha256(b"# changed policy\n").hexdigest()
+            api.add_file_to_knowledge_base.assert_called_once_with(
+                "kb-existing", f"file-{new_digest}-owui"
+            )
+        finally:
+            path.write_bytes(original)
+
+    def test_new_asset_is_created_and_linked(self):
+        # The tool is missing from OWUI while everything else exists.
+        api = self._api_with_linked_assets()
+        api.tools.return_value = []
+        api.create_tool.return_value = {"id": DEMO_AGENT["tool"]["owui_tool_id"]}
+        self._agent_row()
+        self._stub_live_model(
+            api, ["kb-existing"], [DEMO_AGENT["tool"]["owui_tool_id"]]
+        )
+        with mock.patch("chat.api.ChatAPI.as_user", return_value=api):
+            seed_demo_agent(self.project, self.user)
+
+        api.create_tool.assert_called_once()
+        self.assertEqual(
+            api.create_tool.call_args.args[0], DEMO_AGENT["tool"]["owui_tool_id"]
+        )
+        kb = KnowledgeBase.objects.get(
+            project=self.project, name=DEMO_AGENT["knowledge_base"]["name"]
+        )
+        self.assertEqual(kb.external_id, "kb-existing")
+        tool = Tool.objects.get(project=self.project, name=DEMO_AGENT["tool"]["name"])
+        self.assertEqual(tool.external_id, DEMO_AGENT["tool"]["owui_tool_id"])
+
+    def test_verification_mismatch_surfaces_as_unhealthy_status(self):
+        # OWUI never accepts the reconciled links: the live model keeps stale
+        # links even after update_workspace_model, so verification fails.
+        api = self._api_with_linked_assets()
+        agent = self._agent_row()
+        self._stub_live_model(
+            api, ["kb-stale"], ["tool-stale"]  # mismatch before AND after update
+        )
+        logs: list[str] = []
+        with mock.patch("chat.api.ChatAPI.as_user", return_value=api):
+            status = seed_demo_agent(self.project, self.user, log=logs.append)
+
+        api.update_workspace_model.assert_called_once()
+        self.assertEqual(status["openwebui"], "degraded")
+
+        push = _push_to_openwebui(api, logs.append, agent=agent)
+        self.assertFalse(push["healthy"])
+        unverified = [a for a in push["assets"] if not a["verified"]]
+        self.assertEqual([a["asset"] for a in unverified], ["agent-links"])
+
+
+class SeedDemoAgentUnhealthyStatusTests(TestCase):
+    """Mandatory assets that cannot land are reported, not silently skipped."""
+
+    def setUp(self):
+        self._enabled = mock.patch("chat.config.ENABLED", True)
+        self._enabled.start()
+        self.addCleanup(self._enabled.stop)
+        self.user, self.project, self.model = _project_with_model()
+
+    def test_missing_kb_marks_push_degraded_but_local_rows_land(self):
+        # Open WebUI creates no KB (no id returned) — docs cannot link.
+        api = mock.Mock()
+        api.base_url = "http://owui.test"
+        api.knowledge_bases.return_value = []
+        api.create_knowledge_base.return_value = {}  # no id
+        api.tools.return_value = [
+            {"id": DEMO_AGENT["tool"]["owui_tool_id"], "name": "x"}
+        ]
+        logs: list[str] = []
+        with mock.patch("chat.api.ChatAPI.as_user", return_value=api):
+            status = seed_demo_agent(self.project, self.user, log=logs.append)
+
+        self.assertEqual(status["openwebui"], "degraded")
+        push = _push_to_openwebui(api, logs.append)
+        self.assertFalse(push["healthy"])
+        by_asset = {a["asset"]: a for a in push["assets"]}
+        self.assertFalse(by_asset[f"kb:{DEMO_AGENT['knowledge_base']['name']}"]["verified"])
+        for filename, _title in DEMO_AGENT["docs"]:
+            self.assertFalse(by_asset[f"doc:{filename}"]["verified"])
+        # Local rows still exist so the workspace is usable offline.
+        self.assertEqual(
+            KnowledgeBase.objects.filter(project=self.project).count(), 1
+        )
+        self.assertEqual(Agent.objects.filter(project=self.project).count(), 1)
+
+
+class SeedDemoAgentUnreachableTests(TestCase):
+    """OWUI outages never break the seed; local rows always land."""
+
+    def setUp(self):
+        self._enabled = mock.patch("chat.config.ENABLED", True)
+        self._enabled.start()
+        self.addCleanup(self._enabled.stop)
+        self.user, self.project, self.model = _project_with_model()
+
+    def _patched_api(self):
+        api = mock.Mock()
+        api.knowledge_bases.return_value = []
+        api.create_knowledge_base.return_value = {"id": "kb-abc"}
+        api.knowledge_base.return_value = {"id": "kb-abc", "files": []}
+        api.upload_file.side_effect = (
+            lambda name, content, ct: {
+                "id": f"file-{hashlib.sha256(content).hexdigest()}-owui"
+            }
+        )
+        api.tools.return_value = []
+        return api
 
     def test_unreachable_openwebui_still_creates_local_rows(self):
         from chat.api import ChatAPIError
@@ -230,7 +469,12 @@ class SeedDemoAgentBackfillTests(TestCase):
         api = mock.Mock()
         api.knowledge_bases.return_value = []
         api.create_knowledge_base.return_value = {"id": "kb-backfill"}
-        api.upload_file.side_effect = lambda name, content, ct: {"id": f"file-{name}"}
+        api.knowledge_base.return_value = {"id": "kb-backfill", "files": []}
+        api.upload_file.side_effect = (
+            lambda name, content, ct: {
+                "id": f"file-{hashlib.sha256(content).hexdigest()}-owui"
+            }
+        )
         api.tools.return_value = []
         return api
 
@@ -269,7 +513,7 @@ class SeedDemoAgentBackfillTests(TestCase):
         # One push per call: KB created once, two docs uploaded, tool once, and
         # the agent's workspace model created once.
         api.create_knowledge_base.assert_called_once()
-        self.assertEqual(api.upload_file.call_count, 2)
+        self.assertEqual(api.upload_file.call_count, len(DEMO_AGENT["docs"]))
         api.create_tool.assert_called_once()
         api.create_workspace_model.assert_called_once()
         # The agent is pushed AFTER its KB/tool ids were backfilled, so its

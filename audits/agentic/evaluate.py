@@ -9,6 +9,10 @@ def evaluate(
     trajectory: Any,
     expectations: Any = None,
     frozen_agent_snapshot: dict[str, Any] | None = None,
+    *,
+    llm=None,
+    task: str = "",
+    final_response: str = "",
 ) -> dict[str, Any]:
     """Legacy interface—delegates to orchestrator.
 
@@ -22,7 +26,12 @@ def evaluate(
             scenario_metadata = expectations or {}
 
         run_result = {}
-        return orchestrate_agentic_audit(run_result, trajectory, scenario_metadata, frozen_agent_snapshot)
+        if final_response:
+            run_result["judgment"] = {"final_response": final_response}
+        return orchestrate_agentic_audit(
+            run_result, trajectory, scenario_metadata, frozen_agent_snapshot,
+            llm=llm, task=task,
+        )
     except Exception as exc:  # noqa: BLE001 - evaluator must never break the base audit
         return {
             "status": "ERROR",

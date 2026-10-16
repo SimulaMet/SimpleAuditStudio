@@ -148,10 +148,20 @@ def nav(request):
 
     best = max(items, key=score, default=None)
     for item in items:
-        item["active"] = best is not None and item is best and score(best) > 0
+        # Children are top-level pages with their own URLs; mark each active
+        # when its URL matches exactly (e.g. /agents/knowledge/).
+        for child in item["children"]:
+            child["active"] = child["url"] == path
         # For sub-pages (children), expose the exact child label so the
         # breadcrumb can render "Agents / Knowledge" instead of just "Agents".
         item["active_child"] = next(
             (c["label"] for c in item["children"] if c["url"] == path), None
+        )
+        # Parent is active only when no child claims the current page —
+        # otherwise both would be highlighted simultaneously.
+        has_active_child = any(c["active"] for c in item["children"])
+        item["active"] = (
+            best is not None and item is best and score(best) > 0
+            and not has_active_child
         )
     return {"nav_items": items}

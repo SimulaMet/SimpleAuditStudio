@@ -223,13 +223,21 @@ class ChatAPI:
         """One knowledge base, with the names of the files in it."""
         item = self.request("GET", f"/api/v1/knowledge/{knowledge_id}")
         summary = _knowledge_summary(item)
-        summary["files"] = [
-            {
-                "id": file.get("id"),
-                "name": (file.get("meta") or {}).get("name") or file.get("filename") or "",
-            }
-            for file in (item.get("files") or [])
-        ]
+        files: list[dict[str, Any]] = []
+        for file in (item.get("files") or []):
+            if not isinstance(file, dict):
+                continue
+            meta = file.get("meta") if isinstance(file.get("meta"), dict) else {}
+            files.append(
+                {
+                    "id": file.get("id"),
+                    "name": meta.get("name") or file.get("filename") or "",
+                    # OWUI stores the sha256 hex of the content here; seed
+                    # reconciliation compares it against local fixture hashes.
+                    "hash": meta.get("file_hash"),
+                }
+            )
+        summary["files"] = files
         return summary
 
     # --- push: resources -> Open WebUI (one-time seeding / admin) ----------

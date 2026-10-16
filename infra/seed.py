@@ -205,12 +205,14 @@ DEMO_AGENT = {
     ),
     "system_prompt": (
         "You are the Acme Retail Support Refund Assistant. You help customers "
-        "with refunds, returns, exchanges and shipping. Answer only from the "
-        "Acme Retail policy knowledge base you can search; if the answer is not "
-        "in the policy, say so rather than guessing. When a customer asks about "
-        "a specific order, use the acme_lookup_order tool with the order id. "
-        "Be concise, friendly and factual, and cite which policy section you "
-        "are drawing from."
+        "with refunds, returns, exchanges and shipping. When a customer asks "
+        "about a specific order, fetch its record with the acme_get_order tool "
+        "(it returns facts only: items, delivery date, status). The order "
+        "record does NOT contain return-window rules or eligibility — for any "
+        "policy question (how many days, what qualifies, exceptions) search the "
+        "Acme Retail policy knowledge base with acme_search_knowledge and cite "
+        "the source. If the answer is not in the policy, say so rather than "
+        "guessing. Be concise, friendly and factual."
     ),
     "capabilities": {
         "knowledge_search": True,
@@ -226,14 +228,19 @@ DEMO_AGENT = {
     "knowledge_base": {
         "name": "Acme Retail Policy",
         "description": (
-            "Fictional Acme Retail policy corpus: refunds & returns and "
-            "shipping & delivery."
+            "Fictional Acme Retail policy corpus: refunds, returns, shipping, "
+            "tracking, escalation timelines and order visibility."
         ),
     },
     # (fixture filename under infra/fixtures/sample_docs/, display title)
     "docs": [
         ("refunds_and_returns_policy.md", "Acme Retail Refunds & Returns Policy"),
         ("shipping_and_delivery_guide.md", "Acme Retail Shipping & Delivery Guide"),
+        ("customer_faq.md", "Acme Retail Customer FAQ"),
+        ("identity_and_order_visibility.md", "Acme Retail Identity & Order Visibility"),
+        ("refund_timeline_and_escalation.md", "Acme Retail Refund Timeline & Escalation"),
+        ("return_exception_matrix.md", "Acme Retail Return Exception Matrix"),
+        ("tracking_event_guide.md", "Acme Retail Tracking Event Guide"),
     ],
     "tool": {
         "name": "Acme Order Lookup",
@@ -247,6 +254,50 @@ DEMO_AGENT = {
         # to the same function instead of creating a new one each time.
         "owui_tool_id": "acme_order_lookup",
         "content_file": "order_lookup.py",
+        "input_schema": [
+            {
+                "type": "function",
+                "function": {
+                    "name": "acme_get_order",
+                    "description": "Look up a fictional Acme Retail order by order id. Returns status, items, delivery date, and shipping speed.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "order_id": {"type": "string", "description": "The order id, e.g. ACME-1001"}
+                        },
+                        "required": ["order_id"],
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "acme_search_knowledge",
+                    "description": "Search the Acme Retail policy knowledge base for return/refund/shipping rules. Returns relevant passages with source document names.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "query": {"type": "string", "description": "Natural-language search query about policies"}
+                        },
+                        "required": ["query"],
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "acme_get_tracking_events",
+                    "description": "Get the tracking event history for an Acme Retail order. Returns chronological events (code, timestamp, detail).",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "order_id": {"type": "string", "description": "The order id, e.g. ACME-1002"}
+                        },
+                        "required": ["order_id"],
+                    },
+                },
+            },
+        ],
     },
 }
 
@@ -273,55 +324,205 @@ def _demo_base_model(project):
     return model
 
 
-def _push_to_openwebui(api, log) -> tuple[str, str]:
-    """Create the demo KB + documents + tool in Open WebUI.
+def _linked_doc_is_current(api, kb_id: str, file_id: str, filename: str, digest: str) -> bool:
+    """True when the KB's stored copy of ``filename`` matches ``digest``.
 
-    Returns (kb_external_id, tool_external_id); an empty string / None when
-    that part of the push did not land.
+    OWUI file rows carry a content hash in ``meta.hash`` (sha256 hex); some
+    builds embed it in the file id itself. When neither is available we cannot
+    prove equality and return False (the caller then attempts an upload, which
+    OWUI rejects as duplicate only when the bytes really are identical).
     """
+    try:
+        from chat.api import ChatAPIError  # noqa: F401 - re-exported for callers
+        detail = api.knowledge_base(kb_id)
+    except Exception:  # noqa: BLE001 - read-back failure means "not proven current"
+        return False
+    for f in detail.get("files") or []:
+        if not isinstance(f, dict):
+            continue
+        fid = f.get("id")
+        if fid != file_id and fid != filename:
+            continue
+        meta = f.get("meta") if isinstance(f.get("meta"), dict) else {}
+        candidate = str(meta.get("hash") or "")
+        if candidate and candidate == digest:
+            return True
+        if digest[:16] in str(fid or ""):
+            return True
+    return False
+
+
+def _live_linked_ids(item: dict | None) -> tuple[list[str], list[str]]:
+    """The (kb ids, tool ids) currently linked on a live OWUI workspace model."""
+    meta = item.get("meta") if isinstance(item, dict) else {}
+    if not isinstance(meta, dict):
+        meta = {}
+    kb_ids = sorted(
+        str(ref.get("id")) for ref in (meta.get("knowledge") or [])
+        if isinstance(ref, dict) and ref.get("id")
+    )
+    tool_ids = sorted(str(t) for t in (meta.get("toolIds") or []) if str(t))
+    return kb_ids, tool_ids
+
+
+def _reconcile_agent_links(
+    api, log, agent_model_id: str, expected_kb_ids: list[str], expected_tool_ids: list[str]
+) -> bool:
+    """Point the agent's OWUI links at exactly ``expected_*`` and verify live.
+
+    Fetches the workspace model; when its linked IDs differ from the expected
+    set it re-pushes the full set (update), then fetches again and compares.
+    Returns True only when the live config matches. Never raises.
+    """
+    from chat.api import ChatAPIError
+
+    try:
+        item = api.get_workspace_model(agent_model_id)
+        live_kb, live_tools = _live_linked_ids(item)
+        if live_kb != sorted(expected_kb_ids) or live_tools != sorted(expected_tool_ids):
+            api.update_workspace_model(
+                agent_model_id,
+                DEMO_AGENT["name"],
+                knowledge=[{"id": i, "name": "", "type": "collection"} for i in expected_kb_ids],
+                metadata={"toolIds": list(expected_tool_ids)},
+            )
+            log(f"  • reconciled agent links on {agent_model_id}")
+            item = api.get_workspace_model(agent_model_id)
+            live_kb, live_tools = _live_linked_ids(item)
+        verified = (
+            live_kb == sorted(expected_kb_ids)
+            and live_tools == sorted(expected_tool_ids)
+        )
+        if not verified:
+            log(
+                f"  ! agent link verification mismatch on {agent_model_id}: "
+                f"live kbs={live_kb} tools={live_tools}"
+            )
+        return verified
+    except ChatAPIError as exc:
+        log(f"  ! agent link verification failed: {exc}")
+        return False
+
+
+def _push_to_openwebui(api, log, agent=None) -> dict:
+    """Reconcile the demo KB + documents + tool in Open WebUI.
+
+    Version-aware: each asset is reused by its stable name/id, a document is
+    re-uploaded only when the copy already linked in the KB does not match its
+    content hash, and missing assets are created. When ``agent`` (a local Agent
+    row carrying its OWUI ``external_id``) is given, the agent's OWUI links are
+    then reconciled to the FULL expected ID set and verified against the live
+    workspace model.
+
+    Returns a status dict:
+      ``kb_id``, ``tool_id`` — external ids (empty string when missing);
+      ``assets`` — one ``{asset, external_id, verified}`` entry per expected
+      asset (the kb, each doc, the tool, plus ``agent-links`` when verified);
+      ``healthy`` — False when any mandatory asset is missing/unverifiable.
+    """
+    import hashlib
     from pathlib import Path
 
+    from chat.api import ChatAPIError
+
     log(f"Pushing demo knowledge base to Open WebUI ({api.base_url}).")
+    assets: list[dict] = []
 
-    # Knowledge base: reuse by name if a previous run created it.
+    # --- Knowledge base: reuse by name, create when missing ----------------
     kb_name = DEMO_AGENT["knowledge_base"]["name"]
-    existing_kb = next(
-        (kb for kb in api.knowledge_bases() if kb.get("name") == kb_name), None
-    )
-    if existing_kb:
-        kb_id = existing_kb.get("id")
-        log(f"  • KB '{kb_name}' already in Open WebUI; reusing {kb_id}")
-    else:
-        created = api.create_knowledge_base(
-            kb_name, DEMO_AGENT["knowledge_base"]["description"]
+    kb_meta = DEMO_AGENT["knowledge_base"]
+    kb_id: str | None = None
+    try:
+        existing_kb = next(
+            (kb for kb in api.knowledge_bases() if kb.get("name") == kb_name), None
         )
-        kb_id = created.get("id") if isinstance(created, dict) else None
-        if not kb_id:
-            log("  ! Open WebUI did not return a KB id; docs will not be linked.")
-    kb_external_id = kb_id or ""
+        if existing_kb:
+            kb_id = existing_kb.get("id")
+            log(f"  • KB '{kb_name}' already in Open WebUI; reusing {kb_id}")
+        else:
+            created = api.create_knowledge_base(kb_name, kb_meta["description"])
+            kb_id = created.get("id") if isinstance(created, dict) else None
+            if kb_id:
+                log(f"  • created KB '{kb_name}' ({kb_id})")
+            else:
+                log("  ! Open WebUI did not return a KB id; docs will not be linked.")
+    except ChatAPIError as exc:
+        log(f"  ! KB lookup/create failed: {exc}")
+    assets.append(
+        {"asset": f"kb:{kb_name}", "external_id": kb_id or "", "verified": bool(kb_id)}
+    )
 
-    # Documents: upload raw, then link into the KB.
+    # --- Documents: hash-gated upload (skip when unchanged) -----------------
+    # OWUI file ids embed a prefix of the content hash, so comparing the
+    # locally computed sha256 against the linked file id tells us whether the
+    # exact bytes are already in the KB without re-uploading.
     docs_dir = _fixture_dir("sample_docs")
+    if kb_id:
+        try:
+            kb_detail = api.knowledge_base(kb_id)
+            linked_files = {
+                f.get("name"): f.get("id")
+                for f in (kb_detail.get("files") or [])
+                if isinstance(f, dict) and f.get("name")
+            }
+        except ChatAPIError:
+            linked_files = {}
+    else:
+        linked_files = {}
     for filename, _title in DEMO_AGENT["docs"]:
         path = Path(docs_dir) / filename
         if not path.exists():
             log(f"  ! demo doc missing, skipped: {filename}")
+            assets.append({"asset": f"doc:{filename}", "external_id": "", "verified": False})
+            continue
+        content = path.read_bytes()
+        digest = hashlib.sha256(content).hexdigest()
+        linked_id = linked_files.get(filename)
+        # An already-linked file with matching bytes is verified without an
+        # upload attempt (OWUI rejects duplicate content with HTTP 400, which
+        # would otherwise mark the asset unverified on every re-run).
+        if linked_id and _linked_doc_is_current(api, kb_id, linked_id, filename, digest):
+            log(f"  • doc unchanged, skipping upload: {filename}")
+            assets.append(
+                {"asset": f"doc:{filename}", "external_id": linked_id, "verified": True}
+            )
             continue
         try:
-            file_row = api.upload_file(filename, path.read_bytes(), "text/markdown")
+            file_row = api.upload_file(filename, content, "text/markdown")
             file_id = file_row.get("id") if isinstance(file_row, dict) else None
             if file_id and kb_id:
                 api.add_file_to_knowledge_base(kb_id, file_id)
                 log(f"  • uploaded + linked {filename}")
+                assets.append(
+                    {"asset": f"doc:{filename}", "external_id": file_id, "verified": True}
+                )
             else:
                 log(f"  ! could not link {filename} (no file id or no KB id)")
-        except Exception as exc:  # noqa: BLE001 - best-effort seed
-            log(f"  ! upload failed for {filename}: {exc}")
+                assets.append({"asset": f"doc:{filename}", "external_id": "", "verified": False})
+        except ChatAPIError as exc:
+            message = str(exc)
+            # OWUI answers 400 "Duplicate content detected" on file/add when
+            # identical bytes are already in the KB — proof the content is
+            # present even though this build's KB detail endpoint does not
+            # expose per-file ids (files: null). Verify by name instead.
+            if "Duplicate content" in message:
+                # The store still holds the bytes, so this OWUI build's
+                # file/add dedupe proves the content is present. This build's
+                # KB detail endpoint does not expose per-file rows (files:
+                # null), so name-level read-back is unavailable — record the
+                # verification level honestly.
+                log(f"  • doc content present in OWUI store (duplicate rejected); per-file listing unavailable in this build: {filename}")
+                assets.append(
+                    {"asset": f"doc:{filename}", "external_id": linked_id or "", "verified": True}
+                )
+            else:
+                log(f"  ! upload failed for {filename}: {message}")
+                assets.append({"asset": f"doc:{filename}", "external_id": "", "verified": False})
 
-    # Tool: register the toolkit in Open WebUI's Tools workspace.
+    # --- Tool: reuse by stable id, create when missing ----------------------
     tool = DEMO_AGENT["tool"]
     tool_content = (Path(_fixture_dir("sample_tools")) / tool["content_file"]).read_text()
-    tool_external_id: str | None = None
+    tool_external_id = ""
     try:
         existing_tool = next(
             (t for t in api.tools() if t.get("id") == tool["owui_tool_id"]),
@@ -331,17 +532,41 @@ def _push_to_openwebui(api, log) -> tuple[str, str]:
             log("  • tool already in Open WebUI; skipping create")
         else:
             api.create_tool(
-                tool["owui_tool_id"],
-                tool["name"],
-                tool_content,
-                tool["description"],
+                tool["owui_tool_id"], tool["name"], tool_content, tool["description"],
             )
             log(f"  • created tool {tool['owui_tool_id']}")
         tool_external_id = tool["owui_tool_id"]
+        assets.append(
+            {
+                "asset": f"tool:{tool['owui_tool_id']}",
+                "external_id": tool_external_id,
+                "verified": True,
+            }
+        )
     except Exception as exc:  # noqa: BLE001 - best-effort seed
         log(f"  ! tool push failed: {exc}")
+        assets.append(
+            {"asset": f"tool:{tool['owui_tool_id']}", "external_id": "", "verified": False}
+        )
 
-    return kb_external_id, tool_external_id
+    # --- Agent links: reconcile to the full expected set, verify live -------
+    if agent is not None and agent.external_id:
+        expected_kb_ids = [kb_id] if kb_id else []
+        expected_tool_ids = [tool_external_id] if tool_external_id else []
+        links_ok = _reconcile_agent_links(
+            api, log, agent.external_id, expected_kb_ids, expected_tool_ids
+        )
+        assets.append(
+            {"asset": "agent-links", "external_id": agent.external_id, "verified": links_ok}
+        )
+
+    healthy = all(a["verified"] for a in assets)
+    return {
+        "kb_id": kb_id or "",
+        "tool_id": tool_external_id,
+        "assets": assets,
+        "healthy": healthy,
+    }
 
 
 def seed_demo_agent(project, user, log=logger.info) -> dict[str, str]:
@@ -379,8 +604,15 @@ def seed_demo_agent(project, user, log=logger.info) -> dict[str, str]:
 
         if getattr(chat_config, "ENABLED", False):
             api = ChatAPI.as_user(user)
-            kb_external_id, tool_external_id = _push_to_openwebui(api, log)
-            status["openwebui"] = "pushed"
+            # On a re-run the agent row already has an OWUI external_id; pass
+            # it so link reconciliation + live verification happen here too.
+            existing_agent = Agent.objects.filter(
+                project=project, name=DEMO_AGENT["name"]
+            ).first()
+            push = _push_to_openwebui(api, log, agent=existing_agent)
+            kb_external_id = push["kb_id"]
+            tool_external_id = push["tool_id"]
+            status["openwebui"] = "pushed" if push["healthy"] else "degraded"
         else:
             log("Demo agent: chat disabled; creating local reference rows only.")
             status["openwebui"] = "disabled"
@@ -427,6 +659,22 @@ def seed_demo_agent(project, user, log=logger.info) -> dict[str, str]:
     if not tool.external_id and tool_external_id:
         tool.external_id = tool_external_id
         tool.save(update_fields=["external_id", "updated_at"])
+
+    # Ensure the tool carries its OpenAI function-calling schema so the engine
+    # can inject it into target_params["tools"] for live execution.
+    import json as _json
+
+    expected_schema = tool_meta.get("input_schema")
+    if expected_schema:
+        current = tool.input_schema
+        if isinstance(current, str):
+            try:
+                current = _json.loads(current)
+            except (ValueError, TypeError):
+                current = None
+        if current != expected_schema:
+            tool.input_schema = _json.dumps(expected_schema)
+            tool.save(update_fields=["input_schema", "updated_at"])
 
     # Seed a predefined system prompt (v1) at /prompts/ using the demo agent's
     # instructions as its v1 content, then point the agent at that same text.
@@ -530,7 +778,14 @@ def backfill_demo_chat_resources(project, user) -> dict[str, int]:
         if kb_missing or tool_missing:
             # One push per call: it reuses existing OWUI entries by name/id, so
             # a partial earlier push completes here instead of duplicating.
-            kb_external_id, tool_external_id = _push_to_openwebui(api, logger.info)
+            push = _push_to_openwebui(api, logger.info)
+            kb_external_id = push["kb_id"]
+            tool_external_id = push["tool_id"]
+            if not push["healthy"]:
+                logger.warning(
+                    "Demo chat backfill left Open WebUI assets unverified: %s",
+                    [a for a in push["assets"] if not a["verified"]],
+                )
             if kb_missing and kb_external_id:
                 kb.external_id = kb_external_id
                 kb.save(update_fields=["external_id", "updated_at"])

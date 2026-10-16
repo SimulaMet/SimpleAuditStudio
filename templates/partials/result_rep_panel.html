@@ -4,20 +4,89 @@ One judged conversation on the scenario result page: a repetition, or the
 whole result of a single-rep run. Context: rep (see infra.ui._rep_view).
 {% endcomment %}
 <div class="space-y-4">
-  {% if rep.agentic %}
-  <div class="bg-surface-raised rounded-xl border {% if rep.agentic.status == 'FAIL' or rep.agentic.status == 'ERROR' %}border-red-900/40{% elif rep.agentic.status == 'INCONCLUSIVE' %}border-amber-900/40{% else %}border-emerald-900/40{% endif %} p-4">
-    <div class="flex items-center justify-between gap-3 mb-3">
-      <h3 class="text-sm font-semibold text-violet-300">Agentic Safety</h3>
-      <span class="text-xs font-semibold {% if rep.agentic.status == 'PASS' %}text-emerald-300{% elif rep.agentic.status == 'INCONCLUSIVE' %}text-amber-300{% else %}text-red-300{% endif %}">{{ rep.agentic.status }}</span>
+  
+  <!-- Unified response assessment card -->
+  {% if rep.summary or rep.agentic_overview or rep.agentic_findings %}
+  <div class="bg-surface-raised rounded-xl border p-4 {% if rep.severity == 'pass' %}border-emerald-900/50{% elif rep.severity == 'fail' or rep.severity == 'unsafe' %}border-red-900/50{% elif rep.severity == 'inconclusive' %}border-amber-900/50{% else %}border-gray-800{% endif %}">
+    <div class="flex flex-wrap items-center gap-2 mb-1">
+      <h3 class="text-sm font-semibold text-gray-300 shrink-0">Response assessment</h3>
+      {% include "partials/severity_badge.html" with sev=rep.severity %}
+      {% if rep.agentic_trace_completeness %}
+      {% with tc=rep.agentic_trace_completeness %}
+      <span class="ml-auto min-w-0 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-gray-500">
+        {% if tc.derived_from_conversation %}
+        <span class="text-gray-400">No trace (derived from conversation){% if tc.span_count is not None %} · {{ tc.span_count }} turn{{ tc.span_count|pluralize }}{% endif %}</span>
+        {% elif tc.complete %}
+        <span class="text-emerald-300/90">Trace complete{% if tc.captured_kinds %} · {{ tc.captured_kinds|join:", " }}{% endif %}{% if tc.span_count is not None %} · {{ tc.span_count }} span{{ tc.span_count|pluralize }}{% endif %}</span>
+        {% else %}
+        <span class="text-amber-300/90">Trace incomplete{% if tc.missing_reason %} — {{ tc.missing_reason|truncatechars:80 }}{% endif %}</span>
+        {% endif %}
+        {% if tc.total_steps is not None %}<span>{{ tc.total_steps }} step{{ tc.total_steps|pluralize }}</span>{% endif %}
+        {% if tc.tool_calls is not None %}<span>{{ tc.tool_calls }} tool call{{ tc.tool_calls|pluralize }}</span>{% endif %}
+        {% if tc.errors %}<span class="text-red-300">{{ tc.errors }} error{{ tc.errors|pluralize }}</span>{% endif %}
+      </span>
+      {% endwith %}
+      {% endif %}
     </div>
-    {% if rep.agentic.overall or rep.agentic.verdict %}
-    <div class="mb-3 rounded-lg bg-surface-overlay/50 px-3 py-2 text-xs">
-      <div class="flex flex-wrap gap-x-4 gap-y-1 text-gray-400">
-        <span>Overall: <strong class="text-gray-200">{% if rep.agentic.overall %}{{ rep.agentic.overall.status }}{% else %}{{ rep.agentic.verdict.status }}{% endif %}</strong></span>
-        {% if rep.agentic.policy_version %}<span>Policy: <code class="text-gray-300">{{ rep.agentic.policy_version }}</code></span>{% endif %}
-        {% if rep.agentic.trajectory_stats %}<span>Trace: {{ rep.agentic.trajectory_stats.total_steps|default:0 }} steps · {{ rep.agentic.trajectory_stats.tool_calls|default:0 }} tools · {{ rep.agentic.trajectory_stats.errors|default:0 }} errors</span>{% endif %}
+    {% if judge_ref %}
+    <p class="text-[11px] text-gray-500 mb-2">
+      {% if rep.agentic_overview or rep.agentic_findings %}Agentic-aware judge{% else %}Judge{% endif %} · <a href="{{ judge_ref.url }}" target="_blank" class="text-gray-400 underline hover:text-gray-300">{{ judge_ref.name }} v{{ judge_ref.version }}</a>
+    </p>
+    {% endif %}
+    {% if rep.summary %}
+    <p class="text-sm text-gray-300 whitespace-pre-wrap mb-3">{{ rep.summary }}</p>
+    {% endif %}
+
+    <!-- Deterministic checks summary + findings -->
+    {% if rep.agentic_overview or rep.agentic_findings %}
+    <div class="mt-2">
+      <div class="flex flex-wrap items-center gap-x-3 gap-y-1 mb-2">
+        <h4 class="text-xs font-semibold text-gray-400 uppercase tracking-wide">Deterministic checks</h4>
+        {% if rep.agentic_overview %}
+        <span class="text-xs text-gray-400"><span class="font-semibold text-emerald-300">{{ rep.agentic_overview.n_passed }}</span>/{{ rep.agentic_overview.n_checks }} pass{% if rep.agentic_overview.n_failed %} · <span class="font-semibold text-red-300">{{ rep.agentic_overview.n_failed }}</span> fail{% endif %}{% if rep.agentic_overview.n_inconclusive %} · <span class="font-semibold text-amber-300">{{ rep.agentic_overview.n_inconclusive }}</span> inconclusive{% endif %}</span>
+        {% endif %}
       </div>
-      {% if rep.agentic.reason %}<p class="mt-1 text-gray-400">Reason: {{ rep.agentic.reason }}</p>{% elif rep.agentic.overall.reason %}<p class="mt-1 text-gray-400">Reason: {{ rep.agentic.overall.reason }}</p>{% elif rep.agentic.verdict.reason %}<p class="mt-1 text-gray-400">Reason: {{ rep.agentic.verdict.reason }}</p>{% endif %}
+      {% if rep.agentic_overview and rep.agentic_overview.first_failure %}
+      <p class="mb-2 text-xs break-words text-red-300/90">First failure: {{ rep.agentic_overview.first_failure }}</p>
+      {% elif rep.agentic_overview and rep.agentic_overview.first_inconclusive %}
+      <p class="mb-2 text-xs break-words text-amber-300/90">Needs more evidence: {{ rep.agentic_overview.first_inconclusive }}</p>
+      {% endif %}
+      {% if rep.agentic_findings %}
+      <p class="text-[11px] text-gray-500 mb-2">Chips jump to the evidence step</p>
+      <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-2.5">
+        {% for f in rep.agentic_findings %}
+        <details class="agentic-finding-card min-w-0 rounded-lg border px-3 py-2.5 {% if f.status == 'FAIL' or f.status == 'ERROR' %}border-red-900/50 bg-red-950/20{% elif f.status == 'INCONCLUSIVE' %}border-amber-900/50 bg-amber-950/10{% else %}border-gray-800 bg-surface-overlay/30{% endif %}" data-severity="{{ f.severity }}" data-status="{{ f.status }}">
+          <summary class="cursor-pointer select-none list-none">
+            <div class="flex items-center gap-2 min-w-0">
+              <span class="shrink-0 px-1.5 py-0.5 rounded text-[10px] font-semibold {% if f.status == 'PASS' %}bg-emerald-900/40 text-emerald-300{% elif f.status == 'INCONCLUSIVE' %}bg-amber-900/40 text-amber-300{% else %}bg-red-900/40 text-red-300{% endif %}">{{ f.status }}</span>
+              {% if f.severity %}<span class="shrink-0 px-1.5 py-0.5 rounded text-[10px] uppercase tracking-wide {% if f.severity == 'critical' %}bg-red-950 text-red-300{% elif f.severity == 'high' %}bg-orange-950 text-orange-300{% elif f.severity == 'medium' %}bg-amber-950 text-amber-300{% else %}bg-gray-800 text-gray-400{% endif %}">{{ f.severity }}</span>{% endif %}
+              <code class="min-w-0 truncate text-[11px] text-gray-400" title="{{ f.id }}">{{ f.id }}</code>
+            </div>
+            <p class="mt-1 text-xs text-gray-300 break-words">{% if f.summary %}{{ f.summary }}{% else %}—{% endif %}</p>
+          </summary>
+          <div class="mt-2 space-y-1.5 border-t border-gray-800/60 pt-2">
+            {% if f.reason %}<p class="text-[11px] text-gray-400 break-words">{{ f.reason }}</p>{% endif %}
+            {% if f.expected or f.observed %}
+            <div class="text-[11px] text-gray-500">
+              {% if f.expected %}<p><span class="font-semibold text-gray-400">Expected:</span> {{ f.expected }}</p>{% endif %}
+              {% if f.observed %}<p><span class="font-semibold text-gray-400">Observed:</span> {{ f.observed }}</p>{% endif %}
+            </div>
+            {% endif %}
+            {% if f.spans %}
+            <div class="flex flex-wrap gap-1">
+              {% for sp in f.spans %}
+              <a href="#trace-span-{{ rep.index }}-{{ sp.anchor }}" class="agentic-span-link inline-flex items-center gap-1 max-w-full rounded bg-surface-overlay/70 border border-gray-800 px-1.5 py-0.5 text-[10px] text-violet-300 hover:text-violet-200" title="{{ sp.span_id }}">
+                <span aria-hidden="true">⌖</span><span class="truncate">{{ sp.label|default:sp.span_id }}</span>
+              </a>
+              {% endfor %}
+            </div>
+            {% endif %}
+          </div>
+          <span class="hidden" data-agentic-check-evidence="{{ f.evidence_span_ids|join:' ' }}"></span>
+        </details>
+        {% endfor %}
+      </div>
+      {% endif %}
     </div>
     {% endif %}
     <div class="space-y-1.5">
@@ -30,24 +99,21 @@ whole result of a single-rep run. Context: rep (see infra.ui._rep_view).
         </div>{% endif %}
       </details>
       {% endfor %}
+
+    <!-- Semantic judge dimensions -->
+    {% if rep.agentic_judge %}
+    <div class="border-t border-gray-800/70 mt-3 pt-3">
+      {% include "partials/agentic_judge.html" %}
     </div>
-  </div>
-  {% endif %}
-  {% if rep.summary %}
-  <div class="bg-surface-raised rounded-xl border border-gray-800 p-4">
-    <div class="flex items-center gap-2 mb-2">
-      <h3 class="text-sm font-semibold text-gray-300">Judge verdict</h3>
-      {% include "partials/severity_badge.html" with sev=rep.severity %}
-    </div>
-    <p class="text-sm text-gray-300 whitespace-pre-wrap">{{ rep.summary }}</p>
+    {% endif %}
   </div>
   {% endif %}
 
   {% if rep.has_grade %}
-  {# Judge-specific output: score / dimension scores, yes-no, checklist items, feedback. #}
+  
   <div class="bg-surface-raised rounded-xl border border-gray-800 p-4">
     <div class="flex flex-wrap items-center gap-3 mb-2">
-      <h3 class="text-sm font-semibold text-gray-300">Judge grade</h3>
+      <h3 class="text-sm font-semibold text-gray-300">{% if rep.agentic_overview or rep.agentic_findings %}Response grade{% else %}Judge grade{% endif %}</h3>
       {% if rep.grade.score %}<span class="text-lg font-bold text-gray-100" title="Judge score (1–10); severity is derived from it">{{ rep.grade.score }}<span class="text-xs font-normal text-gray-500">/10</span></span>{% endif %}
       {% if rep.grade.abstained is not None %}<span class="px-2 py-0.5 rounded-full text-xs {% if rep.grade.abstained %}bg-sky-900/40 text-sky-300{% else %}bg-gray-800 text-gray-300{% endif %}">{% if rep.grade.abstained %}abstained{% else %}answered{% endif %}</span>{% endif %}
       {% if not rep.summary %}{% include "partials/severity_badge.html" with sev=rep.severity %}{% endif %}
@@ -116,12 +182,14 @@ whole result of a single-rep run. Context: rep (see infra.ui._rep_view).
   </div>
   {% endif %}
 
-  {% if rep.trace %}
-  <div class="bg-surface-raised rounded-xl border border-violet-900/40 p-4">
-    <div class="flex flex-wrap items-center gap-3 mb-2">
+  {% if rep.trace and rep.trace.spans %}
+  <details class="bg-surface-raised rounded-xl border border-violet-900/40 p-4 group">
+    <summary class="flex cursor-pointer select-none flex-wrap items-center gap-3">
       <h3 class="text-sm font-semibold text-violet-300">Target trace</h3>
-      <span class="text-xs text-gray-500">spans the target exported under this rep's {{ rep.trace.trace_ids|length }} trace{{ rep.trace.trace_ids|length|pluralize }}</span>
-    </div>
+      <span class="text-xs text-gray-500">{{ rep.trace.spans|length }} span{{ rep.trace.spans|length|pluralize }} exported under {{ rep.trace.trace_ids|length }} trace{{ rep.trace.trace_ids|length|pluralize }}</span>
+      <span class="text-[10px] text-gray-600 group-open:hidden">click to expand</span>
+    </summary>
+    <div class="mt-3">
     {% if rep.trace.trace_ids %}
     <div class="flex flex-wrap gap-1.5 mb-3">
       {% for tid in rep.trace.trace_ids %}
@@ -129,7 +197,6 @@ whole result of a single-rep run. Context: rep (see infra.ui._rep_view).
       {% endfor %}
     </div>
     {% endif %}
-    {% if rep.trace.spans %}
     <ul class="space-y-1.5">
       {% for s in rep.trace.spans %}
       <li class="scroll-mt-4">
@@ -184,7 +251,11 @@ whole result of a single-rep run. Context: rep (see infra.ui._rep_view).
     <p class="text-xs text-gray-500">The target exported no spans under this rep's trace{{ rep.trace.trace_ids|length|default:0|pluralize }} (tracing was on; the target's OTel may not be wired for this deployment).</p>
     {% endif %}
   </div>
+    </div>
+  </details>
   {% endif %}
+
+  {% include "partials/agentic_timeline.html" %}
 
   {% if rep.tokens or rep.other %}
   <div class="bg-surface-raised rounded-xl border border-gray-800 p-4">
@@ -224,4 +295,43 @@ whole result of a single-rep run. Context: rep (see infra.ui._rep_view).
     </div>
   </div>
   {% endif %}
+
+  {% include "partials/agentic_raw.html" %}
 </div>
+<script>
+// Evidence-link clicks expand the target span's detail (idempotent).
+(function() {
+  if (window.__traceSpanExpandBound) return;
+  window.__traceSpanExpandBound = true;
+  function expandTarget(el) {
+    if (!el) return;
+    // Expand all <details> within or at the anchor element so the user
+    // sees tool args AND raw span JSON immediately.
+    var targets = [];
+    if (el.tagName === 'DETAILS') targets.push(el);
+    if (el.querySelectorAll) {
+      var inner = el.querySelectorAll('details');
+      for (var i = 0; i < inner.length; i++) targets.push(inner[i]);
+    }
+    if (!targets.length && el.closest) {
+      var parent = el.closest('details');
+      if (parent) targets.push(parent);
+    }
+    for (var j = 0; j < targets.length; j++) targets[j].open = true;
+  }
+  function expandFromHash() {
+    var id = window.location.hash.slice(1);
+    if (!id || !id.startsWith('trace-span-')) return;
+    expandTarget(document.getElementById(id));
+  }
+  document.addEventListener('click', function(e) {
+    var a = e.target.closest ? e.target.closest('a[href^="#trace-span-"]') : null;
+    if (!a) return;
+    expandTarget(document.getElementById(a.getAttribute('href').slice(1)));
+  });
+  if (window.location.hash) {
+    expandFromHash();
+    window.addEventListener('hashchange', expandFromHash);
+  }
+})();
+</script>

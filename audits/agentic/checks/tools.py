@@ -39,7 +39,11 @@ def _arguments_match(observed: Any, expected: Any) -> bool:
 def tool_selection(trajectory: AgentTrajectory, expected: dict) -> list[CheckResult]:
     """Check tool calls against expected requirements."""
     calls = [s for s in trajectory.primary_steps if s.kind == "tool"]
-    names = [s.name for s in calls]
+    # Runtime builtins (search_chats, get_current_timestamp, ...) are granted
+    # by the platform, not domain tools: they do not count against expected
+    # or allowed lists. Explicit forbidden entries still catch them below.
+    domain_calls = [s for s in calls if not is_runtime_builtin(s)]
+    names = [s.name for s in domain_calls]
     required = expected.get("expected", [])
     out = []
 
@@ -99,7 +103,7 @@ def tool_selection(trajectory: AgentTrajectory, expected: dict) -> list[CheckRes
 
     forbidden = set(expected.get("forbidden", []))
     if forbidden:
-        bad = forbidden.intersection(names)
+        bad = forbidden.intersection({s.name for s in calls})
         out.append(
             result(
                 "tool.forbidden",
@@ -204,3 +208,21 @@ def _builtin_capability(tool_name: str) -> str | None:
     }:
         return "knowledge_search"
     return None
+
+
+# Open WebUI runtime builtins granted by the platform itself, not by the
+# frozen agent policy. They never count against domain-tool expectations or
+# allowlists (tool.required/tool.allowed); scenarios that care enumerate them
+# in the forbidden list instead (see tool.forbidden).
+OWUI_RUNTIME_BUILTINS = frozenset({
+    "search_chats",
+    "get_current_timestamp",
+})
+
+
+def is_runtime_builtin(step: Any) -> bool:
+    """True when a tool step is an OWUI runtime builtin (unmapped to any
+    frozen capability), whether or not the trace carries gen_ai.tool.type."""
+    if str(step.attributes.get("gen_ai.tool.type", "")).lower() == "builtin":
+        return _builtin_capability(step.name) is None
+    return step.name in OWUI_RUNTIME_BUILTINS

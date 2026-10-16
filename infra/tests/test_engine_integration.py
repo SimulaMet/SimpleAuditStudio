@@ -173,6 +173,30 @@ class AgentRequestWiringTest(TestCase):
 
         self.assertEqual(result["target_params"]["extra_body"], {"session_id": "run-session", "tool_ids": ["custom"]})
 
+    def test_agent_system_prompt_becomes_target_persona(self):
+        """A run without its own system prompt executes the agent's persona."""
+        from infra.engine import augment_agent_generation
+
+        snapshot = {
+            "agent_id": 1,
+            "system_prompt": "You are the Acme Retail Support Refund Assistant.",
+        }
+        result = augment_agent_generation({}, snapshot)
+        self.assertEqual(result["system_prompt"], "You are the Acme Retail Support Refund Assistant.")
+
+    def test_explicit_run_system_prompt_wins_over_agent(self):
+        from infra.engine import augment_agent_generation
+
+        snapshot = {"agent_id": 1, "system_prompt": "Agent persona."}
+        result = augment_agent_generation({"system_prompt": "Run-specific persona."}, snapshot)
+        self.assertEqual(result["system_prompt"], "Run-specific persona.")
+
+    def test_blank_agent_system_prompt_is_not_injected(self):
+        from infra.engine import augment_agent_generation
+
+        result = augment_agent_generation({}, {"agent_id": 1, "system_prompt": "   "})
+        self.assertNotIn("system_prompt", result)
+
     def test_agent_target_drops_provider_reasoning_default_but_judge_keeps_it(self):
         from infra.engine import auditor_kwargs, augment_agent_generation
 
@@ -250,7 +274,9 @@ class TargetTracePropagationTest(TestCase):
                 )
             )
 
-        self.assertEqual(calls[0]["extra_headers"]["traceparent"], "00-" + "1" * 32 + "-" + "2" * 16 + "-01")
+        # W3C trace context is a studio-level parameter: consumed for the
+        # saved-chat request options, never forwarded as an OpenAI field.
+        self.assertNotIn("extra_headers", calls[0])
 
     def test_repetition_runner_uses_context_aware_auditor(self):
         from infra import engine
@@ -313,7 +339,10 @@ class TargetTracePropagationTest(TestCase):
 
         self.assertEqual(response.content, "final answer")
         self.assertTrue(calls[0]["stream"])
-        self.assertEqual(calls[0]["extra_headers"]["traceparent"], "00-" + "1" * 32 + "-" + "2" * 16 + "-01")
+        # extra_body is forwarded as a genuine OpenAI request field; the
+        # studio-level trace headers are not.
+        self.assertEqual(calls[0]["extra_body"], {"session_id": "session-1"})
+        self.assertNotIn("extra_headers", calls[0])
 
     def test_model_target_uses_saved_chat_path_for_openwebui_server_tools(self):
         """Open WebUI's API path must create a chat for server-side tool execution."""
@@ -375,6 +404,111 @@ class TargetTracePropagationTest(TestCase):
         self.assertEqual(calls[0][2]["tool_ids"], ["acme_order_lookup"])
         self.assertEqual(calls[0][3]["headers"]["traceparent"], "00-" + "1" * 32 + "-" + "2" * 16 + "-01")
         self.assertEqual(calls[1][0:2], ("get", "/chats/chat-1"))
+
+    def test_streaming_call_never_forwards_studio_only_params_to_openai_client(self):
+        """extra_headers (W3C trace context) must not leak into the OpenAI request."""
+        import asyncio
+        from types import SimpleNamespace
+
+        from simpleaudit.targets.base import TargetContext
+
+        from infra.trace_target import TraceContextModelTarget
+
+        calls = []
+
+        async def chunks():
+            yield SimpleNamespace(
+                choices=[SimpleNamespace(delta=SimpleNamespace(content="ok"))],
+                usage=None,
+            )
+
+        async def acompletion(**kwargs):
+            calls.append(kwargs)
+            return chunks()
+
+        target = TraceContextModelTarget(client=SimpleNamespace(acompletion=acompletion), model="local")
+        response = asyncio.run(
+            target.send(
+                user="hello",
+                params={"temperature": 0.2},
+                context=TargetContext(trace_headers={"traceparent": "00-" + "1" * 32 + "-" + "2" * 16 + "-01"}),
+            )
+        )
+
+        self.assertEqual(response.content, "ok")
+        self.assertNotIn("extra_headers", calls[0])
+        self.assertEqual(calls[0]["temperature"], 0.2)
+
+    def test_streaming_call_forwards_extra_body_as_openai_request_field(self):
+        """extra_body (session metadata) reaches OWUI's compat endpoint via any_llm."""
+        import asyncio
+        from types import SimpleNamespace
+
+        from infra.trace_target import TraceContextModelTarget
+
+        calls = []
+
+        async def chunks():
+            yield SimpleNamespace(
+                choices=[SimpleNamespace(delta=SimpleNamespace(content="ok"))],
+                usage=None,
+            )
+
+        async def acompletion(**kwargs):
+            calls.append(kwargs)
+            return chunks()
+
+        target = TraceContextModelTarget(client=SimpleNamespace(acompletion=acompletion), model="local")
+        asyncio.run(
+            target.send(
+                user="hello",
+                params={"extra_body": {"session_id": "simpleaudit-agent-7"}},
+            )
+        )
+
+        self.assertEqual(calls[0]["extra_body"], {"session_id": "simpleaudit-agent-7"})
+
+
+class ExtraBodyRoutingTest(TestCase):
+    """extra_body travels as a per-request param and never as a client kwarg."""
+
+    def test_auditor_kwargs_extracts_extra_body_out_of_params(self):
+        from infra.engine import auditor_kwargs
+
+        kwargs, _ = auditor_kwargs(
+            target=_snap("tgt"),
+            auditor=_snap("aud"),
+            judge=_snap("jdg"),
+            generation={
+                "_agent_target": True,
+                "target_params": {
+                    "temperature": 0.1,
+                    "extra_body": {"session_id": "simpleaudit-agent-1"},
+                },
+            },
+        )
+
+        self.assertNotIn("extra_body", kwargs.get("params") or {})
+        self.assertNotIn("extra_body", kwargs.get("target_params") or {})
+        self.assertEqual(kwargs["extra_body"], {"session_id": "simpleaudit-agent-1"})
+        # The remaining generation fields survive the extraction.
+        self.assertEqual(kwargs["target_params"], {"temperature": 0.1})
+
+    def test_endpoint_default_parameters_extra_body_reaches_constructor_handoff(self):
+        """An endpoint snapshot carrying extra_body in default_parameters still
+        extracts it (via gen_params routing) instead of leaking it to the client."""
+        from infra.engine import auditor_kwargs
+
+        kwargs, _ = auditor_kwargs(
+            target=_snap("tgt", default_parameters={"extra_body": {"session_id": "s-1"}}),
+            auditor=_snap("aud"),
+            judge=_snap("jdg"),
+        )
+
+        self.assertEqual(kwargs["extra_body"], {"session_id": "s-1"})
+        self.assertNotIn("extra_body", kwargs.get("params") or {})
+        self.assertNotIn("extra_body", kwargs.get("target_params") or {})
+        self.assertNotIn("extra_body", kwargs.get("target_kwargs") or {})
 
 
 

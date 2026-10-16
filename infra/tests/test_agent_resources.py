@@ -217,6 +217,22 @@ class AgentResourcesNavTest(TestCase):
         tools = next(c for c in agents["children"] if c["label"] == "Tools")
         self.assertEqual(tools["url"], "/agents/tools/")
 
+    def test_child_highlighted_in_sidebar_when_on_child_page(self):
+        resp = self.client.get("/agents/knowledge/")
+        html = resp.content.decode()
+        agents_item = next(
+            i for i in resp.context["nav_items"] if i["label"] == "Agents"
+        )
+        knowledge = next(c for c in agents_item["children"] if c["label"] == "Knowledge Bases")
+        tools = next(c for c in agents_item["children"] if c["label"] == "Tools")
+        self.assertTrue(knowledge["active"])
+        self.assertFalse(tools["active"])
+        # The highlighted child gets the accent treatment (and aria-current),
+        # not just a text-color change.
+        self.assertRegex(
+            html, r'href="/agents/knowledge/"[^>]*aria-current="page"[^>]*bg-accent/15'
+        )
+
 
 class AgentSurfaceDisabledTest(TestCase):
     """With chat off, the whole Agents surface is hidden: out of the nav, and

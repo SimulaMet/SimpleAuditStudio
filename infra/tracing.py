@@ -34,6 +34,7 @@ logger = logging.getLogger("simpleaudit.tracing")
 # Dedicated pool for the studio span-store DB reads (see
 # StudioTraceProvider._fetch_db). Never used for writes.
 from concurrent.futures import ThreadPoolExecutor as _ThreadPoolExecutor
+from datetime import UTC
 
 _SPAN_FETCH_POOL = _ThreadPoolExecutor(max_workers=2, thread_name_prefix="otlp-span-fetch")
 
@@ -198,6 +199,51 @@ class StudioTraceProvider:
                 return []
             time.sleep(self._retry_interval)
 
+    def fetch_window(self, start_ts: float, end_ts: float) -> list[dict[str, Any]]:
+        """Spans received during [start_ts, end_ts] for this target.
+
+        Fallback for targets that do not propagate the W3C traceparent
+        (e.g. OpenWebUI generates its own trace IDs). Matches by target_id
+        and the wall-clock window the run executed in. Filters out raw
+        HTTP transport spans that carry no agent-level semantics.
+        """
+        if not self._target_id:
+            return []
+        from datetime import datetime
+
+        from model_registry.models import OtlpSpan
+
+        dt_start = datetime.fromtimestamp(start_ts, tz=UTC)
+        dt_end = datetime.fromtimestamp(end_ts, tz=UTC)
+        rows = OtlpSpan.objects.filter(
+            target_id=self._target_id,
+            received_at__gte=dt_start,
+            received_at__lte=dt_end,
+        ).order_by("received_at")
+        results = []
+        for r in rows:
+            attrs = r.attributes or {}
+            # Only keep OpenInference semantic spans (agent-level tool calls,
+            # LLM completions, workflow chains).  Raw OTel HTTP/ASGI spans
+            # don't carry this attribute and are pure transport noise.
+            if "openinference.span.kind" not in attrs:
+                continue
+            results.append(r)
+        return [
+            {
+                "trace_id": r.trace_id,
+                "span_id": r.span_id,
+                "name": r.name,
+                "kind": r.kind,
+                "parent_span_id": r.parent_span_id or "",
+                "start_time": r.start_time or 0,
+                "end_time": r.end_time or 0,
+                "status": r.status,
+                "attributes": r.attributes or {},
+            }
+            for r in results
+        ]
+
     def __enter__(self) -> Self:
         return self.start()
 
@@ -320,9 +366,12 @@ def build_trace_provider(config: dict[str, Any] | None) -> Any | None:
         target_id = (config.get("target_id") or "").strip()
         if not target_id:
             raise ValueError("trace config mode='studio' requires a non-empty target_id")
+        # Use a short per-trace-id fetch timeout so the settle loop isn't
+        # blocked: targets that don't propagate W3C traceparent (e.g. OWUI)
+        # will never match by trace ID, and the window fallback handles them.
         return StudioTraceProvider(
             target_id,
-            timeout=float(config.get("timeout") or 15.0),
+            timeout=float(config.get("timeout") or 3.0),
             retry_interval=float(config.get("retry_interval") or 0.5),
             fetcher=config.get("fetcher"),
         )
