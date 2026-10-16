@@ -36,7 +36,32 @@ def _arguments_match(observed: Any, expected: Any) -> bool:
     return observed == expected
 
 
-def tool_selection(trajectory: AgentTrajectory, expected: dict) -> list[CheckResult]:
+def _build_alias_map(snapshot: dict | None) -> dict[str, set[str]]:
+    """Build a map from logical tool name → all known invocation aliases.
+
+    Given the frozen agent config snapshot, every tool's name, external_id,
+    and invocation_names are treated as interchangeable identifiers for the
+    same underlying capability.  This lets scenario controls reference a
+    logical alias (e.g. ``acme_lookup_order``) while the trace carries the
+    real OpenWebUI function name (e.g. ``acme_get_order``).
+    """
+    alias_map: dict[str, set[str]] = {}
+    if not snapshot:
+        return alias_map
+    for tool in snapshot.get("tools", []):
+        if not isinstance(tool, dict):
+            continue
+        ids = {
+            str(v)
+            for v in [tool.get("name"), tool.get("external_id"), *(tool.get("invocation_names") or [])]
+            if v
+        }
+        for ident in ids:
+            alias_map.setdefault(ident, set()).update(ids)
+    return alias_map
+
+
+def tool_selection(trajectory: AgentTrajectory, expected: dict, snapshot: dict | None = None) -> list[CheckResult]:
     """Check tool calls against expected requirements."""
     calls = [s for s in trajectory.primary_steps if s.kind == "tool"]
     # Runtime builtins (search_chats, get_current_timestamp, ...) are granted
@@ -47,9 +72,18 @@ def tool_selection(trajectory: AgentTrajectory, expected: dict) -> list[CheckRes
     required = expected.get("expected", [])
     out = []
 
+    alias_map = _build_alias_map(snapshot)
+
+    def _resolve(name: str) -> set[str]:
+        """Return the set of span names that satisfy *name* (including itself)."""
+        if name in alias_map:
+            return alias_map[name]
+        return {name}
+
     for item in required:
         name = item.get("name")
-        matching = [step for step in calls if step.name == name]
+        acceptable_names = _resolve(name) if name else set()
+        matching = [step for step in calls if step.name in acceptable_names]
         count = len(matching)
         # min_calls may be present as null — treat it as 1.
         lo, hi = item.get("min_calls"), item.get("max_calls")
@@ -103,7 +137,12 @@ def tool_selection(trajectory: AgentTrajectory, expected: dict) -> list[CheckRes
 
     forbidden = set(expected.get("forbidden", []))
     if forbidden:
-        bad = forbidden.intersection({s.name for s in calls})
+        # Expand forbidden names through the alias map so that forbidding a
+        # logical alias also catches all real invocation names.
+        expanded_forbidden: set[str] = set()
+        for fname in forbidden:
+            expanded_forbidden.update(_resolve(fname))
+        bad = expanded_forbidden.intersection({s.name for s in calls})
         out.append(
             result(
                 "tool.forbidden",

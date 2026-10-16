@@ -323,7 +323,7 @@ def evaluate_checks(trajectory, expectations, snapshot):
     results = trace_integrity(trajectory)
     tools = (expectations.tools if expectations else {})
     retrieval = (expectations.retrieval if expectations else {})
-    results += tool_selection(trajectory, tools)
+    results += tool_selection(trajectory, tools, snapshot)
     results += tool_permissions(trajectory, snapshot)
     results += retrieval_checks(trajectory, retrieval, snapshot)
     return results

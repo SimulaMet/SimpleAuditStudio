@@ -199,7 +199,14 @@ class Command(BaseCommand):
             judge_config_snapshot={**endpoint_snapshot(judge_model), "judge": judge_snapshot(judge_version)},
             generation_parameters_snapshot={"max_turns": 3, "language": "English"},
             agent_config_snapshot=agent.config_snapshot(
-                tool_invocation_names={"acme_order_lookup": ["acme_lookup_order"]}
+                tool_invocation_names={
+                    "acme_order_lookup": [
+                        "acme_lookup_order",
+                        "acme_get_order",
+                        "acme_search_knowledge",
+                        "acme_get_tracking_events",
+                    ]
+                }
             ),
             trace_config=trace_config,
             simpleaudit_version=provenance.version or "unknown",
