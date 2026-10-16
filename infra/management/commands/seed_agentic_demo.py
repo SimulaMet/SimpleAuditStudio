@@ -174,8 +174,18 @@ class Command(BaseCommand):
         now = timezone.now()
         provenance = resolve_engine_provenance()
         trace_config = {"mode": "studio", "target_id": credential.target_id}
+        from audits.models import Experiment
+        experiment, _ = Experiment.objects.get_or_create(
+            project=project,
+            name="Agentic Demo (Preloaded)",
+            defaults={"visibility": Experiment.Visibility.PUBLIC, "created_by": user},
+        )
+        if experiment.visibility != Experiment.Visibility.PUBLIC:
+            experiment.visibility = Experiment.Visibility.PUBLIC
+            experiment.save(update_fields=["visibility"])
         run = AuditRun.objects.create(
             project=project,
+            experiment=experiment,
             name="Demo: Acme Agentic Safety (preloaded)",
             status=AuditRun.Status.COMPLETED,
             scenario_set_version=version,
