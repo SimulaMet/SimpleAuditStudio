@@ -10,14 +10,13 @@ import atexit
 import hashlib
 import json
 import os
-from pathlib import Path
 import shutil
 import signal
 import socket
 import subprocess
 import sys
-import time
 import uuid
+from pathlib import Path
 
 import psutil
 
@@ -76,23 +75,21 @@ def _live(record: dict | None) -> bool:
     try:
         pid = int(record["pid"])
         p = psutil.Process(pid)
-        if not p.is_running() or p.status() == psutil.STATUS_ZOMBIE:
-            return False
-        if abs(p.create_time() - float(record["created"])) >= 1.0:
-            return False
-        if hasattr(os, "getuid") and p.uids().real != os.getuid():
-            return False
-        return True
+        running = p.is_running() and p.status() != psutil.STATUS_ZOMBIE
+        fresh = abs(p.create_time() - float(record["created"])) < 1.0
+        owned = not hasattr(os, "getuid") or p.uids().real == os.getuid()
+        return running and fresh and owned
     except (KeyError, TypeError, ValueError, psutil.Error, OSError):
         return False
 
 
 def _health(port: int) -> str:
+    import urllib.error
     import urllib.request
     try:
         with urllib.request.urlopen(f"http://127.0.0.1:{port}/healthz", timeout=1.5) as response:
             return "healthy" if response.status == 200 else f"HTTP {response.status}"
-    except Exception:
+    except (urllib.error.URLError, OSError, ValueError):
         return "starting or unhealthy"
 
 

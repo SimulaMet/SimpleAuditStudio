@@ -43,6 +43,15 @@ uv run manage.py setup_local
 uv run manage.py dev
 ```
 
+For an existing instance, `dev` reuses it rather than restarting the entire
+stack. Run `uv run manage.py dev status` to see the actual port. Run
+`uv run manage.py dev agent-info` for detailed agent-safe instructions.
+`dev down` stops without data loss, `dev reset` recreates clean local data,
+and `dev uninstall` removes owned state and app-scoped uv caches. The same
+lifecycle actions are available as `uvx --from simpleaudit-studio spin ACTION`.
+See [development lifecycle](docs/development-lifecycle.md) for isolation and
+safety details.
+
 The app opens at <http://localhost:8000> with live reload. Use `--no-browser` to skip opening a browser.
 
 ## What it does
