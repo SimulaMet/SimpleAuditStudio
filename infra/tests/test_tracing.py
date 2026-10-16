@@ -425,6 +425,39 @@ class StudioTraceProviderTest(TestCase):
     """StudioTraceProvider reads the run's spans from the listener's persisted
     OtlpSpan rows by (target_id, trace_id), retrying until available."""
 
+    def test_fetch_from_async_context_reads_via_worker_thread(self):
+        """The engine fetches evidence from inside its asyncio loop; the DB
+        read must be routed off the loop thread (SynchronousOnlyOperation)."""
+        import asyncio
+
+        from model_registry.models import OtlpSpan
+
+        tid = "8" * 32
+        OtlpSpan.objects.create(
+            target_id="tgt", trace_id=tid, span_id="b" * 16, name="loop span", kind="LLM",
+        )
+        from infra.tracing import StudioTraceProvider
+
+        # The pool thread reads via its own connection, which does not see
+        # the TestCase transaction's uncommitted row — so verify the fetch
+        # runs WITHOUT raising SynchronousOnlyOperation (the bug this guards)
+        # and returns a list, using an injected fetcher for the positive case.
+        provider = StudioTraceProvider("tgt", timeout=1.0, retry_interval=0.01,
+                                       fetcher=lambda t, tid_: [{"span_id": "x", "name": "injected"}])
+
+        async def in_loop():
+            return provider.fetch(tid)
+
+        self.assertEqual(asyncio.run(in_loop()), [{"span_id": "x", "name": "injected"}])
+
+        # And the default fetcher must not raise inside the loop either.
+        default = StudioTraceProvider("tgt", timeout=0.2, retry_interval=0.01)
+
+        async def default_in_loop():
+            return default.fetch(tid)
+
+        self.assertIsInstance(asyncio.run(default_in_loop()), list)
+
     def test_fetch_returns_persisted_spans(self):
         from model_registry import otlp_views
         from model_registry.models import OtlpSpan

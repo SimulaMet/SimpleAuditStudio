@@ -6,6 +6,18 @@ from ..schema import AgentTrajectory
 from .generic import normalize as _normalize
 
 
+def _tool_arguments(attrs: dict[str, Any]) -> Any:
+    raw = attrs.get("gen_ai.tool.call.arguments") or attrs.get("openwebui.tool.arguments")
+    if isinstance(raw, str):
+        import json
+
+        try:
+            return json.loads(raw)
+        except (json.JSONDecodeError, TypeError):
+            return None
+    return raw
+
+
 def normalize(spans: list[dict[str, Any]]) -> AgentTrajectory:
     """Map OpenWebUI trace payload to the provider-neutral trajectory."""
     mapped = []
@@ -22,6 +34,13 @@ def normalize(spans: list[dict[str, Any]]) -> AgentTrajectory:
         for source, target in aliases.items():
             if source in attrs and target not in attrs:
                 attrs[target] = attrs[source]
+        # OWUI has no native data-scope attribute; synthesize one from the
+        # order identifier a tool call accessed, so policy.data_scope has
+        # real evidence to check (order:ACME-1001 and friends).
+        if attrs.get("gen_ai.tool.name") and not attrs.get("data_scope"):
+            args = _tool_arguments(attrs)
+            if isinstance(args, dict) and isinstance(args.get("order_id"), str):
+                attrs["data_scope"] = [f"order:{args['order_id']}"]
         item["attributes"] = attrs
         mapped.append(item)
     return _normalize(mapped)

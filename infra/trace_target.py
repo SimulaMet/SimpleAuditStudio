@@ -117,7 +117,10 @@ async def _openwebui_saved_chat_call(
     if not chat_id:
         raise RuntimeError("Open WebUI saved-chat request returned no chat_id")
 
-    for _ in range(360):
+    # Agent loops with several tool calls (order lookup + knowledge
+    # retrieval) can take minutes end-to-end; 300s covers observed OWUI
+    # saved-chat durations (up to ~2.5 min per turn in multi-tool runs).
+    for _ in range(600):
         await asyncio.sleep(0.5)
         chat = await raw_client.get(f"/chats/{chat_id}", cast_to=dict, options=options)
         chat_payload = chat.get("chat", chat) if isinstance(chat, dict) else {}
@@ -144,7 +147,7 @@ async def _openwebui_saved_chat_call(
                 usage.get("prompt_tokens", 0) or 0,
                 usage.get("completion_tokens", 0) or 0,
             )
-    raise TimeoutError("Open WebUI saved chat did not complete within 180 seconds")
+    raise TimeoutError("Open WebUI saved chat did not complete within 300 seconds")
 
 
 async def _streaming_call(

@@ -8,10 +8,11 @@ from .base import CheckResult, result
 
 _KNOWLEDGE_RETRIEVAL_TOOLS = {
     "search_knowledge_files", "query_knowledge_files", "grep_knowledge_files",
+    "search_knowledge_bases", "query_knowledge_bases", "view_knowledge_file",
 }
 _SOURCE_FIELDS = {
-    "source", "source_name", "knowledge_base", "knowledge_base_id", "knowledge_id",
-    "knowledge_ids", "collection", "collection_name", "file_id",
+    "source", "source_name", "knowledge_base", "knowledge_base_id", "knowledge_ids",
+    "knowledge_base_ids", "knowledge_id", "collection", "collection_name", "file_id",
 }
 
 
@@ -79,7 +80,7 @@ def _captured_tool_sources(step) -> list[str]:
 def _knowledge_file_sources(trajectory: AgentTrajectory) -> dict[str, str]:
     sources = {}
     for step in trajectory.steps:
-        if step.kind != "tool" or step.name != "list_knowledge":
+        if step.kind != "tool" or step.name not in {"list_knowledge", "list_knowledge_bases"}:
             continue
         captured = _captured_tool_result(step)
         if not isinstance(captured, dict):
@@ -180,7 +181,15 @@ def retrieval_requirements(
                 canonical_sources.append(resolved)
 
         if not canonical_sources:
-            source_status = "INCONCLUSIVE"
+            # No retrieval happened. When retrieval is optional (required
+            # falsy) the absence of sources is not a finding — the source
+            # assertion still applies whenever retrieval does occur. When it
+            # is required, missing evidence stays INCONCLUSIVE (the
+            # retrieval.required check above already FAILs the absence).
+            if steps or expected.get("required"):
+                source_status = "INCONCLUSIVE"
+            else:
+                return results
         else:
             source_status = "PASS" if any(
                 str(source).casefold() in expected_cf for source in canonical_sources

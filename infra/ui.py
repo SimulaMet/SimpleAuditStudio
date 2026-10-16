@@ -3305,6 +3305,37 @@ def _trace_is_noise(span: dict) -> bool:
     return name == "get" and _trace_span_duration_ms(span) < 1.0
 
 
+#: (label, attribute keys) for the expandable span detail — the first key
+#: present wins. Content was already capture-level-sanitized at OTLP
+#: ingestion, so whatever is here is safe to show.
+_TRACE_SPAN_CONTENT_BLOCKS = (
+    ("Tool arguments", ("gen_ai.tool.call.arguments", "tool.arguments")),
+    ("Tool result", ("gen_ai.tool.call.result", "tool.result")),
+    ("Input", ("input.value", "gen_ai.prompt", "gen_ai.input.messages")),
+    ("Output", ("output.value", "gen_ai.completion", "gen_ai.output.messages")),
+)
+
+
+def _trace_span_content_blocks(span: dict) -> list[tuple[str, str]]:
+    """Human-readable (label, text) pairs for a span's content attributes."""
+    attrs = span.get("attributes")
+    if not isinstance(attrs, dict):
+        return []
+    blocks: list[tuple[str, str]] = []
+    for label, keys in _TRACE_SPAN_CONTENT_BLOCKS:
+        for key in keys:
+            value = attrs.get(key)
+            if value is None:
+                continue
+            if not isinstance(value, str):
+                import json as _json
+
+                value = _json.dumps(value, indent=2, default=str)
+            blocks.append((label, value))
+            break
+    return blocks
+
+
 def _trace_card_view(rep: dict) -> dict | None:
     """The trace section of one rep: W3C trace ids + the captured spans.
 
@@ -3317,17 +3348,28 @@ def _trace_card_view(rep: dict) -> dict | None:
     OpenInference semantic kinds surface their signal spans first, targets with
     plain OTel auto-instrumentation (raw SPAN_KIND_*, http.* attributes) are
     still readable because the meaningful operations are the long ones (the
-    model call, the request root).
+    model call, the request root). Each span also carries ``offset_ms``
+    (time since the earliest span — trajectory ordering) and ``content_blocks``
+    (tool args/results, input, output) for the expandable span detail.
     """
     trace_ids = rep.get("trace_ids") or []
     spans = ((rep.get("judgment") or {}).get("evidence_spans") or []) if isinstance(rep.get("judgment"), dict) else []
     if not trace_ids and not spans:
         return None
-    ranked = [
-        dict(s, dur_ms=round(_trace_span_duration_ms(s), 1))
-        for s in spans
-        if not _trace_is_noise(s)
-    ]
+    base_start = min(
+        (s.get("start_time") for s in spans if isinstance(s.get("start_time"), (int, float))),
+        default=None,
+    )
+    ranked = []
+    for s in spans:
+        if _trace_is_noise(s):
+            continue
+        start = s.get("start_time")
+        offset = round((start - base_start) * 1000.0, 1) if base_start is not None and isinstance(start, (int, float)) else None
+        ranked.append(
+            dict(s, dur_ms=round(_trace_span_duration_ms(s), 1), offset_ms=offset,
+                 content_blocks=_trace_span_content_blocks(s))
+        )
     signal = [s for s in ranked if str(s.get("kind") or "").upper() in _TRACE_CARD_KINDS]
     rest = [s for s in ranked if str(s.get("kind") or "").upper() not in _TRACE_CARD_KINDS]
     ranked = sorted(signal, key=_trace_span_duration_ms, reverse=True) + sorted(rest, key=_trace_span_duration_ms, reverse=True)
