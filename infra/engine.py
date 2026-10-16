@@ -880,3 +880,24 @@ def run_scenario_repeated(
         "n_repetitions": len(reps),
         "_language": language,
     }
+
+
+def build_audit_results_export(payloads: list[dict[str, Any]], *, timestamp: str | None = None) -> dict[str, Any]:
+    """Assemble the engine's ``AuditResults.to_dict()`` document from stored results.
+
+    ``payloads`` are persisted per-scenario ``AuditResult.to_dict()`` records.
+    Keys the engine's ``AuditResult`` does not define (Studio bookkeeping such as
+    ``trace_ids`` or ``_language``) are dropped, and the summary block is computed
+    by the engine itself, so the document keeps the engine's own shape and loads
+    with ``AuditResults.load``.
+    """
+    _ensure_engine_available()
+    import dataclasses
+
+    from simpleaudit.results import AuditResult, AuditResults
+
+    fields = {f.name for f in dataclasses.fields(AuditResult)}
+    collection = AuditResults([AuditResult(**{k: v for k, v in p.items() if k in fields}) for p in payloads])
+    if timestamp:
+        collection.timestamp = timestamp
+    return collection.to_dict()

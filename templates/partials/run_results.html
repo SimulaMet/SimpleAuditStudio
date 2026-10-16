@@ -6,7 +6,12 @@ re-fetched from run_results_fragment while the run is live.
   <div class="flex items-center justify-between mb-3">
     <h2 class="text-sm font-semibold text-gray-300">Results ({{ results|length }})</h2>
     {% if results %}
-    <a href="{% url 'run_export' run.id %}?format=json" class="px-2.5 py-1 rounded-lg bg-surface-overlay text-gray-400 text-xs font-medium hover:text-gray-200 transition-colors">Export</a>
+    <div class="flex items-center gap-2">
+      <a href="{% url 'run_export' run.id %}?format=json" class="px-2.5 py-1 rounded-lg bg-surface-overlay text-gray-400 text-xs font-medium hover:text-gray-200 transition-colors">Export</a>
+      {% if run.status == "completed" %}
+      <a href="{% url 'run_export' run.id %}?format=simpleaudit" class="px-2.5 py-1 rounded-lg bg-surface-overlay text-gray-400 text-xs font-medium hover:text-gray-200 transition-colors" title="Download the run as SimpleAudit's own results JSON (loadable with AuditResults.load)">Export (SimpleAudit JSON)</a>
+      {% endif %}
+    </div>
     {% endif %}
   </div>
   {% if results %}
