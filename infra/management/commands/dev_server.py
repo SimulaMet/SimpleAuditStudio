@@ -261,7 +261,7 @@ class Command(BaseCommand):
             chat_enabled=_chat_config.ENABLED,
             chat_internal_port=_chat_config.INTERNAL_PORT,
             chat_upstream_url=_chat_config.UPSTREAM,
-            force_kill=not options["no_force_kill"],
+            force_kill=False,  # no implicit process termination in development
             yes=options["yes"],
             command_hint="manage.py dev --port <free port>",
         )
@@ -447,9 +447,39 @@ class Command(BaseCommand):
         return process
 
     def _stop_web(self, web_proc):
-        if web_proc is not None:
-            web_proc.terminate()
-            web_proc.wait(timeout=5)
+        """Stop the auto-reload web server (guard → reloader parent → server).
+
+        Terminating only the guard can leave an orphaned runserver holding the
+        internal port, because the reloader parent does not always notice the
+        guard's death in time. We therefore SIGTERM the runserver processes by
+        PID (never by process group — the reloader tree shares the owner's
+        process group with Caddy/Open WebUI, which must keep running) and then
+        wait for the guard to exit.
+        """
+        if web_proc is None:
+            return
+        self._terminate_runserver_tree(web_proc.pid)
+        import subprocess
+
+        try:
+            web_proc.wait(timeout=8)
+        except subprocess.TimeoutExpired:
+            logger.warning("web server did not stop in time; left as-is")
+
+    @staticmethod
+    def _terminate_runserver_tree(guard_pid: int) -> None:
+        """SIGTERM the runserver processes under ``guard_pid`` (by PID, not pgid)."""
+        import psutil
+
+        try:
+            guard = psutil.Process(guard_pid)
+        except psutil.NoSuchProcess:
+            return
+        for proc in guard.children(recursive=True):
+            try:
+                proc.terminate()
+            except psutil.NoSuchProcess:
+                pass
 
     def _stop_chat(self):
         try:
