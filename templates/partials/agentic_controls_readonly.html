@@ -1,5 +1,5 @@
 {% load json_filters %}
-{# Read-only summary of agentic controls — only shows fields that have values. #}
+<!-- Read-only summary of agentic controls — only shows fields that have values. -->
 <div class="text-xs space-y-2">
   {% if agentic.tools.expected or agentic.tools.forbidden or agentic.retrieval.sources or agentic.trajectory.required_sequence or agentic.budgets.max_tool_calls or agentic.enforcement.mode %}
   <div>

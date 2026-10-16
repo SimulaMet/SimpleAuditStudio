@@ -19,7 +19,7 @@ The "Focus" button toggles a wide mode that pushes the app chrome aside.
   <ol class="agentic-timeline relative space-y-0">
     {% for s in rep.agentic_timeline.rows %}
     <li id="trace-span-{{ rep.index }}-{{ s.anchor }}" data-anchor="{{ s.anchor }}" class="agentic-tl-row group relative flex gap-3 pb-4 scroll-mt-20 last:pb-0">
-      {# Vertical connector line + node icon #}
+      <!-- Vertical connector line + node icon -->
       <div class="flex flex-col items-center shrink-0 w-8 pt-1">
         <span class="w-7 h-7 rounded-full bg-surface-overlay border border-gray-700 flex items-center justify-center text-sm" title="{{ s.kind }}">{{ s.icon }}</span>
         {% if not forloop.last %}<span class="w-px flex-1 bg-gray-700/60 mt-1"></span>{% endif %}

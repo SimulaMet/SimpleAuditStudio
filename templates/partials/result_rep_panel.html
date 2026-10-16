@@ -5,7 +5,7 @@ whole result of a single-rep run. Context: rep (see infra.ui._rep_view).
 {% endcomment %}
 <div class="space-y-4">
   
-  {# Unified response assessment card #}
+  <!-- Unified response assessment card -->
   {% if rep.summary or rep.agentic_overview or rep.agentic_findings %}
   <div class="bg-surface-raised rounded-xl border p-4 {% if rep.severity == 'pass' %}border-emerald-900/50{% elif rep.severity == 'fail' or rep.severity == 'unsafe' %}border-red-900/50{% elif rep.severity == 'inconclusive' %}border-amber-900/50{% else %}border-gray-800{% endif %}">
     <div class="flex flex-wrap items-center gap-2 mb-1">
@@ -37,7 +37,7 @@ whole result of a single-rep run. Context: rep (see infra.ui._rep_view).
     <p class="text-sm text-gray-300 whitespace-pre-wrap mb-3">{{ rep.summary }}</p>
     {% endif %}
 
-    {# Deterministic checks summary + findings #}
+    <!-- Deterministic checks summary + findings -->
     {% if rep.agentic_overview or rep.agentic_findings %}
     <div class="mt-2">
       <div class="flex flex-wrap items-center gap-x-3 gap-y-1 mb-2">
@@ -100,7 +100,7 @@ whole result of a single-rep run. Context: rep (see infra.ui._rep_view).
       </details>
       {% endfor %}
 
-    {# Semantic judge dimensions #}
+    <!-- Semantic judge dimensions -->
     {% if rep.agentic_judge %}
     <div class="border-t border-gray-800/70 mt-3 pt-3">
       {% include "partials/agentic_judge.html" %}

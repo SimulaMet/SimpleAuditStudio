@@ -1,18 +1,17 @@
 {% load json_filters %}
-{#
+<!--
   Structured agentic controls (authoring form).
-
   Sparse by design: a section renders ONLY when it is active in the current
   metadata, or the author expands its "Add constraint" row. Untouched sections
   stay absent from the saved metadata — absence means "not checked", never a
   silent default. The read-only preview below the form shows exactly what will
   be saved; unknown fields round-trip untouched.
-#}
+-->
 <fieldset class="rounded-lg border border-gray-700 bg-surface-raised/40 p-3 space-y-3" data-agentic-controls>
   <legend class="text-xs font-medium text-gray-300 mb-1">Structured agentic controls</legend>
   <p class="text-[11px] text-gray-500">Only active constraints are shown. Use <strong>Add constraint</strong> to enable a category — an empty category is never saved. Absent = not checked; explicit false/zero/null stays an assertion. Hover any field for details.</p>
 
-  {# ---------------- Tools ---------------- #}
+  <!-- ---------------- Tools ---------------- -->
   {% if agentic.tools.expected or agentic.tools.forbidden or agentic.tools.allowed %}
   <div data-active-section="tools">
     <p class="text-xs font-semibold text-gray-400 mb-2">Tools</p>
@@ -51,7 +50,7 @@
   </details>
   {% endif %}
 
-  {# ---------------- Retrieval & reranking ---------------- #}
+  <!-- ---------------- Retrieval & reranking ---------------- -->
   {% if agentic.retrieval.sources or agentic.retrieval.required or agentic.retrieval.min_documents or agentic.retrieval.max_documents or agentic.rerank.required or agentic.rerank.min_calls or agentic.rerank.max_calls %}
   <div data-active-section="retrieval">
     <p class="text-xs font-semibold text-gray-400 mb-2">Retrieval and reranking</p>
@@ -101,7 +100,7 @@
   </details>
   {% endif %}
 
-  {# ---------------- Policy ---------------- #}
+  <!-- ---------------- Policy ---------------- -->
   {% if agentic.policy.read_only or agentic.policy.allowed_data_scopes or agentic.policy.forbidden_data_scopes or agentic.policy.forbidden_side_effects or agentic.policy.allowed_destinations or agentic.policy.allow_side_effects %}
   <div data-active-section="policy">
     <p class="text-xs font-semibold text-gray-400 mb-2">Policy</p>
@@ -145,7 +144,7 @@
   </details>
   {% endif %}
 
-  {# ---------------- Guardrails & approvals ---------------- #}
+  <!-- ---------------- Guardrails & approvals ---------------- -->
   {% if agentic.guardrails.required or agentic.guardrails.must_pass or agentic.guardrails.before_actions or agentic.approvals.required_for or agentic.approvals.must_precede_execution %}
   <div data-active-section="guardrails">
     <p class="text-xs font-semibold text-gray-400 mb-2">Guardrails and approvals</p>
@@ -186,7 +185,7 @@
   </details>
   {% endif %}
 
-  {# ---------------- Handoffs ---------------- #}
+  <!-- ---------------- Handoffs ---------------- -->
   {% if agentic.handoffs.allowed or agentic.handoffs.forbidden or agentic.handoffs.required or agentic.handoffs.max_handoffs or agentic.handoffs.max_depth %}
   <div data-active-section="handoffs">
     <p class="text-xs font-semibold text-gray-400 mb-2">Handoffs</p>
@@ -229,7 +228,7 @@
   </details>
   {% endif %}
 
-  {# ---------------- Trajectory & budgets (advanced) ---------------- #}
+  <!-- ---------------- Trajectory & budgets (advanced) ---------------- -->
   {% if agentic.trajectory.required_sequence or agentic.trajectory.max_steps or agentic.trajectory.max_retries_per_tool or agentic.trajectory.max_identical_consecutive_calls or agentic.budgets.max_tool_calls or agentic.budgets.max_errors or agentic.state.assertions %}
   <div data-active-section="trajectory">
     <p class="text-xs font-semibold text-gray-400 mb-2">Trajectory, budgets &amp; state</p>
@@ -284,7 +283,7 @@
   </details>
   {% endif %}
 
-  {# ---------------- Semantic judge (advanced) ---------------- #}
+  <!-- ---------------- Semantic judge (advanced) ---------------- -->
   {% if agentic.semantic_judge.enabled or agentic.semantic_judge.criteria %}
   <div data-active-section="semantic_judge">
     <p class="text-xs font-semibold text-gray-400 mb-2">Semantic judge</p>
@@ -313,7 +312,7 @@
   </details>
   {% endif %}
 
-  {# ---------------- Enforcement (always present — how violations count) ---------------- #}
+  <!-- ---------------- Enforcement (always present — how violations count) ---------------- -->
   <div data-active-section="enforcement">
     <p class="text-xs font-semibold text-gray-400 mb-2">Enforcement</p>
     <div class="grid grid-cols-1 md:grid-cols-2 gap-x-3 gap-y-2">
