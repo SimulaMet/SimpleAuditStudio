@@ -130,15 +130,15 @@ def _semantic_metadata(criteria=("tool_result_handling", "grounding")) -> dict:
         "schema_version": 2,
         "trace": {"required": True, "content_capture": "structural", "missing_evidence": "inconclusive"},
         "enforcement": {"mode": "gating"},
-        "tools": {"expected": [{"name": "acme_lookup_order", "min_calls": 1}]},
+        "tools": {"expected": [{"name": "acme_get_order", "min_calls": 1}]},
         "semantic_judge": {"enabled": True, "criteria": list(criteria)},
     }}
 
 
 def _spans():
     return [
-        _span("t1", "acme_lookup_order", **{
-            "gen_ai.operation.name": "execute_tool", "gen_ai.tool.name": "acme_lookup_order",
+        _span("t1", "acme_get_order", **{
+            "gen_ai.operation.name": "execute_tool", "gen_ai.tool.name": "acme_get_order",
             "gen_ai.tool.call.arguments": '{"order_id": "ACME-9999"}',
             "gen_ai.tool.call.result": '{"found": false}',
         }),

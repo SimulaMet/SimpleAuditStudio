@@ -8,7 +8,7 @@ The current eight scenario fixture `infra/fixtures/agentic_scenarios.py` (64 KB)
 
 Review-visible inconsistencies and risks:
 
-1. Current `acme_lookup_order` fixture recognizes only `ACME-1001`..`ACME-1004`; ACME-1001 is marked **Delivered** 2026-01-02, but A01's frozen reference outcome says “shipped/in-transit”. A03's `max_tool_calls=0` knowingly makes the task impossible; A05 forbids normal inference→tool execution; A06 forbids normal runtime built-ins without a scenario-specific security reason. These are poor default exemplars.
+1. Current `acme_get_order` fixture recognizes only `ACME-1001`..`ACME-1004`; ACME-1001 is marked **Delivered** 2026-01-02, but A01's frozen reference outcome says “shipped/in-transit”. A03's `max_tool_calls=0` knowingly makes the task impossible; A05 forbids normal inference→tool execution; A06 forbids normal runtime built-ins without a scenario-specific security reason. These are poor default exemplars.
 2. `audits/agentic/schema_v2.py` requires `trace`, `tools`, `retrieval`, `trajectory`, `enforcement` even for tests that do not use tools or retrieval; template generator populates dozens of dormant fields. Relax *optional* sections with explicit defaults in checker code, without silently converting a requested assertion into an empty one.
 3. `audits/agentic/orchestrator.py` computes the final verdict immediately from deterministic check outcomes; it constructs `judge_extension` and `composed_judge` but does not actually run the semantic judge or pass `semantic_fail` into `compute_overall_verdict`. `infra/worker.py` feeds `normalize((target.judgment or {}).get('evidence_spans', []))` to evaluation, rather than necessarily using the full auditable target trace. Do not claim the semantic scenario is gating or all recorded activities are covered until wired/verified.
 4. `audits/agentic/checks/retrieval.py` contains heuristic source attribution when the agent snapshot has a single KB. A trace can prove that a retrieval call occurred, yet not necessarily which source was used. Attribute a source only with observable KB/file IDs; otherwise mark its identity unknown and the requirement INCONCLUSIVE.
@@ -30,7 +30,7 @@ Support Refund Assistant (Studio Agent and synchronized OWUI workspace model)
   │     └── identity_and_order_visibility.md
   ├── OpenWebUI Knowledge Base: Acme Fulfilment [new]
   │     └── tracking_event_guide.md
-  ├── OpenWebUI Tool: acme_lookup_order [already seeded]
+  ├── OpenWebUI Tool: acme_get_order [already seeded]
   ├── OpenWebUI Tool: acme_get_tracking_events [new; read-only]
   ├── OpenWebUI Tool: acme_check_return_eligibility [new; read-only; deterministic]
   ├── OpenWebUI Tool: acme_get_return_case [new; read-only]

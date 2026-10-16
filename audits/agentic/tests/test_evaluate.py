@@ -198,14 +198,14 @@ def test_tool_argument_assertion_uses_captured_standard_genai_arguments():
 
     trajectory = AgentTrajectory([
         TrajectoryStep(
-            "s3", "tool", "acme_lookup_order",
+            "s3", "tool", "acme_get_order",
             attributes={"gen_ai.tool.call.arguments": '{"order_id":"ACME-1001"}'},
         )
     ])
 
     results = tool_selection(trajectory, {
         "expected": [{
-            "name": "acme_lookup_order",
+            "name": "acme_get_order",
             "min_calls": 1,
             "max_calls": 1,
             "arguments": {"order_id": "ACME-1001"},
@@ -245,12 +245,12 @@ def test_builtin_knowledge_tool_uses_frozen_capability():
 def test_known_tool_matches_its_frozen_openwebui_invocation_name():
     from audits.agentic.checks import tool_permissions
 
-    trajectory = AgentTrajectory([TrajectoryStep("s1", "tool", "acme_lookup_order")])
+    trajectory = AgentTrajectory([TrajectoryStep("s1", "tool", "acme_get_order")])
     snapshot = {
         "tools": [{
             "name": "Acme Order Lookup",
             "external_id": "acme_order_lookup",
-            "invocation_names": ["acme_lookup_order"],
+            "invocation_names": ["acme_get_order"],
             "enabled": True,
             "read_only": True,
             "has_side_effects": False,
@@ -264,7 +264,7 @@ def test_known_tool_matches_its_frozen_openwebui_invocation_name():
 
 
 def test_tool_selection_resolves_alias_to_real_openwebui_function_name():
-    """Scenario control says acme_lookup_order but trace has acme_get_order.
+    """Scenario control says acme_get_order but trace has acme_get_order.
 
     The frozen snapshot maps both names to the same tool, so the check
     must PASS even though the span name differs from the control name.
@@ -276,7 +276,7 @@ def test_tool_selection_resolves_alias_to_real_openwebui_function_name():
     ])
     expected = {
         "expected": [{
-            "name": "acme_lookup_order",
+            "name": "acme_get_order",
             "min_calls": 1,
             "max_calls": 1,
             "arguments": {"order_id": "ACME-9999"},
@@ -286,7 +286,7 @@ def test_tool_selection_resolves_alias_to_real_openwebui_function_name():
         "tools": [{
             "name": "Acme Order Lookup",
             "external_id": "acme_order_lookup",
-            "invocation_names": ["acme_lookup_order", "acme_get_order"],
+            "invocation_names": ["acme_get_order", "acme_get_order"],
             "enabled": True,
             "read_only": True,
             "has_side_effects": False,

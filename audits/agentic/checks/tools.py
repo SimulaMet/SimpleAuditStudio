@@ -42,7 +42,7 @@ def _build_alias_map(snapshot: dict | None) -> dict[str, set[str]]:
     Given the frozen agent config snapshot, every tool's name, external_id,
     and invocation_names are treated as interchangeable identifiers for the
     same underlying capability.  This lets scenario controls reference a
-    logical alias (e.g. ``acme_lookup_order``) while the trace carries the
+    logical alias (e.g. ``acme_get_order``) while the trace carries the
     real OpenWebUI function name (e.g. ``acme_get_order``).
     """
     alias_map: dict[str, set[str]] = {}

@@ -64,13 +64,13 @@ class OpenWebUIToolInvocationNamesTest(TestCase):
 
         api = mock.Mock()
         api.tools.return_value = [
-            {"id": "acme_order_lookup", "specs": [{"name": "acme_lookup_order"}]},
+            {"id": "acme_order_lookup", "specs": [{"name": "acme_get_order"}]},
             {"id": "other", "specs": [{"name": "other_tool"}]},
         ]
 
         names = OpenWebUIAdapter(api).tool_invocation_names(["acme_order_lookup"])
 
-        self.assertEqual(names, {"acme_order_lookup": ["acme_lookup_order"]})
+        self.assertEqual(names, {"acme_order_lookup": ["acme_get_order"]})
 
 
 class _ChatDisabledBase(_SyncBase):

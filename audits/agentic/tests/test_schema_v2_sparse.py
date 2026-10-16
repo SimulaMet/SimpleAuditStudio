@@ -34,7 +34,7 @@ def test_every_optional_section_can_be_omitted():
         "schema_version": 2,
         "trace": {"required": True, "missing_evidence": "inconclusive"},
         "enforcement": {"mode": "gating"},
-        "tools": {"expected": [{"name": "acme_lookup_order", "min_calls": 1}]},
+        "tools": {"expected": [{"name": "acme_get_order", "min_calls": 1}]},
     })
     # none of the omitted sections appear as implicit assertions
     assert validate_agentic_metadata(_ok({"schema_version": 2}))[0]

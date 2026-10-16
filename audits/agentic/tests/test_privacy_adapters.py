@@ -68,7 +68,7 @@ def test_openwebui_adapter_synthesizes_data_scope_from_order_id():
         "kind": "tool",
         "status": "OK",
         "attributes": {
-            "gen_ai.tool.name": "acme_lookup_order",
+            "gen_ai.tool.name": "acme_get_order",
             "gen_ai.tool.call.arguments": json.dumps({"order_id": "ACME-1001"}),
         },
     }

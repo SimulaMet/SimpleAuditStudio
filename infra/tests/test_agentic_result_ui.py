@@ -72,15 +72,15 @@ REAL_AGENIC_EVALUATION = {
 
 REAL_SPANS = [
     _span(
-        "f062125f30609f9f", "acme_lookup_order", "TOOL", 0.05,
+        "f062125f30609f9f", "acme_get_order", "TOOL", 0.05,
         **{
-            "gen_ai.tool.name": "acme_lookup_order",
+            "gen_ai.tool.name": "acme_get_order",
             "gen_ai.tool.call.arguments": '{"order_id": "ACME-9999"}',
             "gen_ai.tool.call.result": '{"error": "not found"}',
         },
     ),
     # Duplicate span id on purpose: repeated calls must anchor uniquely.
-    _span("f062125f30609f9f", "acme_lookup_order", "TOOL", 0.10),
+    _span("f062125f30609f9f", "acme_get_order", "TOOL", 0.10),
     _span(
         "397f73d050fb1b64", "query_knowledge_files", "RETRIEVER", 0.0,
         **{

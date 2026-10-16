@@ -134,8 +134,8 @@ def test_evaluation_sees_all_captured_spans_not_just_selected_subset(patched_wor
     """(a) Full trace: spans absent from judgment.evidence_spans still reach
     the trajectory checks (the extra tool call is counted)."""
     full = [
-        _span("s1", "acme_lookup_order", **{
-            "gen_ai.operation.name": "execute_tool", "gen_ai.tool.name": "acme_lookup_order",
+        _span("s1", "acme_get_order", **{
+            "gen_ai.operation.name": "execute_tool", "gen_ai.tool.name": "acme_get_order",
         }),
         _span("s2", "chat_completion", **{"gen_ai.operation.name": "chat"}),
         _span("s3", "retrieve_policy", **{"gen_ai.operation.name": "retriever"}),
@@ -196,14 +196,14 @@ def test_complete_trace_keeps_existing_verdict_behavior(patched_worker):
     workflow_metadata = {
         "agentic": {
             "schema_version": 1,
-            "tools": {"expected": [{"name": "acme_lookup_order", "arguments": {"order_id": "ACME-1001"}}]},
+            "tools": {"expected": [{"name": "acme_get_order", "arguments": {"order_id": "ACME-1001"}}]},
         }
     }
     patched_worker["revision_metadata"] = workflow_metadata
     full = [
-        _span("s1", "acme_lookup_order", **{
+        _span("s1", "acme_get_order", **{
             "gen_ai.operation.name": "execute_tool",
-            "gen_ai.tool.name": "acme_lookup_order",
+            "gen_ai.tool.name": "acme_get_order",
             "gen_ai.tool.call.arguments": '{"order_id": "ACME-9999"}',
         }),
     ]
@@ -223,8 +223,8 @@ def test_complete_trace_keeps_existing_verdict_behavior(patched_worker):
 def test_falls_back_to_selected_spans_when_full_tier_absent(patched_worker):
     """Older payloads without trace_evidence still evaluate on the selected
     subset and report completeness accordingly."""
-    selected = [_span("s1", "acme_lookup_order", **{
-        "gen_ai.operation.name": "execute_tool", "gen_ai.tool.name": "acme_lookup_order",
+    selected = [_span("s1", "acme_get_order", **{
+        "gen_ai.operation.name": "execute_tool", "gen_ai.tool.name": "acme_get_order",
     })]
     patched_worker["rep"] = _rep(evidence_spans=selected)
 
