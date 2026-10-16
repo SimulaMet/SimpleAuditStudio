@@ -209,16 +209,16 @@ class AgenticResultPageRenderTests(TestCase):
         # The failing check card cites its span via the resolved anchor.
         self.assertContains(resp, 'href="#trace-span-1-f062125f30609f9f"')
         self.assertContains(resp, "tool.arguments")
-        self.assertContains(resp, "Agentic audit")
+        self.assertContains(resp, "Agentic check data")
 
     def test_blocks_self_hide_without_agentic_data(self):
         resp = self._get({"severity": "pass", "summary": "plain", "conversation": []})
-        for marker in ("Trajectory timeline", "Agentic audit", "Semantic judge", "Agentic check data"):
+        for marker in ("Trajectory timeline", "Agentic check data", "Semantic agentic evaluation"):
             self.assertNotContains(resp, marker)
 
     def test_judge_panel_hides_without_semantic_judgement(self):
         resp = self._get(self._result())
-        self.assertNotContains(resp, "Semantic judge")
+        self.assertNotContains(resp, "Semantic agentic evaluation")
         # Add the target-contract semantic judgement -> panel appears.
         rep = self._result()
         rep["agentic_evaluation"]["semantic_judgement"] = {
@@ -229,7 +229,7 @@ class AgenticResultPageRenderTests(TestCase):
             "dimensions": {"grounding": {"status": "PASS", "rationale": "ok", "span_ids": ["f062125f30609f9f"]}},
         }
         resp = self._get(rep)
-        self.assertContains(resp, "Semantic judge")
+        self.assertContains(resp, "Semantic agentic evaluation")
         self.assertContains(resp, "Model: ")
         self.assertContains(resp, "Prompt: ")
         # Dimension citation jumps to the (first) evidence row.
