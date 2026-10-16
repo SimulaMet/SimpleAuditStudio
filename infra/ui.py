@@ -3903,6 +3903,13 @@ def _image_uris(rep: dict) -> list[str]:
     return out
 
 
+def _decision_answer(message: object) -> dict | None:
+    """``model_registry.decision.decision_answer``, imported lazily for Django app loading."""
+    from model_registry.decision import decision_answer
+
+    return decision_answer(message)
+
+
 def _rep_view(rep: dict, index: int) -> dict:
     """One judged conversation (a repetition, or the whole single-rep result)."""
     def _token_count(value: object) -> int:
@@ -3937,6 +3944,9 @@ def _rep_view(rep: dict, index: int) -> dict:
             "is_target": role == "assistant",
             "turn": turn,
             "content": content,
+            # A decision target answers in options, not prose: content is empty
+            # and the answer sits beside it (SimpleAudit 0.4.0).
+            "decision": _decision_answer(msg),
         })
     tokens = [
         {
@@ -3981,8 +3991,12 @@ def _rep_view(rep: dict, index: int) -> dict:
                 {"span_id": sid, "label": _span_label(sid), "anchor": anchor_for.get(sid, sid)}
                 for sid in dim.pop("span_ids")
             ]
+    # The scenario's own decision answer: the last one in the conversation, so a
+    # follow-up turn's answer replaces the opening one.
+    decisions = [m["decision"] for m in conversation if m["decision"]]
     return {
         "index": index,
+        "decision": decisions[-1] if decisions else None,
         "severity": rep.get("severity", ""),
         "summary": rep.get("summary", ""),
         "grade": grade,
