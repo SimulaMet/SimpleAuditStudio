@@ -15,6 +15,7 @@ import signal
 import socket
 import subprocess
 import sys
+import time
 import uuid
 from pathlib import Path
 
@@ -143,7 +144,22 @@ def _delete_owned(instance: Instance) -> None:
     if not safe or data.is_symlink():
         raise SystemExit(f"Refusing to delete unexpected data path: {data}")
     if data.exists():
-        shutil.rmtree(data)
+        # SQLite checkpoints can remove -wal/-shm between rmtree's listing and
+        # its unlink; tolerate files that are already gone but surface real
+        # errors (e.g. permission denied) instead of aborting mid-delete.
+        def _rm_tolerate(fn, path, exc_info):
+            if not isinstance(exc_info[1], FileNotFoundError):
+                raise exc_info[1]
+
+        shutil.rmtree(data, onerror=_rm_tolerate)
+        # Best-effort sweep in case a hot journal reappeared as the last step.
+        for leftover in data.iterdir() if data.exists() else []:
+            try:
+                shutil.rmtree(leftover) if leftover.is_dir() else leftover.unlink()
+            except FileNotFoundError:
+                pass
+        if data.exists() and not any(data.iterdir()):
+            data.rmdir()
     if instance.mode == "dev":
         for suffix in ("", "-wal", "-shm", "-journal"):
             target = Path(str(instance.db) + suffix)
@@ -151,6 +167,34 @@ def _delete_owned(instance: Instance) -> None:
                 raise SystemExit(f"Refusing symlinked SQLite file: {target}")
             target.unlink(missing_ok=True)
     print("Removed instance-owned data. Repository and external results were preserved.")
+
+
+class _Completed:
+    """Minimal stand-in for a finished subprocess result (only returncode used)."""
+
+    def __init__(self, returncode: int):
+        self.returncode = returncode
+
+
+def _kill_group(proc: subprocess.Popen) -> None:
+    """Terminate then kill the whole session/group a child started in."""
+    try:
+        os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+    except (ProcessLookupError, PermissionError):
+        pass
+    try:
+        proc.wait(timeout=5)
+        return
+    except subprocess.TimeoutExpired:
+        pass
+    try:
+        os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
+        pass
+    try:
+        proc.wait(timeout=2)
+    except subprocess.TimeoutExpired:
+        pass
 
 
 def _uv_cleanup(mode: str) -> None:
@@ -161,13 +205,40 @@ def _uv_cleanup(mode: str) -> None:
     # Package-scoped cache cleanup, NEVER `uv cache clean` without a name.
     # A uvx ephemeral environment may remain: uv offers no reliable per-tool
     # selective deletion of all shared cached environments.
+    #
+    # Each step is hard-bounded by wall clock. `subprocess.run(timeout=)` is NOT
+    # sufficient: `uv cache clean` spawns children that keep its pipes open, so
+    # run()'s internal communicate() can block far past the deadline (observed
+    # ~94 min vs a 120 s bound). We therefore run each step in its own session
+    # and kill the whole group on a real deadline.
+    def _bounded(cmd, timeout):
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
+        deadline = time.monotonic() + timeout
+        while True:
+            rc = proc.poll()
+            if rc is not None:
+                return _Completed(rc)
+            if time.monotonic() >= deadline:
+                _kill_group(proc)
+                return None
+            time.sleep(0.5)
+
     for name in ("simpleaudit-studio", "open-webui"):
-        result = subprocess.run([uv, "cache", "clean", name], check=False)
-        if result.returncode:
+        result = _bounded([uv, "cache", "clean", name], timeout=120)
+        if result is None:
+            print(f"Timed out clearing uv cache for {name}; left as-is.")
+        elif result.returncode:
             print(f"Could not clear uv cache for {name} (exit {result.returncode}).")
     if mode == "spin":
-        result = subprocess.run([uv, "tool", "uninstall", "simpleaudit-studio"], check=False, capture_output=True, text=True)
-        if result.returncode == 0:
+        result = _bounded([uv, "tool", "uninstall", "simpleaudit-studio"], timeout=60)
+        if result is None:
+            print("Timed out removing uv tool installation; left as-is.")
+        elif result.returncode == 0:
             print("Removed permanent uv tool installation.")
         else:
             print("No permanent uv tool installation removed (uvx does not install one).")

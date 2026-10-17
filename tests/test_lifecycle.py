@@ -70,6 +70,59 @@ def test_delete_owned_data_only(environment):
     assert (checkout / "manage.py").exists()
 
 
+def test_delete_owned_tolerates_wal_file_vanishing_during_rmtree(environment, monkeypatch):
+    """A SQLite checkpoint can remove -wal/-shm after rmtree lists them.
+
+    Simulate that by making unlink raise FileNotFoundError for one file; the
+    delete must still complete rather than abort mid-way and leave debris.
+    """
+    import shutil as _shutil
+
+    checkout = environment / "repo"
+    checkout.mkdir()
+    instance = lifecycle.Instance("dev", checkout)
+    data = instance.data
+    data.mkdir(parents=True)
+    (data / "studio.sqlite3").write_text("db")
+    (data / "studio.sqlite3-wal").write_text("wal")
+    (data / "studio.sqlite3-shm").write_text("shm")
+    (data / "nested").mkdir()
+    (data / "nested" / "x.txt").write_text("x")
+
+    real_rmtree = _shutil.rmtree
+    flaky = data / "studio.sqlite3-shm"
+
+    def racing_rmtree(path, *args, **kwargs):
+        # Emulate the checkpoint: drop the shm file right before rmtree walks it.
+        if Path(path) == data:
+            try:
+                flaky.unlink()
+            except FileNotFoundError:
+                pass
+        return real_rmtree(path, *args, **kwargs)
+
+    monkeypatch.setattr(lifecycle.shutil, "rmtree", racing_rmtree)
+    lifecycle._delete_owned(instance)
+    assert not data.exists()
+
+
+def test_delete_owned_surfaces_real_errors_not_just_missing_files(environment, monkeypatch):
+    """Permission errors must propagate; only FileNotFoundError is tolerated."""
+    checkout = environment / "repo"
+    checkout.mkdir()
+    instance = lifecycle.Instance("dev", checkout)
+    data = instance.data
+    data.mkdir(parents=True)
+    (data / "locked").write_text("x")
+
+    def boom(*a, **k):
+        raise PermissionError(13, "denied", str(data))
+
+    monkeypatch.setattr(lifecycle.shutil, "rmtree", boom)
+    with pytest.raises(PermissionError):
+        lifecycle._delete_owned(instance)
+
+
 def test_default_port_selection_has_no_duplicate_ports():
     assert len(set(lifecycle._requested_ports(8000).values())) == 4
     assert lifecycle._requested_ports(8100)["public"] == 8100
@@ -91,13 +144,71 @@ def test_live_rejects_unowned_pid():
 def test_uninstall_only_cleans_named_uv_packages(monkeypatch):
     calls = []
     monkeypatch.setattr(lifecycle.shutil, "which", lambda _: "/usr/bin/uv")
-    class Result:
-        returncode = 0
-    monkeypatch.setattr(lifecycle.subprocess, "run", lambda args, **kwargs: (calls.append(args), Result())[1])
+
+    class DoneProc:
+        pid = 42
+
+        def poll(self):
+            return 0  # completes immediately
+
+        def wait(self, timeout=None):
+            return None
+
+    monkeypatch.setattr(
+        lifecycle.subprocess,
+        "Popen",
+        lambda cmd, **kw: (calls.append(cmd), DoneProc())[1],
+    )
     lifecycle._uv_cleanup("dev")
     assert calls == [["/usr/bin/uv", "cache", "clean", "simpleaudit-studio"],
                      ["/usr/bin/uv", "cache", "clean", "open-webui"]]
-    assert not any(args == ["/usr/bin/uv", "cache", "clean"] for args in calls)
+    assert not any(c == ["/usr/bin/uv", "cache", "clean"] for c in calls)
+
+
+def test_uv_cleanup_is_bounded_by_wall_clock_not_run_timeout(monkeypatch, capsys):
+    """`uv cache clean` can hold pipes open so subprocess.run(timeout=) blocks far
+    past its deadline (observed ~94 min vs 120 s). Cleanup must instead enforce a
+    real wall-clock bound: return quickly and report a timeout when a step hangs."""
+    import subprocess as _sp
+
+    monkeypatch.setattr(lifecycle.shutil, "which", lambda _: "/usr/bin/uv")
+
+    class HangingProc:
+        pid = 999999
+
+        def poll(self):
+            return None  # never finishes
+
+        def wait(self, timeout=None):
+            raise _sp.TimeoutExpired("cmd", timeout)
+
+    killed = []
+
+    def fake_popen(cmd, **kwargs):
+        assert kwargs.get("start_new_session") is True
+        return HangingProc()
+
+    def fake_kill_group(proc):
+        killed.append(proc)
+
+    monkeypatch.setattr(lifecycle.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(lifecycle, "_kill_group", fake_kill_group)
+
+    # Fast-forward the clock so each step's deadline elapses after one iteration,
+    # while still proving the loop terminates (vs the old 94-minute hang).
+    clock = {"now": 0.0}
+
+    def fake_monotonic():
+        clock["now"] += 1000.0  # jump past any deadline instantly
+        return clock["now"]
+
+    monkeypatch.setattr(lifecycle.time, "monotonic", fake_monotonic)
+    monkeypatch.setattr(lifecycle.time, "sleep", lambda *_: None)
+    lifecycle._uv_cleanup("spin")
+    assert killed, "hung steps must be killed via the group killer"
+    out = capsys.readouterr().out
+    assert "Timed out clearing uv cache" in out
+    assert "Timed out removing uv tool installation" in out
 
 
 def test_uninstall_cannot_use_live_external_db(environment, monkeypatch):
