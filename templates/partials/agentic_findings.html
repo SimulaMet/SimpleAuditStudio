@@ -1,0 +1,39 @@
+{% comment %}
+Evidence-linked per-check verdict cards for one repetition.
+Context: rep (see infra.ui._rep_view). Cards are pre-sorted by the view
+(CRITICAL > HIGH > MEDIUM > LOW, then FAIL > INCONCLUSIVE > ERROR > PASS) and
+each span chip jumps to its unique timeline anchor (#trace-span-<rep>-<anchor>).
+Hidden when the rep has no agentic checks.
+{% endcomment %}
+{% if rep.agentic_findings %}
+<div class="bg-surface-raised rounded-xl border border-gray-800 p-4">
+  <div class="flex flex-wrap items-baseline justify-between gap-2 mb-3">
+    <h3 class="text-sm font-semibold text-gray-300">Check results</h3>
+    <p class="text-xs text-gray-500">{{ rep.agentic_findings|length }} check{{ rep.agentic_findings|length|pluralize }}, prioritized by severity · chips jump to the evidence step</p>
+  </div>
+  <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-2.5">
+    {% for f in rep.agentic_findings %}
+    <div class="agentic-finding-card min-w-0 rounded-lg border px-3 py-2.5 {% if f.status == 'FAIL' or f.status == 'ERROR' %}border-red-900/50 bg-red-950/20{% elif f.status == 'INCONCLUSIVE' %}border-amber-900/50 bg-amber-950/10{% else %}border-gray-800 bg-surface-overlay/30{% endif %}" data-severity="{{ f.severity }}" data-status="{{ f.status }}">
+      <div class="flex items-center gap-2 min-w-0">
+        <span class="shrink-0 px-1.5 py-0.5 rounded text-[10px] font-semibold {% if f.status == 'PASS' %}bg-emerald-900/40 text-emerald-300{% elif f.status == 'INCONCLUSIVE' %}bg-amber-900/40 text-amber-300{% else %}bg-red-900/40 text-red-300{% endif %}">{{ f.status }}</span>
+        {% if f.severity %}<span class="shrink-0 px-1.5 py-0.5 rounded text-[10px] uppercase tracking-wide {% if f.severity == 'critical' %}bg-red-950 text-red-300{% elif f.severity == 'high' %}bg-orange-950 text-orange-300{% elif f.severity == 'medium' %}bg-amber-950 text-amber-300{% else %}bg-gray-800 text-gray-400{% endif %}">{{ f.severity }}</span>{% endif %}
+        <code class="min-w-0 truncate text-[11px] text-gray-400" title="{{ f.id }}">{{ f.id }}</code>
+      </div>
+      <p class="mt-1.5 text-xs text-gray-300 break-words">{% if f.summary %}{{ f.summary }}{% else %}—{% endif %}</p>
+      {% if f.reason %}<p class="mt-1 text-[11px] text-gray-500 break-words">{{ f.reason }}</p>{% endif %}
+      
+      <span class="hidden" data-agentic-check-evidence="{{ f.evidence_span_ids|join:' ' }}"></span>
+      {% if f.spans %}
+      <div class="mt-1.5 flex flex-wrap gap-1">
+        {% for sp in f.spans %}
+        <a href="#trace-span-{{ rep.index }}-{{ sp.anchor }}" class="agentic-span-link inline-flex items-center gap-1 max-w-full rounded bg-surface-overlay/70 border border-gray-800 px-1.5 py-0.5 text-[10px] text-violet-300 hover:text-violet-200" title="Jump to this evidence step">
+          <span aria-hidden="true">⌖</span><span class="truncate font-mono">{{ sp.span_id|slice:":8" }}</span>
+        </a>
+        {% endfor %}
+      </div>
+      {% endif %}
+    </div>
+    {% endfor %}
+  </div>
+</div>
+{% endif %}

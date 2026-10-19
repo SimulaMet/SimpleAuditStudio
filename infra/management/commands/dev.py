@@ -65,4 +65,5 @@ class Command(BaseCommand):
             embedded=True,
             no_reload=options["no_reload"],
             no_browser=options["no_browser"],
+            no_force_kill=True,  # never evict another agent's stack
         )

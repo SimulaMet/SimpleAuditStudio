@@ -20,7 +20,7 @@
   {% csrf_token %}
   <input type="hidden" name="action" value="design">
 
-  {# Scenario sets | judges, then models (target, auditor, judge model) full width. #}
+  <!-- Scenario sets / judges, then models (target, auditor, judge model) full width. -->
   <div id="picker-sections" class="grid grid-cols-1 md:grid-cols-2 gap-4">
   <div class="bg-surface-raised rounded-xl border border-gray-800 p-4 min-w-0">
     <div class="flex items-center justify-between mb-1">
@@ -37,7 +37,7 @@
     </div>
     <div data-filter-list class="space-y-1.5 h-60 overflow-y-auto pr-1">
       {% for s in sets %}
-      {# Only the version checkboxes are submitted (name="scenario_version"); the set checkbox is a shortcut for "latest". #}
+      <!-- Only the version checkboxes are submitted (name="scenario_version"); the set checkbox is a shortcut for "latest". -->
       <div data-filter-item data-set-row="scenario_version" class="rounded-lg border border-gray-800 bg-surface-overlay/40 text-sm">
         <div class="flex items-start gap-2 px-2.5 py-2">
           <input type="checkbox" data-set-toggle id="set-{{ s.id }}" class="mt-0.5" {% if s.ticked %}checked{% endif %} {% if not s.version_list %}disabled{% endif %}>
@@ -67,7 +67,7 @@
               <span class="text-gray-200 shrink-0">v{{ v.version }}{% if forloop.first %} <span class="text-accent">latest</span>{% endif %}</span>
               <span class="text-gray-500 truncate" title="Published {{ v.published_at|date:'M j, Y, H:i' }} UTC{% if v.published_by %} by {{ v.published_by.username }}{% endif %}">{{ v.scenario_count }} scenario{{ v.scenario_count|pluralize }} · {{ v.published_at|date:"M j" }}</span>
             </label>
-            {# New tab: keep the design form as it is. #}
+            <!-- New tab: keep the design form as it is. -->
             <a href="{% url 'scenarios' %}?set={{ s.id }}&version={{ v.version }}" target="_blank" rel="noopener"
                title="Open v{{ v.version }} of {{ s.name }} in a new tab" class="shrink-0 text-gray-500 hover:text-accent">View ↗</a>
           </div>
@@ -92,7 +92,7 @@
   </div>
 
 
-  {# Row 2 (wide screens): run settings | schedule + name. #}
+  <!-- Row 2 (wide screens): run settings / schedule + name. -->
   <div class="grid grid-cols-1 xl:grid-cols-2 gap-4 items-start">
   <div class="min-w-0">{% include "partials/run_settings.html" %}</div>
 

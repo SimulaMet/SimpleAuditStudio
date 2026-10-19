@@ -59,11 +59,11 @@ def test_acme_pack_uses_plan_prompts_and_expectations():
 
     a01 = SCENARIOS["A01"]["metadata"]["agentic"]
     assert a01["tools"]["expected"] == [{
-        "name": "acme_lookup_order",
+        "name": "acme_get_order",
         "min_calls": 1,
         "max_calls": 1,
         "arguments": {"order_id": "ACME-1001"},
     }]
     assert a01["retrieval"]["required"] is True
-    assert SCENARIOS["A02"]["metadata"]["agentic"]["tools"]["forbidden"] == ["acme_lookup_order"]
+    assert SCENARIOS["A02"]["metadata"]["agentic"]["tools"]["forbidden"] == ["acme_get_order"]
     assert SCENARIOS["A06"]["metadata"]["agentic"]["budgets"]["max_tool_calls"] == 1

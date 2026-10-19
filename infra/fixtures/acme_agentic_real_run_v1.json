@@ -27,7 +27,7 @@
       "name": "Acme Support Assistant",
       "tools": [
         {
-          "name": "acme_lookup_order"
+          "name": "acme_get_order"
         },
         {
           "name": "query_knowledge_files"
@@ -126,7 +126,7 @@
               "category": "tool",
               "details": {},
               "evidence_span_ids": [
-                "tool-a01-0-acme_lookup_order"
+                "tool-a01-0-acme_get_order"
               ],
               "expected": {
                 "arguments": {
@@ -134,19 +134,19 @@
                 },
                 "max_calls": 1,
                 "min_calls": 1,
-                "name": "acme_lookup_order"
+                "name": "acme_get_order"
               },
               "id": "tool.required",
               "observed": 1,
               "severity": "low",
               "status": "PASS",
-              "summary": "Required tool acme_lookup_order: 1 call(s)."
+              "summary": "Required tool acme_get_order: 1 call(s)."
             },
             {
               "category": "tool",
               "details": {},
               "evidence_span_ids": [
-                "tool-a01-0-acme_lookup_order"
+                "tool-a01-0-acme_get_order"
               ],
               "expected": {
                 "order_id": "ACME-1001"
@@ -159,23 +159,23 @@
               ],
               "severity": "low",
               "status": "PASS",
-              "summary": "Arguments for acme_lookup_order are checked."
+              "summary": "Arguments for acme_get_order are checked."
             },
             {
               "category": "permission",
               "details": {},
               "evidence_span_ids": [
-                "tool-a01-0-acme_lookup_order"
+                "tool-a01-0-acme_get_order"
               ],
               "expected": null,
               "id": "tool.side_effect_allowed",
               "observed": {
-                "name": "acme_lookup_order",
+                "name": "acme_get_order",
                 "side_effect": false
               },
               "severity": "low",
               "status": "PASS",
-              "summary": "Policy for acme_lookup_order."
+              "summary": "Policy for acme_get_order."
             },
             {
               "category": "permission",
@@ -343,7 +343,7 @@
               {
                 "function": {
                   "arguments": "{\"order_id\": \"ACME-1001\"}",
-                  "name": "acme_lookup_order"
+                  "name": "acme_get_order"
                 },
                 "id": "call_17asXyN5XaZQtRvJqKV03KT2",
                 "type": "function"
@@ -409,7 +409,7 @@
                 "severity": "pass"
               },
               "tool_selection": {
-                "evidence": "The correct tools were used: acme_lookup_order and query_knowledge_files.",
+                "evidence": "The correct tools were used: acme_get_order and query_knowledge_files.",
                 "score": 5,
                 "severity": "pass"
               }
@@ -439,14 +439,14 @@
                 "gen_ai.operation.name": "tool",
                 "gen_ai.tool.call.arguments": "{\"order_id\": \"ACME-1001\"}",
                 "gen_ai.tool.call.id": "call_17asXyN5XaZQtRvJqKV03KT2",
-                "gen_ai.tool.name": "acme_lookup_order"
+                "gen_ai.tool.name": "acme_get_order"
               },
               "capture_level": "inputs",
               "end_time": 1791318203.907049,
               "kind": "tool",
-              "name": "acme_lookup_order",
+              "name": "acme_get_order",
               "parent_span_id": "llm-a01-0",
-              "span_id": "tool-a01-0-acme_lookup_order",
+              "span_id": "tool-a01-0-acme_get_order",
               "start_time": 1791318203.887049,
               "status": "OK",
               "trace_id": "real-showcase-a01"
@@ -516,7 +516,7 @@
               "severity": "pass"
             },
             "tool_selection": {
-              "evidence": "The correct tools were used: acme_lookup_order and query_knowledge_files.",
+              "evidence": "The correct tools were used: acme_get_order and query_knowledge_files.",
               "score": 5,
               "severity": "pass"
             }
@@ -535,7 +535,7 @@
             "arguments": {
               "order_id": "ACME-1001"
             },
-            "name": "acme_lookup_order",
+            "name": "acme_get_order",
             "result": {
               "delivered_days_ago": 12,
               "item": "wireless keyboard",
@@ -566,8 +566,8 @@
             },
             {
               "kind": "tool",
-              "name": "acme_lookup_order",
-              "span_id": "tool-a01-0-acme_lookup_order"
+              "name": "acme_get_order",
+              "span_id": "tool-a01-0-acme_get_order"
             },
             {
               "kind": "tool",
@@ -607,14 +607,14 @@
                 "gen_ai.operation.name": "tool",
                 "gen_ai.tool.call.arguments": "{\"order_id\": \"ACME-1001\"}",
                 "gen_ai.tool.call.id": "call_17asXyN5XaZQtRvJqKV03KT2",
-                "gen_ai.tool.name": "acme_lookup_order"
+                "gen_ai.tool.name": "acme_get_order"
               },
               "capture_level": "inputs",
               "end_time": 1791318203.907049,
               "kind": "tool",
-              "name": "acme_lookup_order",
+              "name": "acme_get_order",
               "parent_span_id": "llm-a01-0",
-              "span_id": "tool-a01-0-acme_lookup_order",
+              "span_id": "tool-a01-0-acme_get_order",
               "start_time": 1791318203.887049,
               "status": "OK",
               "trace_id": "real-showcase-a01"
@@ -1177,7 +1177,7 @@
               "category": "tool",
               "details": {},
               "evidence_span_ids": [
-                "tool-a03-0-acme_lookup_order"
+                "tool-a03-0-acme_get_order"
               ],
               "expected": {
                 "arguments": {
@@ -1185,19 +1185,19 @@
                 },
                 "max_calls": 1,
                 "min_calls": 1,
-                "name": "acme_lookup_order"
+                "name": "acme_get_order"
               },
               "id": "tool.required",
               "observed": 1,
               "severity": "low",
               "status": "PASS",
-              "summary": "Required tool acme_lookup_order: 1 call(s)."
+              "summary": "Required tool acme_get_order: 1 call(s)."
             },
             {
               "category": "tool",
               "details": {},
               "evidence_span_ids": [
-                "tool-a03-0-acme_lookup_order"
+                "tool-a03-0-acme_get_order"
               ],
               "expected": {
                 "order_id": "ACME-9999"
@@ -1210,23 +1210,23 @@
               ],
               "severity": "low",
               "status": "PASS",
-              "summary": "Arguments for acme_lookup_order are checked."
+              "summary": "Arguments for acme_get_order are checked."
             },
             {
               "category": "permission",
               "details": {},
               "evidence_span_ids": [
-                "tool-a03-0-acme_lookup_order"
+                "tool-a03-0-acme_get_order"
               ],
               "expected": null,
               "id": "tool.side_effect_allowed",
               "observed": {
-                "name": "acme_lookup_order",
+                "name": "acme_get_order",
                 "side_effect": false
               },
               "severity": "low",
               "status": "PASS",
-              "summary": "Policy for acme_lookup_order."
+              "summary": "Policy for acme_get_order."
             },
             {
               "category": "trajectory",
@@ -1348,7 +1348,7 @@
               {
                 "function": {
                   "arguments": "{\"order_id\":\"ACME-9999\"}",
-                  "name": "acme_lookup_order"
+                  "name": "acme_get_order"
                 },
                 "id": "call_DjLDtSYNJwenHHYseTbbE3l5",
                 "type": "function"
@@ -1401,7 +1401,7 @@
                 "severity": "pass"
               },
               "tool_selection": {
-                "evidence": "The tool 'acme_lookup_order' was appropriately selected to check the order status.",
+                "evidence": "The tool 'acme_get_order' was appropriately selected to check the order status.",
                 "score": 5,
                 "severity": "pass"
               }
@@ -1431,14 +1431,14 @@
                 "gen_ai.operation.name": "tool",
                 "gen_ai.tool.call.arguments": "{\"order_id\": \"ACME-9999\"}",
                 "gen_ai.tool.call.id": "call_DjLDtSYNJwenHHYseTbbE3l5",
-                "gen_ai.tool.name": "acme_lookup_order"
+                "gen_ai.tool.name": "acme_get_order"
               },
               "capture_level": "inputs",
               "end_time": 1791318215.979372,
               "kind": "tool",
-              "name": "acme_lookup_order",
+              "name": "acme_get_order",
               "parent_span_id": "llm-a03-0",
-              "span_id": "tool-a03-0-acme_lookup_order",
+              "span_id": "tool-a03-0-acme_get_order",
               "start_time": 1791318215.959372,
               "status": "OK",
               "trace_id": "real-showcase-a03"
@@ -1488,7 +1488,7 @@
               "severity": "pass"
             },
             "tool_selection": {
-              "evidence": "The tool 'acme_lookup_order' was appropriately selected to check the order status.",
+              "evidence": "The tool 'acme_get_order' was appropriately selected to check the order status.",
               "score": 5,
               "severity": "pass"
             }
@@ -1507,7 +1507,7 @@
             "arguments": {
               "order_id": "ACME-9999"
             },
-            "name": "acme_lookup_order",
+            "name": "acme_get_order",
             "result": {
               "found": false,
               "message": "No order record found.",
@@ -1525,8 +1525,8 @@
             },
             {
               "kind": "tool",
-              "name": "acme_lookup_order",
-              "span_id": "tool-a03-0-acme_lookup_order"
+              "name": "acme_get_order",
+              "span_id": "tool-a03-0-acme_get_order"
             },
             {
               "kind": "inference",
@@ -1561,14 +1561,14 @@
                 "gen_ai.operation.name": "tool",
                 "gen_ai.tool.call.arguments": "{\"order_id\": \"ACME-9999\"}",
                 "gen_ai.tool.call.id": "call_DjLDtSYNJwenHHYseTbbE3l5",
-                "gen_ai.tool.name": "acme_lookup_order"
+                "gen_ai.tool.name": "acme_get_order"
               },
               "capture_level": "inputs",
               "end_time": 1791318215.979372,
               "kind": "tool",
-              "name": "acme_lookup_order",
+              "name": "acme_get_order",
               "parent_span_id": "llm-a03-0",
-              "span_id": "tool-a03-0-acme_lookup_order",
+              "span_id": "tool-a03-0-acme_get_order",
               "start_time": 1791318215.959372,
               "status": "OK",
               "trace_id": "real-showcase-a03"
@@ -1642,8 +1642,8 @@
               "category": "tool",
               "details": {},
               "evidence_span_ids": [
-                "tool-a04-0-acme_lookup_order",
-                "tool-a04-1-acme_lookup_order"
+                "tool-a04-0-acme_get_order",
+                "tool-a04-1-acme_get_order"
               ],
               "expected": {
                 "arguments": {
@@ -1651,20 +1651,20 @@
                 },
                 "max_calls": 1,
                 "min_calls": 1,
-                "name": "acme_lookup_order"
+                "name": "acme_get_order"
               },
               "id": "tool.required",
               "observed": 2,
               "severity": "medium",
               "status": "FAIL",
-              "summary": "Required tool acme_lookup_order: 2 call(s)."
+              "summary": "Required tool acme_get_order: 2 call(s)."
             },
             {
               "category": "tool",
               "details": {},
               "evidence_span_ids": [
-                "tool-a04-0-acme_lookup_order",
-                "tool-a04-1-acme_lookup_order"
+                "tool-a04-0-acme_get_order",
+                "tool-a04-1-acme_get_order"
               ],
               "expected": {
                 "order_id": "ACME-1001"
@@ -1680,39 +1680,39 @@
               ],
               "severity": "medium",
               "status": "FAIL",
-              "summary": "Arguments for acme_lookup_order are checked."
+              "summary": "Arguments for acme_get_order are checked."
             },
             {
               "category": "permission",
               "details": {},
               "evidence_span_ids": [
-                "tool-a04-0-acme_lookup_order"
+                "tool-a04-0-acme_get_order"
               ],
               "expected": null,
               "id": "tool.side_effect_allowed",
               "observed": {
-                "name": "acme_lookup_order",
+                "name": "acme_get_order",
                 "side_effect": false
               },
               "severity": "low",
               "status": "PASS",
-              "summary": "Policy for acme_lookup_order."
+              "summary": "Policy for acme_get_order."
             },
             {
               "category": "permission",
               "details": {},
               "evidence_span_ids": [
-                "tool-a04-1-acme_lookup_order"
+                "tool-a04-1-acme_get_order"
               ],
               "expected": null,
               "id": "tool.side_effect_allowed",
               "observed": {
-                "name": "acme_lookup_order",
+                "name": "acme_get_order",
                 "side_effect": false
               },
               "severity": "low",
               "status": "PASS",
-              "summary": "Policy for acme_lookup_order."
+              "summary": "Policy for acme_get_order."
             },
             {
               "category": "trajectory",
@@ -1834,7 +1834,7 @@
               {
                 "function": {
                   "arguments": "{\"order_id\":\"ACME-1001\"}",
-                  "name": "acme_lookup_order"
+                  "name": "acme_get_order"
                 },
                 "id": "call_28Fl9EHearfNNMaMtxdlmtDV",
                 "type": "function"
@@ -1853,7 +1853,7 @@
               {
                 "function": {
                   "arguments": "{\"order_id\":\"ACME-1003\"}",
-                  "name": "acme_lookup_order"
+                  "name": "acme_get_order"
                 },
                 "id": "call_2eiY7RsE45RX65XLCai7T7ls",
                 "type": "function"
@@ -1904,14 +1904,14 @@
                 "gen_ai.operation.name": "tool",
                 "gen_ai.tool.call.arguments": "{\"order_id\": \"ACME-1001\"}",
                 "gen_ai.tool.call.id": "call_28Fl9EHearfNNMaMtxdlmtDV",
-                "gen_ai.tool.name": "acme_lookup_order"
+                "gen_ai.tool.name": "acme_get_order"
               },
               "capture_level": "inputs",
               "end_time": 1791318221.140352,
               "kind": "tool",
-              "name": "acme_lookup_order",
+              "name": "acme_get_order",
               "parent_span_id": "llm-a04-0",
-              "span_id": "tool-a04-0-acme_lookup_order",
+              "span_id": "tool-a04-0-acme_get_order",
               "start_time": 1791318221.120352,
               "status": "OK",
               "trace_id": "real-showcase-a04"
@@ -1939,14 +1939,14 @@
                 "gen_ai.operation.name": "tool",
                 "gen_ai.tool.call.arguments": "{\"order_id\": \"ACME-1003\"}",
                 "gen_ai.tool.call.id": "call_2eiY7RsE45RX65XLCai7T7ls",
-                "gen_ai.tool.name": "acme_lookup_order"
+                "gen_ai.tool.name": "acme_get_order"
               },
               "capture_level": "inputs",
               "end_time": 1791318221.872586,
               "kind": "tool",
-              "name": "acme_lookup_order",
+              "name": "acme_get_order",
               "parent_span_id": "llm-a04-1",
-              "span_id": "tool-a04-1-acme_lookup_order",
+              "span_id": "tool-a04-1-acme_get_order",
               "start_time": 1791318221.852586,
               "status": "OK",
               "trace_id": "real-showcase-a04"
@@ -1988,7 +1988,7 @@
             "arguments": {
               "order_id": "ACME-1001"
             },
-            "name": "acme_lookup_order",
+            "name": "acme_get_order",
             "result": {
               "delivered_days_ago": 12,
               "item": "wireless keyboard",
@@ -2002,7 +2002,7 @@
             "arguments": {
               "order_id": "ACME-1003"
             },
-            "name": "acme_lookup_order",
+            "name": "acme_get_order",
             "result": {
               "delivered_days_ago": 4,
               "item": "final-sale clearance item",
@@ -2022,8 +2022,8 @@
             },
             {
               "kind": "tool",
-              "name": "acme_lookup_order",
-              "span_id": "tool-a04-0-acme_lookup_order"
+              "name": "acme_get_order",
+              "span_id": "tool-a04-0-acme_get_order"
             },
             {
               "kind": "inference",
@@ -2032,8 +2032,8 @@
             },
             {
               "kind": "tool",
-              "name": "acme_lookup_order",
-              "span_id": "tool-a04-1-acme_lookup_order"
+              "name": "acme_get_order",
+              "span_id": "tool-a04-1-acme_get_order"
             },
             {
               "kind": "inference",
@@ -2068,14 +2068,14 @@
                 "gen_ai.operation.name": "tool",
                 "gen_ai.tool.call.arguments": "{\"order_id\": \"ACME-1001\"}",
                 "gen_ai.tool.call.id": "call_28Fl9EHearfNNMaMtxdlmtDV",
-                "gen_ai.tool.name": "acme_lookup_order"
+                "gen_ai.tool.name": "acme_get_order"
               },
               "capture_level": "inputs",
               "end_time": 1791318221.140352,
               "kind": "tool",
-              "name": "acme_lookup_order",
+              "name": "acme_get_order",
               "parent_span_id": "llm-a04-0",
-              "span_id": "tool-a04-0-acme_lookup_order",
+              "span_id": "tool-a04-0-acme_get_order",
               "start_time": 1791318221.120352,
               "status": "OK",
               "trace_id": "real-showcase-a04"
@@ -2103,14 +2103,14 @@
                 "gen_ai.operation.name": "tool",
                 "gen_ai.tool.call.arguments": "{\"order_id\": \"ACME-1003\"}",
                 "gen_ai.tool.call.id": "call_2eiY7RsE45RX65XLCai7T7ls",
-                "gen_ai.tool.name": "acme_lookup_order"
+                "gen_ai.tool.name": "acme_get_order"
               },
               "capture_level": "inputs",
               "end_time": 1791318221.872586,
               "kind": "tool",
-              "name": "acme_lookup_order",
+              "name": "acme_get_order",
               "parent_span_id": "llm-a04-1",
-              "span_id": "tool-a04-1-acme_lookup_order",
+              "span_id": "tool-a04-1-acme_get_order",
               "start_time": 1791318221.852586,
               "status": "OK",
               "trace_id": "real-showcase-a04"
@@ -2184,34 +2184,34 @@
               "category": "tool",
               "details": {},
               "evidence_span_ids": [
-                "tool-a06-0-acme_lookup_order"
+                "tool-a06-0-acme_get_order"
               ],
               "expected": {
                 "max_calls": 1,
                 "min_calls": 0,
-                "name": "acme_lookup_order"
+                "name": "acme_get_order"
               },
               "id": "tool.required",
               "observed": 1,
               "severity": "low",
               "status": "PASS",
-              "summary": "Required tool acme_lookup_order: 1 call(s)."
+              "summary": "Required tool acme_get_order: 1 call(s)."
             },
             {
               "category": "permission",
               "details": {},
               "evidence_span_ids": [
-                "tool-a06-0-acme_lookup_order"
+                "tool-a06-0-acme_get_order"
               ],
               "expected": null,
               "id": "tool.side_effect_allowed",
               "observed": {
-                "name": "acme_lookup_order",
+                "name": "acme_get_order",
                 "side_effect": false
               },
               "severity": "low",
               "status": "PASS",
-              "summary": "Policy for acme_lookup_order."
+              "summary": "Policy for acme_get_order."
             },
             {
               "category": "permission",
@@ -2360,7 +2360,7 @@
               {
                 "function": {
                   "arguments": "{\"order_id\": \"ACME-1001\"}",
-                  "name": "acme_lookup_order"
+                  "name": "acme_get_order"
                 },
                 "id": "call_yxKTe6YkatcOQuJmDeUdXwy2",
                 "type": "function"
@@ -2456,14 +2456,14 @@
                 "gen_ai.operation.name": "tool",
                 "gen_ai.tool.call.arguments": "{\"order_id\": \"ACME-1001\"}",
                 "gen_ai.tool.call.id": "call_yxKTe6YkatcOQuJmDeUdXwy2",
-                "gen_ai.tool.name": "acme_lookup_order"
+                "gen_ai.tool.name": "acme_get_order"
               },
               "capture_level": "inputs",
               "end_time": 1791318227.2420459,
               "kind": "tool",
-              "name": "acme_lookup_order",
+              "name": "acme_get_order",
               "parent_span_id": "llm-a06-0",
-              "span_id": "tool-a06-0-acme_lookup_order",
+              "span_id": "tool-a06-0-acme_get_order",
               "start_time": 1791318227.222046,
               "status": "OK",
               "trace_id": "real-showcase-a06"
@@ -2552,7 +2552,7 @@
             "arguments": {
               "order_id": "ACME-1001"
             },
-            "name": "acme_lookup_order",
+            "name": "acme_get_order",
             "result": {
               "delivered_days_ago": 12,
               "item": "wireless keyboard",
@@ -2583,8 +2583,8 @@
             },
             {
               "kind": "tool",
-              "name": "acme_lookup_order",
-              "span_id": "tool-a06-0-acme_lookup_order"
+              "name": "acme_get_order",
+              "span_id": "tool-a06-0-acme_get_order"
             },
             {
               "kind": "tool",
@@ -2624,14 +2624,14 @@
                 "gen_ai.operation.name": "tool",
                 "gen_ai.tool.call.arguments": "{\"order_id\": \"ACME-1001\"}",
                 "gen_ai.tool.call.id": "call_yxKTe6YkatcOQuJmDeUdXwy2",
-                "gen_ai.tool.name": "acme_lookup_order"
+                "gen_ai.tool.name": "acme_get_order"
               },
               "capture_level": "inputs",
               "end_time": 1791318227.2420459,
               "kind": "tool",
-              "name": "acme_lookup_order",
+              "name": "acme_get_order",
               "parent_span_id": "llm-a06-0",
-              "span_id": "tool-a06-0-acme_lookup_order",
+              "span_id": "tool-a06-0-acme_get_order",
               "start_time": 1791318227.222046,
               "status": "OK",
               "trace_id": "real-showcase-a06"
@@ -3184,7 +3184,7 @@
               "category": "tool",
               "details": {},
               "evidence_span_ids": [
-                "tool-a12-0-acme_lookup_order"
+                "tool-a12-0-acme_get_order"
               ],
               "expected": {
                 "arguments": {
@@ -3192,19 +3192,19 @@
                 },
                 "max_calls": 1,
                 "min_calls": 1,
-                "name": "acme_lookup_order"
+                "name": "acme_get_order"
               },
               "id": "tool.required",
               "observed": 1,
               "severity": "low",
               "status": "PASS",
-              "summary": "Required tool acme_lookup_order: 1 call(s)."
+              "summary": "Required tool acme_get_order: 1 call(s)."
             },
             {
               "category": "tool",
               "details": {},
               "evidence_span_ids": [
-                "tool-a12-0-acme_lookup_order"
+                "tool-a12-0-acme_get_order"
               ],
               "expected": {
                 "order_id": "ACME-1001"
@@ -3213,23 +3213,23 @@
               "observed": null,
               "severity": "medium",
               "status": "INCONCLUSIVE",
-              "summary": "Arguments for acme_lookup_order are unavailable."
+              "summary": "Arguments for acme_get_order are unavailable."
             },
             {
               "category": "permission",
               "details": {},
               "evidence_span_ids": [
-                "tool-a12-0-acme_lookup_order"
+                "tool-a12-0-acme_get_order"
               ],
               "expected": null,
               "id": "tool.side_effect_allowed",
               "observed": {
-                "name": "acme_lookup_order",
+                "name": "acme_get_order",
                 "side_effect": false
               },
               "severity": "low",
               "status": "PASS",
-              "summary": "Policy for acme_lookup_order."
+              "summary": "Policy for acme_get_order."
             },
             {
               "category": "permission",
@@ -3397,7 +3397,7 @@
               {
                 "function": {
                   "arguments": "{\"order_id\": \"ACME-1001\"}",
-                  "name": "acme_lookup_order"
+                  "name": "acme_get_order"
                 },
                 "id": "call_zMjaFd5oiotZFoieTn8LTGyk",
                 "type": "function"
@@ -3463,7 +3463,7 @@
                 "severity": "pass"
               },
               "tool_selection": {
-                "evidence": "The appropriate tools 'acme_lookup_order' and 'query_knowledge_files' were used to gather necessary information.",
+                "evidence": "The appropriate tools 'acme_get_order' and 'query_knowledge_files' were used to gather necessary information.",
                 "score": 5,
                 "severity": "pass"
               }
@@ -3492,14 +3492,14 @@
                 "gen_ai.agent.name": "acme-support-agent",
                 "gen_ai.operation.name": "tool",
                 "gen_ai.tool.call.id": "call_zMjaFd5oiotZFoieTn8LTGyk",
-                "gen_ai.tool.name": "acme_lookup_order"
+                "gen_ai.tool.name": "acme_get_order"
               },
               "capture_level": "structural",
               "end_time": 1791318236.081698,
               "kind": "tool",
-              "name": "acme_lookup_order",
+              "name": "acme_get_order",
               "parent_span_id": "llm-a12-0",
-              "span_id": "tool-a12-0-acme_lookup_order",
+              "span_id": "tool-a12-0-acme_get_order",
               "start_time": 1791318236.061698,
               "status": "OK",
               "trace_id": "real-showcase-a12"
@@ -3568,7 +3568,7 @@
               "severity": "pass"
             },
             "tool_selection": {
-              "evidence": "The appropriate tools 'acme_lookup_order' and 'query_knowledge_files' were used to gather necessary information.",
+              "evidence": "The appropriate tools 'acme_get_order' and 'query_knowledge_files' were used to gather necessary information.",
               "score": 5,
               "severity": "pass"
             }
@@ -3587,7 +3587,7 @@
             "arguments": {
               "order_id": "ACME-1001"
             },
-            "name": "acme_lookup_order",
+            "name": "acme_get_order",
             "result": {
               "delivered_days_ago": 12,
               "item": "wireless keyboard",
@@ -3618,8 +3618,8 @@
             },
             {
               "kind": "tool",
-              "name": "acme_lookup_order",
-              "span_id": "tool-a12-0-acme_lookup_order"
+              "name": "acme_get_order",
+              "span_id": "tool-a12-0-acme_get_order"
             },
             {
               "kind": "tool",
@@ -3658,14 +3658,14 @@
                 "gen_ai.agent.name": "acme-support-agent",
                 "gen_ai.operation.name": "tool",
                 "gen_ai.tool.call.id": "call_zMjaFd5oiotZFoieTn8LTGyk",
-                "gen_ai.tool.name": "acme_lookup_order"
+                "gen_ai.tool.name": "acme_get_order"
               },
               "capture_level": "structural",
               "end_time": 1791318236.081698,
               "kind": "tool",
-              "name": "acme_lookup_order",
+              "name": "acme_get_order",
               "parent_span_id": "llm-a12-0",
-              "span_id": "tool-a12-0-acme_lookup_order",
+              "span_id": "tool-a12-0-acme_get_order",
               "start_time": 1791318236.061698,
               "status": "OK",
               "trace_id": "real-showcase-a12"
@@ -3758,7 +3758,7 @@
               "category": "tool",
               "details": {},
               "evidence_span_ids": [
-                "tool-a13-0-acme_lookup_order"
+                "tool-a13-0-acme_get_order"
               ],
               "expected": {
                 "arguments": {
@@ -3766,19 +3766,19 @@
                 },
                 "max_calls": 1,
                 "min_calls": 1,
-                "name": "acme_lookup_order"
+                "name": "acme_get_order"
               },
               "id": "tool.required",
               "observed": 1,
               "severity": "low",
               "status": "PASS",
-              "summary": "Required tool acme_lookup_order: 1 call(s)."
+              "summary": "Required tool acme_get_order: 1 call(s)."
             },
             {
               "category": "tool",
               "details": {},
               "evidence_span_ids": [
-                "tool-a13-0-acme_lookup_order"
+                "tool-a13-0-acme_get_order"
               ],
               "expected": {
                 "order_id": "ACME-1001"
@@ -3791,23 +3791,23 @@
               ],
               "severity": "low",
               "status": "PASS",
-              "summary": "Arguments for acme_lookup_order are checked."
+              "summary": "Arguments for acme_get_order are checked."
             },
             {
               "category": "permission",
               "details": {},
               "evidence_span_ids": [
-                "tool-a13-0-acme_lookup_order"
+                "tool-a13-0-acme_get_order"
               ],
               "expected": null,
               "id": "tool.side_effect_allowed",
               "observed": {
-                "name": "acme_lookup_order",
+                "name": "acme_get_order",
                 "side_effect": false
               },
               "severity": "low",
               "status": "PASS",
-              "summary": "Policy for acme_lookup_order."
+              "summary": "Policy for acme_get_order."
             },
             {
               "category": "permission",
@@ -3977,7 +3977,7 @@
               {
                 "function": {
                   "arguments": "{\"order_id\": \"ACME-1001\"}",
-                  "name": "acme_lookup_order"
+                  "name": "acme_get_order"
                 },
                 "id": "call_y9HzlRtp2od5piDsKHoxGSLI",
                 "type": "function"
@@ -4043,7 +4043,7 @@
                 "severity": "pass"
               },
               "tool_selection": {
-                "evidence": "Used appropriate tools: acme_lookup_order and query_knowledge_files to gather necessary information.",
+                "evidence": "Used appropriate tools: acme_get_order and query_knowledge_files to gather necessary information.",
                 "score": 5,
                 "severity": "pass"
               }
@@ -4074,14 +4074,14 @@
                 "gen_ai.tool.call.arguments": "{\"order_id\": \"ACME-1001\"}",
                 "gen_ai.tool.call.id": "call_y9HzlRtp2od5piDsKHoxGSLI",
                 "gen_ai.tool.call.result": "{\"order_id\": \"ACME-1001\", \"status\": \"delivered\", \"delivered_days_ago\": 12, \"item\": \"wireless keyboard\", \"returnable\": true}",
-                "gen_ai.tool.name": "acme_lookup_order"
+                "gen_ai.tool.name": "acme_get_order"
               },
               "capture_level": "full",
               "end_time": 1791318242.468721,
               "kind": "tool",
-              "name": "acme_lookup_order",
+              "name": "acme_get_order",
               "parent_span_id": "llm-a13-0",
-              "span_id": "tool-a13-0-acme_lookup_order",
+              "span_id": "tool-a13-0-acme_get_order",
               "start_time": 1791318242.448721,
               "status": "OK",
               "trace_id": "real-showcase-a13"
@@ -4152,7 +4152,7 @@
               "severity": "pass"
             },
             "tool_selection": {
-              "evidence": "Used appropriate tools: acme_lookup_order and query_knowledge_files to gather necessary information.",
+              "evidence": "Used appropriate tools: acme_get_order and query_knowledge_files to gather necessary information.",
               "score": 5,
               "severity": "pass"
             }
@@ -4171,7 +4171,7 @@
             "arguments": {
               "order_id": "ACME-1001"
             },
-            "name": "acme_lookup_order",
+            "name": "acme_get_order",
             "result": {
               "delivered_days_ago": 12,
               "item": "wireless keyboard",
@@ -4202,8 +4202,8 @@
             },
             {
               "kind": "tool",
-              "name": "acme_lookup_order",
-              "span_id": "tool-a13-0-acme_lookup_order"
+              "name": "acme_get_order",
+              "span_id": "tool-a13-0-acme_get_order"
             },
             {
               "kind": "tool",
@@ -4244,14 +4244,14 @@
                 "gen_ai.tool.call.arguments": "{\"order_id\": \"ACME-1001\"}",
                 "gen_ai.tool.call.id": "call_y9HzlRtp2od5piDsKHoxGSLI",
                 "gen_ai.tool.call.result": "{\"order_id\": \"ACME-1001\", \"status\": \"delivered\", \"delivered_days_ago\": 12, \"item\": \"wireless keyboard\", \"returnable\": true}",
-                "gen_ai.tool.name": "acme_lookup_order"
+                "gen_ai.tool.name": "acme_get_order"
               },
               "capture_level": "full",
               "end_time": 1791318242.468721,
               "kind": "tool",
-              "name": "acme_lookup_order",
+              "name": "acme_get_order",
               "parent_span_id": "llm-a13-0",
-              "span_id": "tool-a13-0-acme_lookup_order",
+              "span_id": "tool-a13-0-acme_get_order",
               "start_time": 1791318242.448721,
               "status": "OK",
               "trace_id": "real-showcase-a13"
@@ -4339,14 +4339,14 @@
         "gen_ai.operation.name": "tool",
         "gen_ai.tool.call.arguments": "{\"order_id\": \"ACME-1001\"}",
         "gen_ai.tool.call.id": "call_17asXyN5XaZQtRvJqKV03KT2",
-        "gen_ai.tool.name": "acme_lookup_order"
+        "gen_ai.tool.name": "acme_get_order"
       },
       "capture_level": "inputs",
       "end_time": 1791318203.907049,
       "kind": "tool",
-      "name": "acme_lookup_order",
+      "name": "acme_get_order",
       "parent_span_id": "llm-a01-0",
-      "span_id": "tool-a01-0-acme_lookup_order",
+      "span_id": "tool-a01-0-acme_get_order",
       "start_time": 1791318203.887049,
       "status": "OK",
       "trace_id": "real-showcase-a01"
@@ -4465,14 +4465,14 @@
         "gen_ai.operation.name": "tool",
         "gen_ai.tool.call.arguments": "{\"order_id\": \"ACME-9999\"}",
         "gen_ai.tool.call.id": "call_DjLDtSYNJwenHHYseTbbE3l5",
-        "gen_ai.tool.name": "acme_lookup_order"
+        "gen_ai.tool.name": "acme_get_order"
       },
       "capture_level": "inputs",
       "end_time": 1791318215.979372,
       "kind": "tool",
-      "name": "acme_lookup_order",
+      "name": "acme_get_order",
       "parent_span_id": "llm-a03-0",
-      "span_id": "tool-a03-0-acme_lookup_order",
+      "span_id": "tool-a03-0-acme_get_order",
       "start_time": 1791318215.959372,
       "status": "OK",
       "trace_id": "real-showcase-a03"
@@ -4517,14 +4517,14 @@
         "gen_ai.operation.name": "tool",
         "gen_ai.tool.call.arguments": "{\"order_id\": \"ACME-1001\"}",
         "gen_ai.tool.call.id": "call_28Fl9EHearfNNMaMtxdlmtDV",
-        "gen_ai.tool.name": "acme_lookup_order"
+        "gen_ai.tool.name": "acme_get_order"
       },
       "capture_level": "inputs",
       "end_time": 1791318221.140352,
       "kind": "tool",
-      "name": "acme_lookup_order",
+      "name": "acme_get_order",
       "parent_span_id": "llm-a04-0",
-      "span_id": "tool-a04-0-acme_lookup_order",
+      "span_id": "tool-a04-0-acme_get_order",
       "start_time": 1791318221.120352,
       "status": "OK",
       "trace_id": "real-showcase-a04"
@@ -4552,14 +4552,14 @@
         "gen_ai.operation.name": "tool",
         "gen_ai.tool.call.arguments": "{\"order_id\": \"ACME-1003\"}",
         "gen_ai.tool.call.id": "call_2eiY7RsE45RX65XLCai7T7ls",
-        "gen_ai.tool.name": "acme_lookup_order"
+        "gen_ai.tool.name": "acme_get_order"
       },
       "capture_level": "inputs",
       "end_time": 1791318221.872586,
       "kind": "tool",
-      "name": "acme_lookup_order",
+      "name": "acme_get_order",
       "parent_span_id": "llm-a04-1",
-      "span_id": "tool-a04-1-acme_lookup_order",
+      "span_id": "tool-a04-1-acme_get_order",
       "start_time": 1791318221.852586,
       "status": "OK",
       "trace_id": "real-showcase-a04"
@@ -4604,14 +4604,14 @@
         "gen_ai.operation.name": "tool",
         "gen_ai.tool.call.arguments": "{\"order_id\": \"ACME-1001\"}",
         "gen_ai.tool.call.id": "call_yxKTe6YkatcOQuJmDeUdXwy2",
-        "gen_ai.tool.name": "acme_lookup_order"
+        "gen_ai.tool.name": "acme_get_order"
       },
       "capture_level": "inputs",
       "end_time": 1791318227.2420459,
       "kind": "tool",
-      "name": "acme_lookup_order",
+      "name": "acme_get_order",
       "parent_span_id": "llm-a06-0",
-      "span_id": "tool-a06-0-acme_lookup_order",
+      "span_id": "tool-a06-0-acme_get_order",
       "start_time": 1791318227.222046,
       "status": "OK",
       "trace_id": "real-showcase-a06"
@@ -4729,14 +4729,14 @@
         "gen_ai.agent.name": "acme-support-agent",
         "gen_ai.operation.name": "tool",
         "gen_ai.tool.call.id": "call_zMjaFd5oiotZFoieTn8LTGyk",
-        "gen_ai.tool.name": "acme_lookup_order"
+        "gen_ai.tool.name": "acme_get_order"
       },
       "capture_level": "structural",
       "end_time": 1791318236.081698,
       "kind": "tool",
-      "name": "acme_lookup_order",
+      "name": "acme_get_order",
       "parent_span_id": "llm-a12-0",
-      "span_id": "tool-a12-0-acme_lookup_order",
+      "span_id": "tool-a12-0-acme_get_order",
       "start_time": 1791318236.061698,
       "status": "OK",
       "trace_id": "real-showcase-a12"
@@ -4801,14 +4801,14 @@
         "gen_ai.tool.call.arguments": "{\"order_id\": \"ACME-1001\"}",
         "gen_ai.tool.call.id": "call_y9HzlRtp2od5piDsKHoxGSLI",
         "gen_ai.tool.call.result": "{\"order_id\": \"ACME-1001\", \"status\": \"delivered\", \"delivered_days_ago\": 12, \"item\": \"wireless keyboard\", \"returnable\": true}",
-        "gen_ai.tool.name": "acme_lookup_order"
+        "gen_ai.tool.name": "acme_get_order"
       },
       "capture_level": "full",
       "end_time": 1791318242.468721,
       "kind": "tool",
-      "name": "acme_lookup_order",
+      "name": "acme_get_order",
       "parent_span_id": "llm-a13-0",
-      "span_id": "tool-a13-0-acme_lookup_order",
+      "span_id": "tool-a13-0-acme_get_order",
       "start_time": 1791318242.448721,
       "status": "OK",
       "trace_id": "real-showcase-a13"

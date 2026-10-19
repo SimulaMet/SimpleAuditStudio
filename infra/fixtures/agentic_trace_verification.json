@@ -45,13 +45,13 @@
           "trace_id": "trace-multi-agent-001",
           "span_id": "span-tool",
           "parent_span_id": "span-specialist",
-          "name": "acme_lookup_order",
+          "name": "acme_get_order",
           "start_time": 1.06,
           "end_time": 1.08,
           "attributes": {
             "gen_ai.operation.name": "execute_tool",
             "gen_ai.agent.name": "refund-specialist",
-            "gen_ai.tool.name": "acme_lookup_order"
+            "gen_ai.tool.name": "acme_get_order"
           }
         }
       ]

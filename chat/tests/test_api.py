@@ -288,7 +288,10 @@ class ChatAPITests(TestCase):
 
     def test_knowledge_base_lists_file_names(self):
         base = self._api(username="reader2").knowledge_base("kb1")
-        self.assertEqual(base["files"], [{"id": "f1", "name": "handbook.pdf"}])
+        self.assertEqual(
+            base["files"],
+            [{"id": "f1", "name": "handbook.pdf", "hash": None}],
+        )
 
     def test_list_models_returns_the_registered_ids(self):
         self.assertEqual(

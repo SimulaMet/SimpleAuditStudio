@@ -112,7 +112,7 @@ class TraceCardViewTest(TestCase):
             _span(
                 "t1", "lookup", "TOOL", 50.0,
                 **{
-                    "gen_ai.tool.name": "acme_lookup_order",
+                    "gen_ai.tool.name": "acme_get_order",
                     "gen_ai.tool.call.arguments": '{"order_id": "ACME-1001"}',
                     "gen_ai.tool.call.result": '{"status": "shipped"}',
                 },

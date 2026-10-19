@@ -105,6 +105,29 @@ Against a real Caddy + this image + a mock OpenAI endpoint, in a real browser:
 - `src/routes/+layout.svelte` + ~111 more — `goto`/`href`/`location.href` → `${base}/...`;
   socket.io subpath goes on `path`, never the namespace arg
 
+**Known fork defect (v0.12.0), fixed at the source:** the port shipped 12 base-prefixings
+where `${base}` renders as LITERAL text — navigation calls written as *quoted* JS strings
+(`goto("${base}/workspace/tools")`) instead of template literals. The visible symptom is
+"Back" from a KB / tool / prompt / skill / model / functions / automations detail page
+navigating to `/chat/workspace/<section>/$%7Bbase%7D/workspace/<section>` ("Not found").
+
+This is **not** repairable at the Caddy front door: this Caddy build treats a bare `$` in a
+`path` matcher as a placeholder, and `path_regexp` is non-functional in v2.11.7 (verified:
+even `path_regexp foo` never matches). The fix is to patch the installed frontend bundle so
+the 12 quoted `"${base}/…"` args become template literals `` `${base}/…` ``. They live under
+`open_webui/frontend/_app/immutable/{nodes,chunks}/*.js` (10 files). A helper does it:
+
+```bash
+uv run python scripts/patch_owui_base.py          # patch in place (idempotent)
+uv run python scripts/patch_owui_base.py --check   # report only, no writes
+```
+
+Static files, so no OWUI restart is needed — but **re-running Studio's dev server re-extracts
+the wheel and wipes the patch**, so re-run the script after a full restart (or rebuild the fork
+image with real `${base}` interpolation, which removes the need entirely). When re-porting to a
+newer SHA, grep the regenerated patch for `["']\$\{base\}/` (quoted, not backticked) to check
+whether the defect persists.
+
 ## Upgrading (when you bump `SHA`)
 
 ```bash

@@ -375,15 +375,26 @@ def _ensure_agent_model_reference(agent, user) -> None:
 
     model = (
         RegisteredModel.objects.select_related("connection")
-        .filter(project=agent.project, model_id=agent.external_id)
+        .filter(project=agent.project, connection__name="Open WebUI Agents")
+        .order_by("id")
         .first()
     )
     if model is not None:
-        if model.display_name != agent.name or not model.enabled:
+        updated = []
+        if model.display_name != agent.name:
             model.display_name = agent.name
-            model.description = agent.description or "Synced Studio agent in OpenWebUI."
-            model.enabled = agent.enabled
-            model.save(update_fields=["display_name", "description", "enabled", "updated_at"])
+            updated.append("display_name")
+        if not model.enabled and agent.enabled:
+            model.enabled = True
+            updated.append("enabled")
+        # The managed reference's model_id must match the agent's external_id
+        # so that agent_target_model() can find it. Re-point when stale.
+        if (agent.external_id and model.model_id != agent.external_id
+                and model.connection.name == "Open WebUI Agents"):
+            model.model_id = agent.external_id
+            updated.append("model_id")
+        if updated:
+            model.save(update_fields=updated + ["updated_at"])
         return
 
     connection, _ = ModelConnection.objects.get_or_create(

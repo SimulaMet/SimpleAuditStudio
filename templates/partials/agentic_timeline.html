@@ -1,0 +1,78 @@
+{% comment %}
+Full-width, chronological agent trajectory timeline for one repetition.
+Context: rep (see infra.ui._rep_view). Renders only when rep.agentic_timeline
+is present; every row anchor is unique even for repeated span ids
+(suffixes -2, -3, …), and finding/judge jump links resolve through them.
+The "Focus" button toggles a wide mode that pushes the app chrome aside.
+{% endcomment %}
+{% if rep.agentic_timeline %}
+<div class="bg-surface-raised rounded-xl border border-violet-900/40 p-4 agentic-focusable">
+  <div class="flex flex-wrap items-center justify-between gap-2 mb-3">
+    <div class="min-w-0">
+      <h3 class="text-sm font-semibold text-violet-300">Trajectory timeline</h3>
+      <p class="text-xs text-gray-500">{{ rep.agentic_timeline.total }} step{{ rep.agentic_timeline.total|pluralize }}, in execution order · click a step for its arguments and result</p>
+    </div>
+    <button type="button" data-tl-focus
+            class="tl-focus-btn px-3 py-1.5 rounded-lg bg-surface-overlay text-gray-400 text-xs font-medium hover:text-accent transition-colors"
+            title="Expand the timeline to full viewport width">⤢ Focus</button>
+  </div>
+  <ol class="agentic-timeline relative space-y-0">
+    {% for s in rep.agentic_timeline.rows %}
+    <li id="trace-span-{{ rep.index }}-{{ s.anchor }}" data-anchor="{{ s.anchor }}" class="agentic-tl-row group relative flex gap-3 pb-4 scroll-mt-20 last:pb-0">
+      <!-- Vertical connector line + node icon -->
+      <div class="flex flex-col items-center shrink-0 w-8 pt-1">
+        <span class="w-7 h-7 rounded-full bg-surface-overlay border border-gray-700 flex items-center justify-center text-sm" title="{{ s.kind }}">{{ s.icon }}</span>
+        {% if not forloop.last %}<span class="w-px flex-1 bg-gray-700/60 mt-1"></span>{% endif %}
+      </div>
+      <details class="agentic-tl-card min-w-0 flex-1 rounded-lg border border-gray-800/70 bg-surface-overlay/40 group-open:border-violet-800/50">
+        <summary class="cursor-pointer select-none flex flex-wrap items-center gap-x-2 gap-y-1 px-3 py-2">
+          <span class="shrink-0 px-1.5 py-0.5 rounded bg-surface-overlay/60 border border-gray-800 text-[10px] uppercase tracking-wide {{ s.tone }}" title="{{ s.kind }}">{{ s.kind|default:"STEP" }}</span>
+          <span class="min-w-0 truncate text-sm text-gray-200" title="{{ s.name }}">{{ s.name }}</span>
+          {% if s.tool_name %}<span class="min-w-0 truncate text-xs text-gray-500" title="{{ s.tool_name }}">· {{ s.tool_name }}</span>{% endif %}
+          {% if s.kb_sources %}
+          <span class="min-w-0 text-xs text-emerald-300/90" title="Knowledge sources observed on this retrieval step">📚 {{ s.kb_sources|join:", " }}</span>
+          {% endif %}
+          <span class="ml-auto shrink-0 flex items-center gap-2 text-[11px] text-gray-500 tabular-nums">
+            {% if s.offset_ms is not None %}<span title="ms after the first captured step">+{{ s.offset_ms }} ms</span>{% endif %}
+            {% if s.duration_ms > 0 %}<span>{{ s.duration_ms }} ms</span>{% endif %}
+          </span>
+        </summary>
+        <div class="space-y-2 border-t border-gray-800/70 px-3 py-2.5">
+          {% if s.content_blocks %}
+          {% for label, value in s.content_blocks %}
+          <div class="min-w-0">
+            <p class="mb-1 text-[10px] uppercase tracking-wide text-gray-500">{{ label }}</p>
+            <pre class="agentic-tl-excerpt max-h-52 overflow-auto whitespace-pre-wrap break-words rounded bg-surface p-2 text-[11px] text-gray-300">{{ value }}</pre>
+          </div>
+          {% endfor %}
+          {% else %}
+          <p class="text-xs text-gray-500">No tool arguments or result were captured for this step.</p>
+          {% endif %}
+          <details class="min-w-0">
+            <summary class="cursor-pointer select-none text-[10px] uppercase tracking-wide text-gray-500 hover:text-gray-300">Raw span JSON</summary>
+            <pre class="mt-1 max-h-64 overflow-auto whitespace-pre-wrap break-words rounded bg-surface p-2 text-[11px] text-gray-400">{{ s.raw_json }}</pre>
+          </details>
+        </div>
+      </details>
+    </li>
+    {% endfor %}
+  </ol>
+  <script>
+  // Focus mode: push the app chrome aside so the timeline owns the viewport.
+  (function() {
+    var btn = document.querySelector('[data-tl-focus][data-rep="{{ rep.index }}"]');
+    if (!btn) {
+      var all = document.querySelectorAll('.tl-focus-btn');
+      btn = all.length === 1 ? all[0] : null;
+    }
+    if (!btn || btn.__bound) return;
+    btn.__bound = true;
+    btn.addEventListener('click', function() {
+      var on = document.documentElement.classList.toggle('agentic-focus-mode');
+      btn.textContent = on ? '✕ Exit focus' : '⤢ Focus';
+      btn.setAttribute('aria-pressed', String(on));
+    });
+  })();
+  </script>
+</div>
+{% endif %}

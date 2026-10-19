@@ -41,6 +41,7 @@ def _version_form(name: str, description: str, version: JudgeVersion) -> dict:
         "dimensions": "\n".join(version.options.get("dimensions", [])),
         "question": version.options.get("question", ""),
         "pass_when": "yes" if version.options.get("pass_when", True) else "no",
+        "agentic_guidance": version.options.get("agentic_guidance", ""),
     }
 
 
@@ -69,12 +70,19 @@ def _diff_entry(version: JudgeVersion) -> dict:
 
 def _spec_fields(form: dict) -> dict:
     """``make_spec`` arguments from the judge form."""
+    options = {
+        "dimensions": form.get("dimensions", ""),
+        "question": form.get("question", ""),
+        "pass_when": form.get("pass_when", "yes") == "yes",
+    }
+    guidance = (form.get("agentic_guidance") or "").strip()
+    if guidance:
+        options["agentic_guidance"] = guidance
     return {
         **parse_start(form.get("start", "")),
         "criteria": form.get("criteria", ""),
         "probe_prompt": form.get("probe_prompt", ""),
-        "options": {"dimensions": form.get("dimensions", ""), "question": form.get("question", ""),
-                    "pass_when": form.get("pass_when", "yes") == "yes"},
+        "options": options,
     }
 
 
@@ -260,7 +268,8 @@ class JudgeDetailView(ProjectMixin, TemplateView):
 
 class JudgePreviewView(ProjectMixin, TemplateView):
     """POST the judge form, get back the full judge prompt it would grade with
-    (the live preview on the judge page)."""
+    (the live preview on the judge page). Also returns the agentic variant
+    showing what the judge sees when deterministic checks are present."""
 
     def post(self, request):
         form = {k: request.POST.get(k, "") for k in ("start", *_SPEC_FIELDS)}
@@ -268,4 +277,20 @@ class JudgePreviewView(ProjectMixin, TemplateView):
             info = resolve(make_spec(**_spec_fields(form)))
         except ValueError as e:
             return JsonResponse({"error": str(e)})
-        return JsonResponse({"judge_prompt": info["judge_prompt"], "format_prompt": info["format_prompt"]})
+        # Build the agentic variant: base prompt + structural template showing
+        # where the agentic evidence block would be inserted at runtime.
+        from audits.agentic.unified_judge import build_unified_judge_prompt
+        template_agentic = (
+            "AGENTIC EVALUATION (observed execution facts):\n\n"
+            "Deterministic checks:\n"
+            "  [<status>] <check_id> — <evidence summary>\n"
+            "  ...\n\n"
+            "Semantic dimensions:\n"
+            "  <criterion>: <status> — <rationale>"
+        )
+        agentic_prompt = build_unified_judge_prompt(info, template_agentic)
+        return JsonResponse({
+            "judge_prompt": info["judge_prompt"],
+            "format_prompt": info["format_prompt"],
+            "agentic_prompt": agentic_prompt,
+        })

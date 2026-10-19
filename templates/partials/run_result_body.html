@@ -1,4 +1,5 @@
 
+{% load json_filters %}
 <div class="mb-4 no-print">
   <a href="{% url 'run_detail' run.id %}" class="text-xs text-gray-500 hover:text-accent">← Back to {{ run.name }} (Run #{{ run.id }})</a>
 </div>
@@ -24,6 +25,7 @@
 <details open class="bg-surface-raised rounded-xl border border-gray-800 p-4 mb-4 group">
   <summary class="text-sm font-semibold text-gray-300 cursor-pointer select-none flex items-center gap-2">
     <span class="text-gray-500 group-open:rotate-90 transition-transform">▸</span> Scenario
+    {% if scenario_set_id and scenario_id %}<a href="{% url 'scenarios' %}?set={{ scenario_set_id }}&scenario={{ scenario_id }}" target="_blank" class="ml-auto text-xs text-gray-500 hover:text-accent" onclick="event.stopPropagation()" title="Open this scenario in a new tab">→ View</a>{% endif %}
   </summary>
   <div class="mt-3 space-y-3 text-sm">
     {% if scenario_description %}<p class="text-gray-300 whitespace-pre-wrap">{{ scenario_description }}</p>{% endif %}
@@ -38,6 +40,35 @@
       <p class="text-xs text-gray-500 uppercase tracking-wide mb-1">Test prompt</p>
       <p class="text-gray-300 whitespace-pre-wrap">{{ test_prompt }}</p>
     </div>
+    {% endif %}
+    <details class="group">
+      <summary class="text-xs text-gray-500 cursor-pointer select-none hover:text-gray-400">Advanced options</summary>
+      <div class="mt-1 space-y-1 pl-3 border-l border-gray-800 text-xs">
+        <div>
+          <span class="text-gray-500">Severity ceiling:</span>
+          {% if scenario_severity_ceiling %}
+          <span class="ml-1 px-1.5 py-0.5 rounded bg-surface-raised text-gray-300 text-[11px]">{{ scenario_severity_ceiling }}</span>
+          {% else %}
+          <span class="ml-1 text-gray-600">none (judge decides)</span>
+          {% endif %}
+        </div>
+        <div>
+          <span class="text-gray-500">Documents (RAG context):</span>
+          <span class="ml-1 font-mono text-[11px] {% if scenario_documents %}text-gray-300{% else %}text-gray-600{% endif %}">{% if scenario_documents %}{{ scenario_documents|jsonify_compact }}{% else %}none{% endif %}</span>
+        </div>
+        <div>
+          <span class="text-gray-500">File URI (vision input):</span>
+          <span class="ml-1 font-mono text-[11px] {% if scenario_file_uri %}text-gray-300{% else %}text-gray-600{% endif %}">{% if scenario_file_uri %}{{ scenario_file_uri }}{% else %}none{% endif %}</span>
+        </div>
+      </div>
+    </details>
+    {% if scenario_agentic %}
+    <details class="group" open>
+      <summary class="text-xs text-gray-500 cursor-pointer select-none hover:text-gray-400">Agentic controls</summary>
+      <div class="mt-2">
+        {% include "partials/agentic_controls_readonly.html" with agentic=scenario_agentic %}
+      </div>
+    </details>
     {% endif %}
   </div>
 </details>
@@ -123,7 +154,7 @@
 {% if raw_json %}
 <div class="bg-surface-raised rounded-xl border border-gray-800 p-4 mt-4">
   <details>
-    <summary class="text-sm font-semibold text-gray-400 cursor-pointer hover:text-gray-200 transition-colors">Raw JSON</summary>
+    <summary class="text-sm font-semibold text-gray-400 cursor-pointer hover:text-gray-200 transition-colors">Full result (raw JSON)</summary>
     <pre class="mt-3 text-xs text-gray-400 font-mono overflow-x-auto max-h-96 overflow-y-auto bg-surface-overlay rounded-lg p-3">{{ raw_json }}</pre>
   </details>
 </div>

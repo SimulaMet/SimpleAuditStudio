@@ -138,10 +138,10 @@ class AgentModelTest(TestCase):
         agent.tools.add(tool)
 
         snapshot = agent.config_snapshot(
-            tool_invocation_names={"acme_order_lookup": ["acme_lookup_order"]}
+            tool_invocation_names={"acme_order_lookup": ["acme_get_order"]}
         )
 
-        self.assertEqual(snapshot["tools"][0]["invocation_names"], ["acme_lookup_order"])
+        self.assertEqual(snapshot["tools"][0]["invocation_names"], ["acme_get_order"])
 
     def test_snapshot_has_default_retrieval_settings(self):
         agent = AgentFactory()
