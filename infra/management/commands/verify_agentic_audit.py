@@ -119,13 +119,14 @@ def _content_capture_check() -> tuple[str, bool, str]:
     }
     structural = sanitize_span(span, "structural")
     attrs = structural.get("attributes", {})
+    # Default structural keeps the tool content the checks read.
     valid = (
-        "gen_ai.tool.call.arguments" not in attrs
-        and "gen_ai.tool.call.result" not in attrs
+        attrs.get("gen_ai.tool.call.arguments") == '{"order_id":"ACME-1001"}'
+        and attrs.get("gen_ai.tool.call.result") == "private result"
         and structural.get("trace_id") == "t"
         and structural.get("span_id") == "s"
     )
-    return "content-off-structural-path", valid, "content fields survived or structural identity was lost"
+    return "structural-capture-path", valid, "tool content or structural identity was lost"
 
 
 def _unknown_span_check() -> tuple[str, str, str]:

@@ -250,9 +250,18 @@ requirements files.
 Compose and development modes leave it off unless explicitly enabled. The
 embedded `uvx simpleaudit-studio` launcher enables structural tracing by default
 so future Agent audits can show operation names, timing, and other non-content
-attributes; set `SIMPLEAUDIT_CHAT_OTLP=false` to opt out. Prompt, output, tool
-argument/result, and retrieved-document content capture remains opt-in and is
-not enabled by this default. When enabled, the demo uses the Studio listener's
+attributes; set `SIMPLEAUDIT_CHAT_OTLP=false` to opt out. Capture levels are per OTLP
+credential; the default is `structural`. API keys and secret-looking tokens are
+redacted at every level. What each level keeps:
+
+| Content | `structural` (default) | `inputs` | `full` |
+|---|---|---|---|
+| Span identity, timing, status, kind | yes | yes | yes |
+| Tool arguments and results | yes | yes | yes |
+| Retrieval sources and documents | yes | yes | yes |
+| Prompts and input messages | yes | yes | yes |
+| Completions and output messages | yes | no | yes |
+| Span events and raw result/output fields | no | no | yes | When enabled, the demo uses the Studio listener's
 `none` credential unless a basic/bearer credential is configured. The exporter
 is the standard OTel one, so the environment variables are the standard ones,
 with two Open WebUI specifics:

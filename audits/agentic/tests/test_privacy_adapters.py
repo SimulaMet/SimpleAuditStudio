@@ -29,8 +29,9 @@ def test_capture_levels_are_additive_and_redact_before_persistence_or_judge():
     inputs = apply_content_capture_level([_span()], "inputs")[0]
     full = serialize_for_judge([_span()], "full")[0]
 
-    assert "gen_ai.tool.call.arguments" not in structural["attributes"]
-    assert "gen_ai.tool.call.arguments" in inputs["attributes"]
+    # Default structural keeps the tool arguments and results the checks read.
+    assert "gen_ai.tool.call.arguments" in structural["attributes"]
+    assert "gen_ai.tool.call.result" in structural["attributes"]
     assert "gen_ai.tool.call.result" in full["attributes"]
     encoded = json.dumps([structural, inputs, full])
     assert SECRET not in encoded
@@ -92,3 +93,33 @@ def test_openwebui_adapter_leaves_non_order_tools_without_scope():
     }
     trajectory = normalize_openwebui([span])
     assert trajectory.steps[0].attributes.get("data_scope") is None
+
+
+def test_default_keeps_necessary_content_and_inputs_drops_model_output():
+    span = {
+        "trace_id": "t", "span_id": "s", "name": "chat", "kind": "LLM",
+        "attributes": {
+            "gen_ai.prompt": "user prompt",
+            "gen_ai.completion": "model completion",
+            "llm.output_messages.0.message.content": "model text",
+            "gen_ai.tool.call.arguments": '{"order_id": "ACME-1001"}',
+            "gen_ai.tool.call.result": '{"status": "Delivered"}',
+        },
+        "events": [{"name": "debug"}],
+    }
+    structural = apply_content_capture_level([span], "structural")[0]
+    attrs = structural["attributes"]
+    assert attrs["gen_ai.prompt"] == "user prompt"
+    assert attrs["gen_ai.completion"] == "model completion"
+    assert attrs["gen_ai.tool.call.arguments"] == '{"order_id": "ACME-1001"}'
+    assert attrs["gen_ai.tool.call.result"] == '{"status": "Delivered"}'
+    assert "events" not in structural
+
+    inputs = apply_content_capture_level([span], "inputs")[0]["attributes"]
+    assert inputs["gen_ai.prompt"] == "user prompt"
+    assert "gen_ai.completion" not in inputs
+    assert not any(key.startswith("llm.output_messages.") for key in inputs)
+
+    full = apply_content_capture_level([span], "full")[0]
+    assert full["attributes"]["gen_ai.completion"] == "model completion"
+    assert full["events"] == [{"name": "debug"}]
