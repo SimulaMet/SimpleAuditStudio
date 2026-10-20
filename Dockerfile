@@ -9,7 +9,7 @@
 #
 # Build:  docker build -t simpleaudit-studio .
 # Run:    docker run -d -p 8000:7860 -v sa-data:/data --name simpleaudit-studio simpleaudit-studio
-#         (web → http://localhost:8000, login studio / admin123 — override with
+#         (web → http://localhost:8000, login studio / localdevpass123 — override with
 #          -e BOOTSTRAP_PASSWORD=<strong> for anything shared)
 # All data (SQLite database, embedded queue, chat) lives in /data: mount a
 # named volume there to keep it across restarts and image updates.
@@ -60,11 +60,11 @@ ENV SIMPLEAUDIT_MINIMAL=1 \
     DJANGO_ALLOWED_HOSTS=* \
     BOOTSTRAP_USERNAME=studio \
     BOOTSTRAP_EMAIL=studio@example.local \
-    BOOTSTRAP_PASSWORD=admin123 \
+    BOOTSTRAP_PASSWORD=localdevpass123 \
     BOOTSTRAP_PROJECT_NAME=Default \
     DEMO_MODE=true \
     DEMO_USERNAME=studio \
-    DEMO_PASSWORD=admin123
+    DEMO_PASSWORD=localdevpass123
 
 # --- Application code --------------------------------------------------------
 COPY . .

@@ -318,7 +318,7 @@ WORKOS_ENABLED = bool(WORKOS_CLIENT_ID and WORKOS_API_KEY)
 # (public demos / HF Spaces).
 DEMO_MODE = env_bool("DEMO_MODE", False)
 DEMO_USERNAME = os.environ.get("DEMO_USERNAME", "studio")
-DEMO_PASSWORD = os.environ.get("DEMO_PASSWORD", "admin123")
+DEMO_PASSWORD = os.environ.get("DEMO_PASSWORD", "localdevpass123")
 
 # Framing policy:
 # - Demo mode (HF Spaces / public demos): allow cross-origin framing so the

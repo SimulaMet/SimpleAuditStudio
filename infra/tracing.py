@@ -210,43 +210,65 @@ class StudioTraceProvider:
         (e.g. OpenWebUI generates its own trace IDs). Matches by target_id
         and the wall-clock window the run executed in. Filters out raw
         HTTP transport spans that carry no agent-level semantics.
+
+        The Django ORM read must run on a sync thread: the engine calls this
+        from inside its asyncio loop (per-scenario evidence collection), and
+        a synchronous ORM query on a thread with a live event loop raises
+        SynchronousOnlyOperation. Mirrors ``_fetch_db``'s thread hop.
         """
         if not self._target_id:
             return []
         from datetime import datetime
 
-        from model_registry.models import OtlpSpan
+        def _read() -> list[dict[str, Any]]:
+            from django.db import close_old_connections
 
-        dt_start = datetime.fromtimestamp(start_ts, tz=UTC)
-        dt_end = datetime.fromtimestamp(end_ts, tz=UTC)
-        rows = OtlpSpan.objects.filter(
-            target_id=self._target_id,
-            received_at__gte=dt_start,
-            received_at__lte=dt_end,
-        ).order_by("received_at")
-        results = []
-        for r in rows:
-            attrs = r.attributes or {}
-            # Only keep OpenInference semantic spans (agent-level tool calls,
-            # LLM completions, workflow chains).  Raw OTel HTTP/ASGI spans
-            # don't carry this attribute and are pure transport noise.
-            if "openinference.span.kind" not in attrs:
-                continue
-            results.append(r)
-        return [
-            {
-                "trace_id": r.trace_id,
-                "span_id": r.span_id,
-                "name": r.name,
-                "kind": r.kind,
-                "parent_span_id": r.parent_span_id or "",
-                "start_time": r.start_time or 0,
-                "end_time": r.end_time or 0,
-                "status": r.status,
-                "attributes": r.attributes or {},
-            }
-            for r in results
-        ]
+            from model_registry.models import OtlpSpan
+
+            close_old_connections()  # the pool thread's connection may be stale
+            dt_start = datetime.fromtimestamp(start_ts, tz=UTC)
+            dt_end = datetime.fromtimestamp(end_ts, tz=UTC)
+            rows = OtlpSpan.objects.filter(
+                target_id=self._target_id,
+                received_at__gte=dt_start,
+                received_at__lte=dt_end,
+            ).order_by("received_at")
+            results = []
+            for r in rows:
+                attrs = r.attributes or {}
+                # Only keep OpenInference semantic spans (agent-level tool
+                # calls, LLM completions, workflow chains).  Raw OTel
+                # HTTP/ASGI spans don't carry this attribute and are pure
+                # transport noise.
+                if "openinference.span.kind" not in attrs:
+                    continue
+                results.append({
+                    "trace_id": r.trace_id,
+                    "span_id": r.span_id,
+                    "name": r.name,
+                    "kind": r.kind,
+                    "parent_span_id": r.parent_span_id or "",
+                    "start_time": r.start_time or 0,
+                    "end_time": r.end_time or 0,
+                    "status": r.status,
+                    "attributes": r.attributes or {},
+                })
+            return results
+
+        import asyncio
+
+        try:
+            in_loop = asyncio.get_running_loop() is not None
+        except RuntimeError:
+            in_loop = False
+
+        try:
+            if in_loop:
+                return _SPAN_FETCH_POOL.submit(_read).result(timeout=30)
+            return _read()
+        except Exception as exc:  # noqa: BLE001 - tracing must not break the run
+            logger.warning("Studio span window fetch failed for %s: %s", self._target_id, exc)
+            return []
 
     def __enter__(self) -> Self:
         return self.start()

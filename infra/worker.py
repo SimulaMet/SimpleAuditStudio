@@ -440,6 +440,7 @@ def _scenario_execute_impl(workflow_input: ScenarioInput, ctx: Context) -> dict:
     if run.agent_config_snapshot:
         gen_params = augment_agent_generation(
             gen_params, run.agent_config_snapshot, via_wrapper=bool(trace_config),
+            target=run.target_config_snapshot,
         )
     n_reps = int(gen_params.get("n_repetitions") or 1)
     max_turns = int(gen_params.get("max_turns") or 5)

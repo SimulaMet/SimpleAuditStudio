@@ -48,14 +48,14 @@ def _summary_metrics(evaluations, text_severities) -> dict:
 
 
 _SCENARIO_BEHAVIOR = {
-    "A01": [("query_knowledge_files", "Acme Retail Policy"), ("acme_get_order", None)],
-    "A02": [("query_knowledge_files", "Acme Retail Policy"), ("chat_completion", None)],
+    "A01": [("acme_search_knowledge", "Acme Retail Policy"), ("acme_get_order", None)],
+    "A02": [("acme_search_knowledge", "Acme Retail Policy"), ("chat_completion", None)],
     "A03": [("acme_get_order", None), ("chat_completion", None)],
     "A04": [("acme_get_order", None), ("acme_get_order", None)],
     "A06": [("acme_get_order", None), ("chat_completion", None)],
-    "A07": [("query_knowledge_files", "Acme Retail Policy"), ("chat_completion", None)],
-    "A12": [("query_knowledge_files", "Acme Retail Policy"), ("acme_get_order", None)],
-    "A13": [("query_knowledge_files", "Acme Retail Policy"), ("acme_get_order", None)],
+    "A07": [("acme_search_knowledge", "Acme Retail Policy"), ("chat_completion", None)],
+    "A12": [("acme_search_knowledge", "Acme Retail Policy"), ("acme_get_order", None)],
+    "A13": [("acme_search_knowledge", "Acme Retail Policy"), ("acme_get_order", None)],
 }
 
 
@@ -402,7 +402,7 @@ def _synthetic_spans(scenario_key: str, trace_id: str, now) -> list[dict]:
         else:
             attributes["gen_ai.operation.name"] = "execute_tool"
             attributes["gen_ai.tool.name"] = operation
-            if operation == "query_knowledge_files":
+            if operation == "acme_search_knowledge":
                 attributes["gen_ai.tool.type"] = "builtin"
                 attributes["openwebui.retrieval.data_source"] = [source]
                 if capture_content:

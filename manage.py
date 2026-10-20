@@ -68,6 +68,9 @@ def main() -> None:
             os.environ["SIMPLEAUDIT_CHAT"] = "off"  # explicit flag beats .env
         else:
             os.environ.setdefault("SIMPLEAUDIT_CHAT", "embedded")
+            # OTLP tracing for OWUI spans must also be set before django.setup()
+            # because chat/config.py freezes OTLP_ENABLED at import time.
+            os.environ.setdefault("SIMPLEAUDIT_CHAT_OTLP", "true")
     # `dev` / `dev_server` are local dev commands — they imply DEBUG so the
     # production hardening block (SECURE_SSL_REDIRECT, HSTS, secure cookies)
     # stays off.

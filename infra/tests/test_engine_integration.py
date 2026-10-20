@@ -148,22 +148,33 @@ class OpenWebUISavedChatParamsTest(TestCase):
 class AgentRequestWiringTest(TestCase):
     """Frozen Agent capabilities become standard Open WebUI request fields."""
 
-    def test_agent_snapshot_adds_session_and_tool_ids_without_overwriting_explicit_fields(self):
+    def test_agent_snapshot_injects_tools_as_openai_function_definitions(self):
+        """Agent tools become OpenAI function-calling definitions in target_params."""
         from infra.engine import augment_agent_generation
 
         generation = {"target_params": {"temperature": 0.0, "reasoning_effort": "none"}}
         snapshot = {
             "agent_id": 1,
-            "tools": [{"external_id": "acme_order_lookup"}],
-            "knowledge_bases": [{"external_id": "kb-acme"}],
+            "tools": [
+                {
+                    "external_id": "acme_get_order",
+                    "description": "Look up an order.",
+                    "input_schema": {"type": "object", "properties": {"order_id": {"type": "string"}}, "required": ["order_id"]},
+                }
+            ],
+            "capabilities": {"knowledge_search": True},
+            "knowledge_bases": [{"name": "Acme Retail Policy"}],
         }
 
         result = augment_agent_generation(generation, snapshot)
 
-        self.assertEqual(result["target_params"]["temperature"], 0.0)
-        self.assertEqual(result["target_params"]["extra_body"]["tool_ids"], ["acme_order_lookup"])
-        self.assertEqual(result["target_params"]["extra_body"]["session_id"], "simpleaudit-agent-1")
-        self.assertNotIn("reasoning_effort", result["target_params"])
+        tp = result["target_params"]
+        self.assertEqual(tp["temperature"], 0.0)
+        self.assertNotIn("reasoning_effort", tp)
+        tool_names = [t["function"]["name"] for t in tp.get("tools", [])]
+        self.assertIn("acme_get_order", tool_names)
+        # knowledge_search capability injects the local policy search fixture
+        self.assertIn("acme_search_knowledge", tool_names)
 
     def test_existing_openwebui_request_fields_win(self):
         from infra.engine import augment_agent_generation
@@ -204,13 +215,22 @@ class AgentRequestWiringTest(TestCase):
         result = augment_agent_generation({}, snapshot)
         self.assertEqual(result["_agent_base_model"], {"connection_id": 3, "model_id": "default"})
 
-    def test_traced_agent_run_keeps_openwebui_wrapper(self):
+    def test_traced_agent_run_routes_through_owui_compat_endpoint(self):
+        """Traced runs carry _agent_base_model AND the OWUI route override."""
         from infra.engine import augment_agent_generation
 
         snapshot = {"agent_id": 1, "base_model": {"connection_id": 3, "model_id": "default"}}
-        result = augment_agent_generation({}, snapshot, via_wrapper=True)
-        self.assertNotIn("_agent_base_model", result)
+        target = {"connection_id": 2, "base_url": "http://127.0.0.1:8080/chat/api/v1"}
+        result = augment_agent_generation({}, snapshot, via_wrapper=True, target=target)
+        # Both traced and untraced runs execute the base model directly;
+        # traced runs additionally get the OWUI route for span export.
+        self.assertEqual(result["_agent_base_model"], {"connection_id": 3, "model_id": "default"})
+        self.assertEqual(result["_owui_route"], {"connection_id": 2})
         self.assertTrue(result["_agent_target"])
+
+        # Without an OWUI target, no route override is added.
+        result2 = augment_agent_generation({}, snapshot, via_wrapper=True, target={"connection_id": 5, "base_url": "https://other.invalid/v1"})
+        self.assertNotIn("_owui_route", result2)
 
     def test_agent_target_drops_provider_reasoning_default_but_judge_keeps_it(self):
         from infra.engine import auditor_kwargs, augment_agent_generation
@@ -246,7 +266,9 @@ class AgentRequestWiringTest(TestCase):
                 resolve_key=lambda _snapshot: "test-key",
             )
 
-        self.assertNotIn("reasoning_effort", kwargs["target_params"])
+        # reasoning_effort is stripped from the target's generation params;
+        # target_params may be None when no other params survive the filter.
+        self.assertNotIn("reasoning_effort", kwargs.get("target_params") or {})
         self.assertEqual(kwargs["judge_params"]["reasoning_effort"], "none")
 
 

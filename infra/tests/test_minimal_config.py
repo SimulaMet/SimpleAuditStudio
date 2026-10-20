@@ -33,7 +33,7 @@ class TestDemoBootSequence(TestCase):
         user, project = bootstrap_admin_and_default_project(
             username="studio",
             email="admin@localhost",
-            password="admin12345",
+            password="localdevpass12345",
             project_name="Demo Project",
         )
         self.assertEqual(user.username, "studio")
@@ -61,7 +61,7 @@ class TestDemoBootSequence(TestCase):
         from model_registry.models import ModelConnection
 
         _, project = bootstrap_admin_and_default_project(
-            username="studio", email="admin@localhost", password="admin12345",
+            username="studio", email="admin@localhost", password="localdevpass12345",
             project_name="Demo Project",
         )
         call_command("seed_platform", project=project.id, verbosity=0)
@@ -95,7 +95,7 @@ class TestDemoBootSequence(TestCase):
         from simpleaudit_studio.cli import _restore_real_model_endpoints
 
         _, project = bootstrap_admin_and_default_project(
-            username="studio", email="admin@localhost", password="admin12345",
+            username="studio", email="admin@localhost", password="localdevpass12345",
             project_name="Demo Project",
         )
         call_command("seed_platform", project=project.id, verbosity=0)

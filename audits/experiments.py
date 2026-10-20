@@ -145,6 +145,17 @@ def parse_design(post, project) -> dict:
         missing = [i for i in ids if i not in found]
         if missing:
             raise DesignError(f"A selected {label} model isn't available in this workspace.")
+        # Agent wrapper models (studio.agent-*) are targets only: an auditor or
+        # judge grades conversations as a bare model, so the agent's KB/tools
+        # have no meaning in those roles. The picker hides them; this rejects
+        # hand-crafted or stale submissions that still carry them.
+        if axis != "target":
+            bad = [m.display_name for m in found.values() if m.model_id.startswith("studio.agent-")]
+            if bad:
+                raise DesignError(
+                    f"Agents can't be used as {label} models: " + ", ".join(bad)
+                    + ". Pick a regular model for that role."
+                )
         models[axis] = [found[i] for i in dict.fromkeys(ids)]
 
     # Judges: version ids, and/or "latest:<judge id>" (always latest: unpinned,

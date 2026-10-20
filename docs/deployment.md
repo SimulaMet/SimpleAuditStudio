@@ -41,7 +41,7 @@ folder to back up your work.
 
 The same root `Dockerfile` also powers the hosted
 [Hugging Face Space demo](https://sushantgautam-simpleaudit-studio.hf.space)
-(demo login `studio` / `admin123`; override the secrets in the Space's
+(demo login `studio` / `localdevpass123`; override the secrets in the Space's
 settings). The Space is disposable — its data is lost on restart.
 
 ## 2. Docker — one container
@@ -62,7 +62,7 @@ docker run -d -p 8000:7860 -v sa-data:/data --name simpleaudit-studio simpleaudi
 - All data (database, job queue, chat) lives in the `sa-data` volume, so the
   container can be deleted and recreated without losing anything. Without the
   `-v`, data is lost when the container is removed.
-- Login is `studio` / `admin123`. For anything shared, add
+- Login is `studio` / `localdevpass123`. For anything shared, add
   `-e BOOTSTRAP_PASSWORD=<strong-password>` to the `docker run` line (it only
   takes effect on first start, while the admin is created).
 - Chat is on by default; add `-e SIMPLEAUDIT_CHAT=off` to run without it.
@@ -178,7 +178,7 @@ override them when you deliberately need to.
 | `VISUALIZER_MAX_FILE_SIZE_MB` | Max JSON file size in MB to parse (default `100`). Larger files are skipped. |
 | `SIMPLEAUDIT_MINIMAL` **internal** | `1` = single-process demo mode. Set by the CLI. |
 | `SIMPLEAUDIT_CHAT` | Chat mode: `embedded` / `docker`, or `off` (and `disabled`, `false`, `no`, `0`, unset). On by default in every mode (`embedded` in the single-process modes, `docker` in compose — set in `.env`). Turn off with this var or the `--disable-chat` flag; the flag beats the env value (flag > env > mode default). |
-| `SIMPLEAUDIT_CHAT_OTLP` | Export Open WebUI structural spans to Studio. Embedded `uvx simpleaudit-studio` defaults to `true`; other modes remain off unless enabled. Set `false` to opt out of embedded tracing. Content capture remains independently opt-in. |
+| `SIMPLEAUDIT_CHAT_OTLP` | Export Open WebUI structural spans to Studio. Defaults to `true` in all modes (agent audits use the spans as trace evidence). Set `false` to opt out. Content capture remains independently opt-in. |
 | `SIMPLEAUDIT_DATA_DIR` | Where single-process mode keeps its data (default `~/.simpleaudit-studio`): the SQLite database and embedded Hatchet's PostgreSQL. |
 | `SIMPLEAUDIT_EMBEDDED_PG_DIR` | Override just embedded Hatchet's PostgreSQL directory (default `<data dir>/embedded-pg`). |
 | `HATCHET_SERVER_URL`, `HATCHET_GRPC_URL`, `HATCHET_API_KEY`, `HATCHET_TOKEN_FILE`, `HATCHET_TLS_STRATEGY` | External Hatchet connection (`compose` mode). |
