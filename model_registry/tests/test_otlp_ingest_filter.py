@@ -104,3 +104,21 @@ class OTLPIngestFilterTest(TestCase):
         )
         body = _export([_span("08" * 8, "get", attributes={"gen_ai.tool.name": "x"})])
         self.assertEqual(self._post(body).status_code, 200)
+
+    def test_error_span_is_stored_as_error_with_exception_message(self):
+        otlp_views.clear_target_spans(self.target_id)
+        span = _span("09" * 8, "execute_tool", attributes={"gen_ai.tool.name": "acme_get_order"})
+        span["status"] = {"code": "STATUS_CODE_ERROR", "message": "ValueError"}
+        span["events"] = [{
+            "name": "exception",
+            "attributes": [
+                {"key": "exception.type", "value": {"stringValue": "ValueError"}},
+                {"key": "exception.message", "value": {"stringValue": "Unknown order ACME-9999"}},
+            ],
+        }]
+        resp = self._post(_export([span]), headers={"HTTP_AUTHORIZATION": _basic_header(
+            self.basic.credential.username, self.basic.secret)})
+        self.assertEqual(resp.status_code, 200)
+        row = otlp_views.get_spans_for_trace_db(self.target_id, TRACE_ID)[0]
+        self.assertEqual(row["status"], "ERROR")
+        self.assertEqual(row["attributes"]["exception.message"], "Unknown order ACME-9999")

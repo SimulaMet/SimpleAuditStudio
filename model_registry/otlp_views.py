@@ -157,6 +157,37 @@ def _otlp_body_to_dict(body: bytes, content_type: str | None) -> dict:
     return json.loads(body)
 
 
+_STATUS_CODES = {"STATUS_CODE_UNSET": 0, "STATUS_CODE_OK": 1, "STATUS_CODE_ERROR": 2}
+
+
+def _normalize_span_status(payload: dict) -> None:
+    """Map OTLP status names to codes and keep an error's exception message.
+
+    Protobuf exports arrive as ``STATUS_CODE_ERROR`` strings, which the engine's
+    parser does not recognize (it treats them as OK). The exception text lives
+    in the span's ``exception`` event, which the parser drops, so it is copied
+    onto the span's attributes first.
+    """
+    for resource in payload.get("resourceSpans") or []:
+        for scope in resource.get("scopeSpans") or []:
+            for span in scope.get("spans") or []:
+                status = span.get("status") or {}
+                code = status.get("code")
+                if isinstance(code, str):
+                    code = _STATUS_CODES.get(code, 0)
+                    status["code"] = code
+                    span["status"] = status
+                if code != 2:
+                    continue
+                attributes = span.setdefault("attributes", [])
+                for event in span.get("events") or []:
+                    if event.get("name") != "exception":
+                        continue
+                    for kv in event.get("attributes") or []:
+                        if kv.get("key") in ("exception.type", "exception.message"):
+                            attributes.append(kv)
+
+
 def _hexify_id_fields(node) -> None:
     """Recursively convert protobuf-JSON base64 id fields to hex in place."""
     if isinstance(node, dict):
@@ -225,7 +256,9 @@ def otlp_traces(request):
         body = request.body
         if request.headers.get("Content-Encoding", "").lower() == "gzip":
             body = gzip.decompress(body)
-        raw_spans = parse_otlp_json(_otlp_body_to_dict(body, request.headers.get("Content-Type")))
+        payload = _otlp_body_to_dict(body, request.headers.get("Content-Type"))
+        _normalize_span_status(payload)
+        raw_spans = parse_otlp_json(payload)
         # Store only the spans the audit reads (tool, LLM, retrieval, ...);
         # transport and framework spans are most of an export and are dropped here.
         raw_spans = select_auditable_spans(raw_spans)
