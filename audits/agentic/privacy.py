@@ -9,11 +9,15 @@ from typing import Any
 CAPTURE_LEVELS = {"structural", "inputs", "full"}
 _SENSITIVE_KEY = re.compile(
     r"(?:api[_-]?key|authorization|auth[_-]?header|cookie|set-cookie|"
-    r"password|passwd|secret|token|credential|private[_-]?key|access[_-]?key)",
+    r"password|passwd|secret|credential|private[_-]?key|access[_-]?key|"
+    # A token segment only: "access_token" matches, "gen_ai.usage.input_tokens" does not.
+    r"(?:^|[_.-])token(?:$|[_.-]))",
     re.IGNORECASE,
 )
 _SECRET_VALUE = re.compile(
-    r"(?:bearer\s+|basic\s+)[A-Za-z0-9+/=._~-]+|"
+    # A bearer/basic credential is a long opaque string; plain words after
+    # "basic" ("basic refund question") are not secrets.
+    r"(?:bearer\s+|basic\s+)(?=[A-Za-z0-9+/=._~-]*[0-9+/=._~-])[A-Za-z0-9+/=._~-]{16,}|"
     r"(?:sk|pk|rk)-[A-Za-z0-9_-]{12,}|sa_otlp_[A-Za-z0-9_-]{8,}",
     re.IGNORECASE,
 )

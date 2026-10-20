@@ -197,6 +197,21 @@ class AgentRequestWiringTest(TestCase):
         result = augment_agent_generation({}, {"agent_id": 1, "system_prompt": "   "})
         self.assertNotIn("system_prompt", result)
 
+    def test_untraced_agent_run_executes_base_model_directly(self):
+        from infra.engine import augment_agent_generation
+
+        snapshot = {"agent_id": 1, "base_model": {"connection_id": 3, "model_id": "default"}}
+        result = augment_agent_generation({}, snapshot)
+        self.assertEqual(result["_agent_base_model"], {"connection_id": 3, "model_id": "default"})
+
+    def test_traced_agent_run_keeps_openwebui_wrapper(self):
+        from infra.engine import augment_agent_generation
+
+        snapshot = {"agent_id": 1, "base_model": {"connection_id": 3, "model_id": "default"}}
+        result = augment_agent_generation({}, snapshot, via_wrapper=True)
+        self.assertNotIn("_agent_base_model", result)
+        self.assertTrue(result["_agent_target"])
+
     def test_agent_target_drops_provider_reasoning_default_but_judge_keeps_it(self):
         from infra.engine import auditor_kwargs, augment_agent_generation
 

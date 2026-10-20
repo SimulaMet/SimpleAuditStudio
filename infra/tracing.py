@@ -121,7 +121,7 @@ class TempoTraceProvider:
 
         try:
             client = httpx.Client(
-                headers=self._headers,
+                headers={**self._headers, "Accept": "application/json"},
                 timeout=self._timeout,
                 transport=self._transport,
             )
@@ -135,6 +135,10 @@ class TempoTraceProvider:
             logger.warning("Tempo trace fetch failed for %s: %s", url, exc)
             return []
 
+        # Tempo's JSON trace response keys the export as "batches"; the OTLP
+        # shape the parser expects is "resourceSpans".
+        if isinstance(payload, dict) and "batches" in payload and "resourceSpans" not in payload:
+            payload = {"resourceSpans": payload["batches"]}
         raw_spans = parse_otlp_json(payload)
         if not raw_spans:
             return []
@@ -325,7 +329,13 @@ def enrich_trace_config(trace_config: dict[str, Any] | None, target_snapshot: di
     """
     if not trace_config or str(trace_config.get("mode") or "").strip().lower() != "studio":
         return trace_config
-    return {**trace_config, "target_id": studio_target_id(target_snapshot) or ""}
+    target_id = studio_target_id(target_snapshot)
+    if not target_id:
+        # The credential was revoked or deleted after the run was queued. Run
+        # without trace evidence rather than failing the whole audit.
+        logger.warning("Studio trace target has no enabled OTLP credential; running without traces")
+        return None
+    return {**trace_config, "target_id": target_id}
 
 
 def build_trace_provider(config: dict[str, Any] | None) -> Any | None:

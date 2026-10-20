@@ -211,7 +211,9 @@ def _merge(*dicts: dict | None) -> dict | None:
     return merged or None
 
 
-def augment_agent_generation(generation: dict | None, agent_snapshot: dict | None) -> dict:
+def augment_agent_generation(
+    generation: dict | None, agent_snapshot: dict | None, *, via_wrapper: bool = False,
+) -> dict:
     """Add standard Open WebUI Agent request metadata to target parameters.
 
     Open WebUI's compatibility endpoint only exposes model-attached native
@@ -224,10 +226,11 @@ def augment_agent_generation(generation: dict | None, agent_snapshot: dict | Non
     if not agent_snapshot:
         return result
     result["_agent_target"] = True
-    # Carry the resolved base model connection so auditor_kwargs can execute
-    # against it directly (bypassing the OWUI wrapper endpoint).
+    # Untraced runs execute the base model directly (bypassing the OWUI wrapper);
+    # traced runs keep the wrapper so its OTLP spans are collected.
     base_model = agent_snapshot.get("base_model") or {}
-    if base_model.get("connection_id"):
+    # A traced run keeps the wrapper endpoint: its OTLP spans are the evidence.
+    if base_model.get("connection_id") and not via_wrapper:
         result["_agent_base_model"] = {
             "connection_id": base_model["connection_id"],
             "model_id": base_model.get("model_id"),
@@ -291,7 +294,9 @@ def augment_agent_generation(generation: dict | None, agent_snapshot: dict | Non
                     "parameters": {"type": "object", "properties": {}},
                 },
             })
-    if agent_tools:
+    # A traced run reaches the wrapper, which resolves the agent's tools from
+    # ``tool_ids`` and executes them. Injected ``tools`` would shadow that path.
+    if agent_tools and not via_wrapper:
         existing = target_params.get("tools") or []
         seen = {t.get("function", {}).get("name") for t in existing if isinstance(t, dict)}
         merged = list(existing) + [t for t in agent_tools if t["function"]["name"] not in seen]
@@ -516,6 +521,10 @@ def scenario_dict(
     return scenario
 
 
+# Quiet period that ends settling: longer than the 5s OTLP exporter interval.
+_SETTLE_QUIET_S = 6.0
+
+
 def _collect_evidence_spans(
     correlation: Any,
     provider: Any,
@@ -541,10 +550,10 @@ def _collect_evidence_spans(
     for targets that do not adopt the propagated trace id.
 
     The fetch is settled: remote exporters flush in batches, so the spans for
-    a trace id can arrive a couple of seconds after the model call returns.
-    The span set is re-polled until it stays quiet for 0.6s, with one delayed
-    verification pass before ``settle_timeout`` elapses (``settle_timeout=None``
-    disables settling — the fast path for tests).
+    a trace id can arrive several seconds after the model call returns. The
+    span set is re-polled until no new span arrives for ``_SETTLE_QUIET_S``,
+    bounded by ``settle_timeout`` (``settle_timeout=None`` disables settling —
+    the fast path for tests).
 
     Returns the legacy span list by default, or a dict with trace evidence tiers
     when ``structured=True``. None is returned when
@@ -586,36 +595,28 @@ def _collect_evidence_spans(
                 logger = __import__("logging").getLogger("simpleaudit.engine")
                 logger.warning("Trace window fetch failed: %s", exc)
 
-    # Settle: the remote exporter flushes spans in batches, so they routinely
-    # arrive seconds after the model call returns — even *after* the first
-    # fetch comes back empty (observed live: batches ~1-2s apart on a
-    # 5s exporter interval). Poll until the span set is quiet for 0.6s, then
-    # run one delayed verification pass 2.0s later that catches the final
-    # batch of a 5s-interval exporter, so the evidence is complete rather
-    # than a race. Bounded by the settle budget.
+    # Settle: remote exporters flush spans in batches on a fixed interval (5s
+    # for OpenWebUI's OTLP exporter), so the last batch of a run can arrive
+    # several seconds after the model call returns. Keep polling until no new
+    # span has arrived for a full export interval, bounded by ``settle_timeout``.
     if settle_timeout:
         deadline = _time.monotonic() + settle_timeout
-        stable = False
-        while not stable:
+        while True:
             _fetch_all()
             if not all_spans:
                 _fetch_window()
-            if not all_spans:
-                if _time.monotonic() >= deadline:
+            if all_spans:
+                before = len(all_spans)
+                _time.sleep(min(_SETTLE_QUIET_S, max(0.0, deadline - _time.monotonic())))
+                _fetch_all()
+                if len(all_spans) == before:
                     break
-                _time.sleep(0.25)
-                continue
-            before = len(all_spans)
-            _time.sleep(0.6)
-            _fetch_all()
-            if len(all_spans) == before:
-                stable = True
             elif _time.monotonic() >= deadline:
                 break
-        if stable and _time.monotonic() + 2.0 < deadline:
-            _time.sleep(2.0)
-            _fetch_all()
-            _fetch_window()
+            else:
+                _time.sleep(0.25)
+            if _time.monotonic() >= deadline:
+                break
 
     if not all_spans:
         return None
@@ -797,7 +798,7 @@ def run_scenario(
                 # the W3C traceparent (e.g. OpenWebUI).
                 _window = (_exec_start_ts - 2.0, _t.time() + 5.0)
                 evidence = _collect_evidence_spans(
-                    execution.trace_correlation, provider, settle_timeout=10.0,
+                    execution.trace_correlation, provider, settle_timeout=20.0,
                     window=_window,
                     capture_level=(trace_config or {}).get("content_capture", "structural"),
                     structured=True,
@@ -904,7 +905,7 @@ def run_scenario(
             # tiers (trace_ids, all_spans, selected_spans, selection metadata).
             if provider is not None and correlation is not None:
                 full_trace_evidence = _collect_evidence_spans(
-                    correlation, provider, settle_timeout=10.0,
+                    correlation, provider, settle_timeout=20.0,
                     window=(_exec_start_ts_outer - 2.0, _t.time() + 5.0),
                     capture_level=(trace_config or {}).get("content_capture", "structural"),
                     structured=True,
@@ -1100,7 +1101,7 @@ def run_scenario_repeated(
         def _rep_evidence_resolver(execution):
             corr = current_correlation["corr"]
             evidence = _collect_evidence_spans(
-                corr, provider, settle_timeout=10.0,
+                corr, provider, settle_timeout=20.0,
                 capture_level=(trace_config or {}).get("content_capture", "structural"),
                 structured=True,
             )
@@ -1176,7 +1177,9 @@ def run_scenario_repeated(
             if provider is not None:
                 for idx, rep in enumerate(reps):
                     corr = rep_correlations.get(rep.get("_rep_index"))
-                    full_trace_evidence = _collect_evidence_spans(corr, provider, structured=True)
+                    full_trace_evidence = _collect_evidence_spans(
+                        corr, provider, settle_timeout=20.0, structured=True,
+                    )
                     if full_trace_evidence:
                         # Persist full evidence tiers separately. For backward compatibility,
                         # also populate judgment.evidence_spans with selected_spans.
