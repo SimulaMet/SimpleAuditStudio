@@ -3437,6 +3437,11 @@ def _trace_card_view(rep: dict) -> dict | None:
     """
     trace_ids = rep.get("trace_ids") or []
     spans = ((rep.get("judgment") or {}).get("evidence_spans") or []) if isinstance(rep.get("judgment"), dict) else []
+    # The header reports every span the target exported; the evidence subset
+    # is what the judge selected, shown separately in the timeline.
+    captured = (rep.get("trace_evidence") or {}).get("all_spans") or []
+    if captured:
+        spans = captured
     if not trace_ids and not spans:
         return None
     base_start = min(
@@ -3669,9 +3674,11 @@ def _agentic_timeline_view(rep: dict) -> dict | None:
     anchor_for: dict[str, str] = {}
     for row in rows:
         anchor_for.setdefault(row["span_id"], row["anchor"])
+    all_spans = (rep.get("trace_evidence") or {}).get("all_spans") or []
     return {
         "rows": rows,
         "total": len(rows),
+        "captured": max(len(all_spans), len(rows)),
         "anchor_for": anchor_for,
         "spans_json": json.dumps(raw_spans, indent=2, ensure_ascii=False, default=str),
     }
