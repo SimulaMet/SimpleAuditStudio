@@ -4111,6 +4111,9 @@ class RunExportView(ProjectMixin, View):
         run = get_object_or_404(AuditRun, pk=run_id, project=request.project)
         fmt = request.GET.get("format", "json").lower()
 
+        if fmt == "simpleaudit":
+            return self._engine_json(run)
+
         items = {str(vi.pk): vi for vi in ScenarioSetVersionItem.objects.filter(version=run.scenario_set_version).select_related("scenario")}
         rows = []
         for sr in ScenarioResult.objects.filter(run_id=run.id).order_by("id"):
@@ -4138,6 +4141,20 @@ class RunExportView(ProjectMixin, View):
             response = HttpResponse(payload, content_type="application/json; charset=utf-8")
 
         response["Content-Disposition"] = f'attachment; filename="{filename}"'
+        return response
+
+    @staticmethod
+    def _engine_json(run):
+        """``?format=simpleaudit``: the run as the engine's own results JSON."""
+        from audits.services import RunExportError, export_engine_results
+
+        try:
+            document = export_engine_results(run)
+        except RunExportError as exc:
+            return JsonResponse({"error": exc.reason}, status=422 if exc.unsupported else 409)
+        payload = json.dumps(document, indent=2, ensure_ascii=False)
+        response = HttpResponse(payload, content_type="application/json; charset=utf-8")
+        response["Content-Disposition"] = f'attachment; filename="audit_{run.id}_simpleaudit.json"'
         return response
 
 

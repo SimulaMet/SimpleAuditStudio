@@ -417,3 +417,71 @@ def cancel_run(run: AuditRun, user) -> bool:
     run.save(update_fields=["status", "finished_at"])
     append_event(run.pk, "_run", "run_cancelled", {"by": user.username})
     return True
+
+
+class RunExportError(Exception):
+    """A run cannot be exported in the engine's JSON format (``reason`` says why)."""
+
+    def __init__(self, reason: str, *, unsupported: bool = False):
+        super().__init__(reason)
+        self.reason = reason
+        # True when the run can never be exported (as opposed to "not finished yet").
+        self.unsupported = unsupported
+
+
+def export_engine_results(run: AuditRun) -> dict:
+    """Reassemble a completed run into the engine's ``AuditResults`` JSON document.
+
+    Built from the persisted ``ScenarioResult`` rows, so no engine run is needed.
+    The document has the engine's own keys (``timestamp``, ``summary``, ``issues``,
+    ``recommendations``, ``results``) plus a ``run`` block with the provenance
+    frozen on the run, and ``studio_provenance.target_model`` (the target's model
+    id) when the run has one. Runs with ``n_repetitions > 1`` are not supported yet.
+    """
+    from audits.events import ScenarioResult
+    from infra import engine
+    from scenarios.models import ScenarioSetVersionItem
+
+    if run.status != AuditRun.Status.COMPLETED:
+        raise RunExportError(f"Run is {run.status}; only completed runs can be exported.")
+    if int((run.generation_parameters_snapshot or {}).get("n_repetitions") or 1) > 1:
+        raise RunExportError("Runs with repetitions cannot be exported in this format yet.", unsupported=True)
+
+    items = {
+        str(vi.pk): vi
+        for vi in ScenarioSetVersionItem.objects.filter(version=run.scenario_set_version).select_related("scenario")
+    }
+    payloads = []
+    for sr in ScenarioResult.objects.filter(run_id=run.id).order_by("id"):
+        item = items.get(sr.version_item_id)
+        payload = dict(sr.result or {})
+        payload.setdefault("scenario_name", item.scenario.title if item else sr.version_item_id)
+        payload.setdefault("scenario_description", "")
+        payload.setdefault("conversation", [])
+        payload.setdefault("severity", "pass" if sr.status == "completed" else "ERROR")
+        payload.setdefault("issues_found", [])
+        payload.setdefault("positive_behaviors", [])
+        payload.setdefault("summary", payload.get("error", ""))
+        payload.setdefault("recommendations", [])
+        payloads.append(payload)
+
+    document = engine.build_audit_results_export(
+        payloads, timestamp=run.finished_at.isoformat() if run.finished_at else None
+    )
+    document["run"] = {
+        "id": run.id,
+        "name": run.name,
+        "simpleaudit_version": run.simpleaudit_version,
+        "git_commit": run.git_commit,
+        "started_at": run.started_at.isoformat() if run.started_at else None,
+        "finished_at": run.finished_at.isoformat() if run.finished_at else None,
+        "target": frozen_name(run, "target", with_id=True),
+        "auditor": frozen_name(run, "auditor", with_id=True),
+        "judge": frozen_name(run, "judge", with_id=True),
+    }
+    # The Every Eval Ever converter (evaleval/every_eval_ever#312) names the model
+    # from ``studio_provenance.target_model``; engine files carry no model name.
+    target_model_id = frozen_model(run, "target")["model_id"]
+    if target_model_id:
+        document["studio_provenance"] = {"target_model": target_model_id}
+    return document
