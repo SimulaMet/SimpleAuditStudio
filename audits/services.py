@@ -435,7 +435,8 @@ def export_engine_results(run: AuditRun) -> dict:
     Built from the persisted ``ScenarioResult`` rows, so no engine run is needed.
     The document has the engine's own keys (``timestamp``, ``summary``, ``issues``,
     ``recommendations``, ``results``) plus a ``run`` block with the provenance
-    frozen on the run. Runs with ``n_repetitions > 1`` are not supported yet.
+    frozen on the run, and ``studio_provenance.target_model`` (the target's model
+    id) when the run has one. Runs with ``n_repetitions > 1`` are not supported yet.
     """
     from audits.events import ScenarioResult
     from infra import engine
@@ -478,4 +479,9 @@ def export_engine_results(run: AuditRun) -> dict:
         "auditor": frozen_name(run, "auditor", with_id=True),
         "judge": frozen_name(run, "judge", with_id=True),
     }
+    # The Every Eval Ever converter (evaleval/every_eval_ever#312) names the model
+    # from ``studio_provenance.target_model``; engine files carry no model name.
+    target_model_id = frozen_model(run, "target")["model_id"]
+    if target_model_id:
+        document["studio_provenance"] = {"target_model": target_model_id}
     return document

@@ -108,6 +108,26 @@ class RunExportSimpleAuditTest(TestCase):
         self.assertEqual(document["run"]["git_commit"], self.run.git_commit)
         self.assertEqual(document["timestamp"], self.run.finished_at.isoformat())
 
+    def test_studio_provenance_names_the_frozen_target_model(self):
+        # The Every Eval Ever converter reads the model id from here.
+        self.run.target_config_snapshot = {"model_id": "acme/frozen-model", "display_name": "Frozen"}
+        self.run.save(update_fields=["target_config_snapshot"])
+
+        document = json.loads(self._export().content)
+
+        self.assertEqual(document["studio_provenance"], {"target_model": "acme/frozen-model"})
+        self.assertIn("run", document)
+
+    def test_studio_provenance_is_omitted_without_a_model_id(self):
+        self.run.target_config_snapshot = {"model_id": "", "display_name": "Unnamed"}
+        self.run.save(update_fields=["target_config_snapshot"])
+        self.run.target_model.model_id = ""
+        self.run.target_model.save(update_fields=["model_id"])
+
+        document = json.loads(self._export().content)
+
+        self.assertNotIn("studio_provenance", document)
+
     def test_failed_scenario_is_exported_as_error(self):
         item = ScenarioSetVersionItemFactory(version=self.run.scenario_set_version, scenario=ScenarioFactory(title="Gamma"))
         ScenarioResult.objects.create(
