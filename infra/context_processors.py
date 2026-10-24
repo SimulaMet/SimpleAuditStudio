@@ -22,8 +22,11 @@ def gravatar_for(user) -> str | None:
 
 
 def gravatar_url(request):
-    """Expose the current user's Gravatar URL (or ``None``) to templates."""
-    return {"gravatar_url": gravatar_for(getattr(request, "user", None))}
+    """Expose the current user's Gravatar URL (or ``None``) and the setting."""
+    return {
+        "gravatar_url": gravatar_for(getattr(request, "user", None)),
+        "gravatar_enabled": settings.SIMPLEAUDIT_GRAVATAR,
+    }
 
 
 def admin_status(request):

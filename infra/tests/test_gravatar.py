@@ -17,6 +17,11 @@ class GravatarSettingTest(TestCase):
         content = self.client.get("/profile/").content.decode()
         self.assertNotIn("gravatar.com/avatar/", content)
 
+    def test_off_shows_no_gravatar_text_on_the_profile(self):
+        content = self.client.get("/profile/").content.decode()
+        self.assertNotIn("Add an email address to get a Gravatar avatar.", content)
+        self.assertNotIn("Update image on Gravatar", content)
+
     @override_settings(SIMPLEAUDIT_GRAVATAR=True)
     def test_on_renders_the_gravatar_url(self):
         # MD5 of the trimmed, lower-cased email "jane@x.com".
