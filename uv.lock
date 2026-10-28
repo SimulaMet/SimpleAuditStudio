@@ -2757,7 +2757,7 @@ requires-dist = [
     { name = "requests", specifier = "==2.32.5" },
     { name = "ruff", marker = "extra == 'dev'" },
     { name = "sentry-sdk", extras = ["django"], specifier = ">=2.0" },
-    { name = "simpleaudit", specifier = ">=0.4.0,<0.5.0" },
+    { name = "simpleaudit", specifier = ">=0.4.0,<0.6.0" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.22" },
     { name = "watchfiles", specifier = ">=1.1.0" },
     { name = "workos", specifier = "==10.4.0" },

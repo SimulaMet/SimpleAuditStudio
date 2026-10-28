@@ -80,7 +80,8 @@ def _fetch_remote_model_list(conn, *, timeout: float = 10) -> list[dict]:
         if isinstance(item, str):
             models.append({"id": item, "description": ""})
         elif isinstance(item, dict):
-            mid = item.get("id") or item.get("model") or ""
+            # OpenAI-compatible servers use "id"; TypeSafe's /v1/models uses "name".
+            mid = item.get("id") or item.get("model") or item.get("name") or ""
             if mid:
                 models.append({"id": mid, "description": item.get("description") or ""})
     return sorted(models, key=lambda m: m["id"])
@@ -107,19 +108,23 @@ _DECISION_PROBE_BODY = {
 }
 
 
-def probe_systemone_decision(base_url: str, model_id: str, *, timeout: float = 15) -> bool | None:
+def probe_systemone_decision(base_url: str, model_id: str, *, api_key: str = "", timeout: float = 15) -> bool | None:
     """Whether a model answers on the server's ``POST /v1/systemone`` (True/False).
 
     The System One endpoint is a shared surface: Ollama (>= 0.35) and vLLM
     both expose it at the API root, and every OpenAI-compatible server can
     be probed the same way. ``None`` when it cannot be told: network errors,
     a server not exposing the endpoint (404), or an unrecognised reply.
+
+    ``api_key`` is forwarded as a Bearer token for providers that require
+    authentication (e.g. TypeSafe); local servers ignore it.
     """
     base = (base_url or "").strip().rstrip("/")
     url = f"{base.removesuffix('/v1')}/v1/systemone"
     body = {**_DECISION_PROBE_BODY, "model": model_id}
+    headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
     try:
-        resp = httpx.post(url, json=body, timeout=timeout)
+        resp = httpx.post(url, json=body, headers=headers, timeout=timeout)
     except httpx.HTTPError:
         return None
     if resp.status_code == 200:
@@ -156,7 +161,7 @@ def detect_model_capabilities(conn, model_id: str, *, timeout: float = 10) -> di
         if _is_openrouter_decision_model(model_id):
             caps["decision"] = True
     else:
-        supports = probe_systemone_decision(conn.base_url, model_id, timeout=timeout)
+        supports = probe_systemone_decision(conn.base_url, model_id, api_key=connection_api_key(conn), timeout=timeout)
         if supports is not None:
             caps["decision"] = bool(supports)
         elif conn.provider == "ollama" and model_id.rsplit(":", 1)[0].rsplit("/", 1)[-1] in OLLAMA_LIBRARY_DECISION_MODELS:
