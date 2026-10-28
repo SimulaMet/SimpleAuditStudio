@@ -158,30 +158,36 @@ def parse_design(post, project) -> dict:
                 )
         models[axis] = [found[i] for i in dict.fromkeys(ids)]
 
-    # Judges: version ids, and/or "latest:<judge id>" (always latest: unpinned,
-    # so repeating runs follow new versions).
-    raw = [v for v in dict.fromkeys(post.getlist("judge")) if v]
-    if not raw:
-        raise DesignError("Pick at least one judge.")
-    follow_ids = [v.split(":", 1)[1] for v in raw if v.startswith("latest:")]
-    pinned_ids = [v for v in raw if not v.startswith("latest:")]
-    judges = list(
-        JudgeVersion.objects.filter(pk__in=pinned_ids, judge__project=project).select_related("judge")
-    )
-    follow = list(Judge.objects.filter(pk__in=follow_ids, project=project))
-    if len(judges) != len(pinned_ids) or len(follow) != len(follow_ids):
-        raise DesignError("A selected judge is not in this workspace.")
-    for judge in follow:
-        latest = judge.versions.select_related("judge").order_by("-version").first()
-        if latest is None:
-            raise DesignError(f"Judge “{judge.name}” has no version.")
-        latest.follow_latest = True
-        judges.append(latest)
-    judges.sort(key=lambda v: (v.judge.name, is_follow(v), v.version))
-
     # When an agent is the target, its base_model IS the target model.
     if agent is not None and not models.get("target"):
         models["target"] = [agent.base_model]
+
+    all_decision = _all_decision_targets(models["target"])
+
+    # Judges: version ids, and/or "latest:<judge id>" (always latest: unpinned,
+    # so repeating runs follow new versions). All-decision designs skip this:
+    # choice_match grades in code and no judge model is called.
+    if all_decision:
+        judges = [_decision_judge_version(project)]
+    else:
+        raw = [v for v in dict.fromkeys(post.getlist("judge")) if v]
+        if not raw:
+            raise DesignError("Pick at least one judge.")
+        follow_ids = [v.split(":", 1)[1] for v in raw if v.startswith("latest:")]
+        pinned_ids = [v for v in raw if not v.startswith("latest:")]
+        judges = list(
+            JudgeVersion.objects.filter(pk__in=pinned_ids, judge__project=project).select_related("judge")
+        )
+        follow = list(Judge.objects.filter(pk__in=follow_ids, project=project))
+        if len(judges) != len(pinned_ids) or len(follow) != len(follow_ids):
+            raise DesignError("A selected judge is not in this workspace.")
+        for judge in follow:
+            latest = judge.versions.select_related("judge").order_by("-version").first()
+            if latest is None:
+                raise DesignError(f"Judge “{judge.name}” has no version.")
+            latest.follow_latest = True
+            judges.append(latest)
+        judges.sort(key=lambda v: (v.judge.name, is_follow(v), v.version))
 
     n_reps_raw = (post.get("n_repetitions") or "").strip()
     try:
@@ -293,6 +299,26 @@ def run_count(design: dict) -> int:
     return n
 
 
+def _all_decision_targets(targets: list) -> bool:
+    """True when every selected target is a decision model."""
+    return bool(targets) and all(m.is_decision for m in targets)
+
+
+def _decision_judge_version(project):
+    """A Choice Match judge version for this workspace, created on first use."""
+    from judges.models import JudgeVersion
+    from judges.services import create_judge, unique_name
+
+    existing = JudgeVersion.objects.filter(
+        judge__project=project, base="choice_match"
+    ).order_by("judge__name", "version").first()
+    if existing:
+        return existing
+    name = unique_name(project, "Choice Match")
+    judge = create_judge(project=project, name=name, base="choice_match")
+    return judge.latest
+
+
 def expand(design: dict) -> list[dict]:
     """Every combination of the design's values, as run specs."""
     if run_count(design) > MAX_RUNS_PER_EXPERIMENT:
@@ -300,9 +326,19 @@ def expand(design: dict) -> list[dict]:
             f"This design makes {run_count(design)} runs; the limit is {MAX_RUNS_PER_EXPERIMENT}. "
             "Fix more inputs to one value, or split it into several experiments."
         )
+    all_decision = _all_decision_targets(design["target"])
+    # All-decision designs have no auditor or judge model; give them a
+    # placeholder so the cartesian product isn't empty (overwritten below).
+    axes = {k: design[k] for k in DESIGN_AXES}
+    if all_decision:
+        axes["auditor"] = [None]
+        axes["judge_model"] = [None]
     specs = []
-    for combo in itertools.product(*(design[key] for key in DESIGN_AXES)):
+    for combo in itertools.product(*(axes[key] for key in DESIGN_AXES)):
         spec = dict(zip(DESIGN_AXES, combo, strict=True))
+        if all_decision:
+            spec["auditor"] = spec["judge_model"] = spec["target"]
+            spec["max_turns"] = 1
         spec["n_repetitions"] = design["n_repetitions"]
         spec["gen_config"] = design["gen_config"]
         spec["system_prompt_version"] = design.get("system_prompt_version")
@@ -360,7 +396,12 @@ def spec_label(spec: dict, factors: list[str]) -> str:
 
 def spec_warnings(spec: dict) -> list[str]:
     warnings = []
-    if spec["judge_model"].pk == spec["target"].pk:
+    if spec["target"].is_decision:
+        warnings.append(
+            "Decision targets are graded by the Choice Match judge (choice_match); "
+            "no judge model is called."
+        )
+    elif spec["judge_model"].pk == spec["target"].pk:
         warnings.append("Judge model is the target model: it grades itself.")
     for role, model in (("Target", spec["target"]), ("Auditor", spec["auditor"]), ("Judge", spec["judge_model"])):
         if not model.has_key:
