@@ -323,6 +323,9 @@ SIMPLEAUDIT_GRAVATAR = env_bool("SIMPLEAUDIT_GRAVATAR", False)
 DEMO_MODE = env_bool("DEMO_MODE", False)
 DEMO_USERNAME = os.environ.get("DEMO_USERNAME", "studio")
 DEMO_PASSWORD = os.environ.get("DEMO_PASSWORD", "localdevpass123")
+# Optional: override the demo-mode login banner with custom HTML (trusted
+# operator content only). When empty, the built-in banner is shown.
+DEMO_BANNER_HTML = os.environ.get("DEMO_BANNER_HTML", "")
 
 # Framing policy:
 # - Demo mode (HF Spaces / public demos): allow cross-origin framing so the

@@ -336,6 +336,7 @@ class LoginView(TemplateView):
             kw["demo_mode"] = True
             kw["demo_username"] = settings.DEMO_USERNAME
             kw["demo_password"] = settings.DEMO_PASSWORD
+            kw["demo_banner_html"] = getattr(settings, "DEMO_BANNER_HTML", "")
         kw["workos_enabled"] = getattr(settings, "WORKOS_ENABLED", False)
         kw["registration_enabled"] = registration_enabled()
         # The login page is what unauthenticated visitors land on when they
