@@ -13,6 +13,7 @@ import math
 from audits.events import ScenarioResult
 from audits.models import AuditRun
 from audits.services import frozen_judge, frozen_name
+from audits.target_metadata import frozen_target_metadata
 
 # Ordinal scale for fragility metrics (matches the SimpleAudit visualizer).
 _SEV_ORDER = ["pass", "low", "medium", "high", "critical"]
@@ -217,6 +218,22 @@ def compare_runs(project, run_ids: list[int]) -> dict:
             cells.append(_cell(text, url))
         differs = len({c["text"] for c in cells}) > 1
         input_rows.append({"label": label, "cells": cells, "differs": differs})
+
+    # The union of frozen target metadata keys is compared, including keys
+    # absent from some runs. No provider calls are made while comparing.
+    metadata_by_run = [frozen_target_metadata(r) for r in runs]
+    all_metadata_keys = sorted({key for values in metadata_by_run for key in values})
+    for key in all_metadata_keys:
+        cells = []
+        for metadata in metadata_by_run:
+            value = metadata.get(key, "—")
+            cells.append({"text": value, "url": None, "long": len(value) > 160})
+        input_rows.append({
+            "label": f"Target metadata · {key}",
+            "cells": cells,
+            "differs": len({cell["text"] for cell in cells}) > 1,
+            "is_metadata": True,
+        })
 
     return {
         "compatible": len(warnings) == 0,

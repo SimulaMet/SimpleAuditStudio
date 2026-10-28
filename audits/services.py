@@ -10,6 +10,7 @@ from audits.models import AuditRun
 from infra.exceptions import StableAPIError
 from infra.simpleaudit_package import resolve_engine_provenance
 from model_registry.models import RegisteredModel
+from model_registry.remote_metadata import discover_target_metadata
 from scenarios.models import ScenarioSetVersion
 from scenarios.services import require_project_role
 
@@ -311,6 +312,25 @@ def create_audit_run(
         agent_snapshot = agent.config_snapshot(
             server_rag=server_rag, tool_invocation_names=tool_invocation_names
         )
+    # Capture the target's declared metadata once, before execution. Retrieval
+    # failure never changes whether the audit can run. Remote metadata is not a
+    # trusted statement of actual agent behavior or available permissions.
+    discovery = discover_target_metadata(target_model)
+    inputs = frozen_inputs(
+        target_model=target_model, auditor_model=auditor_model, judge_model=judge_model, judge=judge,
+        max_turns_override=max_turns_override, language_override=language_override,
+        n_repetitions_override=n_repetitions_override, gen_config_override=gen_config_override,
+        system_prompt_version=system_prompt_version,
+    )
+    target_snapshot = inputs["target_config_snapshot"]
+    target_snapshot["metadata_discovery"] = {
+        "status": discovery["status"],
+        "source": discovery["source"],
+        "captured_at": discovery["captured_at"],
+    }
+    if discovery["metadata"] is not None:
+        target_snapshot["remote_metadata"] = discovery["metadata"]
+
     return AuditRun.objects.create(
         project=project,
         name=name.strip(),
@@ -322,12 +342,7 @@ def create_audit_run(
         judge_version=judge,
         judge_model=judge_model,
         system_prompt_version=system_prompt_version,
-        **frozen_inputs(
-            target_model=target_model, auditor_model=auditor_model, judge_model=judge_model, judge=judge,
-            max_turns_override=max_turns_override, language_override=language_override,
-            n_repetitions_override=n_repetitions_override, gen_config_override=gen_config_override,
-            system_prompt_version=system_prompt_version,
-        ),
+        **inputs,
         agent_config_snapshot=agent_snapshot,
         simpleaudit_version=resolved_version,
         git_commit=resolved_commit,

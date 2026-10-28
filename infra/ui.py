@@ -3193,6 +3193,8 @@ class RunDetailView(PublicReadableMixin, DetailView):
         from audits.services import ROLES, frozen_agent, frozen_judge, frozen_model
 
         ctx["frozen_models"] = [frozen_model(run, role) for role in ROLES]
+        from audits.target_metadata import metadata_rows
+        ctx["target_metadata_rows"] = metadata_rows(run)
         ctx["judge"] = frozen_judge(run)
         snap = run.generation_parameters_snapshot or {}
         ctx["system_prompt"] = snap.get("system_prompt", "")
