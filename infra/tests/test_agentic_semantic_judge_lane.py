@@ -56,7 +56,7 @@ def patched_worker(monkeypatch):
             metadata=calls["revision_metadata"],
             test_prompt="Check ACME-9999.",
             description="d", expected_behavior=["States the order was not found"],
-            documents=None, file_uri=None, severity_ceiling="",
+            documents=None, file_uri=None, severity_ceiling="", decision=None,
         )
         return SimpleNamespace(
             scenario=SimpleNamespace(key="agentic_d02_unknown_order", category=""),

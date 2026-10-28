@@ -71,7 +71,7 @@ def patched_worker(monkeypatch):
             metadata=calls["revision_metadata"],
             test_prompt="What is the status of ACME-1001?",
             description="d", expected_behavior=[], documents=None,
-            file_uri=None, severity_ceiling="",
+            file_uri=None, severity_ceiling="", decision=None,
         )
 
     class FakeManager:

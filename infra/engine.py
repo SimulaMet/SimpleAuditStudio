@@ -392,7 +392,16 @@ def auditor_kwargs(*, target: dict, auditor: dict, judge: dict, generation: dict
     if resolve_key is None:
         # Fail fast with a clear, actionable error if a required secret is unset,
         # rather than letting any_llm raise an opaque MissingApiKeyError later.
-        _validate_secrets(("target", target), ("auditor", auditor), ("judge", judge))
+        # A decision target is graded in code by choice_match and runs with
+        # max_turns=1 through without_target_client(ModelAuditor), so neither
+        # the auditor nor the judge ever makes an LLM call — validate only the
+        # target for those runs.
+        from model_registry.decision import is_decision_snapshot as _is_decision
+
+        if _is_decision(target):
+            _validate_secrets(("target", target))
+        else:
+            _validate_secrets(("target", target), ("auditor", auditor), ("judge", judge))
         resolve_key = snapshot_api_key
     target_cfg = _auditor_kwargs_from_snapshot(target, resolve_key)
     if gen.get("_agent_target"):
@@ -516,6 +525,18 @@ def auditor_kwargs(*, target: dict, auditor: dict, judge: dict, generation: dict
         "show_progress": False,
         "verbose": False,
     }
+    # A decision-capable target is graded in code by the engine's choice_match
+    # judge: it compares the model's chosen option against the scenario's
+    # ``decision.accepted`` and makes no LLM call. So the frozen LLM judge is
+    # replaced by the library name ``"choice_match"`` (whose config carries the
+    # ``grade`` callable) and the probe prompt is dropped — otherwise the
+    # auditor would still build a judge client for a model that answers once
+    # with no prose. This mirrors what the e2e test does directly.
+    from model_registry.decision import is_decision_snapshot as _is_decision
+
+    if _is_decision(target):
+        kwargs["judge"] = "choice_match"
+        kwargs["probe_prompt"] = None
     # ``extra_body`` is a per-request parameter (session_id / tool_ids for
     # Open WebUI's saved-chat path), not a ModelAuditor/AsyncOpenAI
     # constructor argument. Pop it out of the merged target param dicts and
@@ -538,6 +559,22 @@ def auditor_kwargs(*, target: dict, auditor: dict, judge: dict, generation: dict
     if is_decision_snapshot(target):
         kwargs["max_turns"] = 1
     return kwargs, gen.get("language") or "English"
+
+
+def validate_decision_block(decision) -> None:
+    """Validate a scenario's decision block against the engine's schema.
+
+    Thin wrapper so callers outside this module never import the engine. Raises
+    ``ValueError`` with the engine's message when the block is malformed; returns
+    normally when valid. A ``None`` or empty dict is treated as "no decision
+    block" and passes silently (the field is optional on ScenarioRevision).
+    """
+    if not decision:
+        return
+    _ensure_engine_available()
+    from simpleaudit.decision import validate_decision
+
+    validate_decision(decision)
 
 
 def decision_target_for(target: dict, *, resolve_key=snapshot_api_key):
@@ -639,16 +676,20 @@ def scenario_dict(
     severity_ceiling: str = "",
     documents: list | None = None,
     file_uri=None,
+    decision=None,
     category: str = "",
     metadata: dict | None = None,
 ) -> dict[str, Any]:
     """A scenario in SimpleAudit's own format (what ``ModelAuditor.run`` and
     ``AuditExperiment`` take), with empty fields left out. The designed
-    severity goes in ``severity``; judge notes ride in ``metadata``."""
+    severity goes in ``severity``; judge notes ride in ``metadata``. A
+    ``decision`` block is passed through verbatim — the engine validates it and
+    grades it in code via choice_match."""
     scenario: dict[str, Any] = {"name": name, "description": description}
     optional = {
         "expected_behavior": expected_behavior, "test_prompt": test_prompt, "severity": severity_ceiling,
-        "documents": documents, "file_uri": file_uri, "category": category, "metadata": metadata,
+        "documents": documents, "file_uri": file_uri, "decision": decision, "category": category,
+        "metadata": metadata,
     }
     scenario.update({k: v for k, v in optional.items() if v})
     return scenario
@@ -860,6 +901,7 @@ def run_scenario(
     severity_ceiling: str = "",
     documents: list | None = None,
     file_uri=None,
+    decision=None,
     category: str = "",
     metadata: dict | None = None,
     trace_config: dict | None = None,
@@ -890,8 +932,8 @@ def run_scenario(
     )
     scenario = scenario_dict(
         name=name, description=description, expected_behavior=expected_behavior, test_prompt=test_prompt,
-        severity_ceiling=severity_ceiling, documents=documents, file_uri=file_uri, category=category,
-        metadata=metadata,
+        severity_ceiling=severity_ceiling, documents=documents, file_uri=file_uri, decision=decision,
+        category=category, metadata=metadata,
     )
 
     provider = None
@@ -1092,6 +1134,7 @@ def run_scenario_repeated(
     severity_ceiling: str = "",
     documents: list | None = None,
     file_uri=None,
+    decision=None,
     category: str = "",
     metadata: dict | None = None,
     trace_config: dict | None = None,
@@ -1156,8 +1199,8 @@ def run_scenario_repeated(
     max_turns = kwargs["max_turns"]
     scenario = scenario_dict(
         name=name, description=description, expected_behavior=expected_behavior, test_prompt=test_prompt,
-        severity_ceiling=severity_ceiling, documents=documents, file_uri=file_uri, category=category,
-        metadata=metadata,
+        severity_ceiling=severity_ceiling, documents=documents, file_uri=file_uri, decision=decision,
+        category=category, metadata=metadata,
     )
 
     # The model entry carries every ModelAuditor kwarg (target, auditor and

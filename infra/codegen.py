@@ -113,6 +113,8 @@ def _scenario_dicts(version) -> list[dict]:
             d["test_prompt"] = item.revision.test_prompt
         if item.revision.expected_behavior:
             d["expected_behavior"] = item.revision.expected_behavior
+        if item.revision.decision:
+            d["decision"] = item.revision.decision
         out.append(d)
     return out
 

@@ -14,6 +14,25 @@ from scenarios.models import (
     ScenarioSetVersionItem,
 )
 
+#: Sentinel distinguishing "leave the decision block unchanged" from an explicit
+#: ``decision=None`` (clear it) in :func:`update_scenario_content`.
+_UNSET = object()
+
+
+def _validate_decision_block(decision: dict) -> None:
+    """Reject a malformed decision block before it is frozen into a revision.
+
+    Delegates to the engine's own schema check so Studio and the engine never
+    disagree about what a valid decision block looks like. Raises
+    ``StableAPIError`` with the engine's message on failure.
+    """
+    from infra.engine import validate_decision_block
+
+    try:
+        validate_decision_block(decision)
+    except ValueError as exc:
+        raise StableAPIError(detail=f"Invalid decision block: {exc}", code="invalid_decision_block", http_status=400) from exc
+
 
 def require_project_role(user, project: Project, *roles):
     if not user or not user.is_authenticated:
@@ -31,7 +50,7 @@ def require_project_role(user, project: Project, *roles):
 @transaction.atomic
 def create_scenario(*, project: Project, user, key: str, title: str, description: str, expected_behavior,
                     test_prompt: str = "", severity_ceiling: str = "", documents=None, file_uri=None,
-                    metadata: dict | None = None, category: str = "", tags: list | None = None) -> Scenario:
+                    decision=None, metadata: dict | None = None, category: str = "", tags: list | None = None) -> Scenario:
     require_project_role(user, project, ProjectMembership.Role.ADMIN, ProjectMembership.Role.AUDITOR)
     normalized_key = slugify(key) or slugify(title)
     if not normalized_key:
@@ -47,20 +66,26 @@ def create_scenario(*, project: Project, user, key: str, title: str, description
     )
     _create_revision(scenario=scenario, user=user, description=description, expected_behavior=expected_behavior,
                      test_prompt=test_prompt, severity_ceiling=severity_ceiling, documents=documents or [],
-                     file_uri=file_uri, metadata=metadata or {})
+                     file_uri=file_uri, decision=decision, metadata=metadata or {})
     return scenario
 
 
 @transaction.atomic
 def update_scenario_content(*, scenario: Scenario, user, description: str, expected_behavior,
                             test_prompt: str = "", severity_ceiling: str = "", documents=None, file_uri=None,
-                            metadata: dict | None = None) -> ScenarioRevision:
+                            decision=_UNSET, metadata: dict | None = None) -> ScenarioRevision:
     require_project_role(user, scenario.project, ProjectMembership.Role.ADMIN, ProjectMembership.Role.AUDITOR)
     latest = ScenarioRevision.objects.filter(scenario=scenario).order_by("-revision").first()
     new_metadata = metadata if metadata is not None else (latest.metadata if latest else {})
     new_ceiling = severity_ceiling or ""
     new_documents = documents if documents is not None else (latest.documents if latest else [])
     new_file_uri = file_uri if file_uri is not None else (latest.file_uri if latest else None)
+    # ``decision`` uses a sentinel so "clear the block" (None passed explicitly)
+    # is distinguishable from "leave unchanged" (the default below).
+    if decision is _UNSET:
+        new_decision = latest.decision if latest else None
+    else:
+        new_decision = decision
     if (
         latest
         and latest.description == description
@@ -69,19 +94,23 @@ def update_scenario_content(*, scenario: Scenario, user, description: str, expec
         and latest.severity_ceiling == new_ceiling
         and latest.documents == new_documents
         and latest.file_uri == new_file_uri
+        and latest.decision == new_decision
         and latest.metadata == new_metadata
     ):
         return latest
     return _create_revision(scenario=scenario, user=user, description=description, expected_behavior=expected_behavior,
                             test_prompt=test_prompt, severity_ceiling=new_ceiling, documents=new_documents,
-                            file_uri=new_file_uri, metadata=new_metadata)
+                            file_uri=new_file_uri, decision=new_decision, metadata=new_metadata)
 
 
 def _create_revision(*, scenario: Scenario, user, description: str, expected_behavior, test_prompt: str,
-                     severity_ceiling: str = "", documents=None, file_uri=None, metadata: dict) -> ScenarioRevision:
+                     severity_ceiling: str = "", documents=None, file_uri=None, decision=None,
+                     metadata: dict) -> ScenarioRevision:
     from audits.agentic.expectations import validate_agentic_metadata
 
     validate_agentic_metadata(metadata)
+    if decision:
+        _validate_decision_block(decision)
     next_revision = ScenarioRevision.objects.filter(scenario=scenario).count() + 1
     content_hash = scenario_revision_hash(
         description=description,
@@ -90,6 +119,7 @@ def _create_revision(*, scenario: Scenario, user, description: str, expected_beh
         severity_ceiling=severity_ceiling,
         documents=documents or [],
         file_uri=file_uri,
+        decision=decision,
         metadata=metadata,
     )
     return ScenarioRevision.objects.create(
@@ -101,6 +131,7 @@ def _create_revision(*, scenario: Scenario, user, description: str, expected_beh
         severity_ceiling=severity_ceiling or "",
         documents=documents or [],
         file_uri=file_uri,
+        decision=decision,
         metadata=metadata,
         content_hash=content_hash,
         created_by=user,

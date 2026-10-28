@@ -47,6 +47,10 @@ class ScenarioRevision(models.Model):
     # File attachment(s) for multimodal scenarios (str or list[str]).
     # Resolved via fsspec by the engine; attached to the first user message.
     file_uri = models.JSONField(null=True, blank=True)
+    # Decision block for decision-model targets: {id, type, instructions,
+    # criteria, accepted, state}. Null for ordinary chat scenarios. The engine
+    # grades these in code via the choice_match judge (no LLM judge call).
+    decision = models.JSONField(null=True, blank=True)
     metadata = models.JSONField(default=dict, blank=True)
     content_hash = models.CharField(max_length=71)
     created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True)

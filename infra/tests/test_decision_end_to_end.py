@@ -185,6 +185,57 @@ def test_max_turns_from_the_generation_config_still_applies_to_chat_targets():
     assert _kwargs_for(chat, {"max_turns": 5})["max_turns"] == 5
 
 
+def test_choice_match_judge_is_forced_for_a_decision_target():
+    """A decision run is graded in code; no LLM judge is invoked."""
+    kwargs = _kwargs_for(SNAPSHOT, {"max_turns": 1})
+    assert kwargs["judge"] == "choice_match"
+    assert kwargs["probe_prompt"] is None
+
+
+def test_llm_judge_is_still_used_for_chat_targets():
+    """Non-decision targets keep their frozen LLM judge untouched."""
+    chat = {**SNAPSHOT, "capabilities": {}}
+    kwargs = _kwargs_for(chat, {"max_turns": 3})
+    assert kwargs["judge"] != "choice_match"
+
+
+def test_scenario_dict_includes_decision_block():
+    """The engine's scenario dict carries the decision block through."""
+    from infra.engine import scenario_dict
+
+    d = scenario_dict(
+        name="dec", description="Pick A or B",
+        expected_behavior=None, test_prompt=None,
+        decision={"id": "d1", "type": "choice", "instructions": "Pick one.",
+                  "criteria": {"A": "Option A", "B": "Option B"},
+                  "accepted": ["A"]},
+    )
+    assert d["decision"]["accepted"] == ["A"]
+    # A non-decision scenario has no decision key
+    d2 = scenario_dict(name="chat", description="Say hi")
+    assert "decision" not in d2
+
+
+def test_validate_decision_block_accepts_valid_and_rejects_invalid():
+    from infra.engine import validate_decision_block
+
+    # Valid block passes silently
+    validate_decision_block({"id": "d1", "type": "choice", "instructions": "x",
+                             "criteria": {"A": "Option A", "B": "Option B"},
+                             "accepted": ["A"]})
+    # Missing criteria raises ValueError
+    with pytest.raises(ValueError):
+        validate_decision_block({"id": "d1", "type": "choice", "instructions": "x"})
+    # accepted key not in criteria raises ValueError
+    with pytest.raises(ValueError):
+        validate_decision_block({"id": "d1", "type": "choice", "instructions": "x",
+                                 "criteria": {"A": "Option A", "B": "Option B"},
+                                 "accepted": ["C"]})
+    # None / empty is a no-op
+    validate_decision_block(None)
+    validate_decision_block({})
+
+
 @pytest.mark.django_db
 def test_a_decision_target_forwards_the_per_turn_traceparent():
     """Why the trace-context adapter is not installed for decision runs.
