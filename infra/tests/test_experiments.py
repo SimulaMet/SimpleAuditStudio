@@ -110,9 +110,10 @@ class ExperimentFlowTests(_ExperimentBase):
             page = self.client.get("/experiments/new/")
         self.assertContains(page, "New Experiment")
         self.assertContains(page, 'type="checkbox" name="target_model"')
-        self.assertContains(page, f'name="auditor_model" value="{agent_model.id}"')
-        self.assertContains(page, f'name="judge_model" value="{agent_model.id}"')
+        # Agents are offered as targets only — never as auditor/judge models.
         self.assertContains(page, f'name="agent_id" value="{agent.id}"')
+        self.assertNotContains(page, f'name="auditor_model" value="{agent_model.id}"')
+        self.assertNotContains(page, f'name="judge_model" value="{agent_model.id}"')
         self.assertContains(page, 'name="scenario_version"')
 
     def test_single_combination_becomes_a_singleton_experiment(self):

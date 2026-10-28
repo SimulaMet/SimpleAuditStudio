@@ -429,19 +429,24 @@ def _scenario_execute_impl(workflow_input: ScenarioInput, ctx: Context) -> dict:
             agent_id=str(run.agent_config_snapshot.get("agent_id", "")),
         )
 
-    gen_params = run.generation_parameters_snapshot or {}
-    if run.agent_config_snapshot:
-        gen_params = augment_agent_generation(gen_params, run.agent_config_snapshot)
-    n_reps = int(gen_params.get("n_repetitions") or 1)
-    max_turns = int(gen_params.get("max_turns") or 5)
-    # Trace acquisition config (Promptfoo parity). Empty = no tracing. studio
-    # mode fetches the run's spans from Studio's own OTLP listener by
-    # (target_id, trace_id); the worker resolves the run's frozen target
-    # credential id here, at execution time, so the frozen run needs no UI
-    # knowledge (and picks up credentials created after the run was queued).
     from infra.tracing import enrich_trace_config
 
+    # Trace acquisition config (Promptfoo parity). Empty = no tracing. Resolved
+    # before the agent override: a traced agent run must reach the Open WebUI
+    # wrapper, the only target that exports OTLP spans for the run.
     trace_config = enrich_trace_config(run.trace_config or None, run.target_config_snapshot)
+
+    gen_params = run.generation_parameters_snapshot or {}
+    if run.agent_config_snapshot:
+        gen_params = augment_agent_generation(
+            gen_params, run.agent_config_snapshot, via_wrapper=bool(trace_config),
+            target=run.target_config_snapshot,
+        )
+    n_reps = int(gen_params.get("n_repetitions") or 1)
+    max_turns = int(gen_params.get("max_turns") or 5)
+    # studio mode fetches the run's spans from Studio's own OTLP listener by
+    # (target_id, trace_id); the credential id was resolved above, at execution
+    # time, so the frozen run needs no UI knowledge.
 
     # Granular stage detail for the frontend: which phase of the scenario is
     # starting (target execution begins with the auditor generating a probe).

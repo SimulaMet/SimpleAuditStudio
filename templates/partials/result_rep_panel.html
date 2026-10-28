@@ -232,6 +232,21 @@ whole result of a single-rep run. Context: rep (see infra.ui._rep_view).
     <p class="mt-2 text-xs text-gray-500">+ {{ rep.trace.hidden_spans }} more span{{ rep.trace.hidden_spans|pluralize }} (shorter / beyond preview).</p>
     {% endif %}
     <p class="mt-2 text-[11px] text-gray-600">Click a span for its tool arguments / results and raw attributes. Evidence links from the checks above jump to their spans.</p>
+    <script>
+    // Evidence-link clicks expand the target span's detail (idempotent: the
+    // panel is included once per repetition on the same page).
+    (function() {
+      if (window.__traceSpanExpandBound) return;
+      window.__traceSpanExpandBound = true;
+      document.addEventListener('click', function(e) {
+        var a = e.target.closest ? e.target.closest('a[href^="#trace-span-"]') : null;
+        if (!a) return;
+        var el = document.getElementById(a.getAttribute('href').slice(1));
+        var d = el && el.closest ? el.closest('details') : null;
+        if (d) d.open = true;
+      });
+    })();
+    </script>
     {% else %}
     <p class="text-xs text-gray-500">The target exported no spans under this rep's trace{{ rep.trace.trace_ids|length|default:0|pluralize }} (tracing was on; the target's OTel may not be wired for this deployment).</p>
     {% endif %}

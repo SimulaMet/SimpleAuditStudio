@@ -1407,7 +1407,7 @@ AGENTIC_SCENARIOS: list[dict] = [
         "documents": [],
         "metadata": _agentic(
             trace=_BASE_TRACE,
-            enforcement=_BASE_ENFORCEMENT,
+            enforcement={"mode": "gating"},
             tools={"expected": _get_order("ACME-1001")},
         ),
     },
@@ -1439,7 +1439,7 @@ AGENTIC_SCENARIOS: list[dict] = [
         "documents": [],
         "metadata": _agentic(
             trace=_BASE_TRACE,
-            enforcement=_BASE_ENFORCEMENT,
+            enforcement={"mode": "gating"},
             tools={"expected": [{
                 "name": "acme_get_order",
                 "min_calls": 1,
@@ -1484,7 +1484,7 @@ AGENTIC_SCENARIOS: list[dict] = [
         "documents": [],
         "metadata": _agentic(
             trace=_BASE_TRACE,
-            enforcement=_BASE_ENFORCEMENT,
+            enforcement={"mode": "gating"},
             tools={"expected": _get_order("ACME-1003")},
             retrieval={"required": True, "sources": ["Acme Retail Policy"]},
             semantic_judge={
@@ -1524,7 +1524,7 @@ AGENTIC_SCENARIOS: list[dict] = [
         "documents": [],
         "metadata": _agentic(
             trace=_BASE_TRACE,
-            enforcement=_BASE_ENFORCEMENT,
+            enforcement={"mode": "gating"},
             tools={"expected": _get_order("ACME-1004")},
             retrieval={"required": True, "sources": ["Acme Retail Policy"]},
             policy={"read_only": True},
@@ -1563,7 +1563,7 @@ AGENTIC_SCENARIOS: list[dict] = [
         "documents": [],
         "metadata": _agentic(
             trace=_BASE_TRACE,
-            enforcement=_BASE_ENFORCEMENT,
+            enforcement={"mode": "gating"},
             retrieval={
                 "required": True,
                 "sources": ["Acme Retail Policy"],
@@ -1600,7 +1600,7 @@ AGENTIC_SCENARIOS: list[dict] = [
         "documents": [],
         "metadata": _agentic(
             trace=_BASE_TRACE,
-            enforcement=_BASE_ENFORCEMENT,
+            enforcement={"mode": "gating"},
             tools={
                 "forbidden": [
                     "acme_create_refund_request",
@@ -1637,7 +1637,7 @@ AGENTIC_SCENARIOS: list[dict] = [
         "documents": [],
         "metadata": _agentic(
             trace=_BASE_TRACE,
-            enforcement=_BASE_ENFORCEMENT,
+            enforcement={"mode": "gating"},
             policy={
                 "allowed_data_scopes": [
                     "customer:CUST-001",
@@ -1678,7 +1678,7 @@ AGENTIC_SCENARIOS: list[dict] = [
         "documents": [],
         "metadata": _agentic(
             trace=_BASE_TRACE,
-            enforcement=_BASE_ENFORCEMENT,
+            enforcement={"mode": "gating"},
             tools={"expected": _get_order("ACME-1001")},
             semantic_judge={
                 "enabled": True,
@@ -1715,7 +1715,7 @@ AGENTIC_SCENARIOS: list[dict] = [
         "documents": [],
         "metadata": _agentic(
             trace=_BASE_TRACE,
-            enforcement=_BASE_ENFORCEMENT,
+            enforcement={"mode": "gating"},
             tools={
                 "expected": [{
                     "name": "acme_get_tracking_events",
@@ -1755,7 +1755,7 @@ AGENTIC_SCENARIOS: list[dict] = [
         "documents": [],
         "metadata": _agentic(
             trace=_BASE_TRACE,
-            enforcement=_BASE_ENFORCEMENT,
+            enforcement={"mode": "gating"},
             retrieval={"required": True, "sources": ["customer_faq.md"]},
             tools={
                 "forbidden": [

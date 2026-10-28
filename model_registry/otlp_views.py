@@ -15,6 +15,7 @@ Two kinds of endpoints live here:
 from __future__ import annotations
 
 import base64
+import gzip
 import json
 
 from django.http import JsonResponse
@@ -25,6 +26,7 @@ from rest_framework.response import Response
 from simpleaudit.tracing.auth import parse_basic_header, parse_bearer_header
 from simpleaudit.tracing.store import SpanStore, normalize_span
 
+from audits.agentic.auditable import select_auditable_spans
 from infra.exceptions import StableAPIError
 from model_registry import otlp_services as otlp
 from model_registry.models import ModelConnection, OTLPCredential, OtlpSpan
@@ -155,6 +157,37 @@ def _otlp_body_to_dict(body: bytes, content_type: str | None) -> dict:
     return json.loads(body)
 
 
+_STATUS_CODES = {"STATUS_CODE_UNSET": 0, "STATUS_CODE_OK": 1, "STATUS_CODE_ERROR": 2}
+
+
+def _normalize_span_status(payload: dict) -> None:
+    """Map OTLP status names to codes and keep an error's exception message.
+
+    Protobuf exports arrive as ``STATUS_CODE_ERROR`` strings, which the engine's
+    parser does not recognize (it treats them as OK). The exception text lives
+    in the span's ``exception`` event, which the parser drops, so it is copied
+    onto the span's attributes first.
+    """
+    for resource in payload.get("resourceSpans") or []:
+        for scope in resource.get("scopeSpans") or []:
+            for span in scope.get("spans") or []:
+                status = span.get("status") or {}
+                code = status.get("code")
+                if isinstance(code, str):
+                    code = _STATUS_CODES.get(code, 0)
+                    status["code"] = code
+                    span["status"] = status
+                if code != 2:
+                    continue
+                attributes = span.setdefault("attributes", [])
+                for event in span.get("events") or []:
+                    if event.get("name") != "exception":
+                        continue
+                    for kv in event.get("attributes") or []:
+                        if kv.get("key") in ("exception.type", "exception.message"):
+                            attributes.append(kv)
+
+
 def _hexify_id_fields(node) -> None:
     """Recursively convert protobuf-JSON base64 id fields to hex in place."""
     if isinstance(node, dict):
@@ -189,19 +222,20 @@ def otlp_traces(request):
 
     authorization = request.headers.get("Authorization")
     cred = None
-    if authorization and authorization.strip().lower().startswith("basic"):
-        parsed = parse_basic_header(authorization)
-        if parsed:
-            cred = otlp.verify_basic(*parsed)
-    elif authorization and authorization.strip().lower().startswith("bearer"):
-        token = parse_bearer_header(authorization)
-        if token:
-            cred = otlp.verify_bearer(token)
-
-    # No Authorization header (or an unrecognized scheme): fall back to an
-    # enabled "none" credential for this workspace, if any. This is the
-    # unauthenticated path for targets that can't send credentials.
-    if cred is None:
+    if authorization:
+        # A presented credential must verify. Falling back to an open "none"
+        # credential here would let a wrong or revoked token write into that
+        # target, so only a request with no Authorization header at all uses it.
+        if authorization.strip().lower().startswith("basic"):
+            parsed = parse_basic_header(authorization)
+            if parsed:
+                cred = otlp.verify_basic(*parsed)
+        elif authorization.strip().lower().startswith("bearer"):
+            token = parse_bearer_header(authorization)
+            if token:
+                cred = otlp.verify_bearer(token)
+    else:
+        # Targets that can't send credentials use an enabled "none" credential.
         cred = OTLPCredential.objects.filter(
             auth_mode=OTLPCredential.AuthMode.NONE, enabled=True
         ).first()
@@ -219,7 +253,15 @@ def otlp_traces(request):
         # authenticated target so it's attributable, then normalize into the
         # shared SpanStore (the same schema the run path and the judge's
         # evidence selection use).
-        raw_spans = parse_otlp_json(_otlp_body_to_dict(request.body, request.headers.get("Content-Type")))
+        body = request.body
+        if request.headers.get("Content-Encoding", "").lower() == "gzip":
+            body = gzip.decompress(body)
+        payload = _otlp_body_to_dict(body, request.headers.get("Content-Type"))
+        _normalize_span_status(payload)
+        raw_spans = parse_otlp_json(payload)
+        # Store only the spans the audit reads (tool, LLM, retrieval, ...);
+        # transport and framework spans are most of an export and are dropped here.
+        raw_spans = select_auditable_spans(raw_spans)
         for span in raw_spans:
             attrs = span.get("attributes")
             if attrs is None:

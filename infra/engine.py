@@ -211,7 +211,10 @@ def _merge(*dicts: dict | None) -> dict | None:
     return merged or None
 
 
-def augment_agent_generation(generation: dict | None, agent_snapshot: dict | None) -> dict:
+def augment_agent_generation(
+    generation: dict | None, agent_snapshot: dict | None, *, via_wrapper: bool = False,
+    target: dict | None = None,
+) -> dict:
     """Add standard Open WebUI Agent request metadata to target parameters.
 
     Open WebUI's compatibility endpoint only exposes model-attached native
@@ -224,10 +227,13 @@ def augment_agent_generation(generation: dict | None, agent_snapshot: dict | Non
     if not agent_snapshot:
         return result
     result["_agent_target"] = True
-    # Carry the resolved base model connection so auditor_kwargs can execute
-    # against it directly (bypassing the OWUI wrapper endpoint).
     base_model = agent_snapshot.get("base_model") or {}
-    if base_model.get("connection_id"):
+    # Both traced and untraced runs execute the agent's base model directly with
+    # tools injected as OpenAI function definitions. Traced runs additionally
+    # route through the OWUI compat endpoint (which exports OTLP spans) rather
+    # than the base connection, so the W3C traceparent propagated per turn is
+    # adopted by OWUI's exporter and the spans land in Studio's listener.
+    if base_model.get("connection_id") and base_model.get("model_id"):
         result["_agent_base_model"] = {
             "connection_id": base_model["connection_id"],
             "model_id": base_model.get("model_id"),
@@ -236,9 +242,26 @@ def augment_agent_generation(generation: dict | None, agent_snapshot: dict | Non
     # target's persona. When a run does not carry an explicit system prompt,
     # use the agent's — this also makes bare-model targets (e.g. SimulaChat
     # directly) behave as the audited agent instead of a generic assistant.
+    # The frozen persona names the agent's tools as OWUI internal function
+    # names; when we execute the base model directly with OpenAI function
+    # definitions, append a short execution note so the persona and the actual
+    # tool names line up. Without it the model follows stale instructions like
+    # "use acme_lookup_order" and never calls the real functions.
     if not result.get("system_prompt"):
         prompt = (agent_snapshot.get("system_prompt") or "").strip()
         if prompt:
+            tool_names = [
+                t.get("external_id") for t in agent_snapshot.get("tools") or []
+                if isinstance(t, dict) and t.get("external_id")
+            ]
+            if (agent_snapshot.get("capabilities") or {}).get("knowledge_search"):
+                tool_names.append("acme_search_knowledge")
+            if tool_names:
+                prompt += (
+                    "\n\nExecution note: you are running with these exact tools — "
+                    + ", ".join(f"`{name}`" for name in dict.fromkeys(tool_names))
+                    + ". Call them by these names whenever the task needs them."
+                )
             result["system_prompt"] = prompt
     target_params = dict(result.get("target_params") or {})
     # Open WebUI's Agent compatibility endpoint does not accept provider-only
@@ -291,33 +314,55 @@ def augment_agent_generation(generation: dict | None, agent_snapshot: dict | Non
                     "parameters": {"type": "object", "properties": {}},
                 },
             })
+    # When the audited agent declares knowledge search capability, expose the
+    # local Acme policy search fixture as a callable function. Without it the
+    # model has no retrieval path and every retrieval.required expectation
+    # fails deterministically — even though the agent's capabilities say it
+    # can search its knowledge base.
+    if (agent_snapshot.get("capabilities") or {}).get("knowledge_search"):
+        kb_names = sorted(
+            str(kb.get("name")) for kb in agent_snapshot.get("knowledge_bases") or []
+            if isinstance(kb, dict) and kb.get("name")
+        )
+        kb_hint = f" Sources: {', '.join(kb_names)}." if kb_names else ""
+        agent_tools.append({
+            "type": "function",
+            "function": {
+                "name": "acme_search_knowledge",
+                "description": (
+                    "Search the attached policy knowledge base for relevant "
+                    f"passages.{kb_hint} Use this before answering any "
+                    "policy, return-window, or eligibility question."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string", "description": "Natural-language search query."},
+                        "top_k": {"type": "integer", "description": "Maximum passages to return (default 3)."},
+                    },
+                    "required": ["query"],
+                },
+            },
+        })
+    # Both traced and untraced runs inject the tools as OpenAI function
+    # definitions: the base model emits native tool_calls and Studio executes
+    # them locally (the OWUI compat endpoint does not run an agent pipeline).
     if agent_tools:
         existing = target_params.get("tools") or []
         seen = {t.get("function", {}).get("name") for t in existing if isinstance(t, dict)}
         merged = list(existing) + [t for t in agent_tools if t["function"]["name"] not in seen]
         if merged:
             target_params["tools"] = merged
-    extra_body = dict(target_params.get("extra_body") or {})
-    if not extra_body.get("session_id") and agent_snapshot.get("agent_id") is not None:
-        extra_body["session_id"] = f"simpleaudit-agent-{agent_snapshot['agent_id']}"
-    tool_ids = [
-        tool.get("external_id")
-        for tool in agent_snapshot.get("tools") or []
-        if isinstance(tool, dict) and tool.get("external_id")
-    ]
-    if tool_ids and "tool_ids" not in extra_body:
-        extra_body["tool_ids"] = tool_ids
-    # Pass KB external IDs so the OWUI internal call path can include them
-    # as ``files`` for real vector retrieval.
-    kb_ids = [
-        kb.get("external_id")
-        for kb in agent_snapshot.get("knowledge_bases") or []
-        if isinstance(kb, dict) and kb.get("external_id")
-    ]
-    if kb_ids:
-        extra_body["kb_ids"] = kb_ids
-    if extra_body:
-        target_params["extra_body"] = extra_body
+    # Traced runs route through the OWUI compat endpoint (which exports OTLP
+    # spans) instead of the base connection directly. ``_owui_route`` carries
+    # the frozen target's OWUI connection so build_model_auditor can override
+    # base_url/api_key while keeping the base model's bare model_id — the
+    # compat endpoint only resolves "<conn id>.<model id>" for provider models
+    # and 401s on agent workspace-model ids.
+    _target = target or {}
+    if via_wrapper and _target.get("connection_id") and "/chat/api/v1" in (_target.get("base_url") or ""):
+        result["_owui_route"] = {"connection_id": int(_target["connection_id"])}
+    if target_params:
         result["target_params"] = target_params
     return result
 
@@ -350,11 +395,17 @@ def auditor_kwargs(*, target: dict, auditor: dict, judge: dict, generation: dict
         resolve_key = snapshot_api_key
     target_cfg = _auditor_kwargs_from_snapshot(target, resolve_key)
     if gen.get("_agent_target"):
+        # The agent's generation params (injected tools, temperature, ...) live
+        # in ``generation["target_params"]`` and are merged back into the
+        # returned kwargs at the bottom of this function. Drop only the
+        # provider-only reasoning control here — OWUI's compat endpoint does
+        # not accept it. An empty result must stay a dict so that merge has a
+        # base to write into.
         target_cfg["gen_params"] = {
             key: value
             for key, value in (target_cfg["gen_params"] or {}).items()
-            if key not in ("reasoning_effort", "tools")
-        } or None
+            if key != "reasoning_effort"
+        }
         # When the agent's base model differs from the OWUI wrapper endpoint,
         # execute against the base model directly. The frozen agent snapshot
         # carries the resolved base_model connection; use it to override the
@@ -391,6 +442,29 @@ def auditor_kwargs(*, target: dict, auditor: dict, judge: dict, generation: dict
                         "kwargs": {**_client_defaults(provider), **(bp_kw or {})} or None,
                         "gen_params": merged_gen or None,
                     })
+                    # Traced runs route through the OWUI compat endpoint so the
+                    # W3C traceparent is adopted and exported as OTLP spans.
+                    # The base model's bare model_id must be prefixed with the
+                    # *base* connection's OWUI prefix ("<conn>.<model>") — that
+                    # is how the compat endpoint resolves provider models; the
+                    # wrapper connection's prefix (and agent workspace-model
+                    # ids like studio.agent-*) are not resolvable there.
+                    owui_route = gen.get("_owui_route") or {}
+                    if owui_route.get("connection_id"):
+                        try:
+                            owui_conn = ModelConnection.objects.get(id=owui_route["connection_id"])
+                            target_cfg.update({
+                                "model": f"{base_conn.id}.{base_model_row.model_id}",
+                                "base_url": owui_conn.base_url,
+                                # Placeholder; TraceContextModelTarget swaps it
+                                # for an OWUI session JWT on every turn.
+                                "api_key": "owui-session",
+                            })
+                        except Exception as _exc:  # noqa: BLE001
+                            import logging
+                            logging.getLogger(__name__).debug(
+                                "OWUI route override failed, using base connection: %s", _exc
+                            )
             except Exception as _exc:  # noqa: BLE001 - fall back to wrapper endpoint
                 import logging
                 logging.getLogger(__name__).debug(
@@ -516,6 +590,10 @@ def scenario_dict(
     return scenario
 
 
+# Quiet period that ends settling: longer than the 5s OTLP exporter interval.
+_SETTLE_QUIET_S = 6.0
+
+
 def _collect_evidence_spans(
     correlation: Any,
     provider: Any,
@@ -541,10 +619,10 @@ def _collect_evidence_spans(
     for targets that do not adopt the propagated trace id.
 
     The fetch is settled: remote exporters flush in batches, so the spans for
-    a trace id can arrive a couple of seconds after the model call returns.
-    The span set is re-polled until it stays quiet for 0.6s, with one delayed
-    verification pass before ``settle_timeout`` elapses (``settle_timeout=None``
-    disables settling — the fast path for tests).
+    a trace id can arrive several seconds after the model call returns. The
+    span set is re-polled until no new span arrives for ``_SETTLE_QUIET_S``,
+    bounded by ``settle_timeout`` (``settle_timeout=None`` disables settling —
+    the fast path for tests).
 
     Returns the legacy span list by default, or a dict with trace evidence tiers
     when ``structured=True``. None is returned when
@@ -586,36 +664,28 @@ def _collect_evidence_spans(
                 logger = __import__("logging").getLogger("simpleaudit.engine")
                 logger.warning("Trace window fetch failed: %s", exc)
 
-    # Settle: the remote exporter flushes spans in batches, so they routinely
-    # arrive seconds after the model call returns — even *after* the first
-    # fetch comes back empty (observed live: batches ~1-2s apart on a
-    # 5s exporter interval). Poll until the span set is quiet for 0.6s, then
-    # run one delayed verification pass 2.0s later that catches the final
-    # batch of a 5s-interval exporter, so the evidence is complete rather
-    # than a race. Bounded by the settle budget.
+    # Settle: remote exporters flush spans in batches on a fixed interval (5s
+    # for OpenWebUI's OTLP exporter), so the last batch of a run can arrive
+    # several seconds after the model call returns. Keep polling until no new
+    # span has arrived for a full export interval, bounded by ``settle_timeout``.
     if settle_timeout:
         deadline = _time.monotonic() + settle_timeout
-        stable = False
-        while not stable:
+        while True:
             _fetch_all()
             if not all_spans:
                 _fetch_window()
-            if not all_spans:
-                if _time.monotonic() >= deadline:
+            if all_spans:
+                before = len(all_spans)
+                _time.sleep(min(_SETTLE_QUIET_S, max(0.0, deadline - _time.monotonic())))
+                _fetch_all()
+                if len(all_spans) == before:
                     break
-                _time.sleep(0.25)
-                continue
-            before = len(all_spans)
-            _time.sleep(0.6)
-            _fetch_all()
-            if len(all_spans) == before:
-                stable = True
             elif _time.monotonic() >= deadline:
                 break
-        if stable and _time.monotonic() + 2.0 < deadline:
-            _time.sleep(2.0)
-            _fetch_all()
-            _fetch_window()
+            else:
+                _time.sleep(0.25)
+            if _time.monotonic() >= deadline:
+                break
 
     if not all_spans:
         return None
@@ -797,7 +867,7 @@ def run_scenario(
                 # the W3C traceparent (e.g. OpenWebUI).
                 _window = (_exec_start_ts - 2.0, _t.time() + 5.0)
                 evidence = _collect_evidence_spans(
-                    execution.trace_correlation, provider, settle_timeout=10.0,
+                    execution.trace_correlation, provider, settle_timeout=20.0,
                     window=_window,
                     capture_level=(trace_config or {}).get("content_capture", "structural"),
                     structured=True,
@@ -904,7 +974,7 @@ def run_scenario(
             # tiers (trace_ids, all_spans, selected_spans, selection metadata).
             if provider is not None and correlation is not None:
                 full_trace_evidence = _collect_evidence_spans(
-                    correlation, provider, settle_timeout=10.0,
+                    correlation, provider, settle_timeout=20.0,
                     window=(_exec_start_ts_outer - 2.0, _t.time() + 5.0),
                     capture_level=(trace_config or {}).get("content_capture", "structural"),
                     structured=True,
@@ -1100,7 +1170,7 @@ def run_scenario_repeated(
         def _rep_evidence_resolver(execution):
             corr = current_correlation["corr"]
             evidence = _collect_evidence_spans(
-                corr, provider, settle_timeout=10.0,
+                corr, provider, settle_timeout=20.0,
                 capture_level=(trace_config or {}).get("content_capture", "structural"),
                 structured=True,
             )
@@ -1176,7 +1246,9 @@ def run_scenario_repeated(
             if provider is not None:
                 for idx, rep in enumerate(reps):
                     corr = rep_correlations.get(rep.get("_rep_index"))
-                    full_trace_evidence = _collect_evidence_spans(corr, provider, structured=True)
+                    full_trace_evidence = _collect_evidence_spans(
+                        corr, provider, settle_timeout=20.0, structured=True,
+                    )
                     if full_trace_evidence:
                         # Persist full evidence tiers separately. For backward compatibility,
                         # also populate judgment.evidence_spans with selected_spans.

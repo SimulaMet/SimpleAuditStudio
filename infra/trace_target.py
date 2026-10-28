@@ -373,6 +373,12 @@ async def _streaming_call(
     all_tool_markers: list[str] = []  # Accumulated [TOOL_CALL]/[TOOL_RESULT] for trajectory
 
     while True:
+        # Tool-loop requests must not stream: Open WebUI marks the OTLP span
+        # ERROR when the client disconnects before the SSE body finishes, and
+        # a tool_calls response would make us abandon the stream early. A
+        # non-streaming call completes fully server-side so spans stay OK.
+        if tools_spec:
+            kwargs["stream"] = False
         attempt = 0
         while True:
             try:
@@ -455,7 +461,45 @@ async def _streaming_call(
         # No tool calls → return the final text response with all prior tool markers.
         if not raw_tool_calls:
             final_content = "".join(all_tool_markers) + "".join(content_parts)
-            return final_content, total_input_tokens, total_output_tokens
+            # Retry once on empty completion: some providers (SimulaChat)
+            # intermittently return content="" with no tool_calls on
+            # multi-turn conversations. A single retry recovers most cases.
+            if not final_content.strip() and loop_count == 0:
+                logger.warning(
+                    "Target returned empty completion (no tool_calls); retrying once."
+                )
+                kwargs["messages"] = current_messages
+                try:
+                    response2 = await client.acompletion(**kwargs)
+                    choices2 = _chunk_value(response2, "choices", []) or []
+                    msg2 = _chunk_value(choices2[0], "message", {}) if choices2 else {}
+                    content2 = _chunk_value(msg2, "content", "") or ""
+                    tcs2 = _chunk_value(msg2, "tool_calls") or []
+                    usage2 = _chunk_value(response2, "usage")
+                    if _chunk_value(usage2, "prompt_tokens"):
+                        total_input_tokens += _chunk_value(usage2, "prompt_tokens", 0)
+                    if _chunk_value(usage2, "completion_tokens"):
+                        total_output_tokens += _chunk_value(usage2, "completion_tokens", 0)
+                    if content2.strip():
+                        final_content = content2
+                    elif tcs2:
+                        # Second attempt produced tool_calls — fall through to
+                        # the tool-execution path below by re-setting state.
+                        for tc in tcs2:
+                            fn = _tc_field(tc, "function", {}) or {}
+                            name = _tc_field(fn, "name", "?")
+                            args = _tc_field(fn, "arguments", "{}")
+                            tool_call_parts.append(f"[TOOL_CALL {name}({args})]")
+                            raw_tool_calls.append({"id": _tc_field(tc, "id", ""), "name": name, "arguments": args})
+                        all_tool_markers.extend(tool_call_parts)
+                        # Fall through to tool execution below.
+                    else:
+                        # Still empty after retry — accept and move on.
+                        logger.warning("Target still empty after retry.")
+                except Exception as exc:  # noqa: BLE001 - retry must not crash the audit
+                    logger.warning("Empty-completion retry failed: %s", exc)
+            if not raw_tool_calls:
+                return final_content, total_input_tokens, total_output_tokens
 
         # Execute tool calls and append results for the next loop iteration.
         loop_count += 1
@@ -546,14 +590,39 @@ class TraceContextModelTarget(ModelTarget):
         context: TargetContext | None = None,
     ) -> TargetResponse:
         request_params = dict(params or {})
+        model = self._model
         if context and context.trace_headers:
             extra_headers = dict(request_params.get("extra_headers") or {})
             extra_headers.update(context.trace_headers)
             request_params["extra_headers"] = extra_headers
 
+        # Open WebUI's OpenAI-compat endpoint only authenticates OWUI session
+        # JWTs (Studio's sa_api_ keys are rejected), so when we are talking to
+        # that endpoint swap the client's bearer token for a trusted-header
+        # JWT. This is what lets a traced agent run reach the base model
+        # through OWUI (the only path that exports OTLP spans).
+        raw_client = getattr(self._client, "client", None)
+        base_url = str(getattr(raw_client, "base_url", "") or "")
+        if "/chat/api/v1" in base_url:
+            jwt = await _owui_get_jwt(base_url)
+            if jwt:
+                raw_client.api_key = jwt
+
+        # any_llm's OpenAI provider does not forward ``extra_headers`` to the
+        # SDK (it silently drops it), so the W3C traceparent never reaches OWUI
+        # and spans land on OWUI-generated trace ids. For the OWUI route we
+        # set the headers directly on the underlying AsyncOpenAI client instead;
+        # they ride along on every request of this turn. The guard for
+        # ``_custom_headers`` keeps test doubles without the real SDK attribute
+        # from crashing; production clients always have it.
+        if context and context.trace_headers and raw_client is not None:
+            custom_headers = getattr(raw_client, "_custom_headers", None)
+            if isinstance(custom_headers, dict):
+                custom_headers.update(context.trace_headers)
+
         content, input_tokens, output_tokens = await _streaming_call(
             self._client,
-            self._model,
+            model,
             system=system,
             user=user,
             response_format=response_format,

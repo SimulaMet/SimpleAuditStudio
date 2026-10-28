@@ -249,6 +249,10 @@ class Command(BaseCommand):
             "SIMPLEAUDIT_CHAT",
             runtime.effective_chat_mode(os.environ.get("SIMPLEAUDIT_MODE", "dev")),
         )
+        # Structural spans are useful for Agent audits; mirror the embedded CLI
+        # default so a fresh checkout gets real trace evidence out of the box.
+        # An explicit SIMPLEAUDIT_CHAT_OTLP in .env still wins (setdefault).
+        os.environ.setdefault("SIMPLEAUDIT_CHAT_OTLP", "true")
 
         # With chat on, the front door (Caddy) owns the public port and the
         # web server binds the internal port instead; Caddy proxies the rest
@@ -427,9 +431,33 @@ class Command(BaseCommand):
             chat_proxy.stop_open_webui()
             return None
 
+        def _fix_owui_connection_url():
+            """Point the OWUI ModelConnection at the actual upstream port.
+
+            Port allocation can shift between restarts (e.g. 8000→8100); the
+            frozen connection's base_url must track the live OWUI or agent
+            audits fail with opaque connection errors.
+            """
+            try:
+                from model_registry.models import ModelConnection
+
+                expected = f"{chat_proxy.chat_upstream_base()}/api/v1"
+                conn = ModelConnection.objects.filter(base_url__icontains="/chat/api/v1").first()
+                if conn and conn.base_url != expected:
+                    conn.base_url = expected
+                    conn.save(update_fields=["base_url"])
+                    return f"OWUI connection → {expected}"
+            except Exception as exc:  # noqa: BLE001 - best-effort port fix at startup
+                import logging
+                logging.getLogger(__name__).debug("OWUI conn URL fix skipped: %s", exc)
+            return ""
+
         def report():
             if chat_proxy.wait_until_ready(process):
                 print(f"\n✅ Playground is ready — http://localhost:{public_port}/playground/", flush=True)
+                _fixed = _fix_owui_connection_url()
+                if _fixed:
+                    print(f"   {_fixed}", flush=True)
                 print(f"   {_sync_chat_models()}\n", flush=True)
                 backfilled = _backfill_demo_chat()
                 if backfilled:

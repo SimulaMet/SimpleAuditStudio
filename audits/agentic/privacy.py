@@ -9,15 +9,30 @@ from typing import Any
 CAPTURE_LEVELS = {"structural", "inputs", "full"}
 _SENSITIVE_KEY = re.compile(
     r"(?:api[_-]?key|authorization|auth[_-]?header|cookie|set-cookie|"
-    r"password|passwd|secret|token|credential|private[_-]?key|access[_-]?key)",
+    r"password|passwd|secret|credential|private[_-]?key|access[_-]?key|"
+    # A token segment only: "access_token" matches, "gen_ai.usage.input_tokens" does not.
+    r"(?:^|[_.-])token(?:$|[_.-]))",
     re.IGNORECASE,
 )
 _SECRET_VALUE = re.compile(
-    r"(?:bearer\s+|basic\s+)[A-Za-z0-9+/=._~-]+|"
+    # A bearer/basic credential is a long opaque string; plain words after
+    # "basic" ("basic refund question") are not secrets.
+    r"(?:bearer\s+|basic\s+)(?=[A-Za-z0-9+/=._~-]*[0-9+/=._~-])[A-Za-z0-9+/=._~-]{16,}|"
     r"(?:sk|pk|rk)-[A-Za-z0-9_-]{12,}|sa_otlp_[A-Za-z0-9_-]{8,}",
     re.IGNORECASE,
 )
 _REDACTED = "[REDACTED]"
+
+# Content kept at every level: the tool arguments and results the checks read.
+# Capture levels, by what each keeps (the default is ``structural``):
+#   structural  skeleton, tool arguments/results, retrieval sources, prompts,
+#               and completions: everything the audit checks and judge read.
+#   inputs      structural without model output (completions, output values).
+#   full        everything, including span events and raw result/output fields.
+_OUTPUT_KEYS = frozenset({
+    "gen_ai.completion", "gen_ai.output.messages", "llm.output.messages", "output.value",
+})
+_OUTPUT_PREFIXES = ("llm.output_messages.",)
 
 
 def capture_level(value: str | None) -> str:
@@ -41,6 +56,11 @@ def redact_sensitive(value: Any, *, key: str = "") -> Any:
     return value
 
 
+def _keep_attribute(key: str, level: str) -> bool:
+    """Whether an attribute survives capture at ``level``."""
+    return not (level == "inputs" and (key in _OUTPUT_KEYS or key.startswith(_OUTPUT_PREFIXES)))
+
+
 def sanitize_span(span: Mapping[str, Any], level: str | None = None) -> dict[str, Any]:
     """Keep safe span structure and only the content allowed by ``level``."""
     selected_level = capture_level(level)
@@ -54,43 +74,17 @@ def sanitize_span(span: Mapping[str, Any], level: str | None = None) -> dict[str
         if key in safe
     }
     attributes = structural.get("attributes")
-    content_keys = {
-        "gen_ai.prompt", "gen_ai.completion", "gen_ai.input.messages",
-        "gen_ai.output.messages", "gen_ai.tool.call.arguments",
-        "gen_ai.tool.call.result", "tool.arguments", "tool.result",
-        "input.value", "output.value", "llm.input.messages",
-        "llm.output.messages",
-    }
     if isinstance(attributes, dict):
         structural["attributes"] = {
-            key: value for key, value in attributes.items() if key not in content_keys
+            key: value for key, value in attributes.items() if _keep_attribute(key, selected_level)
         }
-    if selected_level in {"inputs", "full"}:
-        for key in ("arguments", "input", "inputs"):
-            if key in safe:
-                structural[key] = safe[key]
-        if isinstance(attributes, dict):
-            structural["attributes"].update({
-                key: value for key, value in attributes.items()
-                if key in {
-                    "gen_ai.prompt", "gen_ai.input.messages",
-                    "gen_ai.tool.call.arguments", "tool.arguments",
-                    "input.value", "llm.input.messages",
-                }
-            })
+    for key in ("arguments", "input", "inputs"):
+        if key in safe:
+            structural[key] = safe[key]
     if selected_level == "full":
         for key in ("result", "output", "outputs", "events"):
             if key in safe:
                 structural[key] = safe[key]
-        if isinstance(attributes, dict):
-            structural["attributes"].update({
-                key: value for key, value in attributes.items()
-                if key in {
-                    "gen_ai.completion", "gen_ai.output.messages",
-                    "gen_ai.tool.call.result", "tool.result", "output.value",
-                    "llm.output.messages",
-                }
-            })
     structural["capture_level"] = selected_level
     return structural
 

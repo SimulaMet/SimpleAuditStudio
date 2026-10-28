@@ -264,7 +264,7 @@ def main() -> None:
     _start_pipelines_sidecar()
 
     username = os.environ.get("BOOTSTRAP_USERNAME", "studio")
-    password = os.environ.get("BOOTSTRAP_PASSWORD", "admin123")
+    password = os.environ.get("BOOTSTRAP_PASSWORD", "localdevpass123")
 
     # One-time sign-in token: the browser opens the URL below, and the first
     # request that presents it is the only one that works (see auto_login_view).
@@ -542,7 +542,7 @@ def _seed_admin_only() -> None:
 
     username = os.environ.get("BOOTSTRAP_USERNAME", "studio")
     email = os.environ.get("BOOTSTRAP_EMAIL", "admin@localhost")
-    password = os.environ.get("BOOTSTRAP_PASSWORD", "admin123")
+    password = os.environ.get("BOOTSTRAP_PASSWORD", "localdevpass123")
     project_name = os.environ.get("BOOTSTRAP_PROJECT_NAME", "Demo Project")
 
     bootstrap_admin_and_default_project(
@@ -573,7 +573,7 @@ def _run_visualize_only(args) -> None:
     )
 
     username = os.environ.get("BOOTSTRAP_USERNAME", "studio")
-    password = os.environ.get("BOOTSTRAP_PASSWORD", "admin123")
+    password = os.environ.get("BOOTSTRAP_PASSWORD", "localdevpass123")
 
     auto_login_token = secrets.token_urlsafe(32)
     os.environ["SIMPLEAUDIT_AUTO_LOGIN_TOKEN"] = auto_login_token
@@ -620,7 +620,7 @@ def _seed_demo_data() -> None:
     # Respect env vars (set by Dockerfile for HF Space, or defaults for local)
     username = os.environ.get("BOOTSTRAP_USERNAME", "studio")
     email = os.environ.get("BOOTSTRAP_EMAIL", "admin@localhost")
-    password = os.environ.get("BOOTSTRAP_PASSWORD", "admin123")
+    password = os.environ.get("BOOTSTRAP_PASSWORD", "localdevpass123")
     project_name = os.environ.get("BOOTSTRAP_PROJECT_NAME", "Demo Project")
 
     _user, project = bootstrap_admin_and_default_project(

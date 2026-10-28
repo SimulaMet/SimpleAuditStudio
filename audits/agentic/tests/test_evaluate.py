@@ -132,8 +132,12 @@ def test_retrieval_source_unresolvable_file_is_inconclusive_without_listing():
         )
     ])
 
+    # Two linked KBs: a bare filename cannot be attributed to one of them.
     result = evaluate(trajectory, expectations, {
-        "knowledge_bases": [{"name": "Acme Retail Policy", "external_id": "kb-acme"}]
+        "knowledge_bases": [
+            {"name": "Acme Retail Policy", "external_id": "kb-acme"},
+            {"name": "Vendor Docs", "external_id": "kb-vendor"},
+        ]
     })
     source_check = next(
         check for check in result["checks"] if check["id"] == "retrieval.source_allowed"

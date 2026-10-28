@@ -294,6 +294,16 @@ class Tools:
             )
         return _RETURN_CASES[key]
 
+    _DOC_SOURCES = {
+        "refunds_and_returns_policy.md": "Acme Retail Policy",
+        "return_exception_matrix.md": "Acme Retail Policy",
+        "refund_timeline_and_escalation.md": "Acme Retail Policy",
+        "customer_faq.md": "Acme Retail Policy",
+        "identity_and_order_visibility.md": "Acme Retail Policy",
+        "shipping_and_delivery_guide.md": "Acme Shipping Guide",
+        "tracking_event_guide.md": "Acme Tracking Guide",
+    }
+
     def acme_search_knowledge(self, query: str, top_k: int = 3):
         """Search the Acme Retail policy knowledge base for relevant passages.
 
@@ -341,7 +351,7 @@ class Tools:
 
         scored.sort(key=lambda x: -x[0])
         results = [
-            {"source": src, "passage": passage}
+            {"source": self._DOC_SOURCES.get(src, src), "passage": passage}
             for _, src, passage in scored[:top_k]
         ]
         if not results:

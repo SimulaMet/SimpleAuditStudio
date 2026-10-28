@@ -10,7 +10,7 @@ The "Focus" button toggles a wide mode that pushes the app chrome aside.
   <div class="flex flex-wrap items-center justify-between gap-2 mb-3">
     <div class="min-w-0">
       <h3 class="text-sm font-semibold text-violet-300">Trajectory timeline</h3>
-      <p class="text-xs text-gray-500">{{ rep.agentic_timeline.total }} step{{ rep.agentic_timeline.total|pluralize }}, in execution order · click a step for its arguments and result</p>
+      <p class="text-xs text-gray-500">{% if rep.agentic_timeline.captured > rep.agentic_timeline.total %}{{ rep.agentic_timeline.total }} of {{ rep.agentic_timeline.captured }} captured spans (judge evidence subset){% else %}{{ rep.agentic_timeline.total }} step{{ rep.agentic_timeline.total|pluralize }}{% endif %}, in execution order · click a step for its arguments and result</p>
     </div>
     <button type="button" data-tl-focus
             class="tl-focus-btn px-3 py-1.5 rounded-lg bg-surface-overlay text-gray-400 text-xs font-medium hover:text-accent transition-colors"
