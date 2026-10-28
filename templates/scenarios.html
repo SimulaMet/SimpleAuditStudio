@@ -169,6 +169,10 @@
                     <span class="text-gray-500">File URI (vision input):</span>
                     <span class="ml-1 font-mono text-[11px] {% if item.revision.file_uri %}text-gray-300{% else %}text-gray-600{% endif %}">{% if item.revision.file_uri %}{{ item.revision.file_uri }}{% else %}none{% endif %}</span>
                   </div>
+                  <div>
+                    <span class="text-gray-500">Decision question:</span>
+                    <span class="ml-1 font-mono text-[11px] {% if item.revision.decision %}text-gray-300{% else %}text-gray-600{% endif %}">{% if item.revision.decision %}{{ item.revision.decision|jsonify_compact }}{% else %}none{% endif %}</span>
+                  </div>
                 </div>
               </details>
               {% if item.revision.metadata.agentic %}
@@ -194,6 +198,7 @@
                 <input type="text" name="category" value="{{ item.scenario.category }}" placeholder="Category"
                        class="px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-1 focus:ring-accent/50">
               </div>
+              <div data-nondecision-fields>
               <label class="text-xs text-gray-500">Description (scenario prompt)</label>
               <textarea name="description" rows="3" id="desc-{{ item.scenario.id }}"
                         class="w-full px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-1 focus:ring-accent/50">{{ item.revision.description }}</textarea>
@@ -204,9 +209,14 @@
               <label class="text-xs text-gray-500">Test prompt (optional)</label>
               <textarea name="test_prompt" rows="1" placeholder="Exact first user request for replay scenarios"
                         class="w-full px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-1 focus:ring-accent/50">{{ item.revision.test_prompt }}</textarea>
+              </div>
               <label class="flex items-center gap-2 text-xs text-gray-500">
                 <input type="checkbox" name="agentic_scenario" value="1" {% if item.revision.metadata.agentic %}checked{% endif %}>
                 Agentic scenario
+              </label>
+              <label class="flex items-center gap-2 text-xs text-gray-500">
+                <input type="checkbox" name="decision_model_scenario" value="1" {% if item.revision.decision %}checked{% endif %}>
+                Decision model scenario
               </label>
               <div data-agentic-section{% if not item.revision.metadata.agentic %} style="display:none"{% endif %}>
                 {% include "partials/agentic_controls.html" with agentic=item.revision.metadata.agentic %}
@@ -218,6 +228,7 @@
                   </div>
                 </details>
               </div>
+              <div data-nondecision-fields>
               <details class="group">
                 <summary class="text-xs text-gray-500 cursor-pointer select-none hover:text-gray-400">Advanced options (usually leave empty)</summary>
                 <div class="space-y-2 mt-2 pl-3 border-l border-gray-800">
@@ -247,6 +258,13 @@
                   </div>
                 </div>
               </details>
+              </div>
+              <div data-decision-section{% if not item.revision.decision %} style="display:none"{% endif %}>
+                <label class="text-xs text-gray-500">Decision question</label>
+                <p class="text-[11px] text-gray-600 mb-1">The closed question this scenario answers, with its fixed options and accepted answer(s). Graded in code — no LLM judge. JSON object: <code class="text-gray-400">{"instructions": "...", "criteria": {"yes": "...", "no": "..."}, "accepted": ["yes"]}</code>.</p>
+                <textarea name="decision" rows="3" spellcheck="false" placeholder='{"instructions":"Did the court find the defendant guilty?","criteria":{"yes":"Found guilty","no":"Not found guilty"},"accepted":["no"]}'
+                          class="w-full px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs font-mono focus:outline-none focus:ring-1 focus:ring-accent/50">{{ item.revision.decision|jsonify_compact }}</textarea>
+              </div>
               <div class="flex gap-2 items-center">
                 <button class="px-3 py-1 rounded bg-accent text-white text-xs">Save</button>
                 <button type="button" onclick="document.getElementById('edit-scenario-{{ item.scenario.id }}').style.display='none'" class="px-3 py-1 rounded bg-surface-overlay text-gray-400 text-xs">Cancel</button>
@@ -270,6 +288,7 @@
           <input type="text" name="category" placeholder="Category (optional)"
                  class="px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-accent/50">
         </div>
+        <div data-nondecision-fields>
         <label class="text-xs text-gray-500">Description (scenario prompt)</label>
         <textarea name="description" rows="2" placeholder="What should the auditor do?"
                   class="w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-accent/50"></textarea>
@@ -279,9 +298,14 @@
         <label class="text-xs text-gray-500">Test prompt (optional — exact first user request for replay scenarios)</label>
         <textarea name="test_prompt" rows="1" placeholder="The concrete first user request, if this is a replay-style scenario. Leave empty for auditor-generated probes."
                   class="w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-accent/50"></textarea>
+        </div>
         <label class="flex items-center gap-2 text-xs text-gray-500">
           <input type="checkbox" name="agentic_scenario" value="1">
           Agentic scenario
+        </label>
+        <label class="flex items-center gap-2 text-xs text-gray-500">
+          <input type="checkbox" name="decision_model_scenario" value="1">
+          Decision model scenario
         </label>
         <div data-agentic-section style="display:none">
           {% include "partials/agentic_controls.html" with agentic=None %}
@@ -293,6 +317,7 @@
             </div>
           </details>
         </div>
+        <div data-nondecision-fields>
         <details class="group">
           <summary class="text-xs text-gray-500 cursor-pointer select-none hover:text-gray-400">Advanced options (usually leave empty)</summary>
           <div class="space-y-2 mt-2 pl-3 border-l border-gray-800">
@@ -322,6 +347,13 @@
             </div>
           </div>
         </details>
+        </div>
+        <div data-decision-section style="display:none">
+          <label class="text-xs text-gray-500">Decision question</label>
+          <p class="text-[11px] text-gray-600 mb-1">The closed question this scenario answers, with its fixed options and accepted answer(s). Graded in code — no LLM judge. JSON object: <code class="text-gray-400">{"instructions": "...", "criteria": {"yes": "...", "no": "..."}, "accepted": ["yes"]}</code>.</p>
+          <textarea name="decision" rows="3" spellcheck="false" placeholder='{"instructions":"Did the court find the defendant guilty?","criteria":{"yes":"Found guilty","no":"Not found guilty"},"accepted":["no"]}'
+                    class="w-full px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs font-mono focus:outline-none focus:ring-1 focus:ring-accent/50"></textarea>
+        </div>
         <button class="px-3 py-1.5 rounded-lg bg-accent text-white text-xs font-medium hover:bg-accent-hover">+ Add Scenario</button>
       </form>
     </div>
@@ -578,6 +610,24 @@ function toggleAgenticSection(form) {
   }
 }
 
+// A decision-model scenario is graded in code against its decision question:
+// description / expected behavior / test prompt and the "Advanced options"
+// (severity ceiling, RAG documents, vision file) are not used by it, so they
+// are hidden while only the decision question is shown. The reverse for chat
+// scenarios. Toggling never edits values — it only shows/hides fields.
+function toggleDecisionSection(form) {
+  const toggle = form.querySelector('[name="decision_model_scenario"]');
+  const isDecision = !!(toggle && toggle.checked);
+  form.querySelectorAll('[data-nondecision-fields]').forEach((el) => {
+    el.style.display = isDecision ? 'none' : '';
+  });
+  const section = form.querySelector('[data-decision-section]');
+  if (section) {
+    section.style.display = isDecision ? '' : 'none';
+    if (isDecision) requestAnimationFrame(() => autoSizeAllTextareas(section));
+  }
+}
+
 // Merge the structured controls into the raw metadata object. Pure: returns a
 // new metadata dict, preserving every field the form doesn't model. Throws when
 // a structured JSON field is invalid so callers can surface it.
@@ -689,8 +739,22 @@ function _refreshAgenticJsonLive(form) {
 document.querySelectorAll('form[data-write], form[action*="/scenarios/"]').forEach((form) => {
   const controls = form.querySelector('[data-agentic-controls]');
   if (controls) controls.addEventListener('input', () => _refreshAgenticJsonLive(form));
-  const toggle = form.querySelector('[name="agentic_scenario"]');
-  if (toggle) toggle.addEventListener('change', () => { toggleAgenticSection(form); _refreshAgenticJsonLive(form); });
+  const agenticToggle = form.querySelector('[name="agentic_scenario"]');
+  const decisionToggle = form.querySelector('[name="decision_model_scenario"]');
+  // Agentic and decision-model scenarios are mutually exclusive: a scenario is
+  // either an agent trajectory or a closed decision question, never both.
+  const refreshModeSections = () => { toggleAgenticSection(form); toggleDecisionSection(form); _refreshAgenticJsonLive(form); };
+  if (agenticToggle) agenticToggle.addEventListener('change', () => {
+    if (agenticToggle.checked && decisionToggle) decisionToggle.checked = false;
+    refreshModeSections();
+  });
+  if (decisionToggle) {
+    decisionToggle.addEventListener('change', () => {
+      if (decisionToggle.checked && agenticToggle) agenticToggle.checked = false;
+      refreshModeSections();
+    });
+    toggleDecisionSection(form);   // apply the initial checked state on load
+  }
   // Auto-grow textareas as the user types (description, expected behavior, etc.)
   form.querySelectorAll('textarea').forEach((ta) => ta.addEventListener('input', () => autoSizeTextarea(ta)));
 });
@@ -703,7 +767,9 @@ requestAnimationFrame(() => {
 
 // Live JSON validation for textareas that require valid JSON.
 // Shows a red border + error message below the field when invalid.
-const JSON_FIELDS = ['agentic_guardrails_before_actions', 'agentic_state_assertions'];
+const JSON_FIELDS = ['agentic_guardrails_before_actions', 'agentic_state_assertions', 'decision'];
+// Fields whose value must be a JSON object ({}), not an array.
+const JSON_OBJECT_FIELDS = ['decision'];
 function validateFormJson(form) {
   let firstInvalid = null;
   const jsonFields = form.querySelectorAll('textarea[name]');
@@ -730,7 +796,12 @@ function validateJsonField(ta) {
   }
   try {
     const parsed = JSON.parse(value);
-    if (!Array.isArray(parsed)) {
+    const wantObject = JSON_OBJECT_FIELDS.includes(ta.name);
+    if (wantObject) {
+      if (typeof parsed !== 'object' || Array.isArray(parsed) || parsed === null) {
+        throw new Error('Must be a JSON object, e.g. {"instructions": "...", "criteria": {...}, "accepted": [...]}');
+      }
+    } else if (!Array.isArray(parsed)) {
       throw new Error('Must be a JSON array, e.g. [] or [{...}]');
     }
     ta.classList.remove('border-red-500');

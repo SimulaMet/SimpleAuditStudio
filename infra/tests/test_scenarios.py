@@ -179,6 +179,132 @@ class AgenticScenarioBrowserRoundTripTests(TestCase):
         self.assertNotContains(page, "Required sources:")
 
 
+    def _valid_decision(self):
+        return {
+            "instructions": "Did the court find the defendant guilty?",
+            "criteria": {"yes": "Found guilty", "no": "Not found guilty"},
+            "accepted": ["no"],
+        }
+
+    def test_create_decision_scenario_stores_block_and_renders_page(self):
+        response = self.client.post(
+            "/scenarios/create/",
+            {
+                "set_id": self.scenario_set.id,
+                "name": "Guilty verdict",
+                "description": "Classify the verdict.",
+                "decision_model_scenario": "1",
+                "decision": json.dumps(self._valid_decision()),
+            },
+        )
+        self.assertRedirects(response, f"/scenarios/?set={self.scenario_set.id}")
+        revision = Scenario.objects.get(title="Guilty verdict").revisions.get(revision=1)
+        self.assertEqual(revision.decision, self._valid_decision())
+        # The page renders the checkbox checked and the read-only decision value.
+        page = self.client.get(f"/scenarios/?set={self.scenario_set.id}")
+        self.assertContains(page, 'name="decision_model_scenario"')
+        self.assertContains(page, "Found guilty")
+
+    def test_edit_decision_scenario_saves_and_clears(self):
+        created = self.client.post(
+            "/scenarios/create/",
+            {
+                "set_id": self.scenario_set.id,
+                "name": "Verdict edit",
+                "description": "d",
+                "decision_model_scenario": "1",
+                "decision": json.dumps(self._valid_decision()),
+            },
+        )
+        self.assertRedirects(created, f"/scenarios/?set={self.scenario_set.id}")
+        scenario = Scenario.objects.get(title="Verdict edit")
+
+        edited = self.client.post(
+            f"/scenarios/edit/{scenario.id}/",
+            {
+                "set_id": self.scenario_set.id,
+                "title": scenario.title,
+                "category": "",
+                "description": "d",
+                "expected_behavior": "",
+                "test_prompt": "",
+                "severity_ceiling": "",
+                "documents": "",
+                "file_uri": "",
+                "decision_model_scenario": "1",
+                "decision": json.dumps(self._valid_decision()),
+            },
+        )
+        self.assertRedirects(edited, f"/scenarios/?set={self.scenario_set.id}")
+        latest = scenario.revisions.order_by("-revision").first()
+        self.assertEqual(latest.decision, self._valid_decision())
+
+        # Unchecking + emptying clears the block (None is passed explicitly).
+        cleared = self.client.post(
+            f"/scenarios/edit/{scenario.id}/",
+            {
+                "set_id": self.scenario_set.id,
+                "title": scenario.title,
+                "category": "",
+                "description": "d",
+                "expected_behavior": "",
+                "test_prompt": "",
+                "severity_ceiling": "",
+                "documents": "",
+                "file_uri": "",
+                "decision_model_scenario": "",
+                "decision": "",
+            },
+        )
+        self.assertRedirects(cleared, f"/scenarios/?set={self.scenario_set.id}")
+        self.assertIsNone(scenario.revisions.order_by("-revision").first().decision)
+
+    def test_create_decision_scenario_rejects_invalid_json(self):
+        response = self.client.post(
+            "/scenarios/create/",
+            {
+                "set_id": self.scenario_set.id,
+                "name": "Bad decision",
+                "description": "d",
+                "decision_model_scenario": "1",
+                "decision": "{not valid json",
+            },
+        )
+        self.assertRedirects(response, f"/scenarios/?set={self.scenario_set.id}")
+        self.assertFalse(Scenario.objects.filter(title="Bad decision").exists())
+
+    def test_cannot_be_both_agentic_and_decision(self):
+        response = self.client.post(
+            "/scenarios/create/",
+            {
+                "set_id": self.scenario_set.id,
+                "name": "Both modes",
+                "description": "d",
+                "agentic_scenario": "1",
+                "agentic_tools_expected": "acme_get_order",
+                "decision_model_scenario": "1",
+                "decision": json.dumps(self._valid_decision()),
+            },
+        )
+        self.assertRedirects(response, f"/scenarios/?set={self.scenario_set.id}")
+        self.assertFalse(Scenario.objects.filter(title="Both modes").exists())
+
+    def test_create_decision_scenario_rejects_malformed_block(self):
+        # Valid JSON but missing criteria — the engine schema rejects it.
+        bad = {"instructions": "Q?", "criteria": {"only": "one option"}}
+        response = self.client.post(
+            "/scenarios/create/",
+            {
+                "set_id": self.scenario_set.id,
+                "name": "Malformed decision",
+                "description": "d",
+                "decision_model_scenario": "1",
+                "decision": json.dumps(bad),
+            },
+        )
+        self.assertRedirects(response, f"/scenarios/?set={self.scenario_set.id}")
+        self.assertFalse(Scenario.objects.filter(title="Malformed decision").exists())
+
     def test_clearing_a_section_drops_it_from_saved_metadata(self):
         """Clearing all fields of an active section removes the assertion."""
         self.client.post(
