@@ -46,6 +46,9 @@ class _ExperimentBase(TestCase):
         self.t1 = RegisteredModelFactory(connection=conn, display_name="GPT")
         self.t2 = RegisteredModelFactory(connection=conn, display_name="Claude")
         self.judge = RegisteredModelFactory(connection=conn, display_name="Qwen")
+        self.decision = RegisteredModelFactory(
+            connection=conn, display_name="Jev", capabilities={"decision": True}
+        )
         for target in (
             mock.patch("audits.services.resolve_engine_provenance", return_value=_PROVENANCE),
             mock.patch("audits.services.submit_audit_run"),
@@ -65,6 +68,19 @@ class _ExperimentBase(TestCase):
             "language": "",
             "n_repetitions": "3",
             "gen_config_json": '{"judge_params": {"temperature": 0}}',
+        }
+        data.update(extra)
+        return data
+
+    def _decision(self, **extra):
+        """A design POST for a decision-only target: no judge or auditor fields."""
+        data = {
+            "scenario_set": [self.set_a.id],
+            "target_model": [self.decision.id],
+            "max_turns": "3",
+            "language": "",
+            "n_repetitions": "1",
+            "gen_config_json": "",
         }
         data.update(extra)
         return data
@@ -116,6 +132,12 @@ class ExperimentFlowTests(_ExperimentBase):
         self.assertNotContains(page, f'name="judge_model" value="{agent_model.id}"')
         self.assertContains(page, 'name="scenario_version"')
 
+    def test_decision_target_design_page_still_shows_all_pickers(self):
+        # GET design page: JS hides columns client-side; server renders all.
+        page = self.client.get("/experiments/new/")
+        self.assertContains(page, 'name="auditor_model"')
+        self.assertContains(page, 'name="judge_model"')
+
     def test_single_combination_becomes_a_singleton_experiment(self):
         # Anything launched from New Experiment is an Experiment, even one run.
         resp = self.client.post("/experiments/new/", self._design(target_model=[self.t1.id], max_turns="3"))
@@ -126,6 +148,20 @@ class ExperimentFlowTests(_ExperimentBase):
         self.assertEqual(list(exp.runs.all()), [run])
         self.assertEqual(run.experiment, exp)
         self.assertEqual(run.generation_parameters_snapshot["max_turns"], 3)
+
+    def test_decision_target_launches_without_judge_and_forces_max_turns_one(self):
+        resp = self.client.post("/experiments/new/", self._decision())
+        exp = Experiment.objects.get()
+        run = AuditRun.objects.get()
+        self.assertRedirects(resp, f"/experiments/{exp.id}/", fetch_redirect_response=False)
+        # max_turns forced to 1 regardless of the submitted value.
+        self.assertEqual(run.generation_parameters_snapshot["max_turns"], 1)
+        # The target model stands in for both auditor and judge_model FKs.
+        self.assertEqual(run.auditor_model_id, self.decision.id)
+        self.assertEqual(run.judge_model_id, self.decision.id)
+        # The judge version is choice_match, not the workspace default.
+        snap = run.judge_config_snapshot
+        self.assertEqual(snap["judge"]["base"], "choice_match")
 
     def test_singleton_experiment_page_renders(self):
         self.client.post("/experiments/new/", self._design(target_model=[self.t1.id], max_turns="3"))
@@ -149,6 +185,23 @@ class ExperimentFlowTests(_ExperimentBase):
         self.assertContains(resp, "Launch")
         self.assertFalse(AuditRun.objects.exists())
 
+    def test_decision_target_review_forces_max_turns_and_hides_judge_model_column(self):
+        # Two scenario sets × one decision target → multi-run review screen.
+        review = self.client.post(
+            "/experiments/new/",
+            self._decision(scenario_set=[self.set_a.id, self.set_b.id]),
+        )
+        self.assertTemplateUsed(review, "experiment_review.html")
+        rows = review.context["rows"]
+        self.assertEqual(len(rows), 2)
+        # max_turns forced to 1 on every row.
+        self.assertTrue(all(r["max_turns"] == 1 for r in rows))
+        # No judge_model column; choice_match note shown once at top.
+        self.assertNotIn("judge_model", [k for k, _ in review.context["columns"]])
+        self.assertIn(
+            "All runs: Decision targets are graded by the Choice Match judge (choice_match); no judge model is called.",
+            review.context["design_warnings"],
+        )
 
     def test_launch_creates_experiment_with_selected_runs(self):
         review = self.client.post("/experiments/new/", self._design())
@@ -185,11 +238,43 @@ class ExperimentFlowTests(_ExperimentBase):
         self.assertEqual(set(page.context["sel"]["target"]), {str(self.t1.id), str(self.t2.id)})
         self.assertEqual(page.context["clone"]["max_turns"], "3, 5")
 
+    def test_decision_target_back_to_design_keeps_all_pickers(self):
+        # Going back from review to design re-renders the full form; JS
+        # hides columns client-side based on the selected targets.
+        review = self.client.post(
+            "/experiments/new/",
+            self._decision(scenario_set=[self.set_a.id, self.set_b.id]),
+        )
+        back = {"action": "edit"}
+        for key, value in review.context["design_post"]:
+            back.setdefault(f"design__{key}", []).append(value)
+        page = self.client.post("/experiments/new/", back)
+        self.assertTemplateUsed(page, "experiment_new.html")
+        # All pickers are rendered; JS handles visibility.
+        self.assertContains(page, 'name="auditor_model"')
+        self.assertContains(page, 'name="judge_model"')
+
     def test_design_errors_are_explained(self):
         resp = self.client.post("/experiments/new/", self._design(judge=[]))
         self.assertContains(resp, "Pick at least one judge.")
         resp = self.client.post("/experiments/new/", self._design(max_turns="3, lots"))
         self.assertContains(resp, "Max turns")
+
+    def test_mixed_decision_and_chat_targets_show_choice_match_warning(self):
+        # Mixed targets: both rows get the same auditor/judge; only the
+        # decision row gets the choice_match warning.
+        review = self.client.post(
+            "/experiments/new/",
+            self._design(target_model=[self.t1.id, self.decision.id], max_turns=""),
+        )
+        self.assertTemplateUsed(review, "experiment_review.html")
+        rows = review.context["rows"]
+        decision_row = next(r for r in rows if json.loads(r["spec"])["t"] == self.decision.id)
+        chat_row = next(r for r in rows if json.loads(r["spec"])["t"] == self.t1.id)
+        # Decision row: choice_match warning present.
+        self.assertTrue(any("Choice Match judge" in w for w in decision_row["warnings"]))
+        # Chat row: no choice_match warning.
+        self.assertFalse(any("Choice Match judge" in w for w in chat_row["warnings"]))
 
     def test_run_cap(self):
         from audits.experiments import MAX_RUNS_PER_EXPERIMENT
@@ -334,6 +419,18 @@ class ReviewWarningTests(_ExperimentBase):
         )
         rows = review.context["rows"]
         self.assertEqual(sum("grades itself" in " ".join(r["warnings"]) for r in rows), 1)
+
+    def test_decision_target_warning_shown_once_for_all_rows(self):
+        # Two scenario sets × one decision target → 2 runs; note is shared.
+        review = self.client.post(
+            "/experiments/new/",
+            self._decision(scenario_set=[self.set_a.id, self.set_b.id]),
+        )
+        self.assertIn(
+            "All runs: Decision targets are graded by the Choice Match judge (choice_match); no judge model is called.",
+            review.context["design_warnings"],
+        )
+        self.assertTrue(all(not r["warnings"] for r in review.context["rows"]))
 
 
 class ScenarioVersionPickTests(_ExperimentBase):

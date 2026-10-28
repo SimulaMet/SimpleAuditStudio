@@ -174,7 +174,10 @@
   const summary = document.getElementById('design-summary');
   const canLaunch = {{ can_launch|yesno:"true,false" }};
   const MAX_RUNS = {{ max_runs }};
-  const AXES = [['scenario_version', 'scenario set'], ['target_model', 'target'], ['auditor_model', 'auditor'], ['judge_model', 'judge model'], ['judge', 'judge']];
+  const ALL_DECISION = {{ all_decision|yesno:"true,false" }};
+  const AXES = ALL_DECISION
+    ? [['scenario_version', 'scenario set'], ['target_model', 'target'], ['judge', 'judge']]
+    : [['scenario_version', 'scenario set'], ['target_model', 'target'], ['auditor_model', 'auditor'], ['judge_model', 'judge model'], ['judge', 'judge']];
 
   function listCount(name) {
     const el = form.querySelector(`[name="${name}"]`);

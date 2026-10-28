@@ -1719,15 +1719,17 @@ class NewExperimentView(ProjectMixin, TemplateView):
             if spec.get("jf"):
                 judge = copy.copy(judge)   # the flag is per row
                 judge.follow_latest = True
+            target_model = lookup(models, spec["t"], RegisteredModel)
+            is_dec = target_model.is_decision
             objs = {
                 "version": version,
-                "target": lookup(models, spec["t"], RegisteredModel),
+                "target": target_model,
                 "auditor": lookup(models, spec["a"], RegisteredModel),
                 "judge_model": lookup(models, spec["jm"], RegisteredModel),
                 "judge": judge,
             }
             name = (post.get(f"run-{i}-name") or "").strip() or f"Run {i + 1}"
-            mt = (post.get(f"run-{i}-max_turns") or "").strip()
+            mt = "1" if is_dec else (post.get(f"run-{i}-max_turns") or "").strip()
             lang = (post.get(f"run-{i}-language") or "").strip()
             reps = (post.get(f"run-{i}-n_repetitions") or "").strip()
             system_prompt = (post.get(f"run-{i}-system_prompt") or "").strip()
