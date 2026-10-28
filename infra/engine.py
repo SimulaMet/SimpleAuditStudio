@@ -1307,3 +1307,37 @@ def run_scenario_repeated(
         "n_repetitions": len(reps),
         "_language": language,
     }
+
+
+def audit_result_fields() -> set[str]:
+    """The field names of the engine's ``AuditResult`` dataclass.
+
+    Computed lazily so importing this module never requires the engine to be
+    installed. Used by callers that must separate engine-owned keys from
+    Studio-specific extras before/after :func:`build_audit_results_export`.
+    """
+    _ensure_engine_available()
+    import dataclasses
+
+    from simpleaudit.results import AuditResult
+
+    return {f.name for f in dataclasses.fields(AuditResult)}
+
+
+def build_audit_results_export(payloads: list[dict[str, Any]], *, timestamp: str | None = None) -> dict[str, Any]:
+    """Assemble the engine's ``AuditResults.to_dict()`` document from stored results.
+
+    ``payloads`` are persisted per-scenario ``AuditResult.to_dict()`` records. Keys
+    the engine's ``AuditResult`` does not define (Studio bookkeeping such as
+    ``trace_ids`` or ``_language``) are dropped, and the summary block is computed
+    by the engine itself, so the document keeps the engine's own shape and loads
+    back with ``AuditResults.load``. This is the only place Studio may import the
+    engine for export assembly.
+    """
+    fields = audit_result_fields()
+    from simpleaudit.results import AuditResult, AuditResults
+
+    collection = AuditResults([AuditResult(**{k: v for k, v in p.items() if k in fields}) for p in payloads])
+    if timestamp:
+        collection.timestamp = timestamp
+    return collection.to_dict()

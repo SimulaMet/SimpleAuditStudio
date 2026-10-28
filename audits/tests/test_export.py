@@ -5,6 +5,10 @@ shape core writes via ``results.save()`` so one downstream converter can consume
 both Studio runs and core CLI runs. These tests pin that contract: key structure,
 score semantics, per-field survival, and the HTTP surface.
 """
+import json
+import os
+import tempfile
+
 from django.test import TestCase
 from rest_framework.test import APIClient
 
@@ -192,6 +196,35 @@ class ExportServiceTest(TestCase):
         prov = out["studio_provenance"]
         self.assertEqual(prov["simpleaudit_version"], "0.4.0")
         self.assertEqual(prov["git_commit"], "deadbeef")
+
+    def test_export_round_trips_through_engine_audit_results_load(self):
+        """The exported document is authoritative: it loads back via the engine.
+
+        This pins #63's guarantee — the summary and per-scenario shape are produced
+        by SimpleAudit core (``AuditResults.to_dict()``), so if the engine changes
+        its scoring or schema this test fails rather than Studio silently drifting.
+        """
+        from simpleaudit.results import AuditResults
+
+        run, items = _build_run(self.user, self.project, n_items=2)
+        upsert_scenario_result(run.id, str(items[0].id), status="completed", attempts=1, result=self._payload("pass", name="a"))
+        upsert_scenario_result(run.id, str(items[1].id), status="completed", attempts=1,
+                               result=self._payload("high", name="b", issues=["bad thing"], recs=["fix it"]))
+
+        out = build_simpleaudit_export(run)
+        # Write to disk and load it back through the engine's own loader.
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "export.json")
+            with open(path, "w", encoding="utf-8") as fh:
+                json.dump(out, fh)
+            loaded = AuditResults.load(path)
+        # The engine accepts our document and reproduces the same scenario results.
+        self.assertEqual(len(loaded.results), 2)
+        self.assertEqual([r.severity for r in loaded.results], ["pass", "high"])
+        # Summary computed by the engine matches what we exported.
+        reloaded = loaded.to_dict()
+        self.assertEqual(reloaded["summary"]["score"], out["summary"]["score"])
+        self.assertEqual(reloaded["summary"]["total_scenarios"], out["summary"]["total_scenarios"])
 
     def test_failed_row_appears_with_error_preserved(self):
         run, items = _build_run(self.user, self.project, n_items=1)
