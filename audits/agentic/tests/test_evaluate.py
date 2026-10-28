@@ -104,7 +104,11 @@ def test_retrieval_source_resolves_search_result_file_to_attached_knowledge_base
     assert source_check["evidence_span_ids"] == ["search"]
 
 
-def test_retrieval_source_uses_single_attached_kb_for_truncated_search_result():
+def test_retrieval_source_unresolvable_file_is_inconclusive_without_listing():
+    # A truncated search result carries a file identifier that is not backed
+    # by any observable evidence (no list_knowledge mapping, no matching
+    # snapshot entry). Source identity is UNKNOWN -> INCONCLUSIVE; the single
+    # attached KB must not be attributed as the source.
     import json
 
     from audits.agentic.expectations import validate_agentic_metadata
@@ -135,8 +139,7 @@ def test_retrieval_source_uses_single_attached_kb_for_truncated_search_result():
         check for check in result["checks"] if check["id"] == "retrieval.source_allowed"
     )
 
-    assert source_check["status"] == "PASS"
-    assert source_check["observed"] == ["Acme Retail Policy"]
+    assert source_check["status"] == "INCONCLUSIVE"
 
 
 def test_required_retrieval_fails_when_trace_has_no_retrieval_operation():
@@ -195,14 +198,14 @@ def test_tool_argument_assertion_uses_captured_standard_genai_arguments():
 
     trajectory = AgentTrajectory([
         TrajectoryStep(
-            "s3", "tool", "acme_lookup_order",
+            "s3", "tool", "acme_get_order",
             attributes={"gen_ai.tool.call.arguments": '{"order_id":"ACME-1001"}'},
         )
     ])
 
     results = tool_selection(trajectory, {
         "expected": [{
-            "name": "acme_lookup_order",
+            "name": "acme_get_order",
             "min_calls": 1,
             "max_calls": 1,
             "arguments": {"order_id": "ACME-1001"},
@@ -242,12 +245,12 @@ def test_builtin_knowledge_tool_uses_frozen_capability():
 def test_known_tool_matches_its_frozen_openwebui_invocation_name():
     from audits.agentic.checks import tool_permissions
 
-    trajectory = AgentTrajectory([TrajectoryStep("s1", "tool", "acme_lookup_order")])
+    trajectory = AgentTrajectory([TrajectoryStep("s1", "tool", "acme_get_order")])
     snapshot = {
         "tools": [{
             "name": "Acme Order Lookup",
             "external_id": "acme_order_lookup",
-            "invocation_names": ["acme_lookup_order"],
+            "invocation_names": ["acme_get_order"],
             "enabled": True,
             "read_only": True,
             "has_side_effects": False,
@@ -258,3 +261,5 @@ def test_known_tool_matches_its_frozen_openwebui_invocation_name():
 
     assert result[0].status == "PASS"
     assert result[0].evidence_span_ids == ["s1"]
+
+

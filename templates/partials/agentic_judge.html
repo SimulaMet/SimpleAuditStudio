@@ -1,0 +1,41 @@
+{% comment %}
+Semantic judgement panel for one repetition.
+Context: rep (see infra.ui._rep_view). Hidden entirely when the evaluation
+carries no semantic judgement (rep.agentic_judge is None) — a missing
+judgement must never be rendered as an empty or fake "pass".
+{% endcomment %}
+{% if rep.agentic_judge %}
+<div class="bg-surface-raised rounded-xl border border-indigo-900/40 p-4">
+  <div class="flex flex-wrap items-center justify-between gap-2 mb-3">
+    <h3 class="text-sm font-semibold text-indigo-300">Semantic agentic evaluation</h3>
+    <span class="shrink-0 px-2 py-0.5 rounded-full text-[11px] font-semibold {% if rep.agentic_judge.status == 'PASS' %}bg-emerald-900/40 text-emerald-300{% elif rep.agentic_judge.status == 'INCONCLUSIVE' %}bg-amber-900/40 text-amber-300{% else %}bg-red-900/40 text-red-300{% endif %}">{{ rep.agentic_judge.status }}</span>
+  </div>
+  {% if rep.agentic_judge.rationale and not rep.agentic_judge.dimensions %}<p class="text-sm text-gray-300 whitespace-pre-wrap break-words mb-3">{{ rep.agentic_judge.rationale }}</p>{% endif %}
+  {% if rep.agentic_judge.dimensions %}
+  <div class="space-y-1.5">
+    {% for d in rep.agentic_judge.dimensions %}
+    <div class="min-w-0 rounded-lg bg-surface-overlay/40 px-3 py-2">
+      <div class="flex flex-wrap items-center gap-2">
+        <span class="text-xs font-medium text-gray-200">{{ d.label|default:d.name }}</span>
+        <span class="shrink-0 px-1.5 py-0.5 rounded text-[10px] font-semibold {% if d.status == 'PASS' %}bg-emerald-900/40 text-emerald-300{% elif d.status == 'INCONCLUSIVE' %}bg-amber-900/40 text-amber-300{% else %}bg-red-900/40 text-red-300{% endif %}">{{ d.status }}</span>
+        {% if d.spans %}
+        <span class="ml-auto flex flex-wrap gap-1">
+          {% for sp in d.spans %}
+          <a href="#trace-span-{{ rep.index }}-{{ sp.anchor }}" class="agentic-span-link rounded bg-surface-overlay/70 border border-gray-800 px-1.5 py-0.5 text-[10px] text-violet-300 hover:text-violet-200" title="{{ sp.span_id }}">{{ sp.label|default:sp.span_id }}</a>
+          {% endfor %}
+        </span>
+        {% endif %}
+      </div>
+      {% if d.rationale %}<p class="mt-1 text-[11px] text-gray-400 break-words">{{ d.rationale }}</p>{% endif %}
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+  <div class="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-gray-500">
+    {% if rep.agentic_judge.model_version %}<span>Model: <code class="text-gray-300">{{ rep.agentic_judge.model_version }}</code></span>{% endif %}
+    {% if rep.agentic_judge.prompt_version %}<span>Prompt: <code class="text-gray-300">{{ rep.agentic_judge.prompt_version }}</code></span>{% endif %}
+    {% if rep.agentic_judge.confidence is not None %}<span>Confidence: {{ rep.agentic_judge.confidence }}</span>{% endif %}
+    {% if rep.agentic_judge.uncertainty %}<span class="text-amber-300/80">Uncertainty: {{ rep.agentic_judge.uncertainty }}</span>{% endif %}
+  </div>
+</div>
+{% endif %}

@@ -240,6 +240,16 @@ def _caddyfile(port: int, internal_port: int | None = None) -> str:
         # placeholder expands empty because _start_caddy spawns Caddy with
         # WEBUI_SUBPATH="". {http.request.uri} preserves the query string.
         # Dead code once the fork is rebuilt with the ${base} prefix.
+        #
+        # NOTE: the v0.12.0 build also has a second class of broken
+        # base-prefixing where "${base}" renders as LITERAL text (quoted JS
+        # strings), so "Back" from a KB/tool detail page hits
+        # /chat/workspace/<section>/$%7Bbase%7D/workspace/<section>. That one
+        # is NOT repaired here: this Caddy build's path matchers can't express
+        # it (a bare '$' is treated as a placeholder, and path_regexp is
+        # non-functional in v2.11.7). It is fixed at the source by patching
+        # the installed frontend bundle (see deploy/openwebui-subpath/README.md
+        # "Known fork defect").
         "\thandle /workspace/* {",
         f"\t\tredir {{env.WEBUI_SUBPATH}}{chat.SUBPATH}{{http.request.uri}} 308",
         "\t}",
@@ -575,7 +585,7 @@ def start_open_webui(studio_port: int | None = None) -> subprocess.Popen:
 OWUI_WHEEL_URL = os.environ.get(
     "SIMPLEAUDIT_CHAT_WHEEL",
     "https://github.com/SushantGautam/open-webui/releases/download/"
-    "v0.11.4.3-subpath/open_webui-0.11.4.3-py3-none-any.whl",
+    "v0.12.0-subpath/open_webui-0.12.0-py3-none-any.whl",
 )
 OWUI_PACKAGE = os.environ.get("SIMPLEAUDIT_CHAT_PACKAGE", "open-webui")
 

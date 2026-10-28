@@ -124,6 +124,16 @@ class JudgeServiceTests(_Base):
         self.assertNotIn("default", [b["key"] for b in base_choices()])
         self.assertIn("default", [b["key"] for b in base_choices("default")])
 
+    def test_all_bases_have_output_label(self):
+        """Regression: engine may add new bases with unknown output types;
+        base_choices must not crash on a missing OUTPUT_LABELS key."""
+        from judges.services import base_choices
+
+        choices = base_choices()
+        for b in choices:
+            self.assertIn("output_label", b)
+            self.assertTrue(b["output_label"], f"Empty label for {b['key']}")
+
 
 class JudgePagesTests(_Base):
     def test_create_edit_and_view_versions(self):

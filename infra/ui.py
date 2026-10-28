@@ -147,9 +147,34 @@ def _int(value, default: int = 0) -> int:
         return default
 
 
+# Form fields that carry an explicit off/false value (checkbox pairs with a
+# hidden "0" sentinel). These stay written even when unchecked so an explicit
+# false remains an assertion after save.
+_EXPLICIT_FALSE_FIELDS = {
+    "agentic_rerank_required",
+    "agentic_policy_read_only",
+    "agentic_policy_allow_side_effects",
+    "agentic_approvals_must_precede_execution",
+    "agentic_semantic_judge_enabled",
+}
+
+
 def _merge_structured_agentic_fields(metadata: dict, post) -> dict:
-    """Merge authoring controls into agentic metadata without dropping extensions."""
-    if not any(key.startswith("agentic_") and key != "agentic_scenario" for key in post):
+    """Merge authoring controls into agentic metadata without dropping extensions.
+
+    Sparse semantics: a section is only created when at least one of its form
+    fields carries a non-empty value (or an explicit false from a checkbox
+    pair). Untouched sections are removed again rather than being filled with
+    dormant defaults, so absence stays "not checked". Fields whose empty form
+    value maps to ``None``/empty list drop out of the saved section entirely;
+    unknown top-level and per-section fields round-trip untouched.
+    """
+    has_control = any(
+        key.startswith("agentic_") and key != "agentic_scenario"
+        and (key in _EXPLICIT_FALSE_FIELDS or str(post.get(key, "")).strip() != "")
+        for key in post
+    )
+    if not has_control:
         return metadata
     agentic = dict(metadata.get("agentic") or {})
     agentic.setdefault("schema_version", 2)
@@ -175,47 +200,93 @@ def _merge_structured_agentic_fields(metadata: dict, post) -> dict:
             raise TypeError(f"Field '{name}' must be a JSON array, got {type(parsed).__name__}")
         return parsed
 
-    def set_value(section, key, value):
+    # (section, key, value, include_when_empty) — include_when_empty marks the
+    # explicit-false checkbox sentinels that must survive as assertions.
+    planned = [
+        ("tools", "expected", [{"name": name, "min_calls": 1, "max_calls": None} for name in csv("agentic_tools_expected")], False),
+        ("tools", "forbidden", csv("agentic_tools_forbidden"), False),
+        ("tools", "allowed", csv("agentic_tools_allowed"), False),
+        ("retrieval", "sources", csv("agentic_sources"), False),
+        ("retrieval", "min_documents", number("agentic_retrieval_min_documents"), False),
+        ("retrieval", "max_documents", number("agentic_retrieval_max_documents"), False),
+        ("rerank", "required", boolean("agentic_rerank_required"), True),
+        ("rerank", "min_calls", number("agentic_rerank_min_calls"), False),
+        ("rerank", "max_calls", number("agentic_rerank_max_calls"), False),
+        ("policy", "read_only", boolean("agentic_policy_read_only"), True),
+        ("policy", "allowed_data_scopes", csv("agentic_policy_allowed_data_scopes"), False),
+        ("policy", "forbidden_data_scopes", csv("agentic_policy_forbidden_data_scopes"), False),
+        ("policy", "forbidden_side_effects", csv("agentic_policy_forbidden_side_effects"), False),
+        ("policy", "allowed_destinations", csv("agentic_policy_allowed_destinations"), False),
+        ("policy", "allow_side_effects", boolean("agentic_policy_allow_side_effects"), True),
+        ("guardrails", "required", csv("agentic_guardrails_required"), False),
+        ("guardrails", "must_pass", csv("agentic_guardrails_must_pass"), False),
+        ("guardrails", "before_actions", json_value("agentic_guardrails_before_actions"), False),
+        ("approvals", "required_for", csv("agentic_approvals_required_for"), False),
+        ("approvals", "must_precede_execution", boolean("agentic_approvals_must_precede_execution"), True),
+        ("handoffs", "allowed", csv("agentic_handoffs_allowed"), False),
+        ("handoffs", "forbidden", csv("agentic_handoffs_forbidden"), False),
+        ("handoffs", "required", csv("agentic_handoffs_required"), False),
+        ("handoffs", "max_handoffs", number("agentic_handoffs_max_handoffs"), False),
+        ("handoffs", "max_depth", number("agentic_handoffs_max_depth"), False),
+        ("trajectory", "required_sequence", csv("agentic_sequence"), False),
+        ("trajectory", "max_steps", number("agentic_trajectory_max_steps"), False),
+        ("trajectory", "max_retries_per_tool", number("agentic_trajectory_max_retries_per_tool"), False),
+        ("trajectory", "max_identical_consecutive_calls", number("agentic_trajectory_max_identical_consecutive_calls"), False),
+        ("budgets", "max_tool_calls", number("agentic_max_tool_calls"), False),
+        ("budgets", "max_errors", number("agentic_budgets_max_errors"), False),
+        ("state", "assertions", json_value("agentic_state_assertions"), False),
+        ("semantic_judge", "enabled", boolean("agentic_semantic_judge_enabled"), True),
+        ("semantic_judge", "criteria", csv("agentic_semantic_judge_criteria"), False),
+    ]
+
+    # Sections the form owns: rebuilt from scratch so stale values from a
+    # previous revision do not leak through once their fields are cleared.
+    owned_sections = {section for section, _, _, _ in planned}
+    for section in sorted(owned_sections & set(agentic)):
+        del agentic[section]
+
+    for section, key, value, include_when_empty in planned:
+        empty = value in (None, [], "", False)
+        if empty and not include_when_empty:
+            continue
         current = dict(agentic.get(section) or {})
-        current[key] = value
+        if empty and value is False:
+            current[key] = False
+        elif value is None:
+            current.pop(key, None)
+        else:
+            current[key] = value
         agentic[section] = current
 
-    # The expected-tools field holds plain names; wrap each in the rich spec the
-    # engine checks against ({name, min_calls, max_calls}). Per-tool call bounds
-    # and argument matching are authored via import / the read-only JSON preview.
-    set_value("tools", "expected", [{"name": name, "min_calls": 1, "max_calls": None} for name in csv("agentic_tools_expected")])
-    set_value("tools", "forbidden", csv("agentic_tools_forbidden"))
-    sources = csv("agentic_sources")
-    set_value("retrieval", "sources", sources)
-    set_value("retrieval", "required", bool(sources))
-    set_value("retrieval", "min_documents", number("agentic_retrieval_min_documents"))
-    set_value("retrieval", "max_documents", number("agentic_retrieval_max_documents"))
-    set_value("trajectory", "required_sequence", csv("agentic_sequence"))
-    set_value("trajectory", "max_steps", number("agentic_trajectory_max_steps"))
-    set_value("trajectory", "max_retries_per_tool", number("agentic_trajectory_max_retries_per_tool"))
-    set_value("trajectory", "max_identical_consecutive_calls", number("agentic_trajectory_max_identical_consecutive_calls"))
-    set_value("budgets", "max_tool_calls", number("agentic_max_tool_calls"))
-    set_value("budgets", "max_errors", number("agentic_budgets_max_errors"))
-    set_value("rerank", "required", boolean("agentic_rerank_required"))
-    set_value("rerank", "min_calls", number("agentic_rerank_min_calls"))
-    set_value("rerank", "max_calls", number("agentic_rerank_max_calls"))
-    set_value("policy", "read_only", boolean("agentic_policy_read_only"))
-    for key in ("allowed_data_scopes", "forbidden_data_scopes", "forbidden_side_effects", "allowed_destinations"):
-        set_value("policy", key, csv(f"agentic_policy_{key}"))
-    set_value("policy", "allow_side_effects", boolean("agentic_policy_allow_side_effects"))
-    set_value("guardrails", "required", csv("agentic_guardrails_required"))
-    set_value("guardrails", "must_pass", csv("agentic_guardrails_must_pass"))
-    set_value("guardrails", "before_actions", json_value("agentic_guardrails_before_actions"))
-    set_value("approvals", "required_for", csv("agentic_approvals_required_for"))
-    set_value("approvals", "must_precede_execution", boolean("agentic_approvals_must_precede_execution"))
-    for key in ("allowed", "forbidden", "required"):
-        set_value("handoffs", key, csv(f"agentic_handoffs_{key}"))
-    set_value("handoffs", "max_handoffs", number("agentic_handoffs_max_handoffs"))
-    set_value("handoffs", "max_depth", number("agentic_handoffs_max_depth"))
-    set_value("state", "assertions", json_value("agentic_state_assertions"))
+    # retrieval.required follows the sources field: present only when the
+    # author entered at least one source.
+    if "agentic_sources" in post:
+        sources = csv("agentic_sources")
+        retrieval = dict(agentic.get("retrieval") or {})
+        if sources:
+            retrieval["required"] = True
+        else:
+            retrieval.pop("required", None)
+        if retrieval:
+            agentic["retrieval"] = retrieval
+
+    # semantic_judge.enabled=True is implied when criteria were entered.
+    if "agentic_semantic_judge_criteria" in post and csv("agentic_semantic_judge_criteria"):
+        semantic = dict(agentic.get("semantic_judge") or {})
+        semantic["enabled"] = True
+        agentic["semantic_judge"] = semantic
+
     mode = post.get("agentic_enforcement_mode", "")
     if mode:
-        set_value("enforcement", "mode", mode)
+        current = dict(agentic.get("enforcement") or {})
+        current["mode"] = mode
+        agentic["enforcement"] = current
+
+    # Drop sections left empty by this merge (e.g. cleared all tools fields).
+    for section in owned_sections:
+        if agentic.get(section) in ({}, None):
+            agentic.pop(section, None)
+
     result = dict(metadata)
     result["agentic"] = agentic
     return result
@@ -3127,6 +3198,18 @@ class RunDetailView(PublicReadableMixin, DetailView):
         ctx["system_prompt"] = snap.get("system_prompt", "")
         ctx["system_prompt_source"] = snap.get("system_prompt_source")
         ctx["frozen_agent"] = frozen_agent(run)
+        # Verdict split for the run-level agentic overview bar (percentages are
+        # computed here — the template engine has no float arithmetic).
+        agentic_metrics = (run.summary_metrics or {}).get("agentic_evaluation")
+        if isinstance(agentic_metrics, dict) and agentic_metrics.get("total"):
+            total = int(agentic_metrics["total"])
+            ctx["agentic_split"] = [
+                {"status": status, "count": count, "pct": round(count * 100 / total, 1)}
+                for status, count in (("PASS", agentic_metrics.get("passed")), ("FAIL", agentic_metrics.get("failed")), ("INCONCLUSIVE", agentic_metrics.get("inconclusive")))
+                if count
+            ]
+        else:
+            ctx["agentic_split"] = []
         ctx["public_header"] = True
         return ctx
 
@@ -3305,6 +3388,37 @@ def _trace_is_noise(span: dict) -> bool:
     return name == "get" and _trace_span_duration_ms(span) < 1.0
 
 
+#: (label, attribute keys) for the expandable span detail — the first key
+#: present wins. Content was already capture-level-sanitized at OTLP
+#: ingestion, so whatever is here is safe to show.
+_TRACE_SPAN_CONTENT_BLOCKS = (
+    ("Tool arguments", ("gen_ai.tool.call.arguments", "tool.arguments")),
+    ("Tool result", ("gen_ai.tool.call.result", "tool.result")),
+    ("Input", ("input.value", "gen_ai.prompt", "gen_ai.input.messages")),
+    ("Output", ("output.value", "gen_ai.completion", "gen_ai.output.messages")),
+)
+
+
+def _trace_span_content_blocks(span: dict) -> list[tuple[str, str]]:
+    """Human-readable (label, text) pairs for a span's content attributes."""
+    attrs = span.get("attributes")
+    if not isinstance(attrs, dict):
+        return []
+    blocks: list[tuple[str, str]] = []
+    for label, keys in _TRACE_SPAN_CONTENT_BLOCKS:
+        for key in keys:
+            value = attrs.get(key)
+            if value is None:
+                continue
+            if not isinstance(value, str):
+                import json as _json
+
+                value = _json.dumps(value, indent=2, default=str)
+            blocks.append((label, value))
+            break
+    return blocks
+
+
 def _trace_card_view(rep: dict) -> dict | None:
     """The trace section of one rep: W3C trace ids + the captured spans.
 
@@ -3317,17 +3431,28 @@ def _trace_card_view(rep: dict) -> dict | None:
     OpenInference semantic kinds surface their signal spans first, targets with
     plain OTel auto-instrumentation (raw SPAN_KIND_*, http.* attributes) are
     still readable because the meaningful operations are the long ones (the
-    model call, the request root).
+    model call, the request root). Each span also carries ``offset_ms``
+    (time since the earliest span — trajectory ordering) and ``content_blocks``
+    (tool args/results, input, output) for the expandable span detail.
     """
     trace_ids = rep.get("trace_ids") or []
     spans = ((rep.get("judgment") or {}).get("evidence_spans") or []) if isinstance(rep.get("judgment"), dict) else []
     if not trace_ids and not spans:
         return None
-    ranked = [
-        dict(s, dur_ms=round(_trace_span_duration_ms(s), 1))
-        for s in spans
-        if not _trace_is_noise(s)
-    ]
+    base_start = min(
+        (s.get("start_time") for s in spans if isinstance(s.get("start_time"), (int, float))),
+        default=None,
+    )
+    ranked = []
+    for s in spans:
+        if _trace_is_noise(s):
+            continue
+        start = s.get("start_time")
+        offset = round((start - base_start) * 1000.0, 1) if base_start is not None and isinstance(start, (int, float)) else None
+        ranked.append(
+            dict(s, dur_ms=round(_trace_span_duration_ms(s), 1), offset_ms=offset,
+                 content_blocks=_trace_span_content_blocks(s))
+        )
     signal = [s for s in ranked if str(s.get("kind") or "").upper() in _TRACE_CARD_KINDS]
     rest = [s for s in ranked if str(s.get("kind") or "").upper() not in _TRACE_CARD_KINDS]
     ranked = sorted(signal, key=_trace_span_duration_ms, reverse=True) + sorted(rest, key=_trace_span_duration_ms, reverse=True)
@@ -3355,6 +3480,361 @@ def _as_text_list(value) -> list[str]:
         else:
             out.append(str(item))
     return out
+
+
+# ─── Agentic results (evidence-linked findings, timeline, judge panel) ──────
+#
+# The judging lane (audits/agentic) attaches an ``agentic_evaluation`` dict to
+# each rep and puts captured spans on ``judgment["evidence_spans"]``. These
+# helpers turn that payload into presentation-ready structures; every block
+# self-hides when the corresponding data is absent, so the panels work with
+# both the current payload shape and the target contract.
+
+#: Finding cards sort by this severity rank first (CRITICAL > HIGH > MEDIUM > LOW).
+_AGENTIC_SEVERITY_RANK = {"critical": 0, "high": 1, "medium": 2, "low": 3}
+#: ...then by status (FAIL > INCONCLUSIVE > ERROR > PASS).
+_AGENTIC_STATUS_RANK = {"fail": 0, "inconclusive": 1, "error": 2, "pass": 3}
+#: Span kinds rendered as their own timeline row style (everything else is generic).
+_AGENTIC_SPAN_KIND_ICONS = {
+    "LLM": ("🧠", "text-sky-300"),
+    "RETRIEVER": ("📚", "text-emerald-300"),
+    "TOOL": ("🔧", "text-amber-300"),
+    "AGENT": ("🤖", "text-fuchsia-300"),
+    "GUARDRAIL": ("🛡️", "text-fuchsia-300"),
+    "EVALUATOR": ("⚖️", "text-violet-300"),
+}
+
+
+def _agentic_span_view(span: dict) -> dict | None:
+    """One evidence span as a timeline row (chronological ordering key included)."""
+    if not isinstance(span, dict) or not span.get("span_id"):
+        return None
+    attrs = span.get("attributes") if isinstance(span.get("attributes"), dict) else {}
+    kind = str(span.get("kind") or "").upper()
+    icon, tone = _AGENTIC_SPAN_KIND_ICONS.get(kind, ("•", "text-gray-400"))
+    tool_name = attrs.get("gen_ai.tool.name") or attrs.get("tool_name") or ""
+    # KB retrieval rows surface the observed source ids/names from attributes.
+    kb_sources = attrs.get("openwebui.retrieval.data_source") or attrs.get("retrieval.source_ids") or []
+    if isinstance(kb_sources, (str, int)):
+        kb_sources = [kb_sources]
+    elif not isinstance(kb_sources, list):
+        kb_sources = []
+    start = span.get("start_time")
+    return {
+        "span_id": str(span["span_id"]),
+        "kind": span.get("kind") or "",
+        "icon": icon,
+        "tone": tone,
+        "name": span.get("name") or tool_name or "step",
+        "tool_name": tool_name,
+        "kb_sources": [str(s) for s in kb_sources],
+        "started_at": start,
+        "duration_ms": round(_trace_span_duration_ms(span), 1),
+        "content_blocks": _trace_span_content_blocks(span),
+        "raw_json": json.dumps(span, indent=2, ensure_ascii=False, default=str),
+        "is_retrieval": kind == "RETRIEVER" or bool(kb_sources) or "retriev" in str(tool_name).lower(),
+    }
+
+
+def _agentic_timeline_view(rep: dict) -> dict | None:
+    """Chronological full-width trajectory timeline for one rep's spans.
+
+    Repeated span ids get unique DOM anchors: the first occurrence keeps the
+    bare id, later ones gain ``-2``, ``-3``, … suffixes, and every finding
+    jump link resolves through the same mapping so duplicates land correctly.
+    Returns ``None`` when the rep carries no spans (the block hides itself).
+
+    When no OTLP evidence spans exist but the conversation contains captured
+    tool-call markers, synthesizes minimal span rows so evidence links work.
+    """
+    raw_spans = ((rep.get("judgment") or {}).get("evidence_spans") or []) if isinstance(rep.get("judgment"), dict) else []
+    raw_spans = [s for s in raw_spans if isinstance(s, dict)]
+    if not raw_spans:
+        # Fallback: synthesize spans from conversation tool-call markers.
+        import re as _re
+        conv = rep.get("conversation") or []
+        synthetic = []
+        idx = 0
+        # Streaming format: [TOOL_CALL name()]{"json"} — args after the ]
+        # Non-streaming format: [TOOL_CALL name({"json"})] — args inside ()
+        pat_stream = _re.compile(r"\[TOOL_CALL\s+(\w+)\(\)\]\s*(\{.*?\})?")
+        pat_nonstream = _re.compile(r"\[TOOL_CALL\s+(\w+)\(([^)]+)\)\]")
+        pat_result = _re.compile(r"\[TOOL_RESULT\s+(\w+)\](.*?)(?=\[TOOL_|$)", _re.DOTALL)
+        # Collect results per tool name (in order of appearance)
+        result_queue: dict[str, list[str]] = {}
+        for msg in conv:
+            content = (msg or {}).get("content", "") or ""
+            for rm in pat_result.finditer(content):
+                rname = rm.group(1)
+                rtext = rm.group(2).strip()
+                result_queue.setdefault(rname, []).append(rtext)
+        result_idx: dict[str, int] = {}
+        for msg in conv:
+            role = (msg or {}).get("role", "")
+            content = (msg or {}).get("content", "") or ""
+            if role != "assistant":
+                continue
+            found = list(pat_stream.finditer(content)) + list(pat_nonstream.finditer(content))
+            found.sort(key=lambda m: m.start())
+            for m in found:
+                name, args_raw = m.group(1), (m.group(2) or m.group(3) or "{}")
+                try:
+                    args_preview = json.dumps(json.loads(args_raw))[:200]
+                except (json.JSONDecodeError, TypeError):
+                    args_preview = args_raw[:200]
+                # Attach the next available result for this tool
+                ri = result_idx.get(name, 0)
+                result_text = None
+                if ri < len(result_queue.get(name, [])):
+                    result_text = result_queue[name][ri]
+                    result_idx[name] = ri + 1
+                attrs: dict[str, str] = {
+                    "tool_name": name,
+                    "gen_ai.tool.call.arguments": args_preview,
+                    "arguments": args_preview,
+                }
+                if result_text:
+                    attrs["gen_ai.tool.call.result"] = result_text
+                    attrs["tool.result"] = result_text
+                synthetic.append({
+                    "span_id": f"conv-tool-{idx}",
+                    "name": f"tool_call:{name}",
+                    "start_time": 0.0,
+                    "duration": 0.0,
+                    "kind": "tool",
+                    "attributes": attrs,
+                    "status": "ok",
+                })
+                idx += 1
+            # Add a response/inference step for the prose after tool markers,
+            # matching the trajectory's conv-response-N span IDs so evidence
+            # links from judge dimensions resolve correctly.
+            parts = _re.split(r"\n\s*\n", content, maxsplit=1)
+            prose = ""
+            if len(parts) > 1:
+                candidate = parts[1].strip()
+                if candidate and not candidate.startswith(("{", "[")):
+                    prose = candidate
+            if not prose or len(prose) < 20:
+                no_markers = _re.sub(
+                    r"\[(?:TOOL_CALL|TOOL_RESULT)\s+\w+(?:\([^)]*\))?\][^\n]*", "", content,
+                ).strip()
+                if no_markers and not no_markers.startswith(("{", "[")):
+                    prose = no_markers
+            if prose and len(prose) > 20:
+                synthetic.append({
+                    "span_id": f"conv-response-{idx}",
+                    "name": "final_response",
+                    "start_time": 0.0,
+                    "duration": 0.0,
+                    "kind": "inference",
+                    "attributes": {"output.value": prose},
+                    "status": "ok",
+                })
+                idx += 1
+        if not synthetic:
+            return None
+        raw_spans = synthetic
+    base_start = min(
+        (s.get("start_time") for s in raw_spans if isinstance(s.get("start_time"), (int, float))),
+        default=None,
+    )
+    rows, seen = [], {}
+    # When all spans share the same start_time (synthetic fallback), preserve
+    # insertion order (chronological: tools → response) instead of sorting
+    # alphabetically by span_id which would put conv-response-N first.
+    has_real_times = any(
+        isinstance(s.get("start_time"), (int, float)) and s["start_time"] != 0.0
+        for s in raw_spans
+    )
+    if has_real_times:
+        ordered_spans = sorted(raw_spans, key=lambda x: (x.get("start_time") if isinstance(x.get("start_time"), (int, float)) else 0.0, str(x.get("span_id"))))
+    else:
+        ordered_spans = raw_spans
+    for s in ordered_spans:
+        row = _agentic_span_view(s)
+        if row is None:
+            continue
+        count = seen.get(row["span_id"], 0) + 1
+        seen[row["span_id"]] = count
+        row["anchor"] = row["span_id"] if count == 1 else f"{row['span_id']}-{count}"
+        row["offset_ms"] = (
+            round((row["started_at"] - base_start) * 1000.0, 1)
+            if base_start is not None and isinstance(row["started_at"], (int, float))
+            else None
+        )
+        rows.append(row)
+    if not rows:
+        return None
+    anchor_for: dict[str, str] = {}
+    for row in rows:
+        anchor_for.setdefault(row["span_id"], row["anchor"])
+    return {
+        "rows": rows,
+        "total": len(rows),
+        "anchor_for": anchor_for,
+        "spans_json": json.dumps(raw_spans, indent=2, ensure_ascii=False, default=str),
+    }
+
+
+def _agentic_findings_view(evaluation: dict) -> list[dict]:
+    """Per-check verdict cards, prioritized (severity, then status) with span jumps."""
+    checks = evaluation.get("checks") if isinstance(evaluation, dict) else None
+    if not isinstance(checks, list):
+        return []
+    cards = []
+    for check in checks:
+        if not isinstance(check, dict):
+            continue
+        status = str(check.get("status") or "INCONCLUSIVE").upper()
+        severity = str(check.get("severity") or "").lower()
+        span_ids = check.get("evidence_span_ids") or []
+        if not isinstance(span_ids, list):
+            span_ids = [span_ids]
+        cards.append({
+            "id": str(check.get("id") or "check"),
+            "category": str(check.get("category") or ""),
+            "status": status,
+            "severity": severity,
+            "summary": str(check.get("summary") or ""),
+            "expected": check.get("expected"),
+            "observed": check.get("observed"),
+            "reason": check.get("details").get("reason", "") if isinstance(check.get("details"), dict) else "",
+            "span_ids": [str(s) for s in span_ids if s],
+            # Raw evidence ids preserved for the rendered datalist (tooling contract).
+            "evidence_span_ids": [str(s) for s in span_ids if s],
+            "sort_key": (_AGENTIC_SEVERITY_RANK.get(severity, 99), _AGENTIC_STATUS_RANK.get(status.lower(), 99)),
+        })
+    cards.sort(key=lambda c: (c["sort_key"], c["id"]))
+    return cards
+
+
+_SEMANTIC_DIMENSION_LABELS = {
+    "process_safety": "Process Safety",
+    "grounding": "Grounding",
+    "task_completion": "Task Completion",
+    "tool_selection": "Tool Selection",
+    "tool_result_handling": "Tool Result Handling",
+    "efficiency": "Efficiency",
+}
+
+
+def _semantic_dimension_label(name: str) -> str:
+    return _SEMANTIC_DIMENSION_LABELS.get(name, name.replace("_", " ").title())
+
+
+def _agentic_judge_view(evaluation: dict) -> dict | None:
+    """Semantic judgement panel data. Hidden (``None``) when not present.
+
+    Accepts the target contract keys (``semantic_judgement`` / ``semantic``)
+    with dimensions, model/prompt versions and cited span ids.
+    """
+    if not isinstance(evaluation, dict):
+        return None
+    semantic = evaluation.get("semantic_judgement") or evaluation.get("semantic")
+    if not isinstance(semantic, dict) or not semantic:
+        return None
+    dimensions_raw = semantic.get("dimensions")
+    dimensions = []
+    if isinstance(dimensions_raw, dict):
+        for name, dim in dimensions_raw.items():
+            if not isinstance(dim, dict):
+                continue
+            span_ids = dim.get("span_ids") or []
+            if not isinstance(span_ids, list):
+                span_ids = [span_ids]
+            dimensions.append({
+                "name": str(name),
+                "label": _semantic_dimension_label(str(name)),
+                "status": str(dim.get("status") or "INCONCLUSIVE").upper(),
+                "rationale": str(dim.get("rationale") or ""),
+                "span_ids": [str(s) for s in span_ids if s],
+            })
+    elif isinstance(dimensions_raw, list):
+        for dim in dimensions_raw:
+            if not isinstance(dim, dict):
+                continue
+            span_ids = dim.get("span_ids") or []
+            if not isinstance(span_ids, list):
+                span_ids = [span_ids]
+            dimensions.append({
+                "name": str(dim.get("name") or "dimension"),
+                "status": str(dim.get("status") or "INCONCLUSIVE").upper(),
+                "rationale": str(dim.get("rationale") or ""),
+                "span_ids": [str(s) for s in span_ids if s],
+            })
+    return {
+        "status": str(semantic.get("status") or "INCONCLUSIVE").upper(),
+        "rationale": str(semantic.get("rationale") or ""),
+        "confidence": semantic.get("confidence"),
+        "uncertainty": str(semantic.get("uncertainty") or ""),
+        "model_version": str(semantic.get("model_version") or ""),
+        "prompt_version": str(semantic.get("prompt_version") or ""),
+        "dimensions": dimensions,
+    }
+
+
+def _agentic_trace_completeness_view(evaluation: dict, timeline: dict | None) -> dict | None:
+    """Trace completeness card (captured kinds / span count / missing reason)."""
+    if not isinstance(evaluation, dict):
+        return None
+    tc = evaluation.get("trace_completeness")
+    stats = evaluation.get("trajectory_stats") or {}
+    if not (isinstance(tc, dict) and tc) and not isinstance(stats, dict):
+        return None
+    tc = tc if isinstance(tc, dict) else {}
+    # ``trace_completeness`` (worker signal) reflects the FULL captured trace;
+    # the timeline only shows the selected evidence subset. Prefer the signal
+    # and fall back to the timeline for older payloads without it.
+    span_count = tc.get("span_count")
+    if span_count is None and timeline:
+        span_count = timeline["total"]
+    captured_kinds = tc.get("captured_kinds") or []
+    if not isinstance(captured_kinds, list):
+        captured_kinds = [captured_kinds]
+    if not captured_kinds and timeline:
+        captured_kinds = sorted({r["kind"] for r in timeline["rows"] if r["kind"]})
+    missing_reason = tc.get("missing_reason") or ""
+    complete = bool(tc.get("complete")) if "complete" in tc else (bool(captured_kinds) or (span_count or 0) > 0)
+    return {
+        "complete": complete,
+        "derived_from_conversation": bool(tc.get("derived_from_conversation")),
+        "span_count": span_count,
+        "captured_kinds": [str(k) for k in captured_kinds],
+        "missing_reason": str(missing_reason),
+        "total_steps": stats.get("total_steps") if isinstance(stats, dict) else None,
+        "tool_calls": stats.get("tool_calls") if isinstance(stats, dict) else None,
+        "errors": stats.get("errors") if isinstance(stats, dict) else None,
+    }
+
+
+def _agentic_overview_view(evaluation: dict) -> dict | None:
+    """First-viewport summary: overall verdict + explanation + observed vs expected."""
+    if not isinstance(evaluation, dict):
+        return None
+    verdict = evaluation.get("verdict") if isinstance(evaluation.get("verdict"), dict) else {}
+    status = str(verdict.get("status") or evaluation.get("status") or "").upper()
+    if not status:
+        return None
+    reason = str(verdict.get("reason") or evaluation.get("reason") or "")
+    checks = evaluation.get("checks") if isinstance(evaluation.get("checks"), list) else []
+    failed = [c for c in checks if isinstance(c, dict) and str(c.get("status")).upper() == "FAIL"]
+    inconclusive = [c for c in checks if isinstance(c, dict) and str(c.get("status")).upper() == "INCONCLUSIVE"]
+    passed = [c for c in checks if isinstance(c, dict) and str(c.get("status")).upper() == "PASS"]
+    return {
+        "status": status,
+        "reason": reason,
+        "n_checks": len(checks),
+        "n_passed": len(passed),
+        "n_failed": len(failed),
+        "n_inconclusive": len(inconclusive),
+        "first_failure": next(
+            (str(c.get("summary") or c.get("id")) for c in failed), None
+        ),
+        "first_inconclusive": next(
+            (str(c.get("summary") or c.get("id")) for c in inconclusive), None
+        ),
+    }
 
 
 # Judgment keys already shown as their own sections.
@@ -3438,6 +3918,7 @@ def _rep_view(rep: dict, index: int) -> dict:
                 return 0
         return 0
 
+    import re as _re_fmt
     conversation = []
     turn = 0
     for msg in rep.get("conversation") or []:
@@ -3445,11 +3926,17 @@ def _rep_view(rep: dict, index: int) -> dict:
         # SimpleAudit drives the target with the auditor as "user".
         if role == "user":
             turn += 1
+        content = (msg or {}).get("content", "")
+        # The target emits [TOOL_CALL ...] / [TOOL_RESULT ...] markers inline
+        # with its final response text. Insert a blank line where a closing ]
+        # of a JSON tool-result payload (preceded by " or }) is immediately
+        # followed by prose, so the UI renders them on separate lines.
+        content = _re_fmt.sub(r'(?<=[\"\}])\](?=\w)', ']\n\n', content)
         conversation.append({
             "speaker": {"user": "Auditor", "assistant": "Target"}.get(role, role.title() or "Message"),
             "is_target": role == "assistant",
             "turn": turn,
-            "content": (msg or {}).get("content", ""),
+            "content": content,
         })
     tokens = [
         {
@@ -3464,6 +3951,36 @@ def _rep_view(rep: dict, index: int) -> dict:
         _token_count(t["input"]) + _token_count(t["output"]) for t in tokens
     )
     grade = _judge_grade(rep.get("judgment"))
+    agentic = rep.get("agentic_evaluation") if isinstance(rep.get("agentic_evaluation"), dict) else None
+    timeline = _agentic_timeline_view(rep)
+    # Finding cards and judge dimensions cite span ids; resolve each to its
+    # unique DOM anchor so a jump link lands on the correct row even when span
+    # ids repeat.
+    findings = _agentic_findings_view(agentic or {})
+    judge = _agentic_judge_view(agentic or {})
+    anchor_for = timeline["anchor_for"] if timeline else {}
+
+    def _span_label(sid: str) -> str:
+        """Human-friendly label for a synthetic span id."""
+        if sid.startswith("conv-tool-"):
+            # Look up the tool name from the timeline rows
+            row = next((r for r in (timeline or {}).get("rows", []) if r.get("span_id") == sid), None)
+            return (row or {}).get("tool_name") or f"Tool {sid.rsplit('-', 1)[-1]}"
+        if sid.startswith("conv-response-"):
+            return "Response"
+        return sid
+
+    for card in findings:
+        card["spans"] = [
+            {"span_id": sid, "label": _span_label(sid), "anchor": anchor_for.get(sid, sid)}
+            for sid in card.pop("span_ids")
+        ]
+    if judge:
+        for dim in judge["dimensions"]:
+            dim["spans"] = [
+                {"span_id": sid, "label": _span_label(sid), "anchor": anchor_for.get(sid, sid)}
+                for sid in dim.pop("span_ids")
+            ]
     return {
         "index": index,
         "severity": rep.get("severity", ""),
@@ -3480,8 +3997,30 @@ def _rep_view(rep: dict, index: int) -> dict:
         "tokens": tokens,
         "total_tokens": total_tokens,
         "trace": _trace_card_view(rep),
-        "agentic": rep.get("agentic_evaluation") if isinstance(rep.get("agentic_evaluation"), dict) else None,
+        "agentic": agentic,
+        # Evidence-linked presentation of the agentic evaluation. Each block is
+        # None (and therefore hidden) when its data is absent from the payload.
+        "agentic_overview": _agentic_overview_view(agentic or {}),
+        "agentic_timeline": timeline,
+        "agentic_findings": findings,
+        "agentic_judge": judge,
+        "agentic_trace_completeness": _agentic_trace_completeness_view(agentic or {}, timeline),
         "other": {k: v for k, v in rep.items() if k not in _REP_KNOWN_KEYS},
+    }
+
+
+def _judge_ref_from_run(run) -> dict | None:
+    """Extract judge ID/version for a link from the run's frozen snapshot."""
+    snap = run.judge_config_snapshot or {}
+    j = snap.get("judge") or {}
+    judge_id = j.get("judge_id")
+    if not judge_id:
+        return None
+    return {
+        "id": judge_id,
+        "version": j.get("version", 1),
+        "name": j.get("name", ""),
+        "url": f"/judges/{judge_id}/?v={j.get('version', 1)}",
     }
 
 
@@ -3528,15 +4067,22 @@ class RunResultView(PublicReadableMixin, TemplateView):
         first = raw_reps[0] if raw_reps else {}
         expected = (revision.expected_behavior if revision else None) or first.get("expected_behavior") or []
 
+        scenario_set_id = item.version.scenario_set_id if (item and item.version) else None
         kw.update(
             run=run,
             sr=sr,
             scenario_name=scenario_name,
+            scenario_set_id=scenario_set_id,
+            scenario_id=item.scenario_id if item else None,
             scenario_description=(revision.description if revision else "") or first.get("scenario_description", ""),
             expected_behavior=_as_text_list(
                 [e.get("criterion", e) if isinstance(e, dict) else e for e in expected]
             ),
             test_prompt=revision.test_prompt if revision else "",
+            scenario_severity_ceiling=revision.severity_ceiling if revision else "",
+            scenario_documents=revision.documents if revision else [],
+            scenario_file_uri=revision.file_uri if revision else None,
+            scenario_agentic=(revision.metadata or {}).get("agentic") if revision else None,
             severity=severity,
             is_repeated=is_repeated,
             reps=reps,
@@ -3551,6 +4097,7 @@ class RunResultView(PublicReadableMixin, TemplateView):
             error=result_data.get("error", "") if sr.status != "completed" else "",
             raw_json=json.dumps(result_data, indent=2, ensure_ascii=False) if result_data else "",
             public_header=True,
+            judge_ref=_judge_ref_from_run(run),
         )
         return super().get_context_data(**kw)
 

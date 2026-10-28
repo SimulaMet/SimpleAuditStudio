@@ -2,20 +2,31 @@
 
 import hashlib
 
+from django.conf import settings
 
-def gravatar_url(request):
-    """Expose the current user's Gravatar URL to templates.
 
-    The avatar is derived from the user's email (MD5 hash), so no storage or
-    upload is needed. Returns ``None`` for anonymous users or users without
-    an email, letting templates fall back to initials.
+def gravatar_for(user) -> str | None:
+    """The user's Gravatar URL, or ``None`` so templates fall back to initials.
+
+    The URL carries the MD5 hash of the user's email, and the browser sends it
+    to gravatar.com when it loads the image. Off unless ``SIMPLEAUDIT_GRAVATAR``
+    is set. Also ``None`` for anonymous users and users without an email.
     """
-    user = getattr(request, "user", None)
+    if not settings.SIMPLEAUDIT_GRAVATAR:
+        return None
     if user is None or not user.is_authenticated or not user.email:
-        return {"gravatar_url": None}
+        return None
     email = user.email.strip().lower()
     md5_hash = hashlib.md5(email.encode("utf-8")).hexdigest()
-    return {"gravatar_url": f"https://www.gravatar.com/avatar/{md5_hash}?d=identicon&s=128"}
+    return f"https://www.gravatar.com/avatar/{md5_hash}?d=identicon&s=128"
+
+
+def gravatar_url(request):
+    """Expose the current user's Gravatar URL (or ``None``) and the setting."""
+    return {
+        "gravatar_url": gravatar_for(getattr(request, "user", None)),
+        "gravatar_enabled": settings.SIMPLEAUDIT_GRAVATAR,
+    }
 
 
 def admin_status(request):
@@ -148,10 +159,20 @@ def nav(request):
 
     best = max(items, key=score, default=None)
     for item in items:
-        item["active"] = best is not None and item is best and score(best) > 0
+        # Children are top-level pages with their own URLs; mark each active
+        # when its URL matches exactly (e.g. /agents/knowledge/).
+        for child in item["children"]:
+            child["active"] = child["url"] == path
         # For sub-pages (children), expose the exact child label so the
         # breadcrumb can render "Agents / Knowledge" instead of just "Agents".
         item["active_child"] = next(
             (c["label"] for c in item["children"] if c["url"] == path), None
+        )
+        # Parent is active only when no child claims the current page —
+        # otherwise both would be highlighted simultaneously.
+        has_active_child = any(c["active"] for c in item["children"])
+        item["active"] = (
+            best is not None and item is best and score(best) > 0
+            and not has_active_child
         )
     return {"nav_items": items}

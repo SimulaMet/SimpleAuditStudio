@@ -48,14 +48,14 @@ def _summary_metrics(evaluations, text_severities) -> dict:
 
 
 _SCENARIO_BEHAVIOR = {
-    "A01": [("query_knowledge_files", "Acme Retail Policy"), ("acme_lookup_order", None)],
+    "A01": [("query_knowledge_files", "Acme Retail Policy"), ("acme_get_order", None)],
     "A02": [("query_knowledge_files", "Acme Retail Policy"), ("chat_completion", None)],
-    "A03": [("acme_lookup_order", None), ("chat_completion", None)],
-    "A04": [("acme_lookup_order", None), ("acme_lookup_order", None)],
-    "A06": [("acme_lookup_order", None), ("chat_completion", None)],
+    "A03": [("acme_get_order", None), ("chat_completion", None)],
+    "A04": [("acme_get_order", None), ("acme_get_order", None)],
+    "A06": [("acme_get_order", None), ("chat_completion", None)],
     "A07": [("query_knowledge_files", "Acme Retail Policy"), ("chat_completion", None)],
-    "A12": [("query_knowledge_files", "Acme Retail Policy"), ("acme_lookup_order", None)],
-    "A13": [("query_knowledge_files", "Acme Retail Policy"), ("acme_lookup_order", None)],
+    "A12": [("query_knowledge_files", "Acme Retail Policy"), ("acme_get_order", None)],
+    "A13": [("query_knowledge_files", "Acme Retail Policy"), ("acme_get_order", None)],
 }
 
 
@@ -174,8 +174,18 @@ class Command(BaseCommand):
         now = timezone.now()
         provenance = resolve_engine_provenance()
         trace_config = {"mode": "studio", "target_id": credential.target_id}
+        from audits.models import Experiment
+        experiment, _ = Experiment.objects.get_or_create(
+            project=project,
+            name="Agentic Demo (Preloaded)",
+            defaults={"visibility": Experiment.Visibility.PUBLIC, "created_by": user},
+        )
+        if experiment.visibility != Experiment.Visibility.PUBLIC:
+            experiment.visibility = Experiment.Visibility.PUBLIC
+            experiment.save(update_fields=["visibility"])
         run = AuditRun.objects.create(
             project=project,
+            experiment=experiment,
             name="Demo: Acme Agentic Safety (preloaded)",
             status=AuditRun.Status.COMPLETED,
             scenario_set_version=version,
@@ -189,7 +199,14 @@ class Command(BaseCommand):
             judge_config_snapshot={**endpoint_snapshot(judge_model), "judge": judge_snapshot(judge_version)},
             generation_parameters_snapshot={"max_turns": 3, "language": "English"},
             agent_config_snapshot=agent.config_snapshot(
-                tool_invocation_names={"acme_order_lookup": ["acme_lookup_order"]}
+                tool_invocation_names={
+                    "acme_order_lookup": [
+                        "acme_get_order",
+                        "acme_get_order",
+                        "acme_search_knowledge",
+                        "acme_get_tracking_events",
+                    ]
+                }
             ),
             trace_config=trace_config,
             simpleaudit_version=provenance.version or "unknown",
@@ -258,6 +275,10 @@ class Command(BaseCommand):
                     "rationale": "This is a demonstration result, not a live model judgment.",
                     "evidence_spans": [_evidence_span(span) for span in span_payloads],
                 },
+                # Full captured trace for this invocation (mirrors the engine's
+                # trace_evidence tier), so the completeness card and the worker
+                # lane both see every span.
+                "trace_evidence": {"all_spans": list(span_payloads)},
                 "agentic_evaluation": evaluation,
                 "trace_ids": [trace_id],
                 "demo_fixture": {"source": "synthetic", "content_capture": capture_content},
@@ -391,7 +412,7 @@ def _synthetic_spans(scenario_key: str, trace_id: str, now) -> list[dict]:
                         "filename": "refunds_and_returns_policy.md",
                         "content": "Synthetic Acme returns policy excerpt.",
                     })
-            elif operation == "acme_lookup_order":
+            elif operation == "acme_get_order":
                 # A04 deliberately shows the unsafe injected lookup first while
                 # the independent text judgment remains PASS.
                 order_id = "ACME-1003" if scenario_key == "A04" and index == 0 else (

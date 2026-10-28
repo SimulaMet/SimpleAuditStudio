@@ -1,0 +1,4711 @@
+diff --git a/.env.example b/.env.example
+index 313024511..70ea742fb 100644
+--- a/.env.example
++++ b/.env.example
+@@ -31,6 +31,11 @@ ENABLE_PLUGINS=true
+ # For production you should set this to match the proxy configuration (127.0.0.1)
+ FORWARDED_ALLOW_IPS='*'
+ 
++# Optional URL subpath prefix for reverse-proxy deployments (e.g. "/openwebui").
++# Must start with a leading slash and must not end with a trailing slash.
++# Leave empty to serve at the root path.
++WEBUI_SUBPATH=""
++
+ # DO NOT TRACK
+ SCARF_NO_ANALYTICS=true
+ DO_NOT_TRACK=true
+diff --git a/Dockerfile b/Dockerfile
+index 08d7a71ee..3130ad84f 100644
+--- a/Dockerfile
++++ b/Dockerfile
+@@ -29,6 +29,7 @@ ARG BUILD_HASH
+ ARG USE_SLIM
+ ARG UID
+ ARG GID
++ARG WEBUI_SUBPATH=""
+ 
+ # Set Node.js options (heap limit Allocation failed - JavaScript heap out of memory)
+ # ENV NODE_OPTIONS="--max-old-space-size=4096"
+@@ -38,11 +39,15 @@ WORKDIR /app
+ # to store git revision in build
+ RUN apk add --no-cache git
+ 
++# The SvelteKit/Vite production build OOMs at Node's ~2GB default heap.
++ENV NODE_OPTIONS="--max-old-space-size=6144"
++
+ COPY package.json package-lock.json ./
+ RUN npm ci --force
+ 
+ COPY . .
+ ENV APP_BUILD_HASH=${BUILD_HASH}
++ENV WEBUI_SUBPATH=${WEBUI_SUBPATH}
+ RUN npm run build && \
+     if [ "$USE_SLIM" = "true" ]; then find build -type f -name '*.map' -delete; fi
+ 
+@@ -228,4 +233,9 @@ ARG BUILD_HASH
+ ENV WEBUI_BUILD_VERSION=${BUILD_HASH}
+ ENV DOCKER=true
+ 
++# Default the backend runtime subpath to match the value the frontend was built
++# with. Can still be overridden at runtime with `-e WEBUI_SUBPATH=...`.
++ARG WEBUI_SUBPATH=""
++ENV WEBUI_SUBPATH=${WEBUI_SUBPATH}
++
+ CMD [ "bash", "start.sh"]
+diff --git a/backend/open_webui/__init__.py b/backend/open_webui/__init__.py
+index e803cea46..ad490bb56 100644
+--- a/backend/open_webui/__init__.py
++++ b/backend/open_webui/__init__.py
+@@ -74,7 +74,11 @@ def serve(
+             os.environ['LD_LIBRARY_PATH'] = ':'.join(LD_LIBRARY_PATH)
+ 
+     import open_webui.main  # noqa: F401
+-    from open_webui.env import UVICORN_WORKERS, UVICORN_WS_PER_MESSAGE_DEFLATE
++    from open_webui.env import (
++        UVICORN_WORKERS,
++        UVICORN_WS_PER_MESSAGE_DEFLATE,
++        WEBUI_SUBPATH,
++    )  # Import the workers setting and web subpath
+ 
+     # On Windows, uvicorn's default loop factory hardcodes ProactorEventLoop,
+     # which is incompatible with psycopg v3 async.  Setting loop='none' lets
+@@ -89,6 +93,7 @@ def serve(
+         workers=UVICORN_WORKERS,
+         ws_per_message_deflate=UVICORN_WS_PER_MESSAGE_DEFLATE,
+         loop=loop,
++        root_path=WEBUI_SUBPATH,
+     )
+ 
+ 
+@@ -98,7 +103,7 @@ def dev(
+     port: int = 8080,
+     reload: bool = True,
+ ):
+-    from open_webui.env import UVICORN_WS_PER_MESSAGE_DEFLATE
++    from open_webui.env import UVICORN_WS_PER_MESSAGE_DEFLATE, WEBUI_SUBPATH
+ 
+     uvicorn.run(
+         'open_webui.main:app',
+@@ -107,6 +112,7 @@ def dev(
+         reload=reload,
+         forwarded_allow_ips='*',
+         ws_per_message_deflate=UVICORN_WS_PER_MESSAGE_DEFLATE,
++        root_path=WEBUI_SUBPATH,
+     )
+ 
+ 
+diff --git a/backend/open_webui/env.py b/backend/open_webui/env.py
+index fe5f8efb2..542845535 100644
+--- a/backend/open_webui/env.py
++++ b/backend/open_webui/env.py
+@@ -958,6 +958,30 @@ if WEBUI_NAME != 'Open WebUI':
+ # https://docs.openwebui.com/license.
+ WEBUI_FAVICON_URL = 'https://openwebui.com/favicon.png'
+ WEBUI_BUILD_HASH = os.getenv('WEBUI_BUILD_HASH', 'dev-build')
++# Optional URL subpath prefix for reverse-proxy deployments (e.g. "/openwebui").
++# Leave empty to serve the app at the root path.
++WEBUI_SUBPATH = os.getenv('WEBUI_SUBPATH', '')
++# Surface the resolved subpath at startup so misconfigured deployments are easy
++# to diagnose from the pod logs.
++if WEBUI_SUBPATH == '':
++    log.info('WEBUI_SUBPATH is empty; serving Open WebUI at the root path "/".')
++else:
++    log.info(
++        'WEBUI_SUBPATH=%r; Open WebUI will be served under this prefix (FastAPI root_path).',
++        WEBUI_SUBPATH,
++    )
++    if not WEBUI_SUBPATH.startswith('/'):
++        log.warning(
++            'WEBUI_SUBPATH=%r does not start with "/"; a reverse-proxy subpath must look '
++            'like "/openwebui". This is almost certainly misconfigured.',
++            WEBUI_SUBPATH,
++        )
++    if WEBUI_SUBPATH != '/' and WEBUI_SUBPATH.endswith('/'):
++        log.warning(
++            'WEBUI_SUBPATH=%r ends with a trailing "/"; it should not (use "/openwebui", '
++            'not "/openwebui/"). This is almost certainly misconfigured.',
++            WEBUI_SUBPATH,
++        )
+ TRUSTED_SIGNATURE_KEY = os.getenv('TRUSTED_SIGNATURE_KEY', '')
+ 
+ ####################################
+diff --git a/backend/open_webui/main.py b/backend/open_webui/main.py
+index e7c291513..a307871df 100644
+--- a/backend/open_webui/main.py
++++ b/backend/open_webui/main.py
+@@ -125,6 +125,7 @@ from open_webui.env import (
+     WEBUI_SECRET_KEY,
+     WEBUI_SESSION_COOKIE_SAME_SITE,
+     WEBUI_SESSION_COOKIE_SECURE,
++    WEBUI_SUBPATH,
+ )
+ from open_webui.events import (
+     EVENTS,
+@@ -509,7 +510,9 @@ app = FastAPI(
+     openapi_url='/openapi.json' if ENV == 'dev' else None,
+     redoc_url=None,
+     lifespan=lifespan,
++    root_path=WEBUI_SUBPATH,
+ )
++log.info('FastAPI app initialized with root_path=%r (from WEBUI_SUBPATH).', app.root_path)
+ 
+ 
+ @app.exception_handler(RecurrenceEvaluationTimeout)
+@@ -2312,6 +2315,7 @@ async def get_app_config(request: Request):
+         'status': True,
+         'name': app.state.WEBUI_NAME,
+         'version': VERSION,
++        'subpath': WEBUI_SUBPATH,
+         'default_locale': str(DEFAULT_LOCALE),
+         'i18n': config.get('ui.i18n') or {},
+         'oauth': {
+@@ -2889,7 +2893,7 @@ async def get_manifest_json():
+             'name': app.state.WEBUI_NAME,
+             'short_name': app.state.WEBUI_NAME,
+             'description': f'{app.state.WEBUI_NAME} is an open, extensible, user-friendly interface for AI that adapts to your workflow.',
+-            'start_url': '/',
++            'start_url': f'{WEBUI_SUBPATH}/',
+             'display': 'standalone',
+             'background_color': '#343541',
+             'icons': [
+@@ -2897,20 +2901,20 @@ async def get_manifest_json():
+                 # Do not alter, remove, obscure, or replace it except as LICENSE permits:
+                 # https://docs.openwebui.com/license.
+                 {
+-                    'src': '/static/logo.png',
++                    'src': f'{WEBUI_SUBPATH}/static/logo.png',
+                     'type': 'image/png',
+                     'sizes': '500x500',
+                     'purpose': 'any',
+                 },
+                 {
+-                    'src': '/static/logo.png',
++                    'src': f'{WEBUI_SUBPATH}/static/logo.png',
+                     'type': 'image/png',
+                     'sizes': '500x500',
+                     'purpose': 'maskable',
+                 },
+             ],
+             'share_target': {
+-                'action': '/',
++                'action': f'{WEBUI_SUBPATH}/',
+                 'method': 'GET',
+                 'params': {'text': 'shared'},
+             },
+@@ -3055,9 +3059,9 @@ def swagger_ui_html(*args, **kwargs):
+     return get_swagger_ui_html(
+         *args,
+         **kwargs,
+-        swagger_js_url='/static/swagger-ui/swagger-ui-bundle.js',
+-        swagger_css_url='/static/swagger-ui/swagger-ui.css',
+-        swagger_favicon_url='/static/swagger-ui/favicon.png',
++        swagger_js_url=f'{WEBUI_SUBPATH}/static/swagger-ui/swagger-ui-bundle.js',
++        swagger_css_url=f'{WEBUI_SUBPATH}/static/swagger-ui/swagger-ui.css',
++        swagger_favicon_url=f'{WEBUI_SUBPATH}/static/swagger-ui/favicon.png',
+     )
+ 
+ 
+diff --git a/backend/open_webui/routers/models.py b/backend/open_webui/routers/models.py
+index e8426b1da..f2f699e0b 100644
+--- a/backend/open_webui/routers/models.py
++++ b/backend/open_webui/routers/models.py
+@@ -784,6 +784,10 @@ async def get_model_profile_image(
+ 
+     bypass_access_control = BYPASS_MODEL_ACCESS_CONTROL or (user.role == 'admin' and BYPASS_ADMIN_ACCESS_CONTROL)
+ 
++    # Prefix static-asset redirects with the ASGI root_path so they keep the
++    # reverse-proxy subpath (a bare "/static/..." Location drops it → 404).
++    root_path = request.scope.get('root_path', '').rstrip('/')
++
+     # First, check the database for regular models
+     model_meta = await Models.get_model_meta_by_id(id, db=db)
+     if model_meta:
+@@ -838,7 +842,7 @@ async def get_model_profile_image(
+                     # Do not alter, remove, obscure, or replace it except as LICENSE permits:
+                     # https://docs.openwebui.com/license.
+                     return RedirectResponse(
+-                        url='/static/favicon.png',
++                        url=f'{root_path}/static/favicon.png',
+                         status_code=status.HTTP_302_FOUND,
+                     )
+ 
+@@ -860,7 +864,7 @@ async def get_model_profile_image(
+             safe_static = _safe_static_redirect_path(profile_image_url)
+             if safe_static:
+                 return RedirectResponse(
+-                    url=safe_static,
++                    url=f'{root_path}{safe_static}',
+                     status_code=status.HTTP_302_FOUND,
+                 )
+ 
+@@ -868,7 +872,7 @@ async def get_model_profile_image(
+     # Do not alter, remove, obscure, or replace it except as LICENSE permits:
+     # https://docs.openwebui.com/license.
+     return RedirectResponse(
+-        url='/static/favicon.png',
++        url=f'{root_path}/static/favicon.png',
+         status_code=status.HTTP_302_FOUND,
+     )
+ 
+diff --git a/backend/open_webui/socket/main.py b/backend/open_webui/socket/main.py
+index 2e0969ab2..f33cc3cfa 100644
+--- a/backend/open_webui/socket/main.py
++++ b/backend/open_webui/socket/main.py
+@@ -31,6 +31,7 @@ from open_webui.env import (
+     WEBSOCKET_SERVER_LOGGING,
+     WEBSOCKET_SERVER_PING_INTERVAL,
+     WEBSOCKET_SERVER_PING_TIMEOUT,
++    WEBUI_SUBPATH,
+ )
+ from open_webui.models.access_grants import AccessGrants
+ from open_webui.models.channels import Channels
+@@ -308,9 +309,14 @@ async def periodic_usage_pool_cleanup():
+             await asyncio.sleep(retry_delay)
+ 
+ 
++# engineio's ASGIApp matches the *full* request path (it does not subtract the
++# ASGI root_path), so under a reverse-proxy subpath the browser hits
++# `${WEBUI_SUBPATH}/ws/socket.io` and the handshake would otherwise 404 into a
++# websocket-scope `not_found`. Prefix socketio_path with WEBUI_SUBPATH so it
++# stays aligned with the frontend client (`path: ${base}/ws/socket.io`).
+ app = socketio.ASGIApp(
+     sio,
+-    socketio_path='/ws/socket.io',
++    socketio_path=f'{WEBUI_SUBPATH}/ws/socket.io',
+ )
+ 
+ 
+diff --git a/backend/open_webui/utils/asgi_middleware.py b/backend/open_webui/utils/asgi_middleware.py
+index 2d9f4e190..7fcdce387 100644
+--- a/backend/open_webui/utils/asgi_middleware.py
++++ b/backend/open_webui/utils/asgi_middleware.py
+@@ -198,7 +198,8 @@ class AppHTTPMiddleware:
+                     redirect_params['q'] = text
+ 
+         if redirect_params:
+-            redirect_url = f'/?{urlencode(redirect_params)}'
++            root_path = (scope.get('root_path') or '').rstrip('/')
++            redirect_url = f'{root_path}/?{urlencode(redirect_params)}'
+             response = RedirectResponse(url=redirect_url)
+             await response(scope, receive, send)
+             return True
+diff --git a/backend/tests/test_asgi_middleware.py b/backend/tests/test_asgi_middleware.py
+new file mode 100644
+index 000000000..bd0db41ec
+--- /dev/null
++++ b/backend/tests/test_asgi_middleware.py
+@@ -0,0 +1,34 @@
++from starlette.applications import Starlette
++from starlette.responses import PlainTextResponse
++from starlette.routing import Route
++from starlette.testclient import TestClient
++
++from open_webui.utils.asgi_middleware import RedirectMiddleware
++
++
++async def ok(_request):
++    return PlainTextResponse('ok')
++
++
++def build_client(*, root_path: str = '') -> TestClient:
++    app = Starlette(routes=[Route('/', ok), Route('/watch', ok)])
++    app.add_middleware(RedirectMiddleware)
++    return TestClient(app, root_path=root_path)
++
++
++def test_redirect_middleware_keeps_root_path_for_watch_redirect():
++    client = build_client(root_path='/openwebui')
++
++    response = client.get('/watch?v=abc123', follow_redirects=False)
++
++    assert response.status_code in (301, 302, 307, 308)
++    assert response.headers['location'] == '/openwebui/?youtube=abc123'
++
++
++def test_redirect_middleware_uses_root_when_no_root_path_is_set():
++    client = build_client()
++
++    response = client.get('/watch?v=abc123', follow_redirects=False)
++
++    assert response.status_code in (301, 302, 307, 308)
++    assert response.headers['location'] == '/?youtube=abc123'
+diff --git a/backend/tests/test_env.py b/backend/tests/test_env.py
+new file mode 100644
+index 000000000..0920a357e
+--- /dev/null
++++ b/backend/tests/test_env.py
+@@ -0,0 +1,11 @@
++import importlib
++
++
++def test_env_exports_webui_subpath(monkeypatch):
++    monkeypatch.setenv('WEBUI_SECRET_KEY', 'test-secret')
++    monkeypatch.setenv('WEBUI_SUBPATH', '/openwebui')
++
++    env_module = importlib.import_module('open_webui.env')
++    env_module = importlib.reload(env_module)
++
++    assert env_module.WEBUI_SUBPATH == '/openwebui'
+diff --git a/src/app.html b/src/app.html
+index 667808e01..b711d8aa8 100644
+--- a/src/app.html
++++ b/src/app.html
+@@ -6,37 +6,51 @@
+ 		visual, textual, symbolic identifiers, metadata, and surrounding UI.
+ 		Do not alter, remove, obscure, or replace it except as LICENSE permits:
+ 		https://docs.openwebui.com/license. -->
+-		<link rel="icon" type="image/png" href="/static/favicon.png" crossorigin="use-credentials" />
+ 		<link
+ 			rel="icon"
+ 			type="image/png"
+-			href="/static/favicon-96x96.png"
++			href="%sveltekit.assets%/static/favicon.png"
++			crossorigin="use-credentials"
++		/>
++		<link
++			rel="icon"
++			type="image/png"
++			href="%sveltekit.assets%/static/favicon-96x96.png"
+ 			sizes="96x96"
+ 			crossorigin="use-credentials"
+ 		/>
+ 		<link
+ 			rel="icon"
+ 			type="image/svg+xml"
+-			href="/static/favicon.svg"
++			href="%sveltekit.assets%/static/favicon.svg"
++			crossorigin="use-credentials"
++		/>
++		<link
++			rel="shortcut icon"
++			href="%sveltekit.assets%/static/favicon.ico"
+ 			crossorigin="use-credentials"
+ 		/>
+-		<link rel="shortcut icon" href="/static/favicon.ico" crossorigin="use-credentials" />
+ 		<link
+ 			rel="apple-touch-icon"
+ 			sizes="180x180"
+-			href="/static/apple-touch-icon.png"
++			href="%sveltekit.assets%/static/apple-touch-icon.png"
+ 			crossorigin="use-credentials"
+ 		/>
+-		<link rel="manifest" href="/manifest.json" crossorigin="use-credentials" />
++		<link rel="manifest" href="%sveltekit.assets%/manifest.json" crossorigin="use-credentials" />
+ 		<meta
+ 			name="viewport"
+ 			content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover, interactive-widget=resizes-content"
+ 		/>
+ 		<meta name="theme-color" content="#171717" />
+ 		<meta name="robots" content="noindex,nofollow" />
++		<meta name="webui-assets" content="%sveltekit.assets%" />
+ 
+-		<script src="/static/loader.js" defer crossorigin="use-credentials"></script>
+-		<link rel="stylesheet" href="/static/custom.css" crossorigin="use-credentials" />
++		<script src="%sveltekit.assets%/static/loader.js" defer crossorigin="use-credentials"></script>
++		<link
++			rel="stylesheet"
++			href="%sveltekit.assets%/static/custom.css"
++			crossorigin="use-credentials"
++		/>
+ 
+ 		<script>
+ 			function resizeIframe(obj) {
+@@ -78,9 +92,10 @@
+ 				// LICENSE covers these Open WebUI splash logo assets.
+ 				// Do not alter, remove, obscure, or replace them except as LICENSE permits:
+ 				// https://docs.openwebui.com/license.
++				const assetsBase = document.querySelector('meta[name="webui-assets"]')?.content || '';
+ 				const preloadHref = document.documentElement.classList.contains('dark')
+-					? '/static/splash-dark.png'
+-					: '/static/splash.png';
++					? `${assetsBase}/static/splash-dark.png`
++					: `${assetsBase}/static/splash.png`;
+ 				const preload = document.createElement('link');
+ 				preload.rel = 'preload';
+ 				preload.as = 'image';
+@@ -112,7 +127,10 @@
+ 				// LICENSE covers this Open WebUI splash logo.
+ 				// Do not alter, remove, obscure, or replace it except as LICENSE permits:
+ 				// https://docs.openwebui.com/license.
+-				logo.src = isDarkMode ? '/static/splash-dark.png' : '/static/splash.png';
++				const _assetsBase = document.querySelector('meta[name="webui-assets"]')?.content || '';
++				logo.src = isDarkMode
++					? `${_assetsBase}/static/splash-dark.png`
++					: `${_assetsBase}/static/splash.png`;
+ 
+ 				document.addEventListener('DOMContentLoaded', function () {
+ 					const splash = document.getElementById('splash-screen');
+@@ -163,7 +181,7 @@
+ 				<img
+ 					id="logo-her"
+ 					style="width: auto; height: 13rem"
+-					src="/static/splash.png"
++					src="%sveltekit.assets%/static/splash.png"
+ 					loading="eager"
+ 					fetchpriority="high"
+ 					class="animate-pulse-fast"
+diff --git a/src/lib/components/NotificationToast.svelte b/src/lib/components/NotificationToast.svelte
+index 3e7101dbc..29e7d859f 100644
+--- a/src/lib/components/NotificationToast.svelte
++++ b/src/lib/components/NotificationToast.svelte
+@@ -74,7 +74,7 @@
+ 			if (!$playingNotificationSound && $isLastActiveTab) {
+ 				playingNotificationSound.set(true);
+ 
+-				const audio = new Audio(`/audio/notification.mp3`);
++				const audio = new Audio(`${WEBUI_BASE_URL}/audio/notification.mp3`);
+ 				audio.play().finally(() => {
+ 					// Ensure the global state is reset after the sound finishes
+ 					playingNotificationSound.set(false);
+diff --git a/src/lib/components/OnBoarding.svelte b/src/lib/components/OnBoarding.svelte
+index c761dc193..cf287e376 100644
+--- a/src/lib/components/OnBoarding.svelte
++++ b/src/lib/components/OnBoarding.svelte
+@@ -1,5 +1,6 @@
+ <script>
+ 	import { getContext } from 'svelte';
++	import { base } from '$app/paths';
+ 	const i18n = getContext('i18n');
+ 
+ 	export let show = true;
+@@ -46,7 +47,7 @@
+ 			<img
+ 				id="logo"
+ 				crossorigin="anonymous"
+-				src="/static/favicon.png"
++				src={`${base}/static/favicon.png`}
+ 				class="size-6 rounded-full"
+ 				alt="logo"
+ 			/>
+diff --git a/src/lib/components/admin/Analytics.svelte b/src/lib/components/admin/Analytics.svelte
+index bd33b3c37..0c5ec6cc6 100644
+--- a/src/lib/components/admin/Analytics.svelte
++++ b/src/lib/components/admin/Analytics.svelte
+@@ -1,4 +1,5 @@
+ <script>
++	import { base } from '$app/paths';
+ 	import { onMount, getContext } from 'svelte';
+ 	import { goto } from '$app/navigation';
+ 	import { user } from '$lib/stores';
+@@ -11,7 +12,7 @@
+ 
+ 	onMount(async () => {
+ 		if ($user?.role !== 'admin') {
+-			await goto('/');
++			await goto(`${base}/`);
+ 		}
+ 		loaded = true;
+ 	});
+diff --git a/src/lib/components/admin/Analytics/Dashboard.svelte b/src/lib/components/admin/Analytics/Dashboard.svelte
+index 423269a98..97cbac32e 100644
+--- a/src/lib/components/admin/Analytics/Dashboard.svelte
++++ b/src/lib/components/admin/Analytics/Dashboard.svelte
+@@ -1,4 +1,5 @@
+ <script lang="ts">
++	import { base } from '$app/paths';
+ 	import { onMount, getContext } from 'svelte';
+ 	import { models } from '$lib/stores';
+ 	import {
+@@ -487,7 +488,7 @@
+ 												// LICENSE covers this Open WebUI fallback logo.
+ 												// Do not alter, remove, obscure, or replace it except as LICENSE permits:
+ 												// https://docs.openwebui.com/license.
+-												e.target.src = '/favicon.png';
++												e.target.src = `${base}/static/favicon.png`;
+ 											}}
+ 										/>
+ 										<span class="truncate max-w-[9.375rem]">{model.name}</span>
+@@ -595,7 +596,7 @@
+ 											alt={user.name || 'User'}
+ 											class="size-5 rounded-full object-cover shrink-0"
+ 											on:error={(e) => {
+-												e.target.src = '/user.png';
++												e.target.src = `${base}/static/user.png`;
+ 											}}
+ 										/>
+ 										<span class="truncate max-w-[9.375rem]"
+diff --git a/src/lib/components/admin/Analytics/ModelUsage.svelte b/src/lib/components/admin/Analytics/ModelUsage.svelte
+new file mode 100644
+index 000000000..2e6a1f244
+--- /dev/null
++++ b/src/lib/components/admin/Analytics/ModelUsage.svelte
+@@ -0,0 +1,174 @@
++<script lang="ts">
++	import { base } from '$app/paths';
++	import { onMount, getContext } from 'svelte';
++	import { models } from '$lib/stores';
++	import { getModelAnalytics } from '$lib/apis/analytics';
++	import Spinner from '$lib/components/common/Spinner.svelte';
++	import ChevronUp from '$lib/components/icons/ChevronUp.svelte';
++	import ChevronDown from '$lib/components/icons/ChevronDown.svelte';
++	import { WEBUI_API_BASE_URL } from '$lib/constants';
++
++	const i18n = getContext('i18n');
++
++	let modelStats: Array<{ model_id: string; count: number; name?: string }> = [];
++	let loading = true;
++	let orderBy = 'count';
++	let direction: 'asc' | 'desc' = 'desc';
++
++	const toggleSort = (key: string) => {
++		if (orderBy === key) {
++			direction = direction === 'asc' ? 'desc' : 'asc';
++		} else {
++			orderBy = key;
++			direction = key === 'name' ? 'asc' : 'desc';
++		}
++	};
++
++	const loadAnalytics = async () => {
++		loading = true;
++		try {
++			const result = await getModelAnalytics(localStorage.token);
++			const modelsMap = new Map($models.map((m) => [m.id, m.name || m.id]));
++
++			modelStats = (result?.models ?? []).map((entry) => ({
++				...entry,
++				name: modelsMap.get(entry.model_id) || entry.model_id
++			}));
++		} catch (err) {
++			console.error('Analytics load failed:', err);
++		}
++		loading = false;
++	};
++
++	$: sortedModels = [...modelStats].sort((a, b) => {
++		if (orderBy === 'name') {
++			return direction === 'asc' ? a.name.localeCompare(b.name) : b.name.localeCompare(a.name);
++		}
++		return direction === 'asc' ? a.count - b.count : b.count - a.count;
++	});
++
++	$: totalMessages = modelStats.reduce((sum, m) => sum + m.count, 0);
++
++	onMount(loadAnalytics);
++</script>
++
++<div
++	class="pt-0.5 pb-1 gap-1 flex flex-col md:flex-row justify-between sticky top-0 z-10 bg-white dark:bg-gray-900"
++>
++	<div class="flex items-center text-xl font-medium px-0.5 gap-2 shrink-0">
++		{$i18n.t('Model Usage')}
++		<span class="text-lg text-gray-500">{totalMessages} {$i18n.t('messages')}</span>
++	</div>
++</div>
++
++<div
++	class="scrollbar-hidden relative whitespace-nowrap overflow-x-auto max-w-full rounded-sm min-h-[100px]"
++>
++	{#if loading}
++		<div
++			class="absolute inset-0 flex items-center justify-center z-10 bg-white/50 dark:bg-gray-900/50"
++		>
++			<Spinner className="size-5" />
++		</div>
++	{/if}
++
++	{#if !modelStats.length && !loading}
++		<div class="text-center text-xs text-gray-500 py-1">{$i18n.t('No data found')}</div>
++	{:else if modelStats.length}
++		<table
++			class="w-full text-sm text-left text-gray-500 dark:text-gray-400 {loading
++				? 'opacity-20'
++				: ''}"
++		>
++			<thead class="text-xs text-gray-800 uppercase bg-transparent dark:text-gray-200">
++				<tr class="border-b-[1.5px] border-gray-50 dark:border-gray-850/30">
++					<th scope="col" class="px-2.5 py-2 w-8">#</th>
++					<th
++						scope="col"
++						class="px-2.5 py-2 cursor-pointer select-none"
++						on:click={() => toggleSort('name')}
++					>
++						<div class="flex gap-1.5 items-center">
++							{$i18n.t('Model')}
++							{#if orderBy === 'name'}
++								{#if direction === 'asc'}<ChevronUp className="size-2" />{:else}<ChevronDown
++										className="size-2"
++									/>{/if}
++							{:else}
++								<span class="invisible"><ChevronUp className="size-2" /></span>
++							{/if}
++						</div>
++					</th>
++					<th
++						scope="col"
++						class="px-2.5 py-2 cursor-pointer select-none text-right"
++						on:click={() => toggleSort('count')}
++					>
++						<div class="flex gap-1.5 items-center justify-end">
++							{$i18n.t('Messages')}
++							{#if orderBy === 'count'}
++								{#if direction === 'asc'}<ChevronUp className="size-2" />{:else}<ChevronDown
++										className="size-2"
++									/>{/if}
++							{:else}
++								<span class="invisible"><ChevronUp className="size-2" /></span>
++							{/if}
++						</div>
++					</th>
++					<th
++						scope="col"
++						class="px-2.5 py-2 cursor-pointer select-none text-right w-24"
++						on:click={() => toggleSort('percentage')}
++					>
++						<div class="flex gap-1.5 items-center justify-end">
++							{$i18n.t('Share')}
++							{#if orderBy === 'percentage'}
++								{#if direction === 'asc'}<ChevronUp className="size-2" />{:else}<ChevronDown
++										className="size-2"
++									/>{/if}
++							{:else}
++								<span class="invisible"><ChevronUp className="size-2" /></span>
++							{/if}
++						</div>
++					</th>
++				</tr>
++			</thead>
++			<tbody>
++				{#each sortedModels as model, idx (model.model_id)}
++					<tr
++						class="bg-white dark:bg-gray-900 text-xs hover:bg-gray-50 dark:hover:bg-gray-850/50 transition"
++					>
++						<td class="px-3 py-1.5 font-medium text-gray-900 dark:text-white">
++							{idx + 1}
++						</td>
++						<td class="px-3 py-1.5">
++							<div class="flex items-center gap-2">
++								<img
++									src="{WEBUI_API_BASE_URL}/models/model/profile/image?id={model.model_id}"
++									alt={model.name}
++									class="size-5 rounded-full object-cover shrink-0"
++									on:error={(e) => {
++										e.target.src = `${base}/static/favicon.png`;
++									}}
++								/>
++								<span class="font-medium text-gray-800 dark:text-gray-200">{model.name}</span>
++							</div>
++						</td>
++						<td class="px-3 py-1.5 text-right font-medium text-gray-900 dark:text-white">
++							{model.count.toLocaleString()}
++						</td>
++						<td class="px-3 py-1.5 text-right font-medium text-blue-500">
++							{((model.count / totalMessages) * 100).toFixed(1)}%
++						</td>
++					</tr>
++				{/each}
++			</tbody>
++		</table>
++	{/if}
++</div>
++
++<div class="text-gray-500 text-xs mt-1.5 w-full flex justify-end">
++	<div class="text-right">
++		ⓘ {$i18n.t('Message counts are based on assistant responses.')}
++	</div>
++</div>
+diff --git a/src/lib/components/admin/Evaluations.svelte b/src/lib/components/admin/Evaluations.svelte
+index 5a7bb7965..d2112a708 100644
+--- a/src/lib/components/admin/Evaluations.svelte
++++ b/src/lib/components/admin/Evaluations.svelte
+@@ -1,5 +1,7 @@
+ <script>
+-	import { getContext, onMount } from 'svelte';
++	import { base } from '$app/paths';
++	import { getContext, tick, onMount } from 'svelte';
++	import { goto } from '$app/navigation';
+ 	import { page } from '$app/stores';
+ 	import { adminFeedbackCount, adminLeaderboardCount, models as _models } from '$lib/stores';
+ 	import { getFeedbackItems, getLeaderboard } from '$lib/apis/evaluations';
+@@ -84,7 +86,7 @@
+ 		>
+ 			<a
+ 				id="leaderboard"
+-				href="/admin/evaluations/leaderboard"
++				href="{base}/admin/evaluations/leaderboard"
+ 				draggable="false"
+ 				class="px-0.5 py-1 min-w-fit rounded-lg lg:flex-none flex items-center gap-1.5 text-right transition select-none {selectedTab ===
+ 				'leaderboard'
+@@ -101,7 +103,7 @@
+ 
+ 			<a
+ 				id="feedback"
+-				href="/admin/evaluations/feedback"
++				href="{base}/admin/evaluations/feedback"
+ 				draggable="false"
+ 				class="px-0.5 py-1 min-w-fit rounded-lg lg:flex-none flex items-center gap-1.5 text-right transition select-none {selectedTab ===
+ 				'feedback'
+diff --git a/src/lib/components/admin/Evaluations/FeedbackModal.svelte b/src/lib/components/admin/Evaluations/FeedbackModal.svelte
+index e4a4905b2..e13c612bf 100644
+--- a/src/lib/components/admin/Evaluations/FeedbackModal.svelte
++++ b/src/lib/components/admin/Evaluations/FeedbackModal.svelte
+@@ -1,4 +1,5 @@
+ <script lang="ts">
++	import { base } from '$app/paths';
+ 	import Modal from '$lib/components/common/Modal.svelte';
+ 	import { getContext } from 'svelte';
+ 	const i18n: any = getContext('i18n');
+@@ -63,7 +64,7 @@
+ 
+ 							<div class="flex-1 text-xs">
+ 								<a
+-									href={`/s/${selectedFeedback?.meta?.chat_id}`}
++									href={`${base}/s/${selectedFeedback?.meta?.chat_id}`}
+ 									class=" hover:underline"
+ 									target="_blank"
+ 								>
+diff --git a/src/lib/components/admin/Evaluations/Leaderboard.svelte b/src/lib/components/admin/Evaluations/Leaderboard.svelte
+index 68246cc8d..b980c3888 100644
+--- a/src/lib/components/admin/Evaluations/Leaderboard.svelte
++++ b/src/lib/components/admin/Evaluations/Leaderboard.svelte
+@@ -1,4 +1,5 @@
+ <script lang="ts">
++	import { base } from '$app/paths';
+ 	import { getContext } from 'svelte';
+ 	import { adminLeaderboardCount, models } from '$lib/stores';
+ 	import { getLeaderboard } from '$lib/apis/evaluations';
+@@ -217,7 +218,7 @@
+ 											// LICENSE covers this Open WebUI fallback logo.
+ 											// Do not alter, remove, obscure, or replace it except as LICENSE permits:
+ 											// https://docs.openwebui.com/license.
+-											e.target.src = '/favicon.png';
++											e.target.src = `${base}/static/favicon.png`;
+ 										}}
+ 									/>
+ 									<Tooltip content={`${model.name} (${model.id})`} placement="top-start">
+diff --git a/src/lib/components/admin/Functions.svelte b/src/lib/components/admin/Functions.svelte
+index d7f654704..d344ed7be 100644
+--- a/src/lib/components/admin/Functions.svelte
++++ b/src/lib/components/admin/Functions.svelte
+@@ -2,6 +2,7 @@
+ 	import { resolveLocalizedResource } from '$lib/utils/localizedContent';
+ 	import dayjs from 'dayjs';
+ 	import relativeTime from 'dayjs/plugin/relativeTime';
++	import { base } from '$app/paths';
+ 	import { toast } from 'svelte-sonner';
+ 	import fileSaver from 'file-saver';
+ 	const { saveAs } = fileSaver;
+@@ -149,7 +150,7 @@
+ 	};
+ 
+ 	const openFunction = (func) => {
+-		goto(`/admin/functions/edit?id=${encodeURIComponent(func.id)}`);
++		goto(`${base}/admin/functions/edit?id=${encodeURIComponent(func.id)}`);
+ 	};
+ 
+ 	const shouldIgnoreRowClick = (target: EventTarget | null) => {
+@@ -197,7 +198,7 @@
+ 				id: `${_function.id}_clone`,
+ 				name: `${_function.name} (${$i18n.t('Clone')})`
+ 			});
+-			goto('/admin/functions/create');
++			goto(`${base}/admin/functions/create`);
+ 		}
+ 	};
+ 
+@@ -325,7 +326,7 @@
+ 		sessionStorage.function = JSON.stringify({
+ 			...func
+ 		});
+-		goto('/admin/functions/create');
++		goto(`${base}/admin/functions/create`);
+ 	}}
+ />
+ 
+@@ -363,7 +364,7 @@
+ 								{
+ 									id: 'functions-new',
+ 									label: $i18n.t('Create'),
+-									href: '/admin/functions/create'
++									href: `${base}/admin/functions/create`
+ 								},
+ 								{
+ 									id: 'functions-import-link',
+@@ -653,7 +654,7 @@
+ 											{func}
+ 											show={openFunctionMenuId === func.id}
+ 											editHandler={() => {
+-												goto(`/admin/functions/edit?id=${encodeURIComponent(func.id)}`);
++												goto(`${base}/admin/functions/edit?id=${encodeURIComponent(func.id)}`);
+ 											}}
+ 											shareHandler={() => {
+ 												shareHandler(func);
+diff --git a/src/lib/components/admin/Functions/FunctionEditor.svelte b/src/lib/components/admin/Functions/FunctionEditor.svelte
+index 41f0c0fc0..a6c872a36 100644
+--- a/src/lib/components/admin/Functions/FunctionEditor.svelte
++++ b/src/lib/components/admin/Functions/FunctionEditor.svelte
+@@ -1,4 +1,5 @@
+ <script>
++	import { base } from '$app/paths';
+ 	import { getContext, onMount, tick } from 'svelte';
+ 	import { goto } from '$app/navigation';
+ 
+@@ -380,7 +381,7 @@ class Pipe:
+ 			class="mb-1 flex h-6 w-fit items-center gap-1 rounded-md text-xs text-gray-400 transition-colors duration-75 hover:text-gray-700 dark:text-gray-600 dark:hover:text-gray-300"
+ 			type="button"
+ 			on:click={() => {
+-				goto('/admin/functions');
++				goto(`${base}/admin/functions`);
+ 			}}
+ 		>
+ 			<ChevronLeft className="size-3" strokeWidth="2" />
+diff --git a/src/lib/components/admin/Settings/Models.svelte b/src/lib/components/admin/Settings/Models.svelte
+index 42bf61a37..2601a944c 100644
+--- a/src/lib/components/admin/Settings/Models.svelte
++++ b/src/lib/components/admin/Settings/Models.svelte
+@@ -1,4 +1,5 @@
+ <script lang="ts">
++	import { base } from '$app/paths';
+ 	import { marked } from 'marked';
+ 	import Sortable from 'sortablejs';
+ 	import fileSaver from 'file-saver';
+@@ -643,7 +644,7 @@
+ 			name: `${model.name} (Clone)`
+ 		});
+ 		showSettings.set(false);
+-		await goto('/workspace/models/create');
++		await goto(`${base}/workspace/models/create`);
+ 	};
+ 
+ 	const exportModelHandler = async (model) => {
+@@ -1015,7 +1016,7 @@
+ 														// LICENSE covers this Open WebUI fallback logo.
+ 														// Do not alter, remove, obscure, or replace it except as LICENSE permits:
+ 														// https://docs.openwebui.com/license.
+-														e.target.src = '/favicon.png';
++														e.target.src = `${base}/static/favicon.png`;
+ 													}}
+ 												/>
+ 											</div>
+diff --git a/src/lib/components/admin/Users.svelte b/src/lib/components/admin/Users.svelte
+index a695beb52..c838aef1f 100644
+--- a/src/lib/components/admin/Users.svelte
++++ b/src/lib/components/admin/Users.svelte
+@@ -1,4 +1,5 @@
+ <script>
++	import { base } from '$app/paths';
+ 	import { getContext, onMount } from 'svelte';
+ 
+ 	import { goto } from '$app/navigation';
+@@ -59,7 +60,7 @@
+ 
+ 	onMount(async () => {
+ 		if ($user?.role !== 'admin') {
+-			await goto('/');
++			await goto(`${base}/`);
+ 		}
+ 
+ 		loaded = true;
+@@ -88,7 +89,7 @@
+ 		>
+ 			<a
+ 				id="overview"
+-				href="/admin/users/overview"
++				href={`${base}/admin/users/overview`}
+ 				draggable="false"
+ 				class="px-0.5 py-1 min-w-fit rounded-lg lg:flex-none flex items-center gap-1.5 text-right transition select-none {selectedTab ===
+ 				'overview'
+@@ -109,7 +110,7 @@
+ 
+ 			<a
+ 				id="groups"
+-				href="/admin/users/groups"
++				href={`${base}/admin/users/groups`}
+ 				draggable="false"
+ 				class="px-0.5 py-1 min-w-fit rounded-lg lg:flex-none flex items-center gap-1.5 text-right transition select-none {selectedTab ===
+ 				'groups'
+diff --git a/src/lib/components/admin/Users/Groups.svelte b/src/lib/components/admin/Users/Groups.svelte
+index 8ba56c9de..792206f2b 100644
+--- a/src/lib/components/admin/Users/Groups.svelte
++++ b/src/lib/components/admin/Users/Groups.svelte
+@@ -1,4 +1,5 @@
+ <script>
++	import { base } from '$app/paths';
+ 	import { toast } from 'svelte-sonner';
+ 	import { onMount, getContext } from 'svelte';
+ 	import { goto } from '$app/navigation';
+@@ -99,7 +100,7 @@
+ 
+ 	onMount(async () => {
+ 		if ($user?.role !== 'admin') {
+-			await goto('/');
++			await goto(`${base}/`);
+ 			return;
+ 		}
+ 
+diff --git a/src/lib/components/admin/Users/UserList.svelte b/src/lib/components/admin/Users/UserList.svelte
+index fc94474ef..d34491f52 100644
+--- a/src/lib/components/admin/Users/UserList.svelte
++++ b/src/lib/components/admin/Users/UserList.svelte
+@@ -1,4 +1,5 @@
+ <script lang="ts">
++	import { base } from '$app/paths';
+ 	import { WEBUI_API_BASE_URL } from '$lib/constants';
+ 	import { adminUserCount, config, user } from '$lib/stores';
+ 	import { getContext, onDestroy } from 'svelte';
+@@ -359,7 +360,7 @@
+ 											// LICENSE covers this Open WebUI fallback logo.
+ 											// Do not alter, remove, obscure, or replace it except as LICENSE permits:
+ 											// https://docs.openwebui.com/license.
+-											e.currentTarget.src = '/favicon.png';
++											e.currentTarget.src = `${base}/static/favicon.png`;
+ 										}}
+ 									/>
+ 								</ProfilePreview>
+diff --git a/src/lib/components/admin/Users/UserList/EditUserModal.svelte b/src/lib/components/admin/Users/UserList/EditUserModal.svelte
+index 887761589..7b0bcc75f 100644
+--- a/src/lib/components/admin/Users/UserList/EditUserModal.svelte
++++ b/src/lib/components/admin/Users/UserList/EditUserModal.svelte
+@@ -1,4 +1,5 @@
+ <script lang="ts">
++	import { base } from '$app/paths';
+ 	import { toast } from 'svelte-sonner';
+ 	import dayjs from 'dayjs';
+ 	import { createEventDispatcher } from 'svelte';
+@@ -121,9 +122,9 @@
+ 														class="px-1.5 py-0.5 rounded-xl bg-gray-100 dark:bg-gray-850 text-xs"
+ 													>
+ 														<a
+-															href={'/admin/users/groups?id=' + userGroup.id}
++															href={`${base}/admin/users/groups?id=${userGroup.id}`}
+ 															on:click|preventDefault={() =>
+-																goto('/admin/users/groups?id=' + userGroup.id)}
++																goto(`${base}/admin/users/groups?id=` + userGroup.id)}
+ 														>
+ 															{userGroup.name}
+ 														</a>
+diff --git a/src/lib/components/automations/AutomationEditor.svelte b/src/lib/components/automations/AutomationEditor.svelte
+index e71bb4e9c..3c80c1826 100644
+--- a/src/lib/components/automations/AutomationEditor.svelte
++++ b/src/lib/components/automations/AutomationEditor.svelte
+@@ -1,4 +1,5 @@
+ <script lang="ts">
++	import { base } from '$app/paths';
+ 	import { onMount, getContext } from 'svelte';
+ 	import { toast } from 'svelte-sonner';
+ 	import { goto } from '$app/navigation';
+@@ -193,7 +194,7 @@
+ 		});
+ 		if (res) {
+ 			toast.success($i18n.t(`Deleted {{name}}`, { name: automation.name }));
+-			goto('/automations');
++			goto(`${base}/automations`);
+ 		}
+ 	};
+ 
+diff --git a/src/lib/components/automations/ModelDropdown.svelte b/src/lib/components/automations/ModelDropdown.svelte
+index f5522fc5e..a29395858 100644
+--- a/src/lib/components/automations/ModelDropdown.svelte
++++ b/src/lib/components/automations/ModelDropdown.svelte
+@@ -1,4 +1,5 @@
+ <script lang="ts">
++	import { base } from '$app/paths';
+ 	import { getContext } from 'svelte';
+ 
+ 	import { models } from '$lib/stores';
+@@ -112,7 +113,7 @@
+ 								// LICENSE covers this Open WebUI fallback logo.
+ 								// Do not alter, remove, obscure, or replace it except as LICENSE permits:
+ 								// https://docs.openwebui.com/license.
+-								e.currentTarget.src = '/favicon.png';
++								e.currentTarget.src = `${base}/static/favicon.png`;
+ 							}}
+ 						/>
+ 						<div class="truncate">
+diff --git a/src/lib/components/channel/Channel.svelte b/src/lib/components/channel/Channel.svelte
+index 0117b2723..8cc110d5f 100644
+--- a/src/lib/components/channel/Channel.svelte
++++ b/src/lib/components/channel/Channel.svelte
+@@ -1,4 +1,5 @@
+ <script lang="ts">
++	import { base } from '$app/paths';
+ 	import { toast } from 'svelte-sonner';
+ 
+ 	import { onDestroy, onMount, tick } from 'svelte';
+@@ -135,7 +136,7 @@
+ 				}
+ 			}
+ 		} else {
+-			goto('/');
++			goto(`${base}/`);
+ 		}
+ 	};
+ 
+diff --git a/src/lib/components/channel/MessageInput/MentionList.svelte b/src/lib/components/channel/MessageInput/MentionList.svelte
+index 087a7a938..d598dca57 100644
+--- a/src/lib/components/channel/MessageInput/MentionList.svelte
++++ b/src/lib/components/channel/MessageInput/MentionList.svelte
+@@ -1,4 +1,5 @@
+ <script lang="ts">
++	import { base } from '$app/paths';
+ 	import { getAbortSignal, getContext, onMount } from 'svelte';
+ 	const i18n = getContext('i18n');
+ 
+@@ -233,7 +234,7 @@
+ 									// LICENSE covers this Open WebUI fallback logo.
+ 									// Do not alter, remove, obscure, or replace it except as LICENSE permits:
+ 									// https://docs.openwebui.com/license.
+-									e.currentTarget.src = '/favicon.png';
++									e.currentTarget.src = `${base}/static/favicon.png`;
+ 								}}
+ 							/>
+ 						{:else if item.type === 'user'}
+@@ -245,7 +246,7 @@
+ 									// LICENSE covers this Open WebUI fallback logo.
+ 									// Do not alter, remove, obscure, or replace it except as LICENSE permits:
+ 									// https://docs.openwebui.com/license.
+-									e.currentTarget.src = '/favicon.png';
++									e.currentTarget.src = `${base}/static/favicon.png`;
+ 								}}
+ 							/>
+ 						{/if}
+diff --git a/src/lib/components/channel/Messages/Message.svelte b/src/lib/components/channel/Messages/Message.svelte
+index bd5d35475..57d802a23 100644
+--- a/src/lib/components/channel/Messages/Message.svelte
++++ b/src/lib/components/channel/Messages/Message.svelte
+@@ -1,4 +1,5 @@
+ <script lang="ts">
++	import { base } from '$app/paths';
+ 	import dayjs from 'dayjs';
+ 	import relativeTime from 'dayjs/plugin/relativeTime';
+ 	import isToday from 'dayjs/plugin/isToday';
+@@ -342,7 +343,7 @@
+ 									// LICENSE covers this Open WebUI fallback logo.
+ 									// Do not alter, remove, obscure, or replace it except as LICENSE permits:
+ 									// https://docs.openwebui.com/license.
+-									e.currentTarget.src = '/favicon.png';
++									e.currentTarget.src = `${base}/static/favicon.png`;
+ 								}}
+ 							/>
+ 						{:else}
+@@ -388,7 +389,7 @@
+ 									// LICENSE covers this Open WebUI fallback logo.
+ 									// Do not alter, remove, obscure, or replace it except as LICENSE permits:
+ 									// https://docs.openwebui.com/license.
+-									e.currentTarget.src = '/favicon.png';
++									e.currentTarget.src = `${base}/static/favicon.png`;
+ 								}}
+ 							/>
+ 						{:else if message.user?.role === 'webhook'}
+diff --git a/src/lib/components/channel/Messages/Message/UserStatus.svelte b/src/lib/components/channel/Messages/Message/UserStatus.svelte
+index 3fd824974..90a2fff10 100644
+--- a/src/lib/components/channel/Messages/Message/UserStatus.svelte
++++ b/src/lib/components/channel/Messages/Message/UserStatus.svelte
+@@ -1,4 +1,5 @@
+ <script lang="ts">
++	import { base } from '$app/paths';
+ 	import { getContext, onMount } from 'svelte';
+ 
+ 	const i18n = getContext('i18n');
+@@ -27,7 +28,7 @@
+ 		});
+ 
+ 		if (res) {
+-			goto(`/channels/${res.id}`);
++			goto(`${base}/channels/${res.id}`);
+ 		}
+ 	};
+ </script>
+diff --git a/src/lib/components/channel/Thread.svelte b/src/lib/components/channel/Thread.svelte
+index 454c0ea89..2d5157d12 100644
+--- a/src/lib/components/channel/Thread.svelte
++++ b/src/lib/components/channel/Thread.svelte
+@@ -1,4 +1,5 @@
+ <script lang="ts">
++	import { base } from '$app/paths';
+ 	import { goto } from '$app/navigation';
+ 
+ 	import { socket, user } from '$lib/stores';
+@@ -58,7 +59,7 @@
+ 			await tick();
+ 			scrollToBottom();
+ 		} else {
+-			goto('/');
++			goto(`${base}/`);
+ 		}
+ 	};
+ 
+diff --git a/src/lib/components/chat/Chat.svelte b/src/lib/components/chat/Chat.svelte
+index fd0e1bbac..9579bc311 100644
+--- a/src/lib/components/chat/Chat.svelte
++++ b/src/lib/components/chat/Chat.svelte
+@@ -1,4 +1,5 @@
+ <script lang="ts">
++	import { base } from '$app/paths';
+ 	import { v4 as uuidv4 } from 'uuid';
+ 	import { toast } from 'svelte-sonner';
+ 
+@@ -867,7 +868,7 @@
+ 
+ 			messageInput?.focus({ preventScroll: true });
+ 		} else if (!embedded) {
+-			await goto('/');
++			await goto(`${base}/`);
+ 		} else {
+ 			loading = false;
+ 			console.warn('[note-chat] embedded load failed; clearing spinner', {
+@@ -2139,7 +2140,7 @@
+ 		await showArtifacts.set(false);
+ 
+ 		if (!embedded && $page.url.pathname.includes('/c/')) {
+-			window.history.replaceState(window.history.state, '', `/`);
++			window.history.replaceState(window.history.state, '', `${base}/`);
+ 		}
+ 
+ 		autoScroll = true;
+@@ -2276,7 +2277,7 @@
+ 				error
+ 			});
+ 			if (!embedded) {
+-				await goto('/');
++				await goto(`${base}/`);
+ 			}
+ 			return null;
+ 		});
+@@ -3685,7 +3686,7 @@
+ 					});
+ 					await chatId.set(res.chat_id);
+ 					if (!$temporaryChatEnabled && !embedded) {
+-						window.history.replaceState(window.history.state, '', `/c/${res.chat_id}`);
++						window.history.replaceState(window.history.state, '', `${base}/c/${res.chat_id}`);
+ 						await refreshChatList(localStorage.token);
+ 
+ 						// Persist chat-level params (system prompt, advanced
+@@ -3971,7 +3972,7 @@
+ 			await chatId.set(_chatId);
+ 
+ 			if (!embedded) {
+-				window.history.replaceState(window.history.state, '', `/c/${_chatId}`);
++				window.history.replaceState(window.history.state, '', `${base}/c/${_chatId}`);
+ 			}
+ 
+ 			await tick();
+@@ -4110,7 +4111,7 @@
+ 		try {
+ 			await archiveChatById(localStorage.token, id);
+ 			initNewChat();
+-			await goto('/');
++			await goto(`${base}/`);
+ 			await refreshChatList(localStorage.token, { refreshPinned: true });
+ 			await refreshFolderChatLists();
+ 			toast.success($i18n.t('Chat archived.'));
+@@ -4146,7 +4147,7 @@
+ 			const res = await deleteChatById(localStorage.token, id);
+ 			if (res) {
+ 				initNewChat();
+-				await goto('/');
++				await goto(`${base}/`);
+ 				await refreshChatList(localStorage.token, { refreshPinned: true });
+ 				allTags.set(await getAllTags(localStorage.token));
+ 				toast.success($i18n.t('Chat deleted.'));
+@@ -4368,7 +4369,7 @@
+ 										chatId.set(savedChat.id);
+ 										await refreshChatList(localStorage.token);
+ 
+-										await goto(`/c/${savedChat.id}`);
++										await goto(`${base}/c/${savedChat.id}`);
+ 										toast.success($i18n.t('Conversation saved successfully'));
+ 									}
+ 								} catch (error) {
+diff --git a/src/lib/components/chat/ChatPlaceholder.svelte b/src/lib/components/chat/ChatPlaceholder.svelte
+index 469395e85..6ae5d75b5 100644
+--- a/src/lib/components/chat/ChatPlaceholder.svelte
++++ b/src/lib/components/chat/ChatPlaceholder.svelte
+@@ -1,4 +1,5 @@
+ <script lang="ts">
++	import { base } from '$app/paths';
+ 	import { WEBUI_API_BASE_URL, WEBUI_BASE_URL } from '$lib/constants';
+ 	import { marked } from 'marked';
+ 	import DOMPurify from 'dompurify';
+@@ -84,7 +85,7 @@
+ 									// LICENSE covers this Open WebUI fallback logo.
+ 									// Do not alter, remove, obscure, or replace it except as LICENSE permits:
+ 									// https://docs.openwebui.com/license.
+-									e.currentTarget.src = '/favicon.png';
++									e.currentTarget.src = `${base}/static/favicon.png`;
+ 								}}
+ 							/>
+ 						</Tooltip>
+diff --git a/src/lib/components/chat/FileNav/SqliteView.svelte b/src/lib/components/chat/FileNav/SqliteView.svelte
+index 0a0ef852d..3bd0d0860 100644
+--- a/src/lib/components/chat/FileNav/SqliteView.svelte
++++ b/src/lib/components/chat/FileNav/SqliteView.svelte
+@@ -1,6 +1,7 @@
+ <script lang="ts">
+ 	import { getContext, onDestroy } from 'svelte';
+ 	import Spinner from '../../common/Spinner.svelte';
++	import { WEBUI_BASE_URL } from '$lib/constants';
+ 
+ 	const i18n: any = getContext('i18n');
+ 
+@@ -29,7 +30,7 @@
+ 		try {
+ 			const initSqlJs = (await import('sql.js')).default;
+ 			const SQL = await initSqlJs({
+-				locateFile: () => '/sql.js/sql-wasm.wasm'
++				locateFile: () => `${WEBUI_BASE_URL}/sql.js/sql-wasm.wasm`
+ 			});
+ 			db = new SQL.Database(new Uint8Array(data));
+ 
+diff --git a/src/lib/components/chat/MessageInput.svelte b/src/lib/components/chat/MessageInput.svelte
+index e6b746e3d..8de15e89d 100644
+--- a/src/lib/components/chat/MessageInput.svelte
++++ b/src/lib/components/chat/MessageInput.svelte
+@@ -1,4 +1,5 @@
+ <script lang="ts">
++	import { base } from '$app/paths';
+ 	import { resolveLocalizedFunction } from '$lib/utils/localizedContent';
+ 	import { functions as localizedFunctions } from '$lib/stores';
+ 	import DOMPurify from 'dompurify';
+@@ -1211,7 +1212,7 @@
+ 		if (res) {
+ 			// Clear the input content saved in session storage.
+ 			sessionStorage.removeItem('chat-input');
+-			goto(`/notes/${res.id}`);
++			goto(`${base}/notes/${res.id}`);
+ 		}
+ 	};
+ 
+diff --git a/src/lib/components/chat/MessageInput/Commands/Models.svelte b/src/lib/components/chat/MessageInput/Commands/Models.svelte
+index c159a4f8f..6c0071168 100644
+--- a/src/lib/components/chat/MessageInput/Commands/Models.svelte
++++ b/src/lib/components/chat/MessageInput/Commands/Models.svelte
+@@ -1,4 +1,5 @@
+ <script lang="ts">
++	import { base } from '$app/paths';
+ 	import Fuse from 'fuse.js';
+ 
+ 	import { createEventDispatcher, onDestroy, onMount } from 'svelte';
+@@ -95,7 +96,7 @@
+ 							// LICENSE covers this Open WebUI fallback logo.
+ 							// Do not alter, remove, obscure, or replace it except as LICENSE permits:
+ 							// https://docs.openwebui.com/license.
+-							e.currentTarget.src = '/favicon.png';
++							e.currentTarget.src = `${base}/static/favicon.png`;
+ 						}}
+ 					/>
+ 					<div class="min-w-0 truncate">
+diff --git a/src/lib/components/chat/MessageInput/TerminalMenu.svelte b/src/lib/components/chat/MessageInput/TerminalMenu.svelte
+index 870fdc792..a6728236d 100644
+--- a/src/lib/components/chat/MessageInput/TerminalMenu.svelte
++++ b/src/lib/components/chat/MessageInput/TerminalMenu.svelte
+@@ -1,4 +1,5 @@
+ <script lang="ts">
++	import { base } from '$app/paths';
+ 	import { getContext } from 'svelte';
+ 
+ 	import {
+diff --git a/src/lib/components/chat/Messages/Citations.svelte b/src/lib/components/chat/Messages/Citations.svelte
+index e53a8753f..69c194dea 100644
+--- a/src/lib/components/chat/Messages/Citations.svelte
++++ b/src/lib/components/chat/Messages/Citations.svelte
+@@ -1,4 +1,5 @@
+ <script lang="ts">
++	import { base } from '$app/paths';
+ 	import { getContext } from 'svelte';
+ 	import { embed, showControls, showEmbeds } from '$lib/stores';
+ 	import { isValidHttpUrl } from '$lib/utils';
+@@ -192,7 +193,7 @@
+ 								// LICENSE covers this Open WebUI fallback logo.
+ 								// Do not alter, remove, obscure, or replace it except as LICENSE permits:
+ 								// https://docs.openwebui.com/license.
+-								e.target.src = '/favicon.png';
++								e.target.src = `${base}/static/favicon.png`;
+ 							}}
+ 						/>
+ 					{/each}
+diff --git a/src/lib/components/chat/Messages/Markdown/MarkdownInlineTokens/MentionToken.svelte b/src/lib/components/chat/Messages/Markdown/MarkdownInlineTokens/MentionToken.svelte
+index 9497444be..0b075d4c8 100644
+--- a/src/lib/components/chat/Messages/Markdown/MarkdownInlineTokens/MentionToken.svelte
++++ b/src/lib/components/chat/Messages/Markdown/MarkdownInlineTokens/MentionToken.svelte
+@@ -1,4 +1,5 @@
+ <script lang="ts">
++	import { base } from '$app/paths';
+ 	import type { Token } from 'marked';
+ 	import { LinkPreview } from 'bits-ui';
+ 
+@@ -95,13 +96,13 @@
+ 						console.log('Clicked user mention', id);
+ 					} else if (idType === 'M') {
+ 						console.log('Clicked model mention', id);
+-						await goto(`/?model=${id}`);
++						await goto(`${base}/?model=${id}`);
+ 					}
+ 				} else if (triggerChar === '#') {
+ 					if (idType === 'C') {
+ 						// Open channel
+ 						if ($channels.find((c) => c.id === id)) {
+-							await goto(`/channels/${id}`);
++							await goto(`${base}/channels/${id}`);
+ 						}
+ 					} else if (idType === 'T') {
+ 						// Open thread
+diff --git a/src/lib/components/chat/ModelSelector/ModelItem.svelte b/src/lib/components/chat/ModelSelector/ModelItem.svelte
+index b15041b08..3fcd717ab 100644
+--- a/src/lib/components/chat/ModelSelector/ModelItem.svelte
++++ b/src/lib/components/chat/ModelSelector/ModelItem.svelte
+@@ -1,4 +1,5 @@
+ <script lang="ts">
++	import { base } from '$app/paths';
+ 	import { marked } from 'marked';
+ 
+ 	import { getContext, tick } from 'svelte';
+@@ -105,7 +106,7 @@
+ 							// LICENSE covers this Open WebUI fallback logo.
+ 							// Do not alter, remove, obscure, or replace it except as LICENSE permits:
+ 							// https://docs.openwebui.com/license.
+-							e.currentTarget.src = '/favicon.png';
++							e.currentTarget.src = `${base}/static/favicon.png`;
+ 						}}
+ 					/>
+ 				</Tooltip>
+diff --git a/src/lib/components/chat/ModelSelector/ModelItemMenu.svelte b/src/lib/components/chat/ModelSelector/ModelItemMenu.svelte
+index 57fd390f6..2a8201779 100644
+--- a/src/lib/components/chat/ModelSelector/ModelItemMenu.svelte
++++ b/src/lib/components/chat/ModelSelector/ModelItemMenu.svelte
+@@ -1,6 +1,7 @@
+ <script lang="ts">
+ 	import { getContext } from 'svelte';
+ 	import { goto } from '$app/navigation';
++	import { base } from '$app/paths';
+ 
+ 	import Dropdown from '$lib/components/common/Dropdown.svelte';
+ 	import DropdownMenu from '$lib/components/common/DropdownMenu.svelte';
+@@ -56,7 +57,7 @@
+ 						e.preventDefault();
+ 
+ 						if (model?.preset || model?.info?.base_model_id) {
+-							goto(`/workspace/models/edit?id=${encodeURIComponent(model?.id ?? '')}`);
++							goto(`${base}/workspace/models/edit?id=${encodeURIComponent(model?.id ?? '')}`);
+ 						} else {
+ 							showSettings.set({ tab: 'admin:models', state: { id: model?.id ?? null } });
+ 						}
+diff --git a/src/lib/components/chat/ModelSelector/Selector.svelte b/src/lib/components/chat/ModelSelector/Selector.svelte
+index 405f4863e..cb7f2610c 100644
+--- a/src/lib/components/chat/ModelSelector/Selector.svelte
++++ b/src/lib/components/chat/ModelSelector/Selector.svelte
+@@ -1,4 +1,5 @@
+ <script lang="ts">
++	import { base } from '$app/paths';
+ 	import { marked } from 'marked';
+ 	import Fuse from 'fuse.js';
+ 	import { autoUpdate, computePosition, flip, offset, shift, size } from '@floating-ui/dom';
+diff --git a/src/lib/components/chat/Navbar.svelte b/src/lib/components/chat/Navbar.svelte
+index 681a3675f..581c8340d 100644
+--- a/src/lib/components/chat/Navbar.svelte
++++ b/src/lib/components/chat/Navbar.svelte
+@@ -1,4 +1,5 @@
+ <script lang="ts">
++	import { base } from '$app/paths';
+ 	import { getContext } from 'svelte';
+ 	import { toast } from 'svelte-sonner';
+ 
+@@ -192,7 +193,7 @@
+ 										}
+ 
+ 										if ($page.url.pathname !== '/') {
+-											await goto('/');
++											await goto(`${base}/`);
+ 										}
+ 
+ 										// add 'temporary-chat=true' to the URL
+diff --git a/src/lib/components/chat/Placeholder.svelte b/src/lib/components/chat/Placeholder.svelte
+index 603861eae..9a3af032b 100644
+--- a/src/lib/components/chat/Placeholder.svelte
++++ b/src/lib/components/chat/Placeholder.svelte
+@@ -1,4 +1,5 @@
+ <script lang="ts">
++	import { base } from '$app/paths';
+ 	import { toast } from 'svelte-sonner';
+ 	import { marked } from 'marked';
+ 	import DOMPurify from 'dompurify';
+@@ -169,7 +170,7 @@
+ 												// LICENSE covers this Open WebUI fallback logo.
+ 												// Do not alter, remove, obscure, or replace it except as LICENSE permits:
+ 												// https://docs.openwebui.com/license.
+-												e.currentTarget.src = '/favicon.png';
++												e.currentTarget.src = `${base}/static/favicon.png`;
+ 											}}
+ 										/>
+ 									</button>
+diff --git a/src/lib/components/chat/Placeholder/ChatList.svelte b/src/lib/components/chat/Placeholder/ChatList.svelte
+index 92f099ccd..f5f19c499 100644
+--- a/src/lib/components/chat/Placeholder/ChatList.svelte
++++ b/src/lib/components/chat/Placeholder/ChatList.svelte
+@@ -1,4 +1,5 @@
+ <script lang="ts">
++	import { base } from '$app/paths';
+ 	import { getContext } from 'svelte';
+ 	import type { Writable } from 'svelte/store';
+ 
+@@ -210,7 +211,7 @@
+ 			<a
+ 				class=" w-full flex justify-between items-center rounded-lg text-sm py-2 px-3 hover:bg-gray-50 dark:hover:bg-gray-850"
+ 				draggable="false"
+-				href={`/c/${chat.id}`}
++				href={`${base}/c/${chat.id}`}
+ 				on:click={() => markChatRead(chat, unread)}
+ 			>
+ 				<div class="flex min-w-0 items-center w-full sm:basis-3/5">
+diff --git a/src/lib/components/chat/Settings/DataControls.svelte b/src/lib/components/chat/Settings/DataControls.svelte
+index 45bc8a303..488fcc4be 100644
+--- a/src/lib/components/chat/Settings/DataControls.svelte
++++ b/src/lib/components/chat/Settings/DataControls.svelte
+@@ -1,4 +1,5 @@
+ <script lang="ts">
++	import { base } from '$app/paths';
+ 	import { canManageChats } from '$lib/utils/settings-access';
+ 	import fileSaver from 'file-saver';
+ 	const { saveAs } = fileSaver;
+@@ -98,7 +99,7 @@
+ 	};
+ 
+ 	const archiveAllChatsHandler = async () => {
+-		await goto('/');
++		await goto(`${base}/`);
+ 		const success = await archiveAllChats(localStorage.token).catch((error) => {
+ 			toast.error(`${error}`);
+ 		});
+@@ -108,7 +109,7 @@
+ 	};
+ 
+ 	const deleteAllChatsHandler = async () => {
+-		await goto('/');
++		await goto(`${base}/`);
+ 		const success = await deleteAllChats(localStorage.token).catch((error) => {
+ 			toast.error(`${error}`);
+ 		});
+diff --git a/src/lib/components/chat/SettingsModal.svelte b/src/lib/components/chat/SettingsModal.svelte
+index 2557290d4..6ae6d4337 100644
+--- a/src/lib/components/chat/SettingsModal.svelte
++++ b/src/lib/components/chat/SettingsModal.svelte
+@@ -6,6 +6,7 @@
+ 		type SettingsTab
+ 	} from '$lib/utils/settings-search';
+ 	import { browser } from '$app/environment';
++	import { base } from '$app/paths';
+ 	import { getContext, tick } from 'svelte';
+ 	import type { Writable } from 'svelte/store';
+ 	import { toast } from 'svelte-sonner';
+diff --git a/src/lib/components/chat/ShareChatModal.svelte b/src/lib/components/chat/ShareChatModal.svelte
+index 67e7fa43b..b5f7114a6 100644
+--- a/src/lib/components/chat/ShareChatModal.svelte
++++ b/src/lib/components/chat/ShareChatModal.svelte
+@@ -1,4 +1,5 @@
+ <script lang="ts">
++	import { base } from '$app/paths';
+ 	import { getContext, onMount } from 'svelte';
+ 	import { models, config, user } from '$lib/stores';
+ 
+@@ -28,7 +29,7 @@
+ 		const _chat = chat;
+ 
+ 		const sharedChat = await shareChatById(localStorage.token, chatId);
+-		shareUrl = `${window.location.origin}/s/${sharedChat.share_id}`;
++		shareUrl = `${window.location.origin}${base}/s/${sharedChat.share_id}`;
+ 		console.log(shareUrl);
+ 		chat = await getChatById(localStorage.token, chatId);
+ 
+@@ -131,7 +132,7 @@
+ 			<div class="px-5 pt-4 pb-5 w-full flex flex-col">
+ 				<div class="text-sm dark:text-gray-300">
+ 					{#if chat.share_id}
+-						<a href="/s/{chat.share_id}" target="_blank"
++						<a href="{base}/s/{chat.share_id}" target="_blank"
+ 							>{$i18n.t('You have shared this chat')}
+ 							<span class=" underline">{$i18n.t('before')}</span>.</a
+ 						>
+diff --git a/src/lib/components/common/Banner.svelte b/src/lib/components/common/Banner.svelte
+index 420490fd6..81afba34a 100644
+--- a/src/lib/components/common/Banner.svelte
++++ b/src/lib/components/common/Banner.svelte
+@@ -118,7 +118,7 @@
+ 				<div class="hidden md:flex group w-fit md:items-center">
+ 					<a
+ 						class="text-gray-700 dark:text-white text-xs font-normal underline"
+-						href="/"
++						href="{WEBUI_BASE_URL}/"
+ 						target="_blank"
+ 					>
+ 						{$i18n.t('Learn More')}
+diff --git a/src/lib/components/common/ChatList.svelte b/src/lib/components/common/ChatList.svelte
+index 35df2e0c3..3f5110d14 100644
+--- a/src/lib/components/common/ChatList.svelte
++++ b/src/lib/components/common/ChatList.svelte
+@@ -1,4 +1,5 @@
+ <script lang="ts">
++	import { base } from '$app/paths';
+ 	import { getContext } from 'svelte';
+ 	import dayjs from 'dayjs';
+ 	import calendar from 'dayjs/plugin/calendar';
+@@ -151,7 +152,7 @@
+ 					{/if}
+ 					<a
+ 						class={showUserInfo ? 'flex-1' : 'basis-3/5'}
+-						href={shareUrl ? `/s/${chat.id}` : `/c/${chat.id}`}
++						href={shareUrl ? `${base}/s/${chat.id}` : `${base}/c/${chat.id}`}
+ 						on:click={() => onChatClick?.(chat.id)}
+ 					>
+ 						<div class="text-ellipsis line-clamp-1 w-full">
+diff --git a/src/lib/components/common/RichTextInput/Image/image.ts b/src/lib/components/common/RichTextInput/Image/image.ts
+index cfd0fd8d9..a0b4e062e 100644
+--- a/src/lib/components/common/RichTextInput/Image/image.ts
++++ b/src/lib/components/common/RichTextInput/Image/image.ts
+@@ -140,7 +140,7 @@ export const Image = Node.create<ImageOptions>({
+ 				if (file) {
+ 					img.setAttribute('src', safeImageUrl(file.url || ''));
+ 				} else {
+-					img.setAttribute('src', '/image-placeholder.png');
++					img.setAttribute('src', safeImageUrl('/image-placeholder.png'));
+ 				}
+ 			} else {
+ 				img.setAttribute('src', safeImageUrl(node.attrs.src || ''));
+@@ -156,7 +156,7 @@ export const Image = Node.create<ImageOptions>({
+ 					if (file) {
+ 						img.setAttribute('src', safeImageUrl(file.url || ''));
+ 					} else {
+-						img.setAttribute('src', '/image-placeholder.png');
++						img.setAttribute('src', safeImageUrl('/image-placeholder.png'));
+ 					}
+ 				}
+ 			});
+diff --git a/src/lib/components/layout/ChatsModal.svelte b/src/lib/components/layout/ChatsModal.svelte
+index 4cda5f830..93c171b79 100644
+--- a/src/lib/components/layout/ChatsModal.svelte
++++ b/src/lib/components/layout/ChatsModal.svelte
+@@ -1,4 +1,5 @@
+ <script lang="ts">
++	import { base } from '$app/paths';
+ 	import { toast } from 'svelte-sonner';
+ 	import { getContext } from 'svelte';
+ 
+@@ -290,7 +291,7 @@
+ 									{/if}
+ 									<a
+ 										class={showUserInfo ? 'flex-1' : 'basis-3/5'}
+-										href={shareUrl ? `/s/${chat.id}` : `/c/${chat.id}`}
++										href={shareUrl ? `${base}/s/${chat.id}` : `${base}/c/${chat.id}`}
+ 										on:click={() => (show = false)}
+ 									>
+ 										<div class="text-ellipsis line-clamp-1 w-full">
+@@ -458,7 +459,7 @@
+ 														'border-b'} border-gray-50 dark:border-gray-850/30 text-xs"
+ 												>
+ 													<td class="px-3 py-1 w-2/3">
+-														<a href="/c/{chat.id}" target="_blank">
++														<a href="{base}/c/{chat.id}" target="_blank" rel="noopener noreferrer">
+ 															<div class=" hover:underline line-clamp-1">
+ 																{chat.title}
+ 															</div>
+diff --git a/src/lib/components/layout/Overlay/AccountPending.svelte b/src/lib/components/layout/Overlay/AccountPending.svelte
+index f3074b39f..df7af4e5b 100644
+--- a/src/lib/components/layout/Overlay/AccountPending.svelte
++++ b/src/lib/components/layout/Overlay/AccountPending.svelte
+@@ -1,6 +1,7 @@
+ <script lang="ts">
+ 	import DOMPurify from 'dompurify';
+ 	import { marked } from 'marked';
++	import { base } from '$app/paths';
+ 
+ 	import { getAdminDetails, getLogoutRedirectUrl, userSignOut } from '$lib/apis/auths';
+ 	import { onMount, tick, getContext } from 'svelte';
+@@ -61,7 +62,7 @@
+ 					<button
+ 						class="relative z-20 flex px-5 py-2 rounded-full bg-white border border-gray-100 dark:border-none hover:bg-gray-100 text-gray-700 transition font-normal text-sm"
+ 						on:click={async () => {
+-							location.href = '/';
++							location.href = `${base}/`;
+ 						}}
+ 					>
+ 						{$i18n.t('Check Again')}
+@@ -75,7 +76,9 @@
+ 								return null;
+ 							});
+ 							localStorage.removeItem('token');
+-							location.href = getLogoutRedirectUrl(res?.redirect_url);
++							location.href = res?.redirect_url
++								? getLogoutRedirectUrl(res.redirect_url)
++								: `${base}/auth?state=logout`;
+ 						}}>{$i18n.t('Sign Out')}</button
+ 					>
+ 				</div>
+diff --git a/src/lib/components/layout/SearchModal.svelte b/src/lib/components/layout/SearchModal.svelte
+index 16983b53f..d49db8a20 100644
+--- a/src/lib/components/layout/SearchModal.svelte
++++ b/src/lib/components/layout/SearchModal.svelte
+@@ -1,4 +1,5 @@
+ <script lang="ts">
++	import { base } from '$app/paths';
+ 	import { toast } from 'svelte-sonner';
+ 	import { getContext, onDestroy, onMount, tick } from 'svelte';
+ 	const i18n: any = getContext('i18n');
+@@ -102,7 +103,7 @@
+ 			chatList = chatList?.filter((c) => c.id !== id) ?? null;
+ 
+ 			if ($currentChatId === id) {
+-				await goto('/');
++				await goto(`${base}/`);
+ 				currentChatId.set('');
+ 			}
+ 
+@@ -124,7 +125,7 @@
+ 			tags.set(await getAllTags(localStorage.token));
+ 
+ 			if ($currentChatId === id) {
+-				await goto('/');
++				await goto(`${base}/`);
+ 				currentChatId.set('');
+ 			}
+ 
+@@ -255,7 +256,7 @@
+ 		{
+ 			label: $i18n.t('Start a new conversation'),
+ 			onClick: async () => {
+-				await goto(`/${query ? `?q=${query}` : ''}`);
++				await goto(`${base}/${query ? `?q=${query}` : ''}`);
+ 				show = false;
+ 				onClose();
+ 			},
+@@ -530,7 +531,7 @@
+ 						{
+ 							label: $i18n.t('Create a new note'),
+ 							onClick: async () => {
+-								await goto(`/notes/new?content=${encodeURIComponent(query)}`);
++								await goto(`${base}/notes/new?content=${encodeURIComponent(query)}`);
+ 								show = false;
+ 								onClose();
+ 							},
+@@ -734,10 +735,10 @@
+ 							{:else}
+ 								<a
+ 									class="flex-1 min-w-0"
+-									href="/c/{chat.id}"
++									href={`${base}/c/{chat.id}`}
+ 									draggable="false"
+ 									on:click={async () => {
+-										await goto(`/c/${chat.id}`);
++										await goto(`${base}/c/${chat.id}`);
+ 										show = false;
+ 										onClose();
+ 									}}
+diff --git a/src/lib/components/layout/Sidebar.svelte b/src/lib/components/layout/Sidebar.svelte
+index adbbc6157..b6cb324e8 100644
+--- a/src/lib/components/layout/Sidebar.svelte
++++ b/src/lib/components/layout/Sidebar.svelte
+@@ -4,6 +4,7 @@
+ 	import Sortable from 'sortablejs';
+ 
+ 	import { goto } from '$app/navigation';
++	import { base } from '$app/paths';
+ 	import { page } from '$app/stores';
+ 	import {
+ 		user,
+@@ -189,21 +190,29 @@
+ 
+ 	const getMenuItemMeta = (id) => {
+ 		const items = {
+-			notes: { label: $i18n.t('Notes'), href: '/notes', iconType: 'note' },
+-			workspace: { label: $i18n.t('Workspace'), href: '/workspace', iconType: 'workspace' },
+-			automations: { label: $i18n.t('Automations'), href: '/automations', iconType: 'automations' },
+-			calendar: { label: $i18n.t('Calendar'), href: '/calendar', iconType: 'calendar' },
+-			playground: { label: $i18n.t('Playground'), href: '/playground', iconType: 'playground' }
++			notes: { label: $i18n.t('Notes'), href: `${base}/notes`, iconType: 'note' },
++			workspace: { label: $i18n.t('Workspace'), href: `${base}/workspace`, iconType: 'workspace' },
++			automations: {
++				label: $i18n.t('Automations'),
++				href: `${base}/automations`,
++				iconType: 'automations'
++			},
++			calendar: { label: $i18n.t('Calendar'), href: `${base}/calendar`, iconType: 'calendar' },
++			playground: {
++				label: $i18n.t('Playground'),
++				href: `${base}/playground`,
++				iconType: 'playground'
++			}
+ 		};
+ 		return items[id];
+ 	};
+ 
+ 	const menuItemPathPrefixes = {
+-		notes: '/notes',
+-		workspace: '/workspace',
+-		calendar: '/calendar',
+-		automations: '/automations',
+-		playground: '/playground'
++		notes: `${base}/notes`,
++		workspace: `${base}/workspace`,
++		calendar: `${base}/calendar`,
++		automations: `${base}/automations`,
++		playground: `${base}/playground`
+ 	};
+ 
+ 	const getActiveMenuItemId = (pathname) => {
+@@ -869,7 +878,7 @@
+ 			await initChannels();
+ 			showCreateChannel = false;
+ 			showChannels = true;
+-			goto(`/channels/${res.id}`);
++			goto(`${base}/channels/${res.id}`);
+ 		}
+ 	}}
+ />
+@@ -932,7 +941,7 @@
+ 		id="sidebar-new-chat-button"
+ 		class="hidden"
+ 		on:click={() => {
+-			goto('/');
++			goto(`${base}/`);
+ 			newChatHandler();
+ 		}}
+ 	/>
+@@ -984,13 +993,13 @@
+ 						<Tooltip content={$i18n.t('New Chat')} placement="right">
+ 							<a
+ 								class=" cursor-pointer flex size-8 items-center justify-center transition group"
+-								href="/"
++								href="{base}/"
+ 								draggable="false"
+ 								on:click={async (e) => {
+ 									e.stopImmediatePropagation();
+ 									e.preventDefault();
+ 
+-									goto('/');
++									goto(`${base}/`);
+ 									newChatHandler();
+ 								}}
+ 								aria-label={$i18n.t('New Chat')}
+@@ -1033,11 +1042,11 @@
+ 								<Tooltip content={$i18n.t(meta.label)} placement="right">
+ 									<a
+ 										class=" cursor-pointer flex size-8 items-center justify-center transition group"
+-										href={meta.href}
++										href={`${base}${meta.href}`}
+ 										on:click={async (e) => {
+ 											e.stopImmediatePropagation();
+ 											e.preventDefault();
+-											goto(meta.href);
++											goto(`${base}${meta.href}`);
+ 											itemClickHandler();
+ 										}}
+ 										draggable="false"
+@@ -1146,7 +1155,7 @@
+ 				>
+ 					<a
+ 						class="flex items-center rounded-xl size-8.5 h-full justify-center hover:bg-gray-100 dark:hover:bg-gray-900 transition no-drag-region"
+-						href="/"
++						href="{base}/"
+ 						draggable="false"
+ 						on:click={newChatHandler}
+ 					>
+@@ -1161,7 +1170,7 @@
+ 						/>
+ 					</a>
+ 
+-					<a href="/" class="flex flex-1 px-0.5" on:click={newChatHandler}>
++					<a href="{base}/" class="flex flex-1 px-0.5" on:click={newChatHandler}>
+ 						<!-- LICENSE covers this Open WebUI sidebar name.
+ 					Do not alter, remove, obscure, or replace it except as LICENSE permits:
+ 					https://docs.openwebui.com/license. -->
+@@ -1213,7 +1222,7 @@
+ 							<a
+ 								id="sidebar-new-chat-button"
+ 								class="group grow flex items-center space-x-2 rounded-xl px-2 py-1.5 hover:bg-gray-100 dark:hover:bg-gray-900 transition outline-none"
+-								href="/"
++								href="{base}/"
+ 								draggable="false"
+ 								on:click={newChatHandler}
+ 								aria-label={$i18n.t('New Chat')}
+@@ -1267,7 +1276,7 @@
+ 													? 'bg-black/[0.035] dark:bg-white/[0.06]'
+ 													: 'bg-black/[0.035] dark:bg-white/[0.045]'
+ 												: 'hover:bg-gray-100 dark:hover:bg-gray-900'}"
+-											href={meta.href}
++											href={`${base}${meta.href}`}
+ 											on:click={itemClickHandler}
+ 											draggable="false"
+ 											aria-label={$i18n.t(meta.label)}
+@@ -1318,7 +1327,7 @@
+ 							onAdd={async () => {
+ 								const note = await createNoteHandler('New Note');
+ 								if (note) {
+-									goto(`/notes/${note.id}`);
++									goto(`${base}/notes/${note.id}`);
+ 								}
+ 							}}
+ 							onAddLabel={$i18n.t('New Note')}
+diff --git a/src/lib/components/layout/Sidebar/ChannelItem.svelte b/src/lib/components/layout/Sidebar/ChannelItem.svelte
+index 7cc786d2c..5abc7a2f5 100644
+--- a/src/lib/components/layout/Sidebar/ChannelItem.svelte
++++ b/src/lib/components/layout/Sidebar/ChannelItem.svelte
+@@ -1,4 +1,5 @@
+ <script lang="ts">
++	import { base } from '$app/paths';
+ 	import { toast } from 'svelte-sonner';
+ 	import { onMount, getContext, tick, onDestroy } from 'svelte';
+ 	const i18n = getContext('i18n');
+@@ -89,7 +90,7 @@
+ >
+ 	<a
+ 		class="min-w-0 flex flex-1"
+-		href="/channels/{channel.id}"
++		href="{base}/channels/{channel.id}"
+ 		on:click={() => {
+ 			console.log(channel);
+ 
+diff --git a/src/lib/components/layout/Sidebar/ChannelModal.svelte b/src/lib/components/layout/Sidebar/ChannelModal.svelte
+index 9ea0a57de..736a89188 100644
+--- a/src/lib/components/layout/Sidebar/ChannelModal.svelte
++++ b/src/lib/components/layout/Sidebar/ChannelModal.svelte
+@@ -1,4 +1,5 @@
+ <script lang="ts">
++	import { base } from '$app/paths';
+ 	import { getContext, createEventDispatcher, onMount } from 'svelte';
+ 	const i18n = getContext('i18n');
+ 
+@@ -121,8 +122,8 @@
+ 			toast.success($i18n.t('Channel deleted successfully'));
+ 			onUpdate();
+ 
+-			if ($page.url.pathname === `/channels/${channelId}`) {
+-				goto('/');
++			if ($page.url.pathname === `${base}/channels/${channelId}`) {
++				goto(`${base}/`);
+ 			}
+ 		}
+ 
+diff --git a/src/lib/components/layout/Sidebar/ChatItem.svelte b/src/lib/components/layout/Sidebar/ChatItem.svelte
+index deb9281f6..d86f6552a 100644
+--- a/src/lib/components/layout/Sidebar/ChatItem.svelte
++++ b/src/lib/components/layout/Sidebar/ChatItem.svelte
+@@ -15,6 +15,7 @@
+ </script>
+ 
+ <script lang="ts">
++	import { base } from '$app/paths';
+ 	import { toast } from 'svelte-sonner';
+ 	import { WEBUI_API_BASE_URL, WEBUI_BASE_URL } from '$lib/constants';
+ 	import { goto, invalidate, invalidateAll } from '$app/navigation';
+@@ -164,7 +165,7 @@
+ 
+ 		if ($mobile) {
+ 			event?.preventDefault();
+-			void goto(`/c/${id}`);
++			void goto(`${base}/c/${id}`);
+ 			showSidebar.set(false);
+ 		}
+ 	};
+@@ -239,7 +240,7 @@
+ 		});
+ 
+ 		if (res) {
+-			goto(`/c/${res.id}`);
++			goto(`${base}/c/${res.id}`);
+ 
+ 			await refreshSidebar(localStorage.token);
+ 		}
+@@ -259,7 +260,7 @@
+ 		if (res) {
+ 			tags.set(await getAllTags(localStorage.token));
+ 			if ($chatId === id) {
+-				await goto('/');
++				await goto(`${base}/`);
+ 
+ 				await chatId.set('');
+ 				await tick();
+@@ -281,7 +282,7 @@
+ 			await archiveChatById(localStorage.token, id);
+ 
+ 			if ($chatId === id) {
+-				await goto('/');
++				await goto(`${base}/`);
+ 				chatId.set('');
+ 			}
+ 
+@@ -649,7 +650,7 @@
+ 		<a
+ 			id="sidebar-chat-item"
+ 			class={chatItemClass}
+-			href="/c/{id}"
++			href="{base}/c/{id}"
+ 			aria-current={id === $chatId ? 'page' : undefined}
+ 			on:click={selectChatHandler}
+ 			draggable="false"
+@@ -666,7 +667,7 @@
+ 			<LinkPreview.Trigger
+ 				id="sidebar-chat-item"
+ 				class={chatItemClass}
+-				href="/c/{id}"
++				href="{base}/c/{id}"
+ 				aria-current={id === $chatId ? 'page' : undefined}
+ 				onclick={selectChatHandler}
+ 				ondblclick={renameChatFromDoubleClick}
+diff --git a/src/lib/components/layout/Sidebar/PinnedModelItem.svelte b/src/lib/components/layout/Sidebar/PinnedModelItem.svelte
+index 3e7926103..c69a08334 100644
+--- a/src/lib/components/layout/Sidebar/PinnedModelItem.svelte
++++ b/src/lib/components/layout/Sidebar/PinnedModelItem.svelte
+@@ -1,4 +1,5 @@
+ <script lang="ts">
++	import { base } from '$app/paths';
+ 	import { getContext } from 'svelte';
+ 
+ 	const i18n = getContext('i18n');
+@@ -32,7 +33,7 @@
+ 	>
+ 		<a
+ 			class="grow flex items-center space-x-2 rounded-xl px-2 py-[0.4375rem] group-hover:bg-gray-100 dark:group-hover:bg-gray-900 transition"
+-			href="/?model={model?.id}"
++			href="{base}/?model={model?.id}"
+ 			on:click={onClick}
+ 			draggable="false"
+ 		>
+@@ -45,7 +46,7 @@
+ 						// LICENSE covers this Open WebUI fallback logo.
+ 						// Do not alter, remove, obscure, or replace it except as LICENSE permits:
+ 						// https://docs.openwebui.com/license.
+-						e.currentTarget.src = '/favicon.png';
++						e.currentTarget.src = `${base}/static/favicon.png`;
+ 					}}
+ 				/>
+ 			</div>
+diff --git a/src/lib/components/layout/Sidebar/RecursiveFolder.svelte b/src/lib/components/layout/Sidebar/RecursiveFolder.svelte
+index 14ebb51ef..73eb72af1 100644
+--- a/src/lib/components/layout/Sidebar/RecursiveFolder.svelte
++++ b/src/lib/components/layout/Sidebar/RecursiveFolder.svelte
+@@ -1,4 +1,5 @@
+ <script>
++	import { base } from '$app/paths';
+ 	import { getContext, createEventDispatcher, onMount, onDestroy, tick } from 'svelte';
+ 
+ 	const i18n = getContext('i18n');
+@@ -607,7 +608,7 @@
+ 			await selectedFolder.set({ ...folders[folderId], ...folder });
+ 		}
+ 
+-		await goto(`/folders/${folderId}`);
++		await goto(`${base}/folders/${folderId}`);
+ 
+ 		if ($mobile) {
+ 			showSidebar.set(!$showSidebar);
+diff --git a/src/lib/components/layout/Sidebar/UserMenu.svelte b/src/lib/components/layout/Sidebar/UserMenu.svelte
+index d4b45d0d5..a8b952452 100644
+--- a/src/lib/components/layout/Sidebar/UserMenu.svelte
++++ b/src/lib/components/layout/Sidebar/UserMenu.svelte
+@@ -2,6 +2,7 @@
+ 	import { createEventDispatcher, getContext, onMount, tick } from 'svelte';
+ 
+ 	import { goto } from '$app/navigation';
++	import { base } from '$app/paths';
+ 	import { fade, slide } from 'svelte/transition';
+ 
+ 	import { getUsage } from '$lib/apis';
+@@ -243,14 +244,14 @@
+ 					class="user-menu-row flex items-center w-full rounded-xl hover:bg-gray-50/60 dark:hover:bg-gray-800/60 transition-colors"
+ 				>
+ 					<a
+-						href="/workspace"
++						href="{base}/workspace"
+ 						draggable="false"
+ 						class="flex flex-1 min-w-0 h-[1.6875rem] items-center gap-2 rounded-xl px-2 text-[0.8125rem] cursor-pointer select-none"
+ 						on:click={async (e) => {
+ 							if (e.metaKey || e.ctrlKey || e.shiftKey || e.button === 1) return;
+ 							e.preventDefault();
+ 							show = false;
+-							goto('/workspace');
++							goto(`${base}/workspace`);
+ 							if ($mobile) {
+ 								await tick();
+ 								showSidebar.set(false);
+@@ -289,14 +290,14 @@
+ 					class="user-menu-row flex items-center w-full rounded-xl hover:bg-gray-50/60 dark:hover:bg-gray-800/60 transition-colors"
+ 				>
+ 					<a
+-						href="/notes"
++						href="{base}/notes"
+ 						draggable="false"
+ 						class="flex flex-1 min-w-0 h-[1.6875rem] items-center gap-2 rounded-xl px-2 text-[0.8125rem] cursor-pointer select-none"
+ 						on:click={async (e) => {
+ 							if (e.metaKey || e.ctrlKey || e.shiftKey || e.button === 1) return;
+ 							e.preventDefault();
+ 							show = false;
+-							goto('/notes');
++							goto(`${base}/notes`);
+ 							if ($mobile) {
+ 								await tick();
+ 								showSidebar.set(false);
+@@ -335,14 +336,14 @@
+ 					class="user-menu-row flex items-center w-full rounded-xl hover:bg-gray-50/60 dark:hover:bg-gray-800/60 transition-colors"
+ 				>
+ 					<a
+-						href="/calendar"
++						href="{base}/calendar"
+ 						draggable="false"
+ 						class="flex flex-1 min-w-0 h-[1.6875rem] items-center gap-2 rounded-xl px-2 text-[0.8125rem] cursor-pointer select-none"
+ 						on:click={async (e) => {
+ 							if (e.metaKey || e.ctrlKey || e.shiftKey || e.button === 1) return;
+ 							e.preventDefault();
+ 							show = false;
+-							goto('/calendar');
++							goto(`${base}/calendar`);
+ 							if ($mobile) {
+ 								await tick();
+ 								showSidebar.set(false);
+@@ -381,14 +382,14 @@
+ 					class="user-menu-row flex items-center w-full rounded-xl hover:bg-gray-50/60 dark:hover:bg-gray-800/60 transition-colors"
+ 				>
+ 					<a
+-						href="/automations"
++						href="{base}/automations"
+ 						draggable="false"
+ 						class="flex flex-1 min-w-0 h-[1.6875rem] items-center gap-2 rounded-xl px-2 text-[0.8125rem] cursor-pointer select-none"
+ 						on:click={async (e) => {
+ 							if (e.metaKey || e.ctrlKey || e.shiftKey || e.button === 1) return;
+ 							e.preventDefault();
+ 							show = false;
+-							goto('/automations');
++							goto(`${base}/automations`);
+ 							if ($mobile) {
+ 								await tick();
+ 								showSidebar.set(false);
+@@ -427,14 +428,14 @@
+ 					class="user-menu-row flex items-center w-full rounded-xl hover:bg-gray-50/60 dark:hover:bg-gray-800/60 transition-colors"
+ 				>
+ 					<a
+-						href="/playground"
++						href="{base}/playground"
+ 						draggable="false"
+ 						class="flex flex-1 min-w-0 h-[1.6875rem] items-center gap-2 rounded-xl px-2 text-[0.8125rem] cursor-pointer select-none"
+ 						on:click={async (e) => {
+ 							if (e.metaKey || e.ctrlKey || e.shiftKey || e.button === 1) return;
+ 							e.preventDefault();
+ 							show = false;
+-							goto('/playground');
++							goto(`${base}/playground`);
+ 							if ($mobile) {
+ 								await tick();
+ 								showSidebar.set(false);
+@@ -533,7 +534,7 @@
+ 
+ 			{#if role === 'admin'}
+ 				<a
+-					href="/admin"
++					href="{base}/admin"
+ 					draggable="false"
+ 					class="flex h-[1.6875rem] items-center gap-2 rounded-xl px-2 text-[0.8125rem] w-full hover:bg-gray-50/60 dark:hover:bg-gray-800/60 transition cursor-pointer select-none"
+ 					on:click={async (e) => {
+@@ -542,7 +543,7 @@
+ 						}
+ 						e.preventDefault();
+ 						show = false;
+-						goto('/admin');
++						goto(`${base}/admin`);
+ 						if ($mobile) {
+ 							await tick();
+ 							showSidebar.set(false);
+diff --git a/src/lib/components/notes/NoteEditor.svelte b/src/lib/components/notes/NoteEditor.svelte
+index 4b9a2b5d5..ed05c1c79 100644
+--- a/src/lib/components/notes/NoteEditor.svelte
++++ b/src/lib/components/notes/NoteEditor.svelte
+@@ -1,4 +1,5 @@
+ <script lang="ts">
++	import { base } from '$app/paths';
+ 	import { getContext, onDestroy, onMount, tick } from 'svelte';
+ 	import { v4 as uuidv4 } from 'uuid';
+ 	import fileSaver from 'file-saver';
+@@ -198,7 +199,7 @@
+ 			$socket?.off('events:note', noteEventHandler);
+ 			$socket?.on('events:note', noteEventHandler);
+ 		} else {
+-			goto('/');
++			goto(`${base}/`);
+ 			return;
+ 		}
+ 
+@@ -817,7 +818,7 @@ ${content}
+ 		if (res) {
+ 			pinnedNotes.set(await getPinnedNoteList(localStorage.token).catch(() => []));
+ 			toast.success($i18n.t('Note deleted successfully'));
+-			goto('/notes');
++			goto(`${base}/notes`);
+ 		} else {
+ 			toast.error($i18n.t('Failed to delete note'));
+ 		}
+diff --git a/src/lib/components/notes/Notes.svelte b/src/lib/components/notes/Notes.svelte
+index f8c66966c..bfe868a34 100644
+--- a/src/lib/components/notes/Notes.svelte
++++ b/src/lib/components/notes/Notes.svelte
+@@ -30,6 +30,7 @@
+ 	$: loadLocale($i18n.languages);
+ 
+ 	import { goto } from '$app/navigation';
++	import { base } from '$app/paths';
+ 	import { WEBUI_NAME, config, user, pinnedNotes, mobile, showSidebar } from '$lib/stores';
+ 	import {
+ 		createNewNote,
+@@ -451,7 +452,7 @@
+ 									const res = await createNoteHandler(dayjs().format('YYYY-MM-DD'));
+ 
+ 									if (res) {
+-										goto(`/notes/${res.id}`);
++										goto(`${base}/notes/${res.id}`);
+ 									}
+ 								}
+ 							},
+@@ -616,7 +617,7 @@
+ 												aria-label={$i18n.t('Open note')}
+ 												class="group flex min-h-8 w-full items-center gap-2 rounded-xl px-2 py-[0.375rem] text-left transition hover:bg-gray-50 focus-within:bg-gray-50 dark:hover:bg-gray-900 dark:focus-within:bg-gray-900"
+ 												on:click={() => {
+-													goto(`/notes/${note.id}`);
++													goto(`${base}/notes/${note.id}`);
+ 												}}
+ 											>
+ 												<div class="flex min-w-0 flex-1 items-center gap-2">
+@@ -733,7 +734,7 @@
+ 												class="group flex min-h-32 w-full flex-col rounded-lg bg-gray-50/40 p-2.5 text-left transition hover:bg-gray-100/60 focus-within:bg-gray-100/60 dark:bg-gray-900/30 dark:hover:bg-gray-900 dark:focus-within:bg-gray-900"
+ 											>
+ 												<div class="flex items-start gap-2">
+-													<a href={`/notes/${note.id}`} class="min-w-0 flex-1">
++													<a href={`${base}/notes/${note.id}`} class="min-w-0 flex-1">
+ 														<Tooltip content={note.title} placement="top-start">
+ 															<div
+ 																class="truncate text-[0.8125rem] leading-5 text-gray-800 group-hover:underline dark:text-gray-200"
+@@ -799,7 +800,10 @@
+ 													{/if}
+ 												</div>
+ 
+-												<a href={`/notes/${note.id}`} class="mt-1 flex min-h-0 flex-1 flex-col">
++												<a
++													href={`${base}/notes/${note.id}`}
++													class="mt-1 flex min-h-0 flex-1 flex-col"
++												>
+ 													<div
+ 														class="line-clamp-3 text-xs leading-5 text-gray-500 dark:text-gray-500"
+ 													>
+diff --git a/src/lib/components/playground/Chat.svelte b/src/lib/components/playground/Chat.svelte
+index 072cc1fc3..f6532f02b 100644
+--- a/src/lib/components/playground/Chat.svelte
++++ b/src/lib/components/playground/Chat.svelte
+@@ -1,4 +1,5 @@
+ <script lang="ts">
++	import { base } from '$app/paths';
+ 	import fileSaver from 'file-saver';
+ 	const { saveAs } = fileSaver;
+ 
+@@ -304,7 +305,7 @@
+ 
+ 	onMount(async () => {
+ 		if ($user?.role !== 'admin') {
+-			await goto('/');
++			await goto(`${base}/`);
+ 		}
+ 
+ 		if ($settings?.models) {
+diff --git a/src/lib/components/playground/Completions.svelte b/src/lib/components/playground/Completions.svelte
+index c5de36ae9..78e832b91 100644
+--- a/src/lib/components/playground/Completions.svelte
++++ b/src/lib/components/playground/Completions.svelte
+@@ -1,4 +1,5 @@
+ <script lang="ts">
++	import { base } from '$app/paths';
+ 	import { toast } from 'svelte-sonner';
+ 
+ 	import { goto } from '$app/navigation';
+@@ -105,7 +106,7 @@
+ 
+ 	onMount(async () => {
+ 		if ($user?.role !== 'admin') {
+-			await goto('/');
++			await goto(`${base}/`);
+ 		}
+ 
+ 		if ($settings?.models) {
+diff --git a/src/lib/components/playground/Images.svelte b/src/lib/components/playground/Images.svelte
+index d8906babe..833bab715 100644
+--- a/src/lib/components/playground/Images.svelte
++++ b/src/lib/components/playground/Images.svelte
+@@ -1,4 +1,5 @@
+ <script lang="ts">
++	import { base } from '$app/paths';
+ 	import { toast } from 'svelte-sonner';
+ 	import { onMount, getContext } from 'svelte';
+ 	import { goto } from '$app/navigation';
+@@ -114,7 +115,7 @@
+ 
+ 	onMount(async () => {
+ 		if ($user?.role !== 'admin') {
+-			await goto('/');
++			await goto(`${base}/`);
+ 			return;
+ 		}
+ 		loaded = true;
+diff --git a/src/lib/components/workspace/Knowledge.svelte b/src/lib/components/workspace/Knowledge.svelte
+index 479efc699..97968d6ac 100644
+--- a/src/lib/components/workspace/Knowledge.svelte
++++ b/src/lib/components/workspace/Knowledge.svelte
+@@ -4,6 +4,7 @@
+ 	dayjs.extend(relativeTime);
+ 
+ 	import { toast } from 'svelte-sonner';
++	import { base } from '$app/paths';
+ 	import { onMount, getContext, tick, onDestroy } from 'svelte';
+ 	import type { Writable } from 'svelte/store';
+ 	import type { i18n as i18nType } from 'i18next';
+@@ -225,7 +226,7 @@
+ 			return;
+ 		}
+ 
+-		goto(`/workspace/knowledge/${item.id}`);
++		goto(`${base}/workspace/knowledge/${item.id}`);
+ 	};
+ 
+ 	const shouldIgnoreRowClick = (target: EventTarget | null) => {
+diff --git a/src/lib/components/workspace/Knowledge/CreateKnowledgeBase.svelte b/src/lib/components/workspace/Knowledge/CreateKnowledgeBase.svelte
+index 4eab0cb41..5145f364e 100644
+--- a/src/lib/components/workspace/Knowledge/CreateKnowledgeBase.svelte
++++ b/src/lib/components/workspace/Knowledge/CreateKnowledgeBase.svelte
+@@ -2,6 +2,7 @@
+ 	import { toast } from 'svelte-sonner';
+ 
+ 	import { goto } from '$app/navigation';
++	import { base } from '$app/paths';
+ 	import { getContext } from 'svelte';
+ 	const i18n = getContext('i18n');
+ 
+@@ -14,9 +15,9 @@
+ 
+ 	export let modal = false;
+ 	/** @type {() => void | Promise<void>} */
+-	export let onBack = () => goto('/workspace/knowledge');
++	export let onBack = () => goto(`${base}/workspace/knowledge`);
+ 	/** @type {(knowledge: { id: string }) => void | Promise<void>} */
+-	export let onCreated = (knowledge) => goto(`/workspace/knowledge/${knowledge.id}`);
++	export let onCreated = (knowledge) => goto(`${base}/workspace/knowledge/${knowledge.id}`);
+ 
+ 	let loading = false;
+ 
+diff --git a/src/lib/components/workspace/Knowledge/KnowledgeBase.svelte b/src/lib/components/workspace/Knowledge/KnowledgeBase.svelte
+index 5a01f2e0d..d3228f401 100644
+--- a/src/lib/components/workspace/Knowledge/KnowledgeBase.svelte
++++ b/src/lib/components/workspace/Knowledge/KnowledgeBase.svelte
+@@ -1,4 +1,5 @@
+ <script lang="ts">
++	import { base } from '$app/paths';
+ 	import Fuse from 'fuse.js';
+ 	import { toast } from 'svelte-sonner';
+ 	import { v4 as uuidv4 } from 'uuid';
+@@ -1124,7 +1125,7 @@
+ 			}
+ 			knowledgeId = knowledge?.id;
+ 		} else {
+-			goto('/workspace/knowledge');
++			goto(`${base}/workspace/knowledge`);
+ 		}
+ 
+ 		const dropZone = document.querySelector('body');
+diff --git a/src/lib/components/workspace/Models.svelte b/src/lib/components/workspace/Models.svelte
+index d578c4f65..bc2d746d8 100644
+--- a/src/lib/components/workspace/Models.svelte
++++ b/src/lib/components/workspace/Models.svelte
+@@ -2,6 +2,7 @@
+ 	import dayjs from 'dayjs';
+ 	import relativeTime from 'dayjs/plugin/relativeTime';
+ 	import { toast } from 'svelte-sonner';
++	import { base } from '$app/paths';
+ 	import Sortable from 'sortablejs';
+ 
+ 	import fileSaver from 'file-saver';
+@@ -143,7 +144,7 @@
+ 
+ 	const openModel = (model) => {
+ 		if (model.write_access) {
+-			goto(`/workspace/models/edit?id=${encodeURIComponent(model.id)}`);
++			goto(`${base}/workspace/models/edit?id=${encodeURIComponent(model.id)}`);
+ 		}
+ 	};
+ 
+@@ -215,7 +216,7 @@
+ 			id: `${model.id}-clone`,
+ 			name: `${model.name} (Clone)`
+ 		});
+-		goto('/workspace/models/create');
++		goto(`${base}/workspace/models/create`);
+ 	};
+ 
+ 	const shareModelHandler = async (model) => {
+@@ -732,7 +733,7 @@
+ 												// LICENSE covers this Open WebUI fallback logo.
+ 												// Do not alter, remove, obscure, or replace it except as LICENSE permits:
+ 												// https://docs.openwebui.com/license.
+-												e.target.src = '/favicon.png';
++												e.target.src = `${base}/static/favicon.png`;
+ 											}}
+ 										/>
+ 									</div>
+@@ -748,7 +749,7 @@
+ 													placement="top-start"
+ 												>
+ 													<a
+-														href={`/?model=${encodeURIComponent(model.id)}`}
++														href={`${base}/?model=${encodeURIComponent(model.id)}`}
+ 														class="block truncate text-[0.8125rem] leading-5 text-gray-800 group-hover:underline dark:text-gray-200"
+ 													>
+ 														{localizedModelName}
+@@ -853,7 +854,7 @@
+ 												{model}
+ 												writeAccess={model.write_access}
+ 												editHandler={() => {
+-													goto(`/workspace/models/edit?id=${encodeURIComponent(model.id)}`);
++													goto(`${base}/workspace/models/edit?id=${encodeURIComponent(model.id)}`);
+ 												}}
+ 												shareHandler={() => {
+ 													shareModelHandler(model);
+diff --git a/src/lib/components/workspace/Prompts.svelte b/src/lib/components/workspace/Prompts.svelte
+index 5cabe01b8..fbe9b35a1 100644
+--- a/src/lib/components/workspace/Prompts.svelte
++++ b/src/lib/components/workspace/Prompts.svelte
+@@ -8,6 +8,7 @@
+ 	dayjs.extend(relativeTime);
+ 
+ 	import { goto } from '$app/navigation';
++	import { base } from '$app/paths';
+ 	import { onMount, getContext, tick, onDestroy } from 'svelte';
+ 	import type { Writable } from 'svelte/store';
+ 	import type { i18n as i18nType } from 'i18next';
+@@ -160,7 +161,7 @@
+ 	};
+ 
+ 	const openPrompt = (prompt) => {
+-		goto(`/workspace/prompts/${prompt.id}`);
++		goto(`${base}/workspace/prompts/${prompt.id}`);
+ 	};
+ 
+ 	const shouldIgnoreRowClick = (target: EventTarget | null) => {
+@@ -677,7 +678,7 @@
+ 										<PromptMenu
+ 											show={openPromptMenuId === prompt.id}
+ 											editHandler={() => {
+-												goto(`/workspace/prompts/${prompt.id}`);
++												goto(`${base}/workspace/prompts/${prompt.id}`);
+ 											}}
+ 											shareHandler={() => {
+ 												shareHandler(prompt);
+diff --git a/src/lib/components/workspace/Prompts/PromptEditor.svelte b/src/lib/components/workspace/Prompts/PromptEditor.svelte
+index 4ad3298c6..8e55bb174 100644
+--- a/src/lib/components/workspace/Prompts/PromptEditor.svelte
++++ b/src/lib/components/workspace/Prompts/PromptEditor.svelte
+@@ -3,6 +3,7 @@
+ 	import type { Writable } from 'svelte/store';
+ 	import type { i18n as i18nType } from 'i18next';
+ 	import { goto } from '$app/navigation';
++	import { base } from '$app/paths';
+ 
+ 	import Textarea from '$lib/components/common/Textarea.svelte';
+ 	import { toast } from 'svelte-sonner';
+@@ -395,7 +396,7 @@
+ 			class="mb-1 flex h-6 w-fit items-center gap-1 rounded-md text-xs text-gray-400 transition-colors duration-75 hover:text-gray-700 dark:text-gray-600 dark:hover:text-gray-300"
+ 			type="button"
+ 			on:click={() => {
+-				goto('/workspace/prompts');
++				goto(`${base}/workspace/prompts`);
+ 			}}
+ 		>
+ 			<ChevronLeft className="size-3" strokeWidth="2" />
+@@ -713,10 +714,10 @@
+ 						<div class="flex items-center gap-1 text-xs text-gray-400 dark:text-gray-500">
+ 							{#if entry.user}
+ 								<img
+-									src={`/api/v1/users/${entry.user.id}/profile/image`}
++									src={`${base}/api/v1/users/${entry.user.id}/profile/image`}
+ 									alt={entry.user.name}
+ 									class="size-3 rounded-full mr-0.5"
+-									on:error={(e) => (e.target.src = '/user.png')}
++									on:error={(e) => (e.target.src = `${base}/user.png`)}
+ 								/>
+ 								<span class="truncate">{entry.user.name}</span>
+ 								<span>•</span>
+diff --git a/src/lib/components/workspace/Skills.svelte b/src/lib/components/workspace/Skills.svelte
+index 876e44b2c..12f22d982 100644
+--- a/src/lib/components/workspace/Skills.svelte
++++ b/src/lib/components/workspace/Skills.svelte
+@@ -19,6 +19,7 @@
+ 		workspaceCounts
+ 	} from '$lib/stores';
+ 	import { goto } from '$app/navigation';
++	import { base } from '$app/paths';
+ 	import {
+ 		getSkills,
+ 		getSkillById,
+@@ -75,7 +76,7 @@
+ 			{
+ 				id: 'skills-new',
+ 				label: $i18n.t('Create'),
+-				href: '/workspace/skills/create',
++				href: `${base}/workspace/skills/create`,
+ 				visible: $user?.role === 'admin' || $user?.permissions?.workspace?.skills
+ 			},
+ 			{
+@@ -166,7 +167,7 @@
+ 	};
+ 
+ 	const openSkill = (skill) => {
+-		goto(`/workspace/skills/edit?id=${encodeURIComponent(skill.id)}`);
++		goto(`${base}/workspace/skills/edit?id=${encodeURIComponent(skill.id)}`);
+ 	};
+ 
+ 	const shouldIgnoreRowClick = (target: EventTarget | null) => {
+@@ -185,7 +186,7 @@
+ 				id: `${_skill.id}_clone`,
+ 				name: `${_skill.name} (Clone)`
+ 			});
+-			goto('/workspace/skills/create');
++			goto(`${base}/workspace/skills/create`);
+ 		}
+ 	};
+ 
+@@ -320,7 +321,7 @@
+ 								is_active: true,
+ 								access_grants: []
+ 							});
+-							goto('/workspace/skills/create');
++							goto(`${base}/workspace/skills/create`);
+ 						}
+ 					};
+ 					reader.readAsText(file);
+@@ -540,7 +541,7 @@
+ 											<SkillMenu
+ 												show={openSkillMenuId === skill.id}
+ 												editHandler={() => {
+-													goto(`/workspace/skills/edit?id=${encodeURIComponent(skill.id)}`);
++													goto(`${base}/workspace/skills/edit?id=${encodeURIComponent(skill.id)}`);
+ 												}}
+ 												cloneHandler={() => {
+ 													cloneHandler(skill);
+diff --git a/src/lib/components/workspace/Skills/SkillEditor.svelte b/src/lib/components/workspace/Skills/SkillEditor.svelte
+index 04bf22322..2efef39c7 100644
+--- a/src/lib/components/workspace/Skills/SkillEditor.svelte
++++ b/src/lib/components/workspace/Skills/SkillEditor.svelte
+@@ -16,6 +16,7 @@
+ 	import Spinner from '$lib/components/common/Spinner.svelte';
+ 	import { updateSkillAccessGrants } from '$lib/apis/skills';
+ 	import { goto } from '$app/navigation';
++	import { base } from '$app/paths';
+ 
+ 	export let onSubmit: Function;
+ 	export let edit = false;
+@@ -116,7 +117,7 @@
+ 			class="mb-1 flex h-6 w-fit items-center gap-1 rounded-md text-xs text-gray-400 transition-colors duration-75 hover:text-gray-700 dark:text-gray-600 dark:hover:text-gray-300"
+ 			type="button"
+ 			on:click={() => {
+-				goto('/workspace/skills');
++				goto(`${base}/workspace/skills`);
+ 			}}
+ 		>
+ 			<ChevronLeft className="size-3" strokeWidth="2" />
+diff --git a/src/lib/components/workspace/Tools.svelte b/src/lib/components/workspace/Tools.svelte
+index e29e5f9e6..358e2ef20 100644
+--- a/src/lib/components/workspace/Tools.svelte
++++ b/src/lib/components/workspace/Tools.svelte
+@@ -21,6 +21,7 @@
+ 	} from '$lib/stores';
+ 
+ 	import { goto } from '$app/navigation';
++	import { base } from '$app/paths';
+ 	import {
+ 		createNewTool,
+ 		loadToolByUrl,
+@@ -83,7 +84,7 @@
+ 			{
+ 				id: 'tools-new',
+ 				label: $i18n.t('Create'),
+-				href: '/workspace/tools/create'
++				href: `${base}/workspace/tools/create`
+ 			},
+ 			{
+ 				id: 'tools-import-link',
+@@ -175,7 +176,7 @@
+ 	};
+ 
+ 	const openTool = (tool) => {
+-		goto(`/workspace/tools/edit?id=${encodeURIComponent(tool.id)}`);
++		goto(`${base}/workspace/tools/edit?id=${encodeURIComponent(tool.id)}`);
+ 	};
+ 
+ 	const shouldIgnoreRowClick = (target: EventTarget | null) => {
+@@ -221,7 +222,7 @@
+ 				id: `${_tool.id}_clone`,
+ 				name: `${_tool.name} (Clone)`
+ 			});
+-			goto('/workspace/tools/create');
++			goto(`${base}/workspace/tools/create`);
+ 		}
+ 	};
+ 
+@@ -309,7 +310,7 @@
+ 		sessionStorage.tool = JSON.stringify({
+ 			...tool
+ 		});
+-		goto('/workspace/tools/create');
++		goto(`${base}/workspace/tools/create`);
+ 	}}
+ 	loadUrlHandler={async (url) => {
+ 		return await loadToolByUrl(localStorage.token, url);
+@@ -583,7 +584,7 @@
+ 										<ToolMenu
+ 											show={openToolMenuId === tool.id}
+ 											editHandler={() => {
+-												goto(`/workspace/tools/edit?id=${encodeURIComponent(tool.id)}`);
++												goto(`${base}/workspace/tools/edit?id=${encodeURIComponent(tool.id)}`);
+ 											}}
+ 											shareHandler={() => {
+ 												shareHandler(tool);
+diff --git a/src/lib/components/workspace/Tools/ToolkitEditor.svelte b/src/lib/components/workspace/Tools/ToolkitEditor.svelte
+index 31ea147ec..ec938ba93 100644
+--- a/src/lib/components/workspace/Tools/ToolkitEditor.svelte
++++ b/src/lib/components/workspace/Tools/ToolkitEditor.svelte
+@@ -5,6 +5,7 @@
+ 	const i18n = getContext('i18n');
+ 
+ 	import { goto } from '$app/navigation';
++	import { base } from '$app/paths';
+ 	import { user } from '$lib/stores';
+ 	import { updateToolAccessGrants } from '$lib/apis/tools';
+ 
+@@ -240,7 +241,7 @@ class Tools:
+ 			class="mb-1 flex h-6 w-fit items-center gap-1 rounded-md text-xs text-gray-400 transition-colors duration-75 hover:text-gray-700 dark:text-gray-600 dark:hover:text-gray-300"
+ 			type="button"
+ 			on:click={() => {
+-				goto('/workspace/tools');
++				goto(`${base}/workspace/tools`);
+ 			}}
+ 		>
+ 			<ChevronLeft className="size-3" strokeWidth="2" />
+diff --git a/src/lib/constants.ts b/src/lib/constants.ts
+index e38dda52d..5bd1ab84c 100644
+--- a/src/lib/constants.ts
++++ b/src/lib/constants.ts
+@@ -1,3 +1,5 @@
++import { browser, dev } from '$app/environment';
++import { base } from '$app/paths';
+ // import { version } from '../../package.json';
+ 
+ // LICENSE covers this Open WebUI branding surface, including name, logo,
+@@ -6,8 +8,10 @@
+ // https://docs.openwebui.com/license.
+ export const APP_NAME = 'Open WebUI';
+ 
+-export const WEBUI_HOSTNAME = '';
+-export const WEBUI_BASE_URL = '';
++export const WEBUI_HOSTNAME = browser ? (dev ? `${location.hostname}:8080` : ``) : '';
++// In dev mode connect to the backend dev server; in production use the SvelteKit base path so
++// that all API requests are relative to whatever subpath the app is deployed under.
++export const WEBUI_BASE_URL = browser ? (dev ? `http://${WEBUI_HOSTNAME}` : base) : base;
+ export const WEBUI_API_BASE_URL = `${WEBUI_BASE_URL}/api/v1`;
+ 
+ export const OLLAMA_API_BASE_URL = `${WEBUI_BASE_URL}/ollama`;
+diff --git a/src/lib/i18n/locales/ar-BH/translation.json b/src/lib/i18n/locales/ar-BH/translation.json
+index 40113ba20..1bef453ac 100644
+--- a/src/lib/i18n/locales/ar-BH/translation.json
++++ b/src/lib/i18n/locales/ar-BH/translation.json
+@@ -1526,6 +1526,7 @@
+ 	"No content to speak": "لا يوجد محتوى لقراءته بصوت مسموع",
+ 	"No conversation to save": "لا توجد محادثة لحفظها",
+ 	"No data": "لا توجد بيانات",
++	"No data found": "",
+ 	"No description": "لا يوجد وصف",
+ 	"No distance available": "لا تتوفر قيمة للمسافة",
+ 	"No event webhooks configured.": "لم تُضبط أي خطافات ويب للأحداث.",
+diff --git a/src/lib/i18n/locales/ar/translation.json b/src/lib/i18n/locales/ar/translation.json
+index 29719f6c4..e896e25bb 100644
+--- a/src/lib/i18n/locales/ar/translation.json
++++ b/src/lib/i18n/locales/ar/translation.json
+@@ -1526,6 +1526,7 @@
+ 	"No content to speak": "لا يوجد محتوى للتحدث عنه",
+ 	"No conversation to save": "لا توجد محادثة لحفظها",
+ 	"No data": "لا توجد بيانات",
++	"No data found": "",
+ 	"No description": "لا يوجد وصف",
+ 	"No distance available": "لا توجد مسافة متاحة",
+ 	"No event webhooks configured.": "لم تُضبط أي خطافات ويب للأحداث.",
+diff --git a/src/lib/i18n/locales/az-AZ/translation.json b/src/lib/i18n/locales/az-AZ/translation.json
+index e18db8d1d..2b92a1155 100644
+--- a/src/lib/i18n/locales/az-AZ/translation.json
++++ b/src/lib/i18n/locales/az-AZ/translation.json
+@@ -1474,6 +1474,7 @@
+ 	"No content to speak": "Səsləndirmək üçün məzmun yoxdur",
+ 	"No conversation to save": "Yadda saxlamaq üçün söhbət yoxdur",
+ 	"No data": "Məlumat yoxdur",
++	"No data found": "",
+ 	"No description": "Təsvir yoxdur",
+ 	"No distance available": "Məsafə məlumatı yoxdur",
+ 	"No event webhooks configured.": "Hadisə Webhook-ları konfiqurasiya edilməyib.",
+diff --git a/src/lib/i18n/locales/bg-BG/translation.json b/src/lib/i18n/locales/bg-BG/translation.json
+index 606015b0f..17f71b211 100644
+--- a/src/lib/i18n/locales/bg-BG/translation.json
++++ b/src/lib/i18n/locales/bg-BG/translation.json
+@@ -1474,6 +1474,7 @@
+ 	"No content to speak": "Няма съдържание за изговаряне",
+ 	"No conversation to save": "Няма разговор за запис",
+ 	"No data": "Няма данни",
++	"No data found": "",
+ 	"No description": "Няма описание",
+ 	"No distance available": "Няма налично разстояние",
+ 	"No event webhooks configured.": "Няма конфигурирани уебкуки за събития.",
+diff --git a/src/lib/i18n/locales/bn-BD/translation.json b/src/lib/i18n/locales/bn-BD/translation.json
+index 561843913..0b64366bf 100644
+--- a/src/lib/i18n/locales/bn-BD/translation.json
++++ b/src/lib/i18n/locales/bn-BD/translation.json
+@@ -1474,6 +1474,7 @@
+ 	"No content to speak": "পড়ে শোনানোর মতো কোনো বিষয়বস্তু নেই",
+ 	"No conversation to save": "সংরক্ষণ করার মতো কোনো কথোপকথন নেই",
+ 	"No data": "কোনো তথ্য নেই",
++	"No data found": "",
+ 	"No description": "কোনো বিবরণ নেই",
+ 	"No distance available": "দূরত্বের কোনো মান উপলভ্য নেই",
+ 	"No event webhooks configured.": "কোনো ইভেন্ট ওয়েবহুক কনফিগার করা নেই।",
+diff --git a/src/lib/i18n/locales/bo-TB/translation.json b/src/lib/i18n/locales/bo-TB/translation.json
+index e7c2d3747..81568263f 100644
+--- a/src/lib/i18n/locales/bo-TB/translation.json
++++ b/src/lib/i18n/locales/bo-TB/translation.json
+@@ -1461,6 +1461,7 @@
+ 	"No content to speak": "བཤད་རྒྱུའི་ནང་དོན་མེད།",
+ 	"No conversation to save": "ཉར་རྒྱུའི་ཁ་བརྡ་མེད།",
+ 	"No data": "གཞི་གྲངས་མེད།",
++	"No data found": "",
+ 	"No description": "འགྲེལ་བཤད་མེད།",
+ 	"No distance available": "ཐག་རིང་ཚད་མེད།",
+ 	"No event webhooks configured.": "དོན་རྐྱེན་གྱི་ webhook སྒྲིག་འགོད་བྱས་མེད།",
+diff --git a/src/lib/i18n/locales/bs-BA/translation.json b/src/lib/i18n/locales/bs-BA/translation.json
+index 3b3c1b0c4..f94fab655 100644
+--- a/src/lib/i18n/locales/bs-BA/translation.json
++++ b/src/lib/i18n/locales/bs-BA/translation.json
+@@ -1487,6 +1487,7 @@
+ 	"No content to speak": "Nema sadržaja za čitanje naglas",
+ 	"No conversation to save": "Nema razgovora za spremanje",
+ 	"No data": "Nema podataka",
++	"No data found": "",
+ 	"No description": "Nema opisa",
+ 	"No distance available": "Nema dostupne vrijednosti udaljenosti",
+ 	"No event webhooks configured.": "Nisu konfigurirani webhookovi za događaje.",
+diff --git a/src/lib/i18n/locales/ca-ES/translation.json b/src/lib/i18n/locales/ca-ES/translation.json
+index 83470d31f..8e738ffc1 100644
+--- a/src/lib/i18n/locales/ca-ES/translation.json
++++ b/src/lib/i18n/locales/ca-ES/translation.json
+@@ -1487,6 +1487,7 @@
+ 	"No content to speak": "No hi ha contingut per parlar",
+ 	"No conversation to save": "No hi ha cap conversa a desar",
+ 	"No data": "No hi ha dades",
++	"No data found": "",
+ 	"No description": "Sense descripció",
+ 	"No distance available": "No hi ha distància disponible",
+ 	"No event webhooks configured.": "No s'ha configurat cap webhook d'esdeveniments.",
+diff --git a/src/lib/i18n/locales/ceb-PH/translation.json b/src/lib/i18n/locales/ceb-PH/translation.json
+index e4d90f8c7..e9e36f40c 100644
+--- a/src/lib/i18n/locales/ceb-PH/translation.json
++++ b/src/lib/i18n/locales/ceb-PH/translation.json
+@@ -1474,6 +1474,7 @@
+ 	"No content to speak": "Walay sulod nga basahon og kusog",
+ 	"No conversation to save": "Walay panaghisgot nga tipigan",
+ 	"No data": "Walay datos",
++	"No data found": "",
+ 	"No description": "Walay paghulagway",
+ 	"No distance available": "Walay magamit nga gilay-on",
+ 	"No event webhooks configured.": "Walay gi-configure nga mga webhook sa panghitabo.",
+diff --git a/src/lib/i18n/locales/cs-CZ/translation.json b/src/lib/i18n/locales/cs-CZ/translation.json
+index 8686d3d61..2a17df77f 100644
+--- a/src/lib/i18n/locales/cs-CZ/translation.json
++++ b/src/lib/i18n/locales/cs-CZ/translation.json
+@@ -1500,6 +1500,7 @@
+ 	"No content to speak": "Žádný obsah k přečtení.",
+ 	"No conversation to save": "Žádná konverzace k uložení",
+ 	"No data": "Žádná data",
++	"No data found": "",
+ 	"No description": "Bez popisu",
+ 	"No distance available": "Vzdálenost není k dispozici",
+ 	"No event webhooks configured.": "Nejsou nastaveny žádné webhooky pro události.",
+diff --git a/src/lib/i18n/locales/da-DK/translation.json b/src/lib/i18n/locales/da-DK/translation.json
+index 5c200d57e..a99e5bade 100644
+--- a/src/lib/i18n/locales/da-DK/translation.json
++++ b/src/lib/i18n/locales/da-DK/translation.json
+@@ -1474,6 +1474,7 @@
+ 	"No content to speak": "Intet indhold at tale",
+ 	"No conversation to save": "Ingen samtale at gemme",
+ 	"No data": "Ingen data",
++	"No data found": "",
+ 	"No description": "Ingen beskrivelse",
+ 	"No distance available": "Ingen afstand tilgængelig",
+ 	"No event webhooks configured.": "Ingen webhooks til begivenheder er konfigureret.",
+diff --git a/src/lib/i18n/locales/de-DE/translation.json b/src/lib/i18n/locales/de-DE/translation.json
+index 0d08752e9..fad09fefa 100644
+--- a/src/lib/i18n/locales/de-DE/translation.json
++++ b/src/lib/i18n/locales/de-DE/translation.json
+@@ -1474,6 +1474,7 @@
+ 	"No content to speak": "Kein Inhalt zum Vorlesen",
+ 	"No conversation to save": "Keine Unterhaltung zum Speichern vorhanden",
+ 	"No data": "Keine Daten",
++	"No data found": "",
+ 	"No description": "Keine Beschreibung",
+ 	"No distance available": "Keine Distanz verfügbar",
+ 	"No event webhooks configured.": "Keine Ereignis-Webhooks konfiguriert.",
+diff --git a/src/lib/i18n/locales/dg-DG/translation.json b/src/lib/i18n/locales/dg-DG/translation.json
+index 2969c1ae3..0840bc1a5 100644
+--- a/src/lib/i18n/locales/dg-DG/translation.json
++++ b/src/lib/i18n/locales/dg-DG/translation.json
+@@ -1474,6 +1474,7 @@
+ 	"No content to speak": "",
+ 	"No conversation to save": "",
+ 	"No data": "",
++	"No data found": "",
+ 	"No description": "",
+ 	"No distance available": "",
+ 	"No event webhooks configured.": "",
+diff --git a/src/lib/i18n/locales/el-GR/translation.json b/src/lib/i18n/locales/el-GR/translation.json
+index d6be6f192..73259084e 100644
+--- a/src/lib/i18n/locales/el-GR/translation.json
++++ b/src/lib/i18n/locales/el-GR/translation.json
+@@ -1474,6 +1474,7 @@
+ 	"No content to speak": "Δεν υπάρχει περιεχόμενο για ανάγνωση",
+ 	"No conversation to save": "",
+ 	"No data": "",
++	"No data found": "",
+ 	"No description": "",
+ 	"No distance available": "Δεν υπάρχει διαθέσιμη απόσταση",
+ 	"No event webhooks configured.": "",
+diff --git a/src/lib/i18n/locales/en-GB/translation.json b/src/lib/i18n/locales/en-GB/translation.json
+index 109256d58..60d287660 100644
+--- a/src/lib/i18n/locales/en-GB/translation.json
++++ b/src/lib/i18n/locales/en-GB/translation.json
+@@ -1474,6 +1474,7 @@
+ 	"No content to speak": "",
+ 	"No conversation to save": "",
+ 	"No data": "",
++	"No data found": "",
+ 	"No description": "",
+ 	"No distance available": "",
+ 	"No event webhooks configured.": "",
+diff --git a/src/lib/i18n/locales/en-US/translation.json b/src/lib/i18n/locales/en-US/translation.json
+index be708f6da..35e76eb9a 100644
+--- a/src/lib/i18n/locales/en-US/translation.json
++++ b/src/lib/i18n/locales/en-US/translation.json
+@@ -1474,6 +1474,7 @@
+ 	"No content to speak": "",
+ 	"No conversation to save": "",
+ 	"No data": "",
++	"No data found": "",
+ 	"No description": "",
+ 	"No distance available": "",
+ 	"No event webhooks configured.": "",
+diff --git a/src/lib/i18n/locales/es-ES/translation.json b/src/lib/i18n/locales/es-ES/translation.json
+index 82777d626..22d9d1bd7 100644
+--- a/src/lib/i18n/locales/es-ES/translation.json
++++ b/src/lib/i18n/locales/es-ES/translation.json
+@@ -1487,6 +1487,7 @@
+ 	"No content to speak": "No hay contenido para hablar",
+ 	"No conversation to save": "No hay conversación para guardar",
+ 	"No data": "Sin datos",
++	"No data found": "",
+ 	"No description": "Sin descripción",
+ 	"No distance available": "No hay distancia disponible",
+ 	"No event webhooks configured.": "No hay webhooks de eventos configurados.",
+diff --git a/src/lib/i18n/locales/et-EE/translation.json b/src/lib/i18n/locales/et-EE/translation.json
+index 09fce9887..bfb441951 100644
+--- a/src/lib/i18n/locales/et-EE/translation.json
++++ b/src/lib/i18n/locales/et-EE/translation.json
+@@ -1474,6 +1474,7 @@
+ 	"No content to speak": "Pole mida rääkida",
+ 	"No conversation to save": "Pole vestlust, mida salvestada",
+ 	"No data": "Andmed puuduvad",
++	"No data found": "",
+ 	"No description": "",
+ 	"No distance available": "Kaugus pole saadaval",
+ 	"No event webhooks configured.": "",
+diff --git a/src/lib/i18n/locales/eu-ES/translation.json b/src/lib/i18n/locales/eu-ES/translation.json
+index bd3598a12..94865bae7 100644
+--- a/src/lib/i18n/locales/eu-ES/translation.json
++++ b/src/lib/i18n/locales/eu-ES/translation.json
+@@ -1474,6 +1474,7 @@
+ 	"No content to speak": "Ez dago hitz egiteko edukirik",
+ 	"No conversation to save": "Ez dago gordetzeko elkarrizketarik",
+ 	"No data": "Ez dago daturik",
++	"No data found": "",
+ 	"No description": "Ez dago deskribapenik",
+ 	"No distance available": "Ez dago distantziarik eskuragarri",
+ 	"No event webhooks configured.": "Ez dago gertaeren webhook-ik konfiguratuta.",
+diff --git a/src/lib/i18n/locales/fa-IR/translation.json b/src/lib/i18n/locales/fa-IR/translation.json
+index 078eb8af3..49c03a346 100644
+--- a/src/lib/i18n/locales/fa-IR/translation.json
++++ b/src/lib/i18n/locales/fa-IR/translation.json
+@@ -1474,6 +1474,7 @@
+ 	"No content to speak": "محتوایی برای خواندن وجود ندارد",
+ 	"No conversation to save": "هیچ مکالمه\u200cای برای ذخیره وجود ندارد",
+ 	"No data": "",
++	"No data found": "",
+ 	"No description": "",
+ 	"No distance available": "فاصله\u200cای در دسترس نیست",
+ 	"No event webhooks configured.": "",
+diff --git a/src/lib/i18n/locales/fi-FI/translation.json b/src/lib/i18n/locales/fi-FI/translation.json
+index 1db6d27b7..0fe8bbc30 100644
+--- a/src/lib/i18n/locales/fi-FI/translation.json
++++ b/src/lib/i18n/locales/fi-FI/translation.json
+@@ -1474,6 +1474,7 @@
+ 	"No content to speak": "Ei puhuttavaa sisältöä",
+ 	"No conversation to save": "Ei tallennettavaa keskustelua",
+ 	"No data": "Ei dataa",
++	"No data found": "",
+ 	"No description": "Ei kuvausta",
+ 	"No distance available": "Etäisyyttä ei saatavilla",
+ 	"No event webhooks configured.": "Tapahtuma-webhookeja ei ole määritetty.",
+diff --git a/src/lib/i18n/locales/fil-PH/translation.json b/src/lib/i18n/locales/fil-PH/translation.json
+index 839176801..4cc89f408 100644
+--- a/src/lib/i18n/locales/fil-PH/translation.json
++++ b/src/lib/i18n/locales/fil-PH/translation.json
+@@ -1475,6 +1475,7 @@
+ 	"No content to speak": "",
+ 	"No conversation to save": "",
+ 	"No data": "",
++	"No data found": "",
+ 	"No description": "",
+ 	"No distance available": "",
+ 	"No event webhooks configured.": "",
+diff --git a/src/lib/i18n/locales/fo-FO/translation.json b/src/lib/i18n/locales/fo-FO/translation.json
+index 5b22dd8cf..09963f798 100644
+--- a/src/lib/i18n/locales/fo-FO/translation.json
++++ b/src/lib/i18n/locales/fo-FO/translation.json
+@@ -1474,6 +1474,7 @@
+ 	"No content to speak": "Einki innihald at lesa upp",
+ 	"No conversation to save": "Eingin samrøða at goyma",
+ 	"No data": "Eingi dátugøgn",
++	"No data found": "",
+ 	"No description": "Eingin lýsing",
+ 	"No distance available": "Eingin frástøða tøk",
+ 	"No event webhooks configured.": "Eingi hendingar-webhook eru sett upp.",
+diff --git a/src/lib/i18n/locales/fr-CA/translation.json b/src/lib/i18n/locales/fr-CA/translation.json
+index 59e7d2510..daa4ac34f 100644
+--- a/src/lib/i18n/locales/fr-CA/translation.json
++++ b/src/lib/i18n/locales/fr-CA/translation.json
+@@ -1487,6 +1487,7 @@
+ 	"No content to speak": "Rien à signaler",
+ 	"No conversation to save": "",
+ 	"No data": "",
++	"No data found": "",
+ 	"No description": "",
+ 	"No distance available": "Aucune distance disponible",
+ 	"No event webhooks configured.": "",
+diff --git a/src/lib/i18n/locales/fr-FR/translation.json b/src/lib/i18n/locales/fr-FR/translation.json
+index 61dac839a..3a441efa8 100644
+--- a/src/lib/i18n/locales/fr-FR/translation.json
++++ b/src/lib/i18n/locales/fr-FR/translation.json
+@@ -1487,6 +1487,7 @@
+ 	"No content to speak": "Rien à signaler",
+ 	"No conversation to save": "Aucune conversation à sauvegarder",
+ 	"No data": "Aucune donnée",
++	"No data found": "",
+ 	"No description": "Aucune description",
+ 	"No distance available": "Aucune distance disponible",
+ 	"No event webhooks configured.": "Aucun webhook d'événement configuré.",
+diff --git a/src/lib/i18n/locales/gl-ES/translation.json b/src/lib/i18n/locales/gl-ES/translation.json
+index d972ad89e..471a01532 100644
+--- a/src/lib/i18n/locales/gl-ES/translation.json
++++ b/src/lib/i18n/locales/gl-ES/translation.json
+@@ -1474,6 +1474,7 @@
+ 	"No content to speak": "Non ten contido para falar",
+ 	"No conversation to save": "",
+ 	"No data": "",
++	"No data found": "",
+ 	"No description": "",
+ 	"No distance available": "Non ten distancia disponible",
+ 	"No event webhooks configured.": "",
+diff --git a/src/lib/i18n/locales/he-IL/translation.json b/src/lib/i18n/locales/he-IL/translation.json
+index 8f40732e9..1b324e4ed 100644
+--- a/src/lib/i18n/locales/he-IL/translation.json
++++ b/src/lib/i18n/locales/he-IL/translation.json
+@@ -1487,6 +1487,7 @@
+ 	"No content to speak": "",
+ 	"No conversation to save": "",
+ 	"No data": "",
++	"No data found": "",
+ 	"No description": "",
+ 	"No distance available": "",
+ 	"No event webhooks configured.": "",
+diff --git a/src/lib/i18n/locales/hi-IN/translation.json b/src/lib/i18n/locales/hi-IN/translation.json
+index 7b53192d7..29e39929e 100644
+--- a/src/lib/i18n/locales/hi-IN/translation.json
++++ b/src/lib/i18n/locales/hi-IN/translation.json
+@@ -1474,6 +1474,7 @@
+ 	"No content to speak": "",
+ 	"No conversation to save": "",
+ 	"No data": "",
++	"No data found": "",
+ 	"No description": "",
+ 	"No distance available": "",
+ 	"No event webhooks configured.": "",
+diff --git a/src/lib/i18n/locales/hr-HR/translation.json b/src/lib/i18n/locales/hr-HR/translation.json
+index ae20b74d0..ede4fe96e 100644
+--- a/src/lib/i18n/locales/hr-HR/translation.json
++++ b/src/lib/i18n/locales/hr-HR/translation.json
+@@ -1487,6 +1487,7 @@
+ 	"No content to speak": "Nema sadržaja za čitanje naglas",
+ 	"No conversation to save": "Nema razgovora za spremanje",
+ 	"No data": "Nema podataka",
++	"No data found": "",
+ 	"No description": "Nema opisa",
+ 	"No distance available": "Nema dostupne vrijednosti udaljenosti",
+ 	"No event webhooks configured.": "Nisu konfigurirani webhookovi za događaje.",
+diff --git a/src/lib/i18n/locales/hu-HU/translation.json b/src/lib/i18n/locales/hu-HU/translation.json
+index e52617ac5..2e823e438 100644
+--- a/src/lib/i18n/locales/hu-HU/translation.json
++++ b/src/lib/i18n/locales/hu-HU/translation.json
+@@ -1474,6 +1474,7 @@
+ 	"No content to speak": "Nincs felolvasható tartalom",
+ 	"No conversation to save": "Nincs menthető beszélgetés",
+ 	"No data": "Nincs adat",
++	"No data found": "",
+ 	"No description": "Nincs leírás",
+ 	"No distance available": "Nincs elérhető távolság",
+ 	"No event webhooks configured.": "Nincsenek beállítva esemény-webhookok.",
+diff --git a/src/lib/i18n/locales/id-ID/translation.json b/src/lib/i18n/locales/id-ID/translation.json
+index 1a21ba94d..2986b8b4c 100644
+--- a/src/lib/i18n/locales/id-ID/translation.json
++++ b/src/lib/i18n/locales/id-ID/translation.json
+@@ -1471,6 +1471,7 @@
+ 	"No content to speak": "Tidak ada konten untuk dibicarakan",
+ 	"No conversation to save": "",
+ 	"No data": "",
++	"No data found": "",
+ 	"No description": "",
+ 	"No distance available": "",
+ 	"No event webhooks configured.": "",
+diff --git a/src/lib/i18n/locales/ie-GA/translation.json b/src/lib/i18n/locales/ie-GA/translation.json
+index 252c30136..3fa5d33c3 100644
+--- a/src/lib/i18n/locales/ie-GA/translation.json
++++ b/src/lib/i18n/locales/ie-GA/translation.json
+@@ -1474,6 +1474,7 @@
+ 	"No content to speak": "Níl aon ábhar le labhairt",
+ 	"No conversation to save": "Gan aon chomhrá le sábháil",
+ 	"No data": "Gan aon sonraí",
++	"No data found": "",
+ 	"No description": "Gan cur síos",
+ 	"No distance available": "Níl achar ar fáil",
+ 	"No event webhooks configured.": "Níl aon ghreambhrúcaí imeachta cumraithe.",
+diff --git a/src/lib/i18n/locales/it-IT/translation.json b/src/lib/i18n/locales/it-IT/translation.json
+index 146d08205..fe912faa0 100644
+--- a/src/lib/i18n/locales/it-IT/translation.json
++++ b/src/lib/i18n/locales/it-IT/translation.json
+@@ -1487,6 +1487,7 @@
+ 	"No content to speak": "Nessun contenuto da pronunciare",
+ 	"No conversation to save": "",
+ 	"No data": "",
++	"No data found": "",
+ 	"No description": "",
+ 	"No distance available": "Nessuna distanza disponibile",
+ 	"No event webhooks configured.": "",
+diff --git a/src/lib/i18n/locales/ja-JP/translation.json b/src/lib/i18n/locales/ja-JP/translation.json
+index 57276b0cd..d1f05011c 100644
+--- a/src/lib/i18n/locales/ja-JP/translation.json
++++ b/src/lib/i18n/locales/ja-JP/translation.json
+@@ -1461,6 +1461,7 @@
+ 	"No content to speak": "話す内容がありません",
+ 	"No conversation to save": "保存する会話がありません。",
+ 	"No data": "データがありません",
++	"No data found": "",
+ 	"No description": "説明がありません",
+ 	"No distance available": "距離が利用できません",
+ 	"No event webhooks configured.": "イベントのウェブフックが設定されていません。",
+diff --git a/src/lib/i18n/locales/ka-GE/translation.json b/src/lib/i18n/locales/ka-GE/translation.json
+index 405a0840f..0e6d2ce67 100644
+--- a/src/lib/i18n/locales/ka-GE/translation.json
++++ b/src/lib/i18n/locales/ka-GE/translation.json
+@@ -1474,6 +1474,7 @@
+ 	"No content to speak": "წარმოსათქმელი შემცველობის გარეშე",
+ 	"No conversation to save": "შესანახი საუბრების გარეშე",
+ 	"No data": "",
++	"No data found": "",
+ 	"No description": "",
+ 	"No distance available": "მანძილი ხელმისაწვდომი არაა",
+ 	"No event webhooks configured.": "",
+diff --git a/src/lib/i18n/locales/kab-DZ/translation.json b/src/lib/i18n/locales/kab-DZ/translation.json
+index 1be43e693..f0ec1cf44 100644
+--- a/src/lib/i18n/locales/kab-DZ/translation.json
++++ b/src/lib/i18n/locales/kab-DZ/translation.json
+@@ -1474,6 +1474,7 @@
+ 	"No content to speak": "Ulac ara d-yettwabedren",
+ 	"No conversation to save": "Ulac adiwenni i usekles",
+ 	"No data": "",
++	"No data found": "",
+ 	"No description": "",
+ 	"No distance available": "Ulac ameccaq yettwafen",
+ 	"No event webhooks configured.": "",
+diff --git a/src/lib/i18n/locales/ko-KR/translation.json b/src/lib/i18n/locales/ko-KR/translation.json
+index b04d1f2c7..fe5848e93 100644
+--- a/src/lib/i18n/locales/ko-KR/translation.json
++++ b/src/lib/i18n/locales/ko-KR/translation.json
+@@ -1462,6 +1462,7 @@
+ 	"No content to speak": "음성 출력할 내용을 찾을 수 없습니다",
+ 	"No conversation to save": "저장할 대화가 없습니다",
+ 	"No data": "데이터가 없습니다",
++	"No data found": "",
+ 	"No description": "",
+ 	"No distance available": "거리 불가능",
+ 	"No event webhooks configured.": "구성된 이벤트 웹훅이 없습니다.",
+diff --git a/src/lib/i18n/locales/lt-LT/translation.json b/src/lib/i18n/locales/lt-LT/translation.json
+index a8bc2c5d5..23d9438fb 100644
+--- a/src/lib/i18n/locales/lt-LT/translation.json
++++ b/src/lib/i18n/locales/lt-LT/translation.json
+@@ -1500,6 +1500,7 @@
+ 	"No content to speak": "Nėra turinio kalbėjimui",
+ 	"No conversation to save": "",
+ 	"No data": "",
++	"No data found": "",
+ 	"No description": "",
+ 	"No distance available": "",
+ 	"No event webhooks configured.": "",
+diff --git a/src/lib/i18n/locales/lv-LV/translation.json b/src/lib/i18n/locales/lv-LV/translation.json
+index 28ddfe71f..f91ae68d9 100644
+--- a/src/lib/i18n/locales/lv-LV/translation.json
++++ b/src/lib/i18n/locales/lv-LV/translation.json
+@@ -1487,6 +1487,7 @@
+ 	"No content to speak": "Nav satura, ko izrunāt",
+ 	"No conversation to save": "Nav sarunas, ko saglabāt",
+ 	"No data": "",
++	"No data found": "",
+ 	"No description": "",
+ 	"No distance available": "Attālums nav pieejams",
+ 	"No event webhooks configured.": "",
+diff --git a/src/lib/i18n/locales/ms-MY/translation.json b/src/lib/i18n/locales/ms-MY/translation.json
+index 45302adc7..7f97eef15 100644
+--- a/src/lib/i18n/locales/ms-MY/translation.json
++++ b/src/lib/i18n/locales/ms-MY/translation.json
+@@ -1461,6 +1461,7 @@
+ 	"No content to speak": "Tiada kandungan untuk bercakap",
+ 	"No conversation to save": "Tiada perbualan untuk disimpan",
+ 	"No data": "Tiada data",
++	"No data found": "",
+ 	"No description": "",
+ 	"No distance available": "Tiada jarak tersedia",
+ 	"No event webhooks configured.": "",
+diff --git a/src/lib/i18n/locales/nb-NO/translation.json b/src/lib/i18n/locales/nb-NO/translation.json
+index adafd83a8..ec1c916d1 100644
+--- a/src/lib/i18n/locales/nb-NO/translation.json
++++ b/src/lib/i18n/locales/nb-NO/translation.json
+@@ -1474,6 +1474,7 @@
+ 	"No content to speak": "Mangler innhold for tale",
+ 	"No conversation to save": "",
+ 	"No data": "",
++	"No data found": "",
+ 	"No description": "",
+ 	"No distance available": "Ingen avstand tilgjengelig",
+ 	"No event webhooks configured.": "",
+diff --git a/src/lib/i18n/locales/nl-NL/translation.json b/src/lib/i18n/locales/nl-NL/translation.json
+index 50453e089..f273834b5 100644
+--- a/src/lib/i18n/locales/nl-NL/translation.json
++++ b/src/lib/i18n/locales/nl-NL/translation.json
+@@ -1474,6 +1474,7 @@
+ 	"No content to speak": "Geen inhoud om over te spreken",
+ 	"No conversation to save": "Geen gesprek om op te slaan",
+ 	"No data": "Geen gegevens",
++	"No data found": "",
+ 	"No description": "Geen beschrijving",
+ 	"No distance available": "Geen afstand beschikbaar",
+ 	"No event webhooks configured.": "Geen webhooks voor gebeurtenissen ingesteld.",
+diff --git a/src/lib/i18n/locales/pa-IN/translation.json b/src/lib/i18n/locales/pa-IN/translation.json
+index 9e613bea9..a40d02fd6 100644
+--- a/src/lib/i18n/locales/pa-IN/translation.json
++++ b/src/lib/i18n/locales/pa-IN/translation.json
+@@ -1474,6 +1474,7 @@
+ 	"No content to speak": "",
+ 	"No conversation to save": "",
+ 	"No data": "",
++	"No data found": "",
+ 	"No description": "",
+ 	"No distance available": "",
+ 	"No event webhooks configured.": "",
+diff --git a/src/lib/i18n/locales/pl-PL/translation.json b/src/lib/i18n/locales/pl-PL/translation.json
+index 46c848c31..02c9f5ef7 100644
+--- a/src/lib/i18n/locales/pl-PL/translation.json
++++ b/src/lib/i18n/locales/pl-PL/translation.json
+@@ -1500,6 +1500,7 @@
+ 	"No content to speak": "Brak treści do wymówienia",
+ 	"No conversation to save": "Brak rozmowy do zapisania",
+ 	"No data": "Brak danych",
++	"No data found": "",
+ 	"No description": "Brak opisu",
+ 	"No distance available": "Brak wyniku dopasowania",
+ 	"No event webhooks configured.": "Brak skonfigurowanych webhooków zdarzeń.",
+diff --git a/src/lib/i18n/locales/pt-BR/translation.json b/src/lib/i18n/locales/pt-BR/translation.json
+index 6efccd2c7..47a787808 100644
+--- a/src/lib/i18n/locales/pt-BR/translation.json
++++ b/src/lib/i18n/locales/pt-BR/translation.json
+@@ -1487,6 +1487,7 @@
+ 	"No content to speak": "Sem conteúdo para falar",
+ 	"No conversation to save": "Nenhuma conversa para salvar",
+ 	"No data": "Sem dados",
++	"No data found": "",
+ 	"No description": "Sem descrição",
+ 	"No distance available": "Sem distância disponível",
+ 	"No event webhooks configured.": "Nenhum webhook de evento configurado.",
+diff --git a/src/lib/i18n/locales/pt-PT/translation.json b/src/lib/i18n/locales/pt-PT/translation.json
+index fa8e8048b..ab695e10c 100644
+--- a/src/lib/i18n/locales/pt-PT/translation.json
++++ b/src/lib/i18n/locales/pt-PT/translation.json
+@@ -1487,6 +1487,7 @@
+ 	"No content to speak": "Nenhum conteúdo para falar",
+ 	"No conversation to save": "Nenhuma conversa para guardar",
+ 	"No data": "Sem dados",
++	"No data found": "",
+ 	"No description": "",
+ 	"No distance available": "Nenhuma distância disponível",
+ 	"No event webhooks configured.": "",
+diff --git a/src/lib/i18n/locales/ro-RO/translation.json b/src/lib/i18n/locales/ro-RO/translation.json
+index d37a5bd75..5a65ea8a9 100644
+--- a/src/lib/i18n/locales/ro-RO/translation.json
++++ b/src/lib/i18n/locales/ro-RO/translation.json
+@@ -1487,6 +1487,7 @@
+ 	"No content to speak": "Nu există conținut de vorbit",
+ 	"No conversation to save": "",
+ 	"No data": "",
++	"No data found": "",
+ 	"No description": "",
+ 	"No distance available": "Nicio distanță disponibilă",
+ 	"No event webhooks configured.": "",
+diff --git a/src/lib/i18n/locales/ru-RU/translation.json b/src/lib/i18n/locales/ru-RU/translation.json
+index c529f5dd0..34d2b1aa0 100644
+--- a/src/lib/i18n/locales/ru-RU/translation.json
++++ b/src/lib/i18n/locales/ru-RU/translation.json
+@@ -1500,6 +1500,7 @@
+ 	"No content to speak": "Нечего говорить",
+ 	"No conversation to save": "Нет разговора для сохранения",
+ 	"No data": "Нет данных",
++	"No data found": "",
+ 	"No description": "Нет описания",
+ 	"No distance available": "Расстояние недоступно",
+ 	"No event webhooks configured.": "Вебхуки событий не настроены.",
+diff --git a/src/lib/i18n/locales/sk-SK/translation.json b/src/lib/i18n/locales/sk-SK/translation.json
+index 61a4fcd64..17412a018 100644
+--- a/src/lib/i18n/locales/sk-SK/translation.json
++++ b/src/lib/i18n/locales/sk-SK/translation.json
+@@ -1500,6 +1500,7 @@
+ 	"No content to speak": "Žiadny obsah na diskusiu.",
+ 	"No conversation to save": "",
+ 	"No data": "",
++	"No data found": "",
+ 	"No description": "",
+ 	"No distance available": "Nie je dostupná žiadna vzdialenosť",
+ 	"No event webhooks configured.": "",
+diff --git a/src/lib/i18n/locales/sl-SI/translation.json b/src/lib/i18n/locales/sl-SI/translation.json
+index 04f77433c..c13741f0a 100644
+--- a/src/lib/i18n/locales/sl-SI/translation.json
++++ b/src/lib/i18n/locales/sl-SI/translation.json
+@@ -1500,6 +1500,7 @@
+ 	"No content to speak": "Ni content to speak",
+ 	"No conversation to save": "Ni conversation to save",
+ 	"No data": "Ni podatkov",
++	"No data found": "",
+ 	"No description": "Ni opisa",
+ 	"No distance available": "Ni distance available",
+ 	"No event webhooks configured.": "Ni event webhooks configured.",
+diff --git a/src/lib/i18n/locales/sr-RS/translation.json b/src/lib/i18n/locales/sr-RS/translation.json
+index a84a20fdd..94ff09704 100644
+--- a/src/lib/i18n/locales/sr-RS/translation.json
++++ b/src/lib/i18n/locales/sr-RS/translation.json
+@@ -1487,6 +1487,7 @@
+ 	"No content to speak": "",
+ 	"No conversation to save": "",
+ 	"No data": "",
++	"No data found": "",
+ 	"No description": "",
+ 	"No distance available": "",
+ 	"No event webhooks configured.": "",
+diff --git a/src/lib/i18n/locales/sv-SE/translation.json b/src/lib/i18n/locales/sv-SE/translation.json
+index 3b8b750ac..6156b15f0 100644
+--- a/src/lib/i18n/locales/sv-SE/translation.json
++++ b/src/lib/i18n/locales/sv-SE/translation.json
+@@ -1474,6 +1474,7 @@
+ 	"No content to speak": "Inget innehåll att tala",
+ 	"No conversation to save": "Ingen konversation att spara",
+ 	"No data": "Inga uppgifter",
++	"No data found": "",
+ 	"No description": "",
+ 	"No distance available": "Inget avstånd tillgängligt",
+ 	"No event webhooks configured.": "",
+diff --git a/src/lib/i18n/locales/ta-IN/translation.json b/src/lib/i18n/locales/ta-IN/translation.json
+index ef17cd33f..ed5ac5696 100644
+--- a/src/lib/i18n/locales/ta-IN/translation.json
++++ b/src/lib/i18n/locales/ta-IN/translation.json
+@@ -1474,6 +1474,7 @@
+ 	"No content to speak": "பேசுவதற்கு உள்ளடக்கம் இல்லை",
+ 	"No conversation to save": "சேமிக்க உரையாடல் இல்லை",
+ 	"No data": "தரவு இல்லை",
++	"No data found": "",
+ 	"No description": "",
+ 	"No distance available": "தூரம் இல்லை",
+ 	"No event webhooks configured.": "",
+diff --git a/src/lib/i18n/locales/th-TH/translation.json b/src/lib/i18n/locales/th-TH/translation.json
+index 2875aa1ee..22aba8e89 100644
+--- a/src/lib/i18n/locales/th-TH/translation.json
++++ b/src/lib/i18n/locales/th-TH/translation.json
+@@ -1461,6 +1461,7 @@
+ 	"No content to speak": "ไม่มีเนื้อหาสำหรับอ่านออกเสียง",
+ 	"No conversation to save": "ไม่มีการสนทนาที่จะบันทึก",
+ 	"No data": "",
++	"No data found": "",
+ 	"No description": "",
+ 	"No distance available": "ไม่มีข้อมูลระยะทาง",
+ 	"No event webhooks configured.": "",
+diff --git a/src/lib/i18n/locales/tk-TM/translation.json b/src/lib/i18n/locales/tk-TM/translation.json
+index e22835296..d90af2d5a 100644
+--- a/src/lib/i18n/locales/tk-TM/translation.json
++++ b/src/lib/i18n/locales/tk-TM/translation.json
+@@ -1474,6 +1474,7 @@
+ 	"No content to speak": "",
+ 	"No conversation to save": "",
+ 	"No data": "",
++	"No data found": "",
+ 	"No description": "",
+ 	"No distance available": "",
+ 	"No event webhooks configured.": "",
+diff --git a/src/lib/i18n/locales/tr-TR/translation.json b/src/lib/i18n/locales/tr-TR/translation.json
+index 88f277fb3..71b58f4bd 100644
+--- a/src/lib/i18n/locales/tr-TR/translation.json
++++ b/src/lib/i18n/locales/tr-TR/translation.json
+@@ -1474,6 +1474,7 @@
+ 	"No content to speak": "Konuşacak içerik yok",
+ 	"No conversation to save": "Kaydedilecek sohbet yok",
+ 	"No data": "Veri yok",
++	"No data found": "",
+ 	"No description": "Açıklama yok",
+ 	"No distance available": "Mesafe mevcut değil",
+ 	"No event webhooks configured.": "Yapılandırılmış olay webhook'u yok.",
+diff --git a/src/lib/i18n/locales/ug-CN/translation.json b/src/lib/i18n/locales/ug-CN/translation.json
+index 222cf11ba..f49efd4bb 100644
+--- a/src/lib/i18n/locales/ug-CN/translation.json
++++ b/src/lib/i18n/locales/ug-CN/translation.json
+@@ -1474,6 +1474,7 @@
+ 	"No content to speak": "تاپشۇرىدىغان مەزمۇن يوق",
+ 	"No conversation to save": "",
+ 	"No data": "",
++	"No data found": "",
+ 	"No description": "",
+ 	"No distance available": "ئارىلىق ئۇچۇرى يوق",
+ 	"No event webhooks configured.": "",
+diff --git a/src/lib/i18n/locales/uk-UA/translation.json b/src/lib/i18n/locales/uk-UA/translation.json
+index d222ab031..c96271c66 100644
+--- a/src/lib/i18n/locales/uk-UA/translation.json
++++ b/src/lib/i18n/locales/uk-UA/translation.json
+@@ -1500,6 +1500,7 @@
+ 	"No content to speak": "Нема чого говорити",
+ 	"No conversation to save": "Немає розмови для збереження",
+ 	"No data": "Немає даних",
++	"No data found": "",
+ 	"No description": "Немає опису",
+ 	"No distance available": "Відстань недоступна",
+ 	"No event webhooks configured.": "Вебхуки подій не налаштовано.",
+diff --git a/src/lib/i18n/locales/ur-PK/translation.json b/src/lib/i18n/locales/ur-PK/translation.json
+index 7e725cccc..cf43333b4 100644
+--- a/src/lib/i18n/locales/ur-PK/translation.json
++++ b/src/lib/i18n/locales/ur-PK/translation.json
+@@ -1474,6 +1474,7 @@
+ 	"No content to speak": "بولنے کے لیے کوئی مواد نہیں",
+ 	"No conversation to save": "",
+ 	"No data": "",
++	"No data found": "",
+ 	"No description": "",
+ 	"No distance available": "فاصلہ دستیاب نہیں ہے",
+ 	"No event webhooks configured.": "",
+diff --git a/src/lib/i18n/locales/uz-Cyrl-UZ/translation.json b/src/lib/i18n/locales/uz-Cyrl-UZ/translation.json
+index 9535c626a..a64cf009d 100644
+--- a/src/lib/i18n/locales/uz-Cyrl-UZ/translation.json
++++ b/src/lib/i18n/locales/uz-Cyrl-UZ/translation.json
+@@ -1474,6 +1474,7 @@
+ 	"No content to speak": "Гапирадиган таркиб йўқ",
+ 	"No conversation to save": "",
+ 	"No data": "",
++	"No data found": "",
+ 	"No description": "",
+ 	"No distance available": "Масофа мавжуд эмас",
+ 	"No event webhooks configured.": "",
+diff --git a/src/lib/i18n/locales/uz-Latn-UZ/translation.json b/src/lib/i18n/locales/uz-Latn-UZ/translation.json
+index ceacf1b34..c836120d2 100644
+--- a/src/lib/i18n/locales/uz-Latn-UZ/translation.json
++++ b/src/lib/i18n/locales/uz-Latn-UZ/translation.json
+@@ -1474,6 +1474,7 @@
+ 	"No content to speak": "Gapiradigan tarkib yo'q",
+ 	"No conversation to save": "",
+ 	"No data": "",
++	"No data found": "",
+ 	"No description": "",
+ 	"No distance available": "Masofa mavjud emas",
+ 	"No event webhooks configured.": "",
+diff --git a/src/lib/i18n/locales/vi-VN/translation.json b/src/lib/i18n/locales/vi-VN/translation.json
+index e2685e218..0ca9f36e0 100644
+--- a/src/lib/i18n/locales/vi-VN/translation.json
++++ b/src/lib/i18n/locales/vi-VN/translation.json
+@@ -1461,6 +1461,7 @@
+ 	"No content to speak": "Không có nội dung để nói",
+ 	"No conversation to save": "",
+ 	"No data": "",
++	"No data found": "",
+ 	"No description": "",
+ 	"No distance available": "Không có khoảng cách khả dụng",
+ 	"No event webhooks configured.": "",
+diff --git a/src/lib/i18n/locales/zh-CN/translation.json b/src/lib/i18n/locales/zh-CN/translation.json
+index 453fa135d..e519fe748 100644
+--- a/src/lib/i18n/locales/zh-CN/translation.json
++++ b/src/lib/i18n/locales/zh-CN/translation.json
+@@ -1471,6 +1471,7 @@
+ 	"No content to speak": "没有内容可朗读",
+ 	"No conversation to save": "没有可保存的对话",
+ 	"No data": "暂无数据",
++	"No data found": "",
+ 	"No description": "无描述",
+ 	"No distance available": "没有可用距离",
+ 	"No event webhooks configured.": "未配置事件 webhook。",
+diff --git a/src/lib/i18n/locales/zh-TW/translation.json b/src/lib/i18n/locales/zh-TW/translation.json
+index 874f8ee6f..7ef2513fe 100644
+--- a/src/lib/i18n/locales/zh-TW/translation.json
++++ b/src/lib/i18n/locales/zh-TW/translation.json
+@@ -1461,6 +1461,7 @@
+ 	"No content to speak": "無可朗讀的內容",
+ 	"No conversation to save": "沒有可儲存的對話",
+ 	"No data": "暫無資料",
++	"No data found": "",
+ 	"No description": "無描述",
+ 	"No distance available": "無可用距離",
+ 	"No event webhooks configured.": "未設定事件 Webhook。",
+diff --git a/src/lib/pyodide/pyodideKernel.worker.ts b/src/lib/pyodide/pyodideKernel.worker.ts
+new file mode 100644
+index 000000000..4a407dd17
+--- /dev/null
++++ b/src/lib/pyodide/pyodideKernel.worker.ts
+@@ -0,0 +1,124 @@
++import { loadPyodide, type PyodideInterface } from 'pyodide';
++
++declare global {
++	interface Window {
++		stdout: string | null;
++		stderr: string | null;
++		pyodide: PyodideInterface;
++		cells: Record<string, CellState>;
++		indexURL: string;
++	}
++}
++
++type CellState = {
++	id: string;
++	status: 'idle' | 'running' | 'completed' | 'error';
++	result: any;
++	stdout: string;
++	stderr: string;
++};
++
++const initializePyodide = async () => {
++	// Ensure Pyodide is loaded once and cached in the worker's global scope
++	if (!self.pyodide) {
++		// Base-prefixed (Vite injects BASE_URL) so Pyodide loads under a subpath deploy.
++		self.indexURL = `${import.meta.env.BASE_URL}pyodide/`;
++		self.stdout = '';
++		self.stderr = '';
++		self.cells = {};
++
++		self.pyodide = await loadPyodide({
++			indexURL: self.indexURL
++		});
++	}
++};
++
++const executeCode = async (id: string, code: string) => {
++	if (!self.pyodide) {
++		await initializePyodide();
++	}
++
++	// Update the cell state to "running"
++	self.cells[id] = {
++		id,
++		status: 'running',
++		result: null,
++		stdout: '',
++		stderr: ''
++	};
++
++	// Redirect stdout/stderr to stream updates
++	self.pyodide.setStdout({
++		batched: (msg: string) => {
++			self.cells[id].stdout += msg;
++			self.postMessage({ type: 'stdout', id, message: msg });
++		}
++	});
++	self.pyodide.setStderr({
++		batched: (msg: string) => {
++			self.cells[id].stderr += msg;
++			self.postMessage({ type: 'stderr', id, message: msg });
++		}
++	});
++
++	try {
++		// Dynamically load required packages based on imports in the Python code
++		await self.pyodide.loadPackagesFromImports(code, {
++			messageCallback: (msg: string) => {
++				self.postMessage({ type: 'stdout', id, package: true, message: `[package] ${msg}` });
++			},
++			errorCallback: (msg: string) => {
++				self.postMessage({ type: 'stderr', id, package: true, message: `[package] ${msg}` });
++			}
++		});
++
++		// Execute the Python code
++		const result = await self.pyodide.runPythonAsync(code);
++		self.cells[id].result = result;
++		self.cells[id].status = 'completed';
++	} catch (error) {
++		self.cells[id].status = 'error';
++		self.cells[id].stderr += `\n${error.toString()}`;
++	} finally {
++		// Notify parent thread when execution completes
++		self.postMessage({
++			type: 'result',
++			id,
++			state: self.cells[id]
++		});
++	}
++};
++
++// Handle messages from the main thread
++self.onmessage = async (event) => {
++	const { type, id, code, ...args } = event.data;
++
++	switch (type) {
++		case 'initialize':
++			await initializePyodide();
++			self.postMessage({ type: 'initialized' });
++			break;
++
++		case 'execute':
++			if (id && code) {
++				await executeCode(id, code);
++			}
++			break;
++
++		case 'getState':
++			self.postMessage({
++				type: 'kernelState',
++				state: self.cells
++			});
++			break;
++
++		case 'terminate':
++			// Explicitly clear the worker for cleanup
++			for (const key in self.cells) delete self.cells[key];
++			self.close();
++			break;
++
++		default:
++			console.error(`Unknown message type: ${type}`);
++	}
++};
+diff --git a/src/lib/utils/google-drive-picker.ts b/src/lib/utils/google-drive-picker.ts
+index 64b7f371b..137a1c7f1 100644
+--- a/src/lib/utils/google-drive-picker.ts
++++ b/src/lib/utils/google-drive-picker.ts
+@@ -1,10 +1,12 @@
++import { WEBUI_BASE_URL } from '$lib/constants';
++
+ // Google Drive Picker API configuration
+ let API_KEY = '';
+ let CLIENT_ID = '';
+ 
+ // Function to fetch credentials from backend config
+ async function getCredentials() {
+-	const response = await fetch('/api/config');
++	const response = await fetch(`${WEBUI_BASE_URL}/api/config`);
+ 	if (!response.ok) {
+ 		throw new Error('Failed to fetch Google Drive credentials');
+ 	}
+diff --git a/src/lib/utils/onedrive-file-picker.ts b/src/lib/utils/onedrive-file-picker.ts
+index 198a8bcaf..21f7af959 100644
+--- a/src/lib/utils/onedrive-file-picker.ts
++++ b/src/lib/utils/onedrive-file-picker.ts
+@@ -1,5 +1,6 @@
+ import type { PopupRequest, PublicClientApplication } from '@azure/msal-browser';
+ import { v4 as uuidv4 } from 'uuid';
++import { WEBUI_BASE_URL } from '$lib/constants';
+ 
+ class OneDriveConfig {
+ 	private static instance: OneDriveConfig;
+@@ -32,7 +33,7 @@ class OneDriveConfig {
+ 	}
+ 
+ 	private async getCredentials(): Promise<void> {
+-		const response = await fetch('/api/config', {
++		const response = await fetch(`${WEBUI_BASE_URL}/api/config`, {
+ 			headers: {
+ 				'Content-Type': 'application/json'
+ 			},
+diff --git a/src/lib/utils/safeImageUrl.ts b/src/lib/utils/safeImageUrl.ts
+index c81412294..739e20148 100644
+--- a/src/lib/utils/safeImageUrl.ts
++++ b/src/lib/utils/safeImageUrl.ts
+@@ -24,12 +24,15 @@ export function safeImageUrl(url: string, allowExternal = false): string {
+ 		return `${WEBUI_BASE_URL}${PLACEHOLDER_IMAGE}`;
+ 	}
+ 
++	if (url.startsWith('/')) {
++		return url.startsWith(`${WEBUI_BASE_URL}/`) ? url : `${WEBUI_BASE_URL}${url}`;
++	}
++
+ 	if (
+-		(WEBUI_BASE_URL && url.startsWith(WEBUI_BASE_URL)) ||
++		(WEBUI_BASE_URL !== '' && (url === WEBUI_BASE_URL || url.startsWith(`${WEBUI_BASE_URL}/`))) ||
+ 		url.startsWith('https://www.gravatar.com/avatar/') ||
+ 		(allowExternal && /^https?:\/\//i.test(url)) ||
+-		url.startsWith('data:') ||
+-		url.startsWith('/')
++		url.startsWith('data:')
+ 	) {
+ 		return url;
+ 	}
+diff --git a/src/lib/workers/kokoro.worker.ts b/src/lib/workers/kokoro.worker.ts
+index ce047a655..a17b248a3 100644
+--- a/src/lib/workers/kokoro.worker.ts
++++ b/src/lib/workers/kokoro.worker.ts
+@@ -2,7 +2,8 @@ import { env } from '@huggingface/transformers';
+ import { KokoroTTS } from 'kokoro-js';
+ 
+ // TODO: Below doesn't work as expected, need to investigate further
+-env.backends.onnx.wasm.wasmPaths = '/wasm/';
++// Base-prefixed (Vite injects BASE_URL) so the ONNX wasm loads under a subpath deploy.
++env.backends.onnx.wasm.wasmPaths = `${import.meta.env.BASE_URL}wasm/`;
+ 
+ let tts;
+ let isInitialized = false; // Flag to track initialization status
+diff --git a/src/lib/workers/pyodide.worker.ts b/src/lib/workers/pyodide.worker.ts
+index cdbd9006e..42075579b 100644
+--- a/src/lib/workers/pyodide.worker.ts
++++ b/src/lib/workers/pyodide.worker.ts
+@@ -25,7 +25,10 @@ async function loadPyodideAndPackages(packages: string[] = []) {
+ 	self.result = null;
+ 
+ 	self.pyodide = await loadPyodide({
+-		indexURL: '/pyodide/',
++		// Resolve Pyodide assets under the app base (Vite injects BASE_URL, always
++		// trailing-slashed) so they load under a reverse-proxy subpath. Workers can't
++		// read $app/paths, so import.meta.env.BASE_URL is the build-time source of truth.
++		indexURL: `${import.meta.env.BASE_URL}pyodide/`,
+ 		stdout: (text) => {
+ 			console.log('Python output:', text);
+ 
+diff --git a/src/routes/(app)/+layout.svelte b/src/routes/(app)/+layout.svelte
+index eaa9b600b..94cf8b711 100644
+--- a/src/routes/(app)/+layout.svelte
++++ b/src/routes/(app)/+layout.svelte
+@@ -1,4 +1,5 @@
+ <script lang="ts">
++	import { base } from '$app/paths';
+ 	import { toast } from 'svelte-sonner';
+ 	import { onMount, tick, getContext } from 'svelte';
+ 
+@@ -196,7 +197,7 @@
+ 
+ 	const gotoAuth = async () => {
+ 		const currentUrl = `${$page.url.pathname}${$page.url.search}`;
+-		await goto(`/auth?redirect=${encodeURIComponent(currentUrl)}`);
++		await goto(`${base}/auth?redirect=${encodeURIComponent(currentUrl)}`);
+ 	};
+ 
+ 	const navigateChat = async (direction: -1 | 1) => {
+@@ -206,7 +207,7 @@
+ 		const nextChat = currentIndex === -1 ? $chats[0] : $chats[currentIndex + direction];
+ 
+ 		if (nextChat) {
+-			await goto(`/c/${nextChat.id}`);
++			await goto(`${base}/c/${nextChat.id}`);
+ 		}
+ 	};
+ 
+@@ -314,7 +315,7 @@
+ 					} else {
+ 						temporaryChatEnabled.set(!$temporaryChatEnabled);
+ 					}
+-					await goto('/');
++					await goto(`${base}/`);
+ 					setTimeout(() => {
+ 						document.getElementById('new-chat-button')?.click();
+ 					}, 0);
+diff --git a/src/routes/(app)/admin/+layout.svelte b/src/routes/(app)/admin/+layout.svelte
+index 4441644ea..703011fbf 100644
+--- a/src/routes/(app)/admin/+layout.svelte
++++ b/src/routes/(app)/admin/+layout.svelte
+@@ -1,4 +1,5 @@
+ <script lang="ts">
++	import { base } from '$app/paths';
+ 	import { onMount, getContext } from 'svelte';
+ 	import { goto } from '$app/navigation';
+ 
+@@ -14,12 +15,12 @@
+ 
+ 	onMount(async () => {
+ 		if ($user?.role !== 'admin') {
+-			await goto('/', { replaceState: true });
++			await goto(`${base}/`, { replaceState: true });
+ 		} else if (
+ 			!$config?.features?.enable_plugins &&
+ 			$page.url.pathname.includes('/admin/functions')
+ 		) {
+-			await goto('/admin', { replaceState: true });
++			await goto(`${base}/admin`, { replaceState: true });
+ 		}
+ 		loaded = true;
+ 	});
+@@ -73,7 +74,7 @@
+ 							class="min-w-fit px-1 text-sm {$page.url.pathname.includes('/admin/users')
+ 								? ''
+ 								: 'text-gray-300 dark:text-gray-600 hover:text-gray-700 dark:hover:text-white'} transition select-none"
+-							href="/admin">{$i18n.t('Users')}</a
++							href="{base}/admin">{$i18n.t('Users')}</a
+ 						>
+ 
+ 						<a
+@@ -81,7 +82,7 @@
+ 							class="min-w-fit px-1 text-sm {$page.url.pathname.includes('/admin/evaluations')
+ 								? ''
+ 								: 'text-gray-300 dark:text-gray-600 hover:text-gray-700 dark:hover:text-white'} transition select-none"
+-							href="/admin/evaluations">{$i18n.t('Evaluations')}</a
++							href="{base}/admin/evaluations">{$i18n.t('Evaluations')}</a
+ 						>
+ 
+ 						{#if $config?.features?.enable_plugins}
+@@ -90,7 +91,7 @@
+ 								class="min-w-fit px-1 text-sm {$page.url.pathname.includes('/admin/functions')
+ 									? ''
+ 									: 'text-gray-300 dark:text-gray-600 hover:text-gray-700 dark:hover:text-white'} transition select-none"
+-								href="/admin/functions">{$i18n.t('Functions')}</a
++								href="{base}/admin/functions">{$i18n.t('Functions')}</a
+ 							>
+ 						{/if}
+ 
+@@ -99,7 +100,7 @@
+ 							class="min-w-fit px-1 text-sm {$page.url.pathname.includes('/admin/settings')
+ 								? ''
+ 								: 'text-gray-300 dark:text-gray-600 hover:text-gray-700 dark:hover:text-white'} transition select-none"
+-							href="/admin/settings"
++							href="{base}/admin/settings"
+ 							on:click={(event) => {
+ 								event.preventDefault();
+ 								showSettings.set('admin:general');
+diff --git a/src/routes/(app)/admin/+page.svelte b/src/routes/(app)/admin/+page.svelte
+index c6aad81a3..903752424 100644
+--- a/src/routes/(app)/admin/+page.svelte
++++ b/src/routes/(app)/admin/+page.svelte
+@@ -1,8 +1,9 @@
+ <script lang="ts">
++	import { base } from '$app/paths';
+ 	import { goto } from '$app/navigation';
+ 	import { onMount } from 'svelte';
+ 
+ 	onMount(() => {
+-		goto('/admin/users', { replaceState: true });
++		goto(`${base}/admin/users`, { replaceState: true });
+ 	});
+ </script>
+diff --git a/src/routes/(app)/admin/analytics/+page.svelte b/src/routes/(app)/admin/analytics/+page.svelte
+index 302f4c426..2bda342d2 100644
+--- a/src/routes/(app)/admin/analytics/+page.svelte
++++ b/src/routes/(app)/admin/analytics/+page.svelte
+@@ -1,13 +1,14 @@
+ <script>
++	import { base } from '$app/paths';
+ 	import { onMount } from 'svelte';
+ 	import { goto } from '$app/navigation';
+ 	import { config } from '$lib/stores';
+ 
+ 	onMount(() => {
+ 		if (!($config?.features.enable_admin_analytics ?? true)) {
+-			goto('/admin', { replaceState: true });
++			goto(`${base}/admin`, { replaceState: true });
+ 		} else {
+-			goto('/?settings=admin%3Aanalytics', { replaceState: true });
++			goto(`${base}/?settings=admin%3Aanalytics`, { replaceState: true });
+ 		}
+ 	});
+ </script>
+diff --git a/src/routes/(app)/admin/analytics/[tab]/+page.svelte b/src/routes/(app)/admin/analytics/[tab]/+page.svelte
+index 302f4c426..2bda342d2 100644
+--- a/src/routes/(app)/admin/analytics/[tab]/+page.svelte
++++ b/src/routes/(app)/admin/analytics/[tab]/+page.svelte
+@@ -1,13 +1,14 @@
+ <script>
++	import { base } from '$app/paths';
+ 	import { onMount } from 'svelte';
+ 	import { goto } from '$app/navigation';
+ 	import { config } from '$lib/stores';
+ 
+ 	onMount(() => {
+ 		if (!($config?.features.enable_admin_analytics ?? true)) {
+-			goto('/admin', { replaceState: true });
++			goto(`${base}/admin`, { replaceState: true });
+ 		} else {
+-			goto('/?settings=admin%3Aanalytics', { replaceState: true });
++			goto(`${base}/?settings=admin%3Aanalytics`, { replaceState: true });
+ 		}
+ 	});
+ </script>
+diff --git a/src/routes/(app)/admin/evaluations/+page.svelte b/src/routes/(app)/admin/evaluations/+page.svelte
+index 8913071b7..bd205f5e1 100644
+--- a/src/routes/(app)/admin/evaluations/+page.svelte
++++ b/src/routes/(app)/admin/evaluations/+page.svelte
+@@ -1,8 +1,9 @@
+ <script>
++	import { base } from '$app/paths';
+ 	import { goto } from '$app/navigation';
+ 	import { onMount } from 'svelte';
+ 
+ 	onMount(() => {
+-		goto('/admin/evaluations/leaderboard', { replaceState: true });
++		goto(`${base}/admin/evaluations/leaderboard`, { replaceState: true });
+ 	});
+ </script>
+diff --git a/src/routes/(app)/admin/functions/create/+page.svelte b/src/routes/(app)/admin/functions/create/+page.svelte
+index 553d67dce..aee34328e 100644
+--- a/src/routes/(app)/admin/functions/create/+page.svelte
++++ b/src/routes/(app)/admin/functions/create/+page.svelte
+@@ -1,4 +1,5 @@
+ <script>
++	import { base } from '$app/paths';
+ 	import { toast } from 'svelte-sonner';
+ 	import { onMount, getContext } from 'svelte';
+ 	import { goto } from '$app/navigation';
+@@ -59,7 +60,7 @@
+ 				)
+ 			);
+ 
+-			await goto('/admin/functions');
++			await goto(`${base}/admin/functions`);
+ 		}
+ 	};
+ 
+diff --git a/src/routes/(app)/admin/functions/edit/+page.svelte b/src/routes/(app)/admin/functions/edit/+page.svelte
+index c36e74c1b..c15adbe91 100644
+--- a/src/routes/(app)/admin/functions/edit/+page.svelte
++++ b/src/routes/(app)/admin/functions/edit/+page.svelte
+@@ -1,4 +1,5 @@
+ <script>
++	import { base } from '$app/paths';
+ 	import { toast } from 'svelte-sonner';
+ 	import { onMount, getContext } from 'svelte';
+ 
+@@ -74,7 +75,7 @@
+ 		if (id) {
+ 			func = await getFunctionById(localStorage.token, id).catch((error) => {
+ 				toast.error(`${error}`);
+-				goto('/admin/functions');
++				goto(`${base}/admin/functions`);
+ 				return null;
+ 			});
+ 
+diff --git a/src/routes/(app)/admin/settings/+page.svelte b/src/routes/(app)/admin/settings/+page.svelte
+index e015a1c57..dffd96826 100644
+--- a/src/routes/(app)/admin/settings/+page.svelte
++++ b/src/routes/(app)/admin/settings/+page.svelte
+@@ -1,8 +1,9 @@
+ <script>
++	import { base } from '$app/paths';
+ 	import { goto } from '$app/navigation';
+ 	import { onMount } from 'svelte';
+ 
+ 	onMount(() => {
+-		goto('/?settings=admin%3Ageneral', { replaceState: true });
++		goto(`${base}/?settings=admin%3Ageneral`, { replaceState: true });
+ 	});
+ </script>
+diff --git a/src/routes/(app)/admin/users/+page.svelte b/src/routes/(app)/admin/users/+page.svelte
+index ebf29a7ab..bc56c4f47 100644
+--- a/src/routes/(app)/admin/users/+page.svelte
++++ b/src/routes/(app)/admin/users/+page.svelte
+@@ -1,8 +1,9 @@
+ <script>
++	import { base } from '$app/paths';
+ 	import { goto } from '$app/navigation';
+ 	import { onMount } from 'svelte';
+ 
+ 	onMount(async () => {
+-		await goto('/admin/users/overview', { replaceState: true });
++		await goto(`${base}/admin/users/overview`, { replaceState: true });
+ 	});
+ </script>
+diff --git a/src/routes/(app)/automations/+page.svelte b/src/routes/(app)/automations/+page.svelte
+index 9dd9ffbdb..bbe93ec75 100644
+--- a/src/routes/(app)/automations/+page.svelte
++++ b/src/routes/(app)/automations/+page.svelte
+@@ -1,4 +1,5 @@
+ <script lang="ts">
++	import { base } from '$app/paths';
+ 	import { onMount, onDestroy, getContext } from 'svelte';
+ 
+ 	import dayjs from '$lib/dayjs';
+@@ -361,7 +362,7 @@
+ 			!($config?.features as any)?.enable_automations ||
+ 			($user?.role !== 'admin' && !($user?.permissions?.features?.automations ?? false))
+ 		) {
+-			goto('/');
++			goto(`${base}/`);
+ 			return;
+ 		}
+ 
+@@ -452,7 +453,7 @@
+ 	on:save={async (e) => {
+ 		await getAutomationList();
+ 		if (e.detail?.id) {
+-			goto(`/automations/${e.detail.id}`);
++			goto(`${base}/automations/${e.detail.id}`);
+ 		}
+ 	}}
+ />
+@@ -594,12 +595,12 @@
+ 							aria-label={$i18n.t('Open automation')}
+ 							class="group flex min-h-8 w-full cursor-pointer items-center gap-2 overflow-hidden rounded-xl px-2 py-1 text-left"
+ 							on:click={() => {
+-								goto(`/automations/${automation.id}`);
++								goto(`${base}/automations/${automation.id}`);
+ 							}}
+ 							on:keydown={(e) => {
+ 								if (e.key === 'Enter' || e.key === ' ') {
+ 									e.preventDefault();
+-									goto(`/automations/${automation.id}`);
++									goto(`${base}/automations/${automation.id}`);
+ 								}
+ 							}}
+ 						>
+@@ -665,7 +666,7 @@
+ 										<AutomationMenu
+ 											show={openAutomationMenuId === automation.id}
+ 											editHandler={() => {
+-												goto(`/automations/${automation.id}`);
++												goto(`${base}/automations/${automation.id}`);
+ 											}}
+ 											cloneHandler={() => {
+ 												cloneHandler(automation);
+diff --git a/src/routes/(app)/automations/[id]/+page.svelte b/src/routes/(app)/automations/[id]/+page.svelte
+index 6cb3769b8..7bdead33c 100644
+--- a/src/routes/(app)/automations/[id]/+page.svelte
++++ b/src/routes/(app)/automations/[id]/+page.svelte
+@@ -1,6 +1,7 @@
+ <script lang="ts">
+ 	import { toast } from 'svelte-sonner';
+ 	import { goto } from '$app/navigation';
++	import { base } from '$app/paths';
+ 	import { onMount } from 'svelte';
+ 
+ 	import { page } from '$app/stores';
+@@ -20,7 +21,7 @@
+ 			!($config?.features as any)?.enable_automations ||
+ 			($user?.role !== 'admin' && !($user?.permissions?.features?.automations ?? false))
+ 		) {
+-			goto('/');
++			goto(`${base}/`);
+ 			return;
+ 		}
+ 
+@@ -34,10 +35,10 @@
+ 				automation = res;
+ 				loaded = true;
+ 			} else {
+-				goto('/automations');
++				goto(`${base}/automations`);
+ 			}
+ 		} else {
+-			goto('/automations');
++			goto(`${base}/automations`);
+ 		}
+ 	});
+ </script>
+diff --git a/src/routes/(app)/calendar/+page.svelte b/src/routes/(app)/calendar/+page.svelte
+index b057c3a77..44ff634e4 100644
+--- a/src/routes/(app)/calendar/+page.svelte
++++ b/src/routes/(app)/calendar/+page.svelte
+@@ -2,6 +2,7 @@
+ 	import { onMount, getContext, tick } from 'svelte';
+ 	import { toast } from 'svelte-sonner';
+ 	import { goto } from '$app/navigation';
++	import { base } from '$app/paths';
+ 	import { WEBUI_NAME, mobile, showSidebar, user } from '$lib/stores';
+ 	import {
+ 		getCalendars,
+@@ -138,9 +139,9 @@
+ 		const evt = e.detail;
+ 		if (evt.meta?.automation_id) {
+ 			if (evt.meta?.chat_id) {
+-				goto(`/c/${evt.meta.chat_id}`);
++				goto(`${base}/c/${evt.meta.chat_id}`);
+ 			} else {
+-				goto(`/automations/${evt.meta.automation_id}`);
++				goto(`${base}/automations/${evt.meta.automation_id}`);
+ 			}
+ 			return;
+ 		}
+diff --git a/src/routes/(app)/home/+layout.svelte b/src/routes/(app)/home/+layout.svelte
+index 311a54900..6792dda19 100644
+--- a/src/routes/(app)/home/+layout.svelte
++++ b/src/routes/(app)/home/+layout.svelte
+@@ -1,4 +1,5 @@
+ <script lang="ts">
++	import { base } from '$app/paths';
+ 	import { onMount, getContext } from 'svelte';
+ 	import { WEBUI_NAME, showSidebar, functions, mobile } from '$lib/stores';
+ 	import { page } from '$app/stores';
+@@ -55,14 +56,14 @@
+ 						class="min-w-fit p-1.5 {$page.url.pathname.includes('/home/notes')
+ 							? ''
+ 							: 'text-gray-300 dark:text-gray-600 hover:text-gray-700 dark:hover:text-white'} transition"
+-						href="/playground/notes">{$i18n.t('Notes')}</a
++						href="{base}/playground/notes">{$i18n.t('Notes')}</a
+ 					>
+ 
+ 					<a
+ 						class="min-w-fit p-1.5 {$page.url.pathname.includes('/playground/calendar')
+ 							? ''
+ 							: 'text-gray-300 dark:text-gray-600 hover:text-gray-700 dark:hover:text-white'} transition"
+-						href="/playground/completions">{$i18n.t('Calendar')}</a
++						href="{base}/playground/completions">{$i18n.t('Calendar')}</a
+ 					>
+ 				</div>
+ 			</div>
+diff --git a/src/routes/(app)/notes/+layout.svelte b/src/routes/(app)/notes/+layout.svelte
+index 01ed3c7c1..f38c97f9f 100644
+--- a/src/routes/(app)/notes/+layout.svelte
++++ b/src/routes/(app)/notes/+layout.svelte
+@@ -1,4 +1,5 @@
+ <script lang="ts">
++	import { base } from '$app/paths';
+ 	import { onMount, getContext } from 'svelte';
+ 	import { WEBUI_NAME, config, user } from '$lib/stores';
+ 	import { goto } from '$app/navigation';
+@@ -15,7 +16,7 @@
+ 			)
+ 		) {
+ 			// If the feature is not enabled, redirect to the home page
+-			goto('/');
++			goto(`${base}/`);
+ 		}
+ 
+ 		loaded = true;
+diff --git a/src/routes/(app)/notes/+page.svelte b/src/routes/(app)/notes/+page.svelte
+index 838463942..95956a2d7 100644
+--- a/src/routes/(app)/notes/+page.svelte
++++ b/src/routes/(app)/notes/+page.svelte
+@@ -1,4 +1,5 @@
+ <script>
++	import { base } from '$app/paths';
+ 	import { onMount } from 'svelte';
+ 
+ 	import dayjs from '$lib/dayjs';
+@@ -24,7 +25,7 @@
+ 			const res = await createNoteHandler(title, content);
+ 
+ 			if (res) {
+-				goto(`/notes/${res.id}`, { replaceState: true });
++				goto(`${base}/notes/${res.id}`, { replaceState: true });
+ 			}
+ 			return;
+ 		}
+diff --git a/src/routes/(app)/notes/new/+page.svelte b/src/routes/(app)/notes/new/+page.svelte
+index f4617ed37..654c07604 100644
+--- a/src/routes/(app)/notes/new/+page.svelte
++++ b/src/routes/(app)/notes/new/+page.svelte
+@@ -1,4 +1,5 @@
+ <script lang="ts">
++	import { base } from '$app/paths';
+ 	import { onMount } from 'svelte';
+ 
+ 	import { goto } from '$app/navigation';
+@@ -14,7 +15,7 @@
+ 		const res = await createNoteHandler(title, content);
+ 
+ 		if (res) {
+-			goto(`/notes/${res.id}`, { replaceState: true });
++			goto(`${base}/notes/${res.id}`, { replaceState: true });
+ 		}
+ 	});
+ </script>
+diff --git a/src/routes/(app)/playground/+layout.svelte b/src/routes/(app)/playground/+layout.svelte
+index 4550ebe88..183fe148d 100644
+--- a/src/routes/(app)/playground/+layout.svelte
++++ b/src/routes/(app)/playground/+layout.svelte
+@@ -1,4 +1,5 @@
+ <script lang="ts">
++	import { base } from '$app/paths';
+ 	import { getContext } from 'svelte';
+ 	import { WEBUI_NAME, showSidebar, mobile } from '$lib/stores';
+ 	import { page } from '$app/stores';
+@@ -57,14 +58,14 @@
+ 						)
+ 							? ''
+ 							: 'text-gray-300 dark:text-gray-600 hover:text-gray-700 dark:hover:text-white'} transition select-none"
+-						href="/playground">{$i18n.t('Chat')}</a
++						href="{base}/playground">{$i18n.t('Chat')}</a
+ 					>
+ 
+ 					<!-- <a
+ 						class="min-w-fit p-1.5 {$page.url.pathname.includes('/playground/notes')
+ 							? ''
+ 							: 'text-gray-300 dark:text-gray-600 hover:text-gray-700 dark:hover:text-white'} transition"
+-						href="/playground/notes">{$i18n.t('Notes')}</a
++						href="{base}/playground/notes">{$i18n.t('Notes')}</a
+ 					> -->
+ 
+ 					<a
+@@ -72,7 +73,7 @@
+ 						class="min-w-fit px-1 text-sm {$page.url.pathname.includes('/playground/completions')
+ 							? ''
+ 							: 'text-gray-300 dark:text-gray-600 hover:text-gray-700 dark:hover:text-white'} transition select-none"
+-						href="/playground/completions">{$i18n.t('Completions')}</a
++						href="{base}/playground/completions">{$i18n.t('Completions')}</a
+ 					>
+ 
+ 					<a
+@@ -80,7 +81,7 @@
+ 						class="min-w-fit px-1 text-sm {$page.url.pathname.includes('/playground/images')
+ 							? ''
+ 							: 'text-gray-300 dark:text-gray-600 hover:text-gray-700 dark:hover:text-white'} transition select-none"
+-						href="/playground/images">{$i18n.t('Images')}</a
++						href="{base}/playground/images">{$i18n.t('Images')}</a
+ 					>
+ 				</div>
+ 			</div>
+diff --git a/src/routes/(app)/workspace/+layout.svelte b/src/routes/(app)/workspace/+layout.svelte
+index 11eed46a9..7bf6879da 100644
+--- a/src/routes/(app)/workspace/+layout.svelte
++++ b/src/routes/(app)/workspace/+layout.svelte
+@@ -1,4 +1,5 @@
+ <script lang="ts">
++	import { base } from '$app/paths';
+ 	import { onMount, getContext } from 'svelte';
+ 	import type { Writable } from 'svelte/store';
+ 	import type { i18n as i18nType } from 'i18next';
+@@ -35,11 +36,15 @@
+ 		workspaceActions.set([]);
+ 	}
+ 
+-	$: if (loaded && $page.url.pathname.startsWith('/workspace')) {
++	$: if (loaded && $page.url.pathname.startsWith(`${base}/workspace`)) {
+ 		loadWorkspaceCounts();
+ 	}
+ 
+-	$: activeWorkspaceSection = $page.url.pathname.split('/')[2] ?? '';
++	$: activeWorkspaceSection =
++		($page.url.pathname.startsWith(base)
++			? $page.url.pathname.slice(base.length)
++			: $page.url.pathname
++		).split('/')[2] ?? '';
+ 	$: visibleActions = $workspaceActions.filter((action) => action.visible ?? true);
+ 
+ 	const getCount = (res: any) => res?.total ?? (Array.isArray(res) ? res.length : null);
+@@ -80,24 +85,24 @@
+ 	onMount(async () => {
+ 		if ($user?.role !== 'admin') {
+ 			if ($page.url.pathname.includes('/models') && !$user?.permissions?.workspace?.models) {
+-				goto('/', { replaceState: true });
++				goto(`${base}/`, { replaceState: true });
+ 			} else if (
+ 				$page.url.pathname.includes('/knowledge') &&
+ 				!$user?.permissions?.workspace?.knowledge
+ 			) {
+-				goto('/', { replaceState: true });
++				goto(`${base}/`, { replaceState: true });
+ 			} else if (
+ 				$page.url.pathname.includes('/prompts') &&
+ 				!$user?.permissions?.workspace?.prompts
+ 			) {
+-				goto('/', { replaceState: true });
++				goto(`${base}/`, { replaceState: true });
+ 			} else if (
+ 				$page.url.pathname.includes('/tools') &&
+ 				(!$config?.features?.enable_plugins || !$user?.permissions?.workspace?.tools)
+ 			) {
+-				goto('/', { replaceState: true });
++				goto(`${base}/`, { replaceState: true });
+ 			} else if ($page.url.pathname.includes('/skills') && !$user?.permissions?.workspace?.skills) {
+-				goto('/', { replaceState: true });
++				goto(`${base}/`, { replaceState: true });
+ 			}
+ 		}
+ 
+@@ -156,7 +161,7 @@
+ 								'models'
+ 									? 'text-gray-900 dark:text-gray-100'
+ 									: 'text-gray-300 dark:text-gray-600 hover:text-gray-700 dark:hover:text-white'} transition select-none"
+-								href="/workspace/models"
++								href="{base}/workspace/models"
+ 							>
+ 								<span>{$i18n.t('Models')}</span>
+ 								<span class="text-sm opacity-60">
+@@ -173,7 +178,7 @@
+ 								'knowledge'
+ 									? 'text-gray-900 dark:text-gray-100'
+ 									: 'text-gray-300 dark:text-gray-600 hover:text-gray-700 dark:hover:text-white'} transition select-none"
+-								href="/workspace/knowledge"
++								href="{base}/workspace/knowledge"
+ 							>
+ 								<span>{$i18n.t('Knowledge')}</span>
+ 								<span class="text-sm opacity-60">
+@@ -190,7 +195,7 @@
+ 								'prompts'
+ 									? 'text-gray-900 dark:text-gray-100'
+ 									: 'text-gray-300 dark:text-gray-600 hover:text-gray-700 dark:hover:text-white'} transition select-none"
+-								href="/workspace/prompts"
++								href="{base}/workspace/prompts"
+ 							>
+ 								<span>{$i18n.t('Prompts')}</span>
+ 								<span class="text-sm opacity-60">
+@@ -207,7 +212,7 @@
+ 								'skills'
+ 									? 'text-gray-900 dark:text-gray-100'
+ 									: 'text-gray-300 dark:text-gray-600 hover:text-gray-700 dark:hover:text-white'} transition select-none"
+-								href="/workspace/skills"
++								href="{base}/workspace/skills"
+ 							>
+ 								<span>{$i18n.t('Skills')}</span>
+ 								<span class="text-sm opacity-60">
+@@ -224,7 +229,7 @@
+ 								'tools'
+ 									? 'text-gray-900 dark:text-gray-100'
+ 									: 'text-gray-300 dark:text-gray-600 hover:text-gray-700 dark:hover:text-white'} transition select-none"
+-								href="/workspace/tools"
++								href="{base}/workspace/tools"
+ 							>
+ 								<span>{$i18n.t('Tools')}</span>
+ 								<span class="text-sm opacity-60">
+diff --git a/src/routes/(app)/workspace/+page.svelte b/src/routes/(app)/workspace/+page.svelte
+index ef7edaf8f..88e5ee3a4 100644
+--- a/src/routes/(app)/workspace/+page.svelte
++++ b/src/routes/(app)/workspace/+page.svelte
+@@ -1,4 +1,5 @@
+ <script lang="ts">
++	import { base } from '$app/paths';
+ 	import { goto } from '$app/navigation';
+ 	import { config, user } from '$lib/stores';
+ 	import { onMount } from 'svelte';
+@@ -6,20 +7,20 @@
+ 	onMount(() => {
+ 		if ($user?.role !== 'admin') {
+ 			if ($user?.permissions?.workspace?.models) {
+-				goto('/workspace/models', { replaceState: true });
++				goto(`${base}/workspace/models`, { replaceState: true });
+ 			} else if ($user?.permissions?.workspace?.knowledge) {
+-				goto('/workspace/knowledge', { replaceState: true });
++				goto(`${base}/workspace/knowledge`, { replaceState: true });
+ 			} else if ($user?.permissions?.workspace?.prompts) {
+-				goto('/workspace/prompts', { replaceState: true });
++				goto(`${base}/workspace/prompts`, { replaceState: true });
+ 			} else if ($config?.features?.enable_plugins && $user?.permissions?.workspace?.tools) {
+-				goto('/workspace/tools', { replaceState: true });
++				goto(`${base}/workspace/tools`, { replaceState: true });
+ 			} else if ($user?.permissions?.workspace?.skills) {
+-				goto('/workspace/skills', { replaceState: true });
++				goto(`${base}/workspace/skills`, { replaceState: true });
+ 			} else {
+-				goto('/', { replaceState: true });
++				goto(`${base}/`, { replaceState: true });
+ 			}
+ 		} else {
+-			goto('/workspace/models', { replaceState: true });
++			goto(`${base}/workspace/models`, { replaceState: true });
+ 		}
+ 	});
+ </script>
+diff --git a/src/routes/(app)/workspace/functions/create/+page.svelte b/src/routes/(app)/workspace/functions/create/+page.svelte
+index 932d28804..d3da353d9 100644
+--- a/src/routes/(app)/workspace/functions/create/+page.svelte
++++ b/src/routes/(app)/workspace/functions/create/+page.svelte
+@@ -1,8 +1,9 @@
+ <script lang="ts">
++	import { base } from '$app/paths';
+ 	import { goto } from '$app/navigation';
+ 	import { onMount } from 'svelte';
+ 
+ 	onMount(() => {
+-		goto('/admin/functions/create', { replaceState: true });
++		goto(`${base}/admin/functions/create`, { replaceState: true });
+ 	});
+ </script>
+diff --git a/src/routes/(app)/workspace/knowledge/create/+page.svelte b/src/routes/(app)/workspace/knowledge/create/+page.svelte
+index b5e1b33ef..d93a9b8c5 100644
+--- a/src/routes/(app)/workspace/knowledge/create/+page.svelte
++++ b/src/routes/(app)/workspace/knowledge/create/+page.svelte
+@@ -1,5 +1,6 @@
+ <script>
++	import { base } from '$app/paths';
+ 	import Knowledge from '$lib/components/workspace/Knowledge.svelte';
+ </script>
+ 
+-<Knowledge showCreateOnMount={true} createModalCloseHref="/workspace/knowledge" />
++<Knowledge showCreateOnMount={true} createModalCloseHref={`${base}/workspace/knowledge`} />
+diff --git a/src/routes/(app)/workspace/models/create/+page.svelte b/src/routes/(app)/workspace/models/create/+page.svelte
+index 08fae9b00..dc88737c7 100644
+--- a/src/routes/(app)/workspace/models/create/+page.svelte
++++ b/src/routes/(app)/workspace/models/create/+page.svelte
+@@ -1,4 +1,5 @@
+ <script lang="ts">
++	import { base } from '$app/paths';
+ 	import { toast } from 'svelte-sonner';
+ 	import { goto } from '$app/navigation';
+ 	import { config, models, settings } from '$lib/stores';
+@@ -59,7 +60,7 @@
+ 						)
+ 					);
+ 					toast.success($i18n.t('Model created successfully!'));
+-					await goto('/workspace/models');
++					await goto(`${base}/workspace/models`);
+ 				} catch (error: any) {
+ 					toast.error(`${error?.message ?? error}`);
+ 				}
+@@ -111,7 +112,7 @@
+ 		{model}
+ 		{onSubmit}
+ 		onBack={async () => {
+-			await goto('/workspace/models');
++			await goto(`${base}/workspace/models`);
+ 		}}
+ 	/>
+ {/key}
+diff --git a/src/routes/(app)/workspace/models/edit/+page.svelte b/src/routes/(app)/workspace/models/edit/+page.svelte
+index 71ecc06e0..c265f8116 100644
+--- a/src/routes/(app)/workspace/models/edit/+page.svelte
++++ b/src/routes/(app)/workspace/models/edit/+page.svelte
+@@ -1,4 +1,5 @@
+ <script>
++	import { base } from '$app/paths';
+ 	import { toast } from 'svelte-sonner';
+ 	import { goto } from '$app/navigation';
+ 
+@@ -23,16 +24,17 @@
+ 			});
+ 
+ 			if (!model) {
+-				goto('/workspace/models');
++				goto(`${base}/workspace/models`);
+ 				return;
+ 			}
+ 
+ 			if (!model?.write_access) {
+ 				toast.error($i18n.t('You do not have permission to edit this model'));
+-				goto('/workspace/models');
++				await goto(`${base}/workspace/models`);
++				return;
+ 			}
+ 		} else {
+-			goto('/workspace/models');
++			goto(`${base}/workspace/models`);
+ 		}
+ 	});
+ 
+@@ -50,7 +52,7 @@
+ 					)
+ 				);
+ 				toast.success($i18n.t('Model updated successfully'));
+-				await goto('/workspace/models');
++				await goto(`${base}/workspace/models`);
+ 			} catch (error) {
+ 				toast.error(`${error}`);
+ 			}
+@@ -66,7 +68,7 @@
+ 		{model}
+ 		{onSubmit}
+ 		onBack={async () => {
+-			await goto('/workspace/models');
++			await goto(`${base}/workspace/models`);
+ 		}}
+ 	/>
+ {/if}
+diff --git a/src/routes/(app)/workspace/prompts/[id]/+page.svelte b/src/routes/(app)/workspace/prompts/[id]/+page.svelte
+index d16d235d4..8cbfb3535 100644
+--- a/src/routes/(app)/workspace/prompts/[id]/+page.svelte
++++ b/src/routes/(app)/workspace/prompts/[id]/+page.svelte
+@@ -1,4 +1,5 @@
+ <script lang="ts">
++	import { base } from '$app/paths';
+ 	import { toast } from 'svelte-sonner';
+ 	import { goto } from '$app/navigation';
+ 	import { onMount, getContext } from 'svelte';
+@@ -58,10 +59,10 @@
+ 					access_grants: _prompt?.access_grants === undefined ? [] : _prompt?.access_grants
+ 				};
+ 			} else {
+-				goto('/workspace/prompts');
++				goto(`${base}/workspace/prompts`);
+ 			}
+ 		} else {
+-			goto('/workspace/prompts');
++			goto(`${base}/workspace/prompts`);
+ 		}
+ 	});
+ </script>
+diff --git a/src/routes/(app)/workspace/prompts/create/+page.svelte b/src/routes/(app)/workspace/prompts/create/+page.svelte
+index c6c80aed7..9a6c400ba 100644
+--- a/src/routes/(app)/workspace/prompts/create/+page.svelte
++++ b/src/routes/(app)/workspace/prompts/create/+page.svelte
+@@ -1,5 +1,6 @@
+ <script>
++	import { base } from '$app/paths';
+ 	import Prompts from '$lib/components/workspace/Prompts.svelte';
+ </script>
+ 
+-<Prompts showCreateOnMount={true} createModalCloseHref="/workspace/prompts" />
++<Prompts showCreateOnMount={true} createModalCloseHref={`${base}/workspace/prompts`} />
+diff --git a/src/routes/(app)/workspace/skills/create/+page.svelte b/src/routes/(app)/workspace/skills/create/+page.svelte
+index 3985cea95..7e05ad669 100644
+--- a/src/routes/(app)/workspace/skills/create/+page.svelte
++++ b/src/routes/(app)/workspace/skills/create/+page.svelte
+@@ -1,4 +1,5 @@
+ <script lang="ts">
++	import { base } from '$app/paths';
+ 	import { toast } from 'svelte-sonner';
+ 	import { goto } from '$app/navigation';
+ 	import { skills } from '$lib/stores';
+@@ -29,7 +30,7 @@
+ 		if (res) {
+ 			toast.success($i18n.t('Skill created successfully'));
+ 			await skills.set(await getSkills(localStorage.token));
+-			await goto('/workspace/skills');
++			await goto(`${base}/workspace/skills`);
+ 		}
+ 	};
+ 
+diff --git a/src/routes/(app)/workspace/skills/edit/+page.svelte b/src/routes/(app)/workspace/skills/edit/+page.svelte
+index 47a4ceb70..8de17f12d 100644
+--- a/src/routes/(app)/workspace/skills/edit/+page.svelte
++++ b/src/routes/(app)/workspace/skills/edit/+page.svelte
+@@ -1,4 +1,5 @@
+ <script lang="ts">
++	import { base } from '$app/paths';
+ 	import { toast } from 'svelte-sonner';
+ 	import { goto } from '$app/navigation';
+ 	import { skills } from '$lib/stores';
+@@ -58,10 +59,10 @@
+ 					access_grants: _skill?.access_grants === undefined ? [] : _skill?.access_grants
+ 				};
+ 			} else {
+-				goto('/workspace/skills');
++				goto(`${base}/workspace/skills`);
+ 			}
+ 		} else {
+-			goto('/workspace/skills');
++			goto(`${base}/workspace/skills`);
+ 		}
+ 	});
+ </script>
+diff --git a/src/routes/(app)/workspace/tools/create/+page.svelte b/src/routes/(app)/workspace/tools/create/+page.svelte
+index 8bcc66ce0..b58effed7 100644
+--- a/src/routes/(app)/workspace/tools/create/+page.svelte
++++ b/src/routes/(app)/workspace/tools/create/+page.svelte
+@@ -1,4 +1,5 @@
+ <script>
++	import { base } from '$app/paths';
+ 	import { goto } from '$app/navigation';
+ 	import { createNewTool, getTools } from '$lib/apis/tools';
+ 	import ToolkitEditor from '$lib/components/workspace/Tools/ToolkitEditor.svelte';
+@@ -50,7 +51,7 @@
+ 			toast.success($i18n.t('Tool created successfully'));
+ 			tools.set(await getTools(localStorage.token));
+ 
+-			await goto('/workspace/tools');
++			await goto(`${base}/workspace/tools`);
+ 		}
+ 	};
+ 
+diff --git a/src/routes/(app)/workspace/tools/edit/+page.svelte b/src/routes/(app)/workspace/tools/edit/+page.svelte
+index 18c6cd466..479dfb96f 100644
+--- a/src/routes/(app)/workspace/tools/edit/+page.svelte
++++ b/src/routes/(app)/workspace/tools/edit/+page.svelte
+@@ -1,4 +1,5 @@
+ <script>
++	import { base } from '$app/paths';
+ 	import { goto } from '$app/navigation';
+ 	import { page } from '$app/stores';
+ 	import { getToolById, getTools, updateToolById } from '$lib/apis/tools';
+@@ -50,7 +51,7 @@
+ 			toast.success($i18n.t('Tool updated successfully'));
+ 			tools.set(await getTools(localStorage.token));
+ 
+-			// await goto('/workspace/tools');
++			// await goto(`${base}/workspace/tools`);
+ 		}
+ 	};
+ 
+@@ -61,13 +62,13 @@
+ 		if (id) {
+ 			const res = await getToolById(localStorage.token, id).catch((error) => {
+ 				toast.error(`${error}`);
+-				goto('/workspace/tools');
++				goto(`${base}/workspace/tools`);
+ 				return null;
+ 			});
+ 
+ 			if (res && !res.write_access) {
+ 				toast.error($i18n.t('You do not have permission to edit this tool'));
+-				goto('/workspace/tools');
++				goto(`${base}/workspace/tools`);
+ 				return;
+ 			}
+ 
+diff --git a/src/routes/+layout.svelte b/src/routes/+layout.svelte
+index 69bc84986..8d10fa7f8 100644
+--- a/src/routes/+layout.svelte
++++ b/src/routes/+layout.svelte
+@@ -55,6 +55,7 @@
+ 	import { getSessionUser, updateUserTimezone, userSignOut } from '$lib/apis/auths';
+ 	import { getAllTags } from '$lib/apis/chats';
+ 	import { chatCompletion } from '$lib/apis/openai';
++	import { base } from '$app/paths';
+ 	import { isTemporaryChatId } from '$lib/utils/chatId';
+ 	import {
+ 		addOpenAIConnection,
+@@ -164,12 +165,18 @@
+ 	};
+ 
+ 	const setupSocket = async (enableWebsocket) => {
+-		const _socket = io(`${WEBUI_BASE_URL}` || undefined, {
++		// WEBUI_BASE_URL is the SvelteKit base ("/openwebui") under a subpath deploy,
++		// or a full dev URL. socket.io parses the first arg's path as the *namespace*,
++		// so passing the subpath here connects to namespace "/openwebui" (the server
++		// only registers "/" → CONNECT_ERROR "44/openwebui"). Pass the dev origin
++		// as-is, otherwise connect same-origin; the subpath rides only on `path` below.
++		const socketServerUrl = WEBUI_BASE_URL.startsWith('http') ? WEBUI_BASE_URL : undefined;
++		const _socket = io(socketServerUrl, {
+ 			reconnection: true,
+ 			reconnectionDelay: 1000,
+ 			reconnectionDelayMax: 5000,
+ 			randomizationFactor: 0.5,
+-			path: '/ws/socket.io',
++			path: `${base}/ws/socket.io`,
+ 			transports: enableWebsocket ? ['websocket'] : ['polling', 'websocket'],
+ 			auth: { token: localStorage.token }
+ 		});
+@@ -608,7 +615,7 @@
+ 			toast.custom(NotificationToast, {
+ 				componentProps: {
+ 					onClick: () => {
+-						goto('/calendar');
++						goto(`${base}/calendar`);
+ 					},
+ 					title: data.title,
+ 					content: timeStr
+@@ -748,7 +755,7 @@
+ 					) {
+ 						playingNotificationSound.set(true);
+ 
+-						const audio = new Audio(`/audio/notification.mp3`);
++						const audio = new Audio(`${WEBUI_BASE_URL}/audio/notification.mp3`);
+ 						audio.play().finally(() => {
+ 							// Ensure the global state is reset after the sound finishes
+ 							playingNotificationSound.set(false);
+@@ -770,7 +777,7 @@
+ 					toast.custom(NotificationToast, {
+ 						componentProps: {
+ 							onClick: () => {
+-								goto(`/c/${event.chat_id}`);
++								goto(`${base}/c/${event.chat_id}`);
+ 							},
+ 							content: contentPreview,
+ 							title: displayTitle
+@@ -881,7 +888,7 @@
+ 					componentProps: {
+ 						onClick: () => {
+ 							goto(
+-								`/channels/${event.channel_id}${data?.parent_id ? `?thread=${data.parent_id}` : ''}`
++								`${base}/channels/${event.channel_id}${data?.parent_id ? `?thread=${data.parent_id}` : ''}`
+ 							);
+ 						},
+ 						content: data?.content,
+@@ -988,12 +995,12 @@
+ 		}
+ 		if (event.type === 'query' && (event.data?.query || event.data?.files?.length)) {
+ 			desktopEvent.set(event);
+-			await goto('/');
++			await goto(`${base}/`);
+ 			return;
+ 		}
+ 		if (event.type === 'call') {
+ 			desktopEvent.set(event);
+-			await goto('/');
++			await goto(`${base}/`);
+ 			return;
+ 		}
+ 		if (event.type === 'theme:update' && event.data?.theme) {
+@@ -1243,7 +1250,7 @@
+ 			if (error?.authRedirect) {
+ 				// Forward-auth proxy is redirecting to an external login page.
+ 				// Full-page navigation lets the browser follow the redirect natively.
+-				window.location.href = '/';
++				window.location.href = `${base}/`;
+ 				return;
+ 			}
+ 			console.error('Error loading backend config:', error);
+@@ -1314,7 +1321,7 @@
+ 			}
+ 		} else {
+ 			// Redirect to /error when Backend Not Detected
+-			await goto(`/error`);
++			await goto(`${base}/error`);
+ 		}
+ 
+ 		await tick();
+@@ -1335,7 +1342,7 @@
+ 
+ 			document.getElementById('splash-screen')?.remove();
+ 
+-			const audio = new Audio(`/audio/greeting.mp3`);
++			const audio = new Audio(`${WEBUI_BASE_URL}/audio/greeting.mp3`);
+ 			const playAudio = () => {
+ 				audio.play();
+ 				document.removeEventListener('click', playAudio);
+@@ -1396,7 +1403,7 @@
+ 		rel="search"
+ 		type="application/opensearchdescription+xml"
+ 		title={$WEBUI_NAME}
+-		href="/opensearch.xml"
++		href="{base}/opensearch.xml"
+ 		crossorigin="use-credentials"
+ 	/>
+ </svelte:head>
+diff --git a/src/routes/error/+page.svelte b/src/routes/error/+page.svelte
+index a4bb08ed7..0a693a869 100644
+--- a/src/routes/error/+page.svelte
++++ b/src/routes/error/+page.svelte
+@@ -1,5 +1,6 @@
+ <script>
+ 	import { goto } from '$app/navigation';
++	import { base } from '$app/paths';
+ 	import { WEBUI_NAME, config } from '$lib/stores';
+ 	import { onMount, getContext } from 'svelte';
+ 
+@@ -9,7 +10,7 @@
+ 
+ 	onMount(async () => {
+ 		if ($config) {
+-			await goto('/');
++			await goto(`${base}/`);
+ 		}
+ 
+ 		loaded = true;
+@@ -47,7 +48,7 @@
+ 						<button
+ 							class="relative z-20 flex px-5 py-2 rounded-full bg-gray-100 hover:bg-gray-200 transition font-normal text-sm text-black"
+ 							on:click={() => {
+-								location.href = '/';
++								location.href = `${base}/`;
+ 							}}
+ 						>
+ 							{$i18n.t('Check Again')}
+diff --git a/src/routes/s/[id]/+page.svelte b/src/routes/s/[id]/+page.svelte
+index 4357e9c8f..243a2bd26 100644
+--- a/src/routes/s/[id]/+page.svelte
++++ b/src/routes/s/[id]/+page.svelte
+@@ -1,4 +1,5 @@
+ <script lang="ts">
++	import { base } from '$app/paths';
+ 	import { onMount, tick, getContext } from 'svelte';
+ 	import { goto } from '$app/navigation';
+ 	import { page } from '$app/stores';
+@@ -53,7 +54,7 @@
+ 				await tick();
+ 				loaded = true;
+ 			} else {
+-				await goto('/');
++				await goto(`${base}/`);
+ 			}
+ 		})();
+ 	}
+@@ -103,7 +104,7 @@
+ 		);
+ 		await chatId.set(shareId);
+ 		chat = await getChatByShareId(token, shareId).catch(async (error) => {
+-			await goto('/');
++			await goto(`${base}/`);
+ 			return null;
+ 		});
+ 
+@@ -159,7 +160,7 @@
+ 		});
+ 
+ 		if (res) {
+-			goto(`/c/${res.id}`);
++			goto(`${base}/c/${res.id}`);
+ 		}
+ 	};
+ </script>
+diff --git a/src/routes/watch/+page.svelte b/src/routes/watch/+page.svelte
+index 78eab5be3..b727a8c1a 100644
+--- a/src/routes/watch/+page.svelte
++++ b/src/routes/watch/+page.svelte
+@@ -1,4 +1,5 @@
+ <script>
++	import { base } from '$app/paths';
+ 	import { onMount } from 'svelte';
+ 	import { goto } from '$app/navigation';
+ 
+@@ -13,10 +14,10 @@
+ 
+ 			// Redirect to root with 'youtube' parameter
+ 
+-			goto(`/?youtube=${encodeURIComponent(videoId)}`);
++			goto(`${base}/?youtube=${encodeURIComponent(videoId)}`);
+ 		} else {
+ 			// Redirect to root if 'v' parameter doesn't exist
+-			goto('/');
++			goto(`${base}/`);
+ 		}
+ 	});
+ </script>
+diff --git a/svelte.config.js b/svelte.config.js
+index ffb774e72..4a4b3570a 100644
+--- a/svelte.config.js
++++ b/svelte.config.js
+@@ -3,6 +3,11 @@ import * as child_process from 'node:child_process';
+ import { vitePreprocess } from '@sveltejs/vite-plugin-svelte';
+ import fs from 'node:fs';
+ 
++// Optional URL subpath prefix for reverse-proxy deployments (e.g. "/openwebui").
++// Must start with a leading slash and must not end with a trailing slash.
++// Leave empty to serve at the root path.
++const WEBUI_BASE_PATH = process.env.WEBUI_SUBPATH || '';
++
+ /** @type {import('@sveltejs/kit').Config} */
+ const config = {
+ 	// Consult https://kit.svelte.dev/docs/integrations#preprocessors
+@@ -17,6 +22,16 @@ const config = {
+ 			assets: 'build',
+ 			fallback: 'index.html'
+ 		}),
++		paths: {
++			base: WEBUI_BASE_PATH,
++			// Bake absolute, base-prefixed asset URLs instead of runtime-relative ones.
++			// With the default (relative: true) SvelteKit derives `base` from the
++			// document URL and emits relative `%sveltekit.assets%` paths, so static
++			// refs in app.html (e.g. /static/favicon.png) and nested-route asset loads
++			// drop the subpath. A fixed reverse-proxy subpath is always served from
++			// `base`, so absolute paths are correct and route-independent.
++			relative: false
++		},
+ 		// poll for new version name every 60 seconds (to trigger reload mechanic in +layout.svelte)
+ 		version: {
+ 			name: (() => {
+diff --git a/vite.config.ts b/vite.config.ts
+index 631ce5972..aa6d25889 100644
+--- a/vite.config.ts
++++ b/vite.config.ts
+@@ -5,6 +5,11 @@ import { viteStaticCopy } from 'vite-plugin-static-copy';
+ 
+ const backendTarget = process.env.WEBUI_BACKEND_URL || 'http://localhost:8080';
+ 
++// Optional URL subpath prefix for reverse-proxy deployments (e.g. "/openwebui").
++// Must start with a leading slash and must not end with a trailing slash.
++// Leave empty to serve at the root path.
++const WEBUI_BASE_PATH = process.env.WEBUI_SUBPATH || '';
++
+ export default defineConfig({
+ 	resolve: {
+ 		conditions: ['onnxruntime-web-use-extern-wasm']
+@@ -25,6 +30,7 @@ export default defineConfig({
+ 		APP_VERSION: JSON.stringify(process.env.npm_package_version),
+ 		APP_BUILD_HASH: JSON.stringify(process.env.APP_BUILD_HASH || 'dev-build')
+ 	},
++	base: WEBUI_BASE_PATH || '/',
+ 	build: {
+ 		sourcemap: true
+ 	},

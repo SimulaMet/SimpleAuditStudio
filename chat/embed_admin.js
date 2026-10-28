@@ -1,3 +1,11 @@
+// OpenWebUI subpath build bug: the Knowledge detail page's "Back" button
+// references a bare `base` global that is never declared (SvelteKit puts it
+// on __sveltekit_*.base instead). Define it here — this script loads first
+// (replaces the 0-byte static/loader.js) so it's available to all SPA code.
+if (typeof base === 'undefined') {
+  window.base = '/chat';
+}
+
 /* Studio admin embed masking script.
  *
  * Two delivery paths, one file, both modes:

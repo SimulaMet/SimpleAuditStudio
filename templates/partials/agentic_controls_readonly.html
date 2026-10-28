@@ -1,5 +1,5 @@
 {% load json_filters %}
-{# Read-only summary of agentic controls — only shows fields that have values. #}
+<!-- Read-only summary of agentic controls — only shows fields that have values. -->
 <div class="text-xs space-y-2">
   {% if agentic.tools.expected or agentic.tools.forbidden or agentic.retrieval.sources or agentic.trajectory.required_sequence or agentic.budgets.max_tool_calls or agentic.enforcement.mode %}
   <div>
@@ -132,6 +132,23 @@
       {% endif %}
       {% if agentic.state.assertions %}
       <div><span class="text-gray-500">State assertions:</span> <span class="text-gray-300 font-mono text-[11px]">{{ agentic.state.assertions|jsonify }}</span></div>
+      {% endif %}
+    </div>
+  </div>
+  {% endif %}
+
+  {% if agentic.trace.required or agentic.semantic_judge.enabled %}
+  <div>
+    <p class="font-semibold text-gray-400 mb-1">Evaluation</p>
+    <div class="space-y-0.5 pl-3 border-l border-gray-800">
+      {% if agentic.trace.required %}
+      <div><span class="text-gray-500">Trace required:</span> <span class="text-gray-300">yes{% if agentic.trace.content_capture %} ({{ agentic.trace.content_capture }} capture){% endif %}</span></div>
+      {% endif %}
+      {% if agentic.trace.missing_evidence %}
+      <div><span class="text-gray-500">Missing evidence →</span> <span class="text-gray-300">{{ agentic.trace.missing_evidence }}</span></div>
+      {% endif %}
+      {% if agentic.semantic_judge.enabled %}
+      <div><span class="text-gray-500">Semantic dimensions:</span> <span class="text-gray-300">{{ agentic.semantic_judge.criteria|join:", " }}</span></div>
       {% endif %}
     </div>
   </div>

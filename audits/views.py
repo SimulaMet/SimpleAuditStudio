@@ -185,6 +185,9 @@ def create_audit_run_view(request, project_id):
         judge=judge,
         trace_config=data.get("trace_config") or None,
         agent=agent,
+        max_turns_override=data.get("max_turns"),
+        n_repetitions_override=data.get("n_repetitions"),
+        language_override=data.get("language") or None,
     )
 
     # Enqueue durable work. This is best-effort: if the job system is unavailable

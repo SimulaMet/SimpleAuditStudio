@@ -35,7 +35,12 @@ import psutil
 # count.
 _STUDIO_MARKERS = ("simpleaudit_studio", "manage.py runserver")
 _STUDIO_SCRIPTS = ("/spin", "/simpleaudit-studio")
-_OPEN_WEBUI_MARKERS = ("open-webui", "open_webui")
+# Underscore spelling only: that is what appears in a running Open WebUI's
+# command line (``uvicorn open_webui.main:app``). The hyphenated project name
+# also appears in checkout paths (e.g. ``.../open-webui/...``), where it must
+# not count — matching it on the whole command line would let an unrelated
+# process get classified as ours and force-killed.
+_OPEN_WEBUI_MARKERS = ("open_webui",)
 _HATCHET_MARKER = "hatchet-embedded-sidecar"
 
 #: Occupants the CLI may stop on the user's behalf.

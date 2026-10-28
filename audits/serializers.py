@@ -59,3 +59,7 @@ class AuditRunCreateSerializer(serializers.Serializer):
     # Optional trace acquisition config (Promptfoo parity). Absent/empty = no
     # tracing. Shape: {"mode": "builtin"|"tempo", "base_url": ..., ...}.
     trace_config = serializers.DictField(required=False, default=dict)
+    # Optional generation settings (mirrors the web form's managed fields).
+    max_turns = serializers.IntegerField(required=False, min_value=1, max_value=20)
+    n_repetitions = serializers.IntegerField(required=False, min_value=1, max_value=10)
+    language = serializers.CharField(required=False, allow_blank=True, max_length=60)

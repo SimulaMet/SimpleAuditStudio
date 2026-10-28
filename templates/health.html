@@ -46,7 +46,7 @@
 <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wide mb-3">Components</h2>
 <div id="component-grid" class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3 mb-8">
   {% for name, comp in health.components.items %}
-  {# min-w-0: a long detail or model name must not widen the grid column. #}
+  <!-- min-w-0: a long detail or model name must not widen the grid column. -->
   <div class="hcard bg-surface-raised rounded-xl border border-gray-800 p-4 min-w-0 {% if name == "model_endpoints" %}col-span-2 md:col-span-1{% endif %}" data-component="{{ name }}">
     <div class="flex items-center justify-between gap-2 mb-2">
       <span class="text-sm font-medium text-gray-200 capitalize truncate">{% if name == "model_endpoints" %}Model endpoints{% else %}{{ name }}{% endif %}</span>

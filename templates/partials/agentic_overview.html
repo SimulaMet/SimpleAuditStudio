@@ -1,0 +1,44 @@
+{% comment %}
+First-viewport agentic summary for one repetition: overall verdict badge with a
+distinct color per status, a one-paragraph explanation, observed-vs-expected
+counts, and trace completeness. Hidden when the rep has no agentic evaluation.
+Context: rep (see infra.ui._rep_view).
+{% endcomment %}
+{% if rep.agentic_overview %}
+<div class="bg-surface-raised rounded-xl border p-4 {% if rep.agentic_overview.status == 'PASS' %}border-emerald-900/50{% elif rep.agentic_overview.status == 'INCONCLUSIVE' %}border-amber-900/50{% else %}border-red-900/50{% endif %}">
+  <div class="flex flex-wrap items-center gap-3 mb-2">
+    <h3 class="text-sm font-semibold text-gray-300 shrink-0">Agentic audit</h3>
+    <span class="shrink-0 inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold {% if rep.agentic_overview.status == 'PASS' %}bg-emerald-900/50 text-emerald-300{% elif rep.agentic_overview.status == 'INCONCLUSIVE' %}bg-amber-900/50 text-amber-300{% else %}bg-red-900/50 text-red-300{% endif %}" title="Overall agentic verdict for this conversation">
+      <span aria-hidden="true">{% if rep.agentic_overview.status == 'PASS' %}✓{% elif rep.agentic_overview.status == 'INCONCLUSIVE' %}?{% else %}✕{% endif %}</span>{{ rep.agentic_overview.status }}
+    </span>
+    {% if rep.agentic_trace_completeness %}
+    {% with tc=rep.agentic_trace_completeness %}
+    <span class="ml-auto min-w-0 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-gray-500">
+      {% if tc.complete %}
+      <span class="text-emerald-300/90" title="Kinds of spans captured in this trace">Trace complete{% if tc.captured_kinds %} · {{ tc.captured_kinds|join:", " }}{% endif %}{% if tc.span_count is not None %} · {{ tc.span_count }} span{{ tc.span_count|pluralize }}{% endif %}</span>
+      {% else %}
+      <span class="text-amber-300/90" title="{% if tc.missing_reason %}{{ tc.missing_reason }}{% else %}No trace evidence was captured{% endif %}">Trace incomplete{% if tc.missing_reason %} — {{ tc.missing_reason|truncatechars:80 }}{% endif %}</span>
+      {% endif %}
+      {% if tc.total_steps is not None %}<span>{{ tc.total_steps }} step{{ tc.total_steps|pluralize }}</span>{% endif %}
+      {% if tc.tool_calls is not None %}<span>{{ tc.tool_calls }} tool call{{ tc.tool_calls|pluralize }}</span>{% endif %}
+      {% if tc.errors %}<span class="text-red-300">{{ tc.errors }} error{{ tc.errors|pluralize }}</span>{% endif %}
+    </span>
+    {% endwith %}
+    {% endif %}
+  </div>
+  {% if rep.agentic_overview.reason %}
+  <p class="text-sm text-gray-300 break-words">{{ rep.agentic_overview.reason }}</p>
+  {% endif %}
+  <div class="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-400">
+    <span><span class="font-semibold text-emerald-300">{{ rep.agentic_overview.n_passed }}</span> pass</span>
+    <span><span class="font-semibold text-red-300">{{ rep.agentic_overview.n_failed }}</span> fail</span>
+    <span><span class="font-semibold text-amber-300">{{ rep.agentic_overview.n_inconclusive }}</span> inconclusive</span>
+    <span class="text-gray-500">{{ rep.agentic_overview.n_checks }} check{{ rep.agentic_overview.n_checks|pluralize }} total</span>
+  </div>
+  {% if rep.agentic_overview.first_failure or rep.agentic_overview.first_inconclusive %}
+  <p class="mt-2 text-xs break-words {% if rep.agentic_overview.first_failure %}text-red-300/90{% else %}text-amber-300/90{% endif %}">
+    {% if rep.agentic_overview.first_failure %}First failure: {{ rep.agentic_overview.first_failure }}{% else %}Needs more evidence: {{ rep.agentic_overview.first_inconclusive }}{% endif %}
+  </p>
+  {% endif %}
+</div>
+{% endif %}

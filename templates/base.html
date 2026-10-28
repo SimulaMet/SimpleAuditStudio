@@ -13,11 +13,11 @@
   <title>{% block title %}SimpleAudit Studio{% endblock %}</title>
   {% block head %}{% endblock %}
   {% load static %}
-  {# SEO head: description, canonical, OG, Twitter, JSON-LD. App pages default to noindex. #}
+  <!-- SEO head: description, canonical, OG, Twitter, JSON-LD. App pages default to noindex. -->
   {% include "seo/head.html" with seo_title=page_title seo_description=page_description seo_robots=page_robots|default:"noindex,nofollow" seo_canonical=page_canonical seo_jsonld=page_jsonld og_image_url=og_image_url og_image_width=og_image_width og_image_height=og_image_height og_image_alt=og_image_alt %}
   <link rel="icon" type="image/svg+xml" sizes="32x32" href="{% static 'favicon-32x32.svg' %}">
   <link rel="icon" type="image/svg+xml" sizes="16x16" href="{% static 'favicon-16x16.svg' %}">
-  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.tailwindcss.com/3.4.17"></script>
   <script>
     tailwind.config = {
       theme: {
@@ -62,6 +62,24 @@
       #sidebar { position: fixed; inset: 0 auto 0 0; z-index: 50; width: min(16rem, 85vw); transform: translateX(-100%); box-shadow: none; }
       html.sidebar-open #sidebar { transform: none; box-shadow: 0 0 40px rgb(0 0 0 / .5); }
       html.sidebar-open body { overflow: hidden; }
+    }
+    /* ── Agentic timeline focus mode ─────────────────────────────────── */
+    /* The "Focus" button on a trajectory timeline pushes the app chrome aside
+       so the timeline owns the viewport (wide panel). Only applied while the
+       flag is set, so it never affects other pages or print output. */
+    @media (min-width: 768px) {
+      html.agentic-focus-mode #sidebar { display: none; }
+      html.agentic-focus-mode header { display: none !important; }
+      html.agentic-focus-mode main { padding-left: 0 !important; padding-right: 0 !important; }
+    }
+    /* Overflow guards for the agentic result blocks at every width: long span
+       ids, tool arguments and JSON wrap or scroll inside their card instead of
+       widening the page (no horizontal scroll at 390px or 1280px+). */
+    .agentic-timeline { overflow-x: visible; }
+    .agentic-tl-card summary { min-width: 0; }
+    .agentic-finding-card code, .agentic-span-link span { max-width: 100%; }
+    @media (max-width: 639.98px) {
+      .agentic-tl-row { gap: .5rem; }
     }
   </style>
 {% include "partials/ui_js.html" %}

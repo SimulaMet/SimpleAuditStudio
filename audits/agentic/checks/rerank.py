@@ -18,7 +18,8 @@ def rerank_checks(trajectory: AgentTrajectory, expected: dict) -> list[CheckResu
             evidence_span_ids=[step.span_id for step in steps if step.span_id],
         ))
     if expected.get("min_calls") is not None or expected.get("max_calls") is not None:
-        low, high = expected.get("min_calls", 0), expected.get("max_calls")
+        # min_calls may be present as null — treat it as 0.
+        low, high = expected.get("min_calls") or 0, expected.get("max_calls")
         ok = len(steps) >= low and (high is None or len(steps) <= high)
         checks.append(result(
             "rerank.count", "rerank", "PASS" if ok else "FAIL",

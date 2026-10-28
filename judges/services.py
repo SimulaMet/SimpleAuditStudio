@@ -21,6 +21,7 @@ OUTPUT_LABELS = {
     "score": "Score 1–10",
     "binary": "Yes / no",
     "checklist": "Checklist",
+    "grounding": "Groundedness",
 }
 
 # The generic formats a judge can use with its own criteria (checklist only via
@@ -125,7 +126,7 @@ def base_choices(current: str | None = None) -> list[dict]:
     (older versions): the Safety Judge is SimpleAudit's default.
     """
     return [
-        {**b, "output_label": OUTPUT_LABELS[b["output"]]}
+        {**b, "output_label": OUTPUT_LABELS.get(b["output"], b["output"].title())}
         for key, b in bases().items()
         if key != DEFAULT_BASE or current == DEFAULT_BASE
     ]

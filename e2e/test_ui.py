@@ -12,6 +12,7 @@ Run locally:
     .venv/bin/python e2e/test_ui.py
 """
 
+import re
 import sys
 import time
 
@@ -146,6 +147,60 @@ def test_compare_view(page: Page) -> None:
     expect(main).to_contain_text("Compare")
 
 
+def open_first_scenario_result(page: Page) -> bool:
+    """Open the first scenario result row from a run's Results section.
+
+    Returns False (and skips) when no completed run has results yet.
+    """
+    if not open_first_run(page):
+        return False
+    # The Results list is server-rendered at the bottom of the run detail page.
+    link = page.locator('#results-section a[href*="/results/"]').first
+    try:
+        link.wait_for(timeout=8_000)
+    except Exception:  # noqa: BLE001 - no results rendered yet
+        print("SKIP: no scenario results rendered on the run page")
+        return False
+    link.click()
+    page.wait_for_url("**/runs/*/results/*")
+    return True
+
+
+def test_agentic_result_detail_page(page: Page) -> None:
+    """A scenario result page renders its first viewport, and — for agentic
+    runs — the trajectory timeline container plus evidence-linked findings.
+
+    Skips gracefully when there are no runs/results or the run predates the
+    agentic blocks (non-agentic runs simply have no timeline to assert).
+    """
+    login(page)
+    if not open_first_scenario_result(page):
+        print("SKIP: no scenario result available")
+        return
+    # First viewport elements always exist on a result page.
+    expect(page.locator("main h1").first).to_be_visible()
+    expect(page.locator('a[title="Export JSON"], button:has-text("Export PDF")').first).to_be_visible()
+    # Agentic blocks only render when the payload carries them; never error out
+    # otherwise — just verify the page stayed healthy.
+    timeline = page.locator(".agentic-timeline")
+    if timeline.count() > 0:
+        expect(timeline.first).to_be_visible()
+        expect(timeline.first.locator(".agentic-tl-row")).not_to_have_count(0)
+        # Every timeline row must carry a unique anchor id jump links target.
+        anchors = timeline.first.locator("[id^='trace-span-']").evaluate_all(
+            "els => els.map(e => e.id)"
+        )
+        assert len(anchors) == len(set(anchors)), f"duplicate timeline anchors: {anchors}"
+        # Focus mode toggle is present and flips the document flag.
+        page.locator(".tl-focus-btn").first.click()
+        expect(page.locator("html")).to_have_class(re.compile("agentic-focus-mode"))
+        page.locator(".tl-focus-btn").first.click()
+    else:
+        print("NOTE: no agentic timeline on this run (expected for non-agentic runs)")
+    # No horizontal overflow at desktop width.
+    assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth + 1")
+
+
 def main() -> int:
     wait_for_health()
     passed = 0
@@ -164,6 +219,7 @@ def main() -> int:
             ("audit_detail_clone_button", test_audit_detail_clone_button),
             ("clone_prefills_form", test_clone_prefills_form),
             ("compare_view", test_compare_view),
+            ("agentic_result_detail_page", test_agentic_result_detail_page),
         ]
 
         for name, fn in tests:

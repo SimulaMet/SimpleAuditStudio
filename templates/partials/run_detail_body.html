@@ -886,10 +886,21 @@ function openScriptModal() {
 
 {% with agentic=run.summary_metrics.agentic_evaluation %}
   {% if agentic %}
-    <div class="mb-4 rounded-xl border border-accent/20 bg-surface-raised px-4 py-3 text-xs text-gray-400" title="Deterministic Agent trajectory policy checks across the run">
-      <span class="font-semibold text-gray-300">Agentic checks:</span>
-      {{ agentic.passed }} pass · {{ agentic.failed }} fail · {{ agentic.inconclusive }} inconclusive
+  <!-- Agentic audit overview (first viewport): target agent, overall verdict
+       split, trace evidence, and a direct link into the scenario evidence view. -->
+  <div class="mb-4 rounded-xl border border-violet-900/40 bg-surface-raised p-4">
+    <div class="mb-2">
+      <h2 class="text-sm font-semibold text-violet-300">Agentic audit</h2>
     </div>
+    <p class="text-xs text-gray-400 mb-3 break-words">
+      {% if frozen_agent %}Target: <a href="{% if frozen_agent.detail_url %}{{ frozen_agent.detail_url }}{% else %}{% url 'agents' %}{% endif %}" class="text-emerald-300 hover:text-emerald-200 transition-colors">{{ frozen_agent.name }}</a>{% if frozen_agent.knowledge_bases %} · {{ frozen_agent.knowledge_bases|length }} KB{% endif %}{% if frozen_agent.tools %} · {{ frozen_agent.tools|length }} tool{{ frozen_agent.tools|pluralize }}{% endif %}. {% endif %}
+      Agentic checks: {{ agentic.passed }} pass · {{ agentic.failed }} fail · {{ agentic.inconclusive }} inconclusive ({{ agentic.total }} scenarios) — deterministic trajectory checks across the run.
+    </p>
+    <div class="flex h-1.5 rounded-full overflow-hidden bg-surface-overlay" role="img" aria-label="Agentic verdict split across scenarios">
+      {% for seg in agentic_split %}<div style="width: {{ seg.pct }}%" class="{% if seg.status == 'PASS' %}bg-emerald-500/80{% elif seg.status == 'FAIL' %}bg-red-500/80{% else %}bg-amber-500/80{% endif %}" title="{{ seg.count }} {{ seg.status }}"></div>{% endfor %}
+    </div>
+    <p class="mt-2 text-[11px] text-gray-500">Open a scenario result below for the full-width trajectory timeline, evidence-linked check results and judge rationale.</p>
+  </div>
   {% endif %}
 {% endwith %}
 

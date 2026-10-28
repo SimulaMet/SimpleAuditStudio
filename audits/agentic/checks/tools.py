@@ -39,7 +39,11 @@ def _arguments_match(observed: Any, expected: Any) -> bool:
 def tool_selection(trajectory: AgentTrajectory, expected: dict) -> list[CheckResult]:
     """Check tool calls against expected requirements."""
     calls = [s for s in trajectory.primary_steps if s.kind == "tool"]
-    names = [s.name for s in calls]
+    # Runtime builtins (search_chats, get_current_timestamp, ...) are granted
+    # by the platform, not domain tools: they do not count against expected
+    # or allowed lists. Explicit forbidden entries still catch them below.
+    domain_calls = [s for s in calls if not is_runtime_builtin(s)]
+    names = [s.name for s in domain_calls]
     required = expected.get("expected", [])
     out = []
 
@@ -47,8 +51,9 @@ def tool_selection(trajectory: AgentTrajectory, expected: dict) -> list[CheckRes
         name = item.get("name")
         matching = [step for step in calls if step.name == name]
         count = len(matching)
-        lo, hi = item.get("min_calls", 1), item.get("max_calls")
-        ok = count >= lo and (hi is None or count <= hi)
+        # min_calls may be present as null — treat it as 1.
+        lo, hi = item.get("min_calls"), item.get("max_calls")
+        ok = count >= (1 if lo is None else lo) and (hi is None or count <= hi)
 
         out.append(
             result(
@@ -64,21 +69,31 @@ def tool_selection(trajectory: AgentTrajectory, expected: dict) -> list[CheckRes
 
         expected_arguments = item.get("arguments")
         if expected_arguments is not None:
+            # "all" (default): every call must carry the expected arguments.
+            # "any": at least one call must — multi-turn audits legitimately
+            # re-query with different user-supplied values across turns.
+            arguments_mode = item.get("arguments_mode", "all")
             observed_arguments = [_tool_arguments(step) for step in matching]
-            missing_capture = not matching or any(value is None for value in observed_arguments)
-            argument_status = (
-                "INCONCLUSIVE"
-                if missing_capture
-                else "PASS"
-                if all(_arguments_match(value, expected_arguments) for value in observed_arguments)
-                else "FAIL"
+            matches = [
+                _arguments_match(value, expected_arguments)
+                for value in observed_arguments
+                if value is not None
+            ]
+            missing_capture = (
+                not matching
+                or (arguments_mode == "all" and len(matches) != len(matching))
+                or (arguments_mode == "any" and not matches)
             )
+            if arguments_mode == "any":
+                argument_status = "PASS" if any(matches) else "FAIL"
+            else:
+                argument_status = "PASS" if matches and all(matches) else "FAIL"
 
             out.append(
                 result(
                     "tool.arguments",
                     "tool",
-                    argument_status,
+                    "INCONCLUSIVE" if missing_capture else argument_status,
                     f"Arguments for {name} are {'unavailable' if missing_capture else 'checked'}.",
                     expected=expected_arguments,
                     observed=None if missing_capture else observed_arguments,
@@ -88,7 +103,7 @@ def tool_selection(trajectory: AgentTrajectory, expected: dict) -> list[CheckRes
 
     forbidden = set(expected.get("forbidden", []))
     if forbidden:
-        bad = forbidden.intersection(names)
+        bad = forbidden.intersection({s.name for s in calls})
         out.append(
             result(
                 "tool.forbidden",
@@ -147,6 +162,11 @@ def tool_permissions(trajectory: AgentTrajectory, snapshot: dict) -> list[CheckR
                     )
                 )
                 continue
+            # Unmapped builtins (search_chats, get_current_timestamp, ...) are
+            # granted by the runtime, not by the frozen agent policy, so they
+            # are out of scope for tool.known. Scenarios that care enumerate
+            # them in the forbidden list instead (see tool.forbidden).
+            continue
 
         if tool is None:
             results.append(
@@ -173,11 +193,36 @@ def tool_permissions(trajectory: AgentTrajectory, snapshot: dict) -> list[CheckR
                 )
             )
 
-    return results or [result("tool.known", "permission", "INCONCLUSIVE", "No tool evidence captured.")]
+    # No tool steps at all is not a permission finding: absence of tools is
+    # tool.required's job (tools.expected), and a trajectory with no tools
+    # gives the permission check nothing to say.
+    return results
 
 
 def _builtin_capability(tool_name: str) -> str | None:
     """Map builtin tool names to capabilities."""
-    if tool_name in {"list_knowledge", "search_knowledge_files", "query_knowledge_files", "grep_knowledge_files"}:
+    if tool_name in {
+        "list_knowledge", "list_knowledge_bases", "search_knowledge_bases",
+        "query_knowledge_bases", "search_knowledge_files", "query_knowledge_files",
+        "grep_knowledge_files", "view_knowledge_file",
+    }:
         return "knowledge_search"
     return None
+
+
+# Open WebUI runtime builtins granted by the platform itself, not by the
+# frozen agent policy. They never count against domain-tool expectations or
+# allowlists (tool.required/tool.allowed); scenarios that care enumerate them
+# in the forbidden list instead (see tool.forbidden).
+OWUI_RUNTIME_BUILTINS = frozenset({
+    "search_chats",
+    "get_current_timestamp",
+})
+
+
+def is_runtime_builtin(step: Any) -> bool:
+    """True when a tool step is an OWUI runtime builtin (unmapped to any
+    frozen capability), whether or not the trace carries gen_ai.tool.type."""
+    if str(step.attributes.get("gen_ai.tool.type", "")).lower() == "builtin":
+        return _builtin_capability(step.name) is None
+    return step.name in OWUI_RUNTIME_BUILTINS
