@@ -187,6 +187,7 @@ override them when you deliberately need to.
 | `BOOTSTRAP_USERNAME`, `BOOTSTRAP_EMAIL`, `BOOTSTRAP_PASSWORD`, `BOOTSTRAP_PROJECT_NAME` | First admin user and workspace. |
 | `DEMO_MODE`, `DEMO_USERNAME`, `DEMO_PASSWORD` | Prefilled demo login and the HF iframe cookie/CSRF policy. |
 | `WORKOS_CLIENT_ID`, `WORKOS_API_KEY` | Optional passwordless email sign-in. |
+| `SIMPLEAUDIT_GRAVATAR` | `true` = show Gravatar avatars (the browser sends the MD5 hash of the user's email to gravatar.com). Default off: the user's initial is shown. |
 | `SENTRY_DSN`, `SENTRY_ENVIRONMENT` | Optional error tracking. |
 | `LOG_LEVEL`, `PORT` | Logging level; web port for the CLI. |
 | any name in a connection's `secret_reference` | Model API key read at execution time. |

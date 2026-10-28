@@ -314,6 +314,10 @@ WORKOS_CLIENT_ID = os.environ.get("WORKOS_CLIENT_ID", "")
 WORKOS_API_KEY = os.environ.get("WORKOS_API_KEY", "")
 WORKOS_ENABLED = bool(WORKOS_CLIENT_ID and WORKOS_API_KEY)
 
+# Gravatar avatars: off by default, since loading one sends the MD5 hash of the
+# user's email to gravatar.com. When off, templates show the user's initial.
+SIMPLEAUDIT_GRAVATAR = env_bool("SIMPLEAUDIT_GRAVATAR", False)
+
 # Demo mode: prefill the login form with demo credentials and show a hint banner
 # (public demos / HF Spaces).
 DEMO_MODE = env_bool("DEMO_MODE", False)
