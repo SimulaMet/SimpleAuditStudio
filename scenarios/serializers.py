@@ -16,7 +16,8 @@ class ScenarioRevisionSerializer(serializers.ModelSerializer):
     class Meta:
         model = ScenarioRevision
         fields = ("id", "revision", "description", "expected_behavior", "test_prompt",
-                  "severity_ceiling", "documents", "file_uri", "metadata", "content_hash", "created_at")
+                  "severity_ceiling", "documents", "file_uri", "decision", "metadata",
+                  "content_hash", "created_at")
         read_only_fields = fields
 
 
@@ -44,9 +45,27 @@ class ScenarioCreateSerializer(serializers.Serializer):
     severity_ceiling = serializers.CharField(required=False, allow_blank=True, default="", validators=[_validate_severity_ceiling])
     documents = serializers.ListField(child=serializers.DictField(), required=False, default=list)
     file_uri = serializers.JSONField(required=False, allow_null=True, default=None)
+    decision = serializers.JSONField(required=False, allow_null=True, default=None)
     metadata = serializers.DictField(required=False, default=dict)
     category = serializers.CharField(required=False, allow_blank=True, default="")
     tags = serializers.ListField(child=serializers.CharField(), required=False, default=list)
+
+    def validate_decision(self, value):
+        if value is None:
+            return None
+        from infra.engine import validate_decision_block
+
+        try:
+            validate_decision_block(value)
+        except ValueError as exc:
+            raise serializers.ValidationError(f"Invalid decision block: {exc}")
+        return value
+
+    def validate(self, attrs):
+        # A scenario is either an agent trajectory or a closed decision question.
+        if attrs.get("decision") and (attrs.get("metadata") or {}).get("agentic"):
+            raise serializers.ValidationError("A scenario cannot be both agentic and a decision model.")
+        return attrs
 
 
 class ScenarioUpdateSerializer(serializers.Serializer):
@@ -56,7 +75,25 @@ class ScenarioUpdateSerializer(serializers.Serializer):
     severity_ceiling = serializers.CharField(required=False, allow_blank=True, default="", validators=[_validate_severity_ceiling])
     documents = serializers.ListField(child=serializers.DictField(), required=False, default=list)
     file_uri = serializers.JSONField(required=False, allow_null=True, default=None)
+    decision = serializers.JSONField(required=False, allow_null=True, default=None)
     metadata = serializers.DictField(required=False, default=dict)
+
+    def validate_decision(self, value):
+        if value is None:
+            return None
+        from infra.engine import validate_decision_block
+
+        try:
+            validate_decision_block(value)
+        except ValueError as exc:
+            raise serializers.ValidationError(f"Invalid decision block: {exc}")
+        return value
+
+    def validate(self, attrs):
+        # A scenario is either an agent trajectory or a closed decision question.
+        if attrs.get("decision") and (attrs.get("metadata") or {}).get("agentic"):
+            raise serializers.ValidationError("A scenario cannot be both agentic and a decision model.")
+        return attrs
 
 
 class ScenarioSetSerializer(serializers.ModelSerializer):

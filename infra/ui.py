@@ -2212,6 +2212,30 @@ def _scenario_redirect(set_id: str | None):
     return redirect(f"/scenarios/?set={set_id}" if set_id else "/scenarios/")
 
 
+def _parse_decision_field(raw: str) -> tuple[dict | None, str | None]:
+    """Parse a scenario form's ``decision`` textarea into a block or an error.
+
+    Empty input means "no decision question" (returns ``(None, None)``). Valid
+    JSON is validated against the engine's schema so the web form and the API
+    reject the same malformed blocks; invalid input returns ``(None, message)``
+    for the caller to surface as a Django message.
+    """
+    text = (raw or "").strip()
+    if not text:
+        return None, None
+    try:
+        decision = json.loads(text)
+    except json.JSONDecodeError as exc:
+        return None, f"Decision question must be valid JSON: {exc.msg}"
+    from infra.engine import validate_decision_block
+
+    try:
+        validate_decision_block(decision)
+    except ValueError as exc:
+        return None, f"Invalid decision question: {exc}"
+    return decision, None
+
+
 def _publish_new_version(sset, user, extra_scenario_ids=None):
     """Auto-publish a new version capturing all current (non-archived) scenarios in the set."""
     latest = sset.versions.order_by("-version").first()
@@ -2349,6 +2373,13 @@ class ScenarioCreateView(ProjectMixin, View):
                 return _scenario_redirect(request.POST.get("set_id", "").strip() or None)
         file_uri_raw = request.POST.get("file_uri", "").strip()
         file_uri = file_uri_raw or None
+        decision, decision_error = _parse_decision_field(request.POST.get("decision", ""))
+        if decision_error:
+            messages.error(request, decision_error)
+            return _scenario_redirect(request.POST.get("set_id", "").strip() or None)
+        if decision and request.POST.get("agentic_scenario"):
+            messages.error(request, "A scenario cannot be both agentic and a decision model — pick one.")
+            return _scenario_redirect(request.POST.get("set_id", "").strip() or None)
         set_id = request.POST.get("set_id", "").strip()
         if name:
             key = hashlib.sha256(name.encode()).hexdigest()[:12]
@@ -2356,7 +2387,7 @@ class ScenarioCreateView(ProjectMixin, View):
                 project=request.project, user=request.user, key=key, title=name, category=category,
                 description=desc, expected_behavior=expected_behavior, test_prompt=test_prompt,
                 severity_ceiling=severity_ceiling, documents=documents, file_uri=file_uri,
-                metadata=metadata
+                decision=decision, metadata=metadata
             )
             # Auto-publish new version including this scenario
             if set_id:
@@ -2390,6 +2421,13 @@ class ScenarioEditView(ProjectMixin, View):
                 return _scenario_redirect(set_id or None)
             file_uri_raw = request.POST.get("file_uri", "").strip()
             file_uri = file_uri_raw or None
+            decision, decision_error = _parse_decision_field(request.POST.get("decision", ""))
+            if decision_error:
+                messages.error(request, decision_error)
+                return _scenario_redirect(set_id or None)
+            if decision and request.POST.get("agentic_scenario"):
+                messages.error(request, "A scenario cannot be both agentic and a decision model — pick one.")
+                return _scenario_redirect(set_id or None)
             if title:
                 scenario.title = title
             scenario.category = category
@@ -2417,7 +2455,7 @@ class ScenarioEditView(ProjectMixin, View):
                 scenario=scenario, user=request.user, description=desc,
                 expected_behavior=expected_behavior, test_prompt=test_prompt,
                 severity_ceiling=severity_ceiling, documents=documents, file_uri=file_uri,
-                metadata=metadata,
+                decision=decision, metadata=metadata,
             )
             content_changed = latest_rev_before is None or rev.revision > latest_rev_before.revision
             if content_changed:
@@ -2517,6 +2555,7 @@ class ScenarioExportView(ProjectMixin, View):
                  "severity_ceiling": it.revision.severity_ceiling,
                  "documents": it.revision.documents,
                  "file_uri": it.revision.file_uri,
+                 "decision": it.revision.decision,
                  "metadata": it.revision.metadata,
                  "category": it.scenario.category,
                  "tags": it.scenario.tags or []}
@@ -2553,6 +2592,7 @@ class ScenarioImportView(ProjectMixin, View):
                     severity_ceiling=item.get("severity_ceiling", ""),
                     documents=item.get("documents") or [],
                     file_uri=item.get("file_uri"),
+                    decision=item.get("decision"),
                     metadata=item.get("metadata")  # Import includes metadata if present
                 )
                 new_ids.append(scenario.id)

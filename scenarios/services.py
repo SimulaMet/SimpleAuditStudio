@@ -84,8 +84,10 @@ def update_scenario_content(*, scenario: Scenario, user, description: str, expec
     # is distinguishable from "leave unchanged" (the default below).
     if decision is _UNSET:
         new_decision = latest.decision if latest else None
-    else:
+    elif decision:
         new_decision = decision
+    else:
+        new_decision = None
     if (
         latest
         and latest.description == description

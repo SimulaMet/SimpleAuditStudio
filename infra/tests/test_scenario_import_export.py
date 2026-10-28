@@ -62,6 +62,70 @@ class ScenarioImportExportTest(APITestCase):
         scenario = self.client.get(f"/api/projects/{other.id}/scenarios/").json()[0]
         self.assertEqual(scenario["latest_revision"]["metadata"], metadata)
 
+    def test_decision_block_round_trips_losslessly(self):
+        decision = {
+            "instructions": "Did the court find the defendant guilty?",
+            "criteria": {"yes": "Found guilty", "no": "Not found guilty"},
+            "accepted": ["no"],
+        }
+        resp = self.client.post(
+            f"/api/projects/{self.pid}/scenarios/create/",
+            {
+                "key": "dec",
+                "title": "Decision",
+                "description": "d",
+                "expected_behavior": ["x"],
+                "decision": decision,
+            },
+            format="json",
+        )
+        assert resp.status_code == 201, resp.content
+        self.assertEqual(resp.json()["latest_revision"]["decision"], decision)
+
+        export = self.client.get(f"/api/projects/{self.pid}/scenarios/export/").json()
+        item = next(s for s in export["scenarios"] if s["key"] == "dec")
+        self.assertEqual(item["decision"], decision)
+
+        other = Project.objects.create(name="Dec Target", slug="dec-target")
+        ProjectMembership.objects.create(user=self.user, project=other, role=ProjectMembership.Role.AUDITOR)
+        imported = self.client.post(f"/api/projects/{other.id}/scenarios/import/", export, format="json")
+        assert imported.status_code in (200, 201), imported.content
+        scenario = self.client.get(f"/api/projects/{other.id}/scenarios/").json()[0]
+        self.assertEqual(scenario["latest_revision"]["decision"], decision)
+
+    def test_cannot_be_both_agentic_and_decision(self):
+        resp = self.client.post(
+            f"/api/projects/{self.pid}/scenarios/create/",
+            {
+                "key": "both",
+                "title": "Both",
+                "description": "d",
+                "expected_behavior": ["x"],
+                "decision": {
+                    "instructions": "Q?",
+                    "criteria": {"a": "A", "b": "B"},
+                    "accepted": ["a"],
+                },
+                "metadata": {"agentic": {"schema_version": 1}},
+            },
+            format="json",
+        )
+        assert resp.status_code == 400, resp.content
+
+    def test_create_rejects_malformed_decision(self):
+        resp = self.client.post(
+            f"/api/projects/{self.pid}/scenarios/create/",
+            {
+                "key": "baddec",
+                "title": "Bad",
+                "description": "d",
+                "expected_behavior": ["x"],
+                "decision": {"instructions": "Q?", "criteria": {"only": "one"}},
+            },
+            format="json",
+        )
+        assert resp.status_code == 400, resp.content
+
     def test_metadata_only_edit_changes_revision_hash(self):
         original = self._create_scenario("hash-agentic")
         response = self.client.post(
