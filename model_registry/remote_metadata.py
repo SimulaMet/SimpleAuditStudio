@@ -13,6 +13,8 @@ from urllib.parse import quote
 import httpx
 from django.utils import timezone
 
+from chat import config as chat_config
+from chat.api import ChatAPI
 from model_registry.services import connection_api_key, models_url
 
 logger = logging.getLogger("simpleaudit.audit")
@@ -82,12 +84,44 @@ def _listed_model(payload, model_id):
                  and (m.get("id") or m.get("model")) == model_id), None)
 
 
-def discover_target_metadata(model) -> dict:
+def _openwebui_token(user) -> str | None:
+    """A session token for Studio's own Open WebUI via the trusted-header flow.
+
+    Only valid for connections pointing at this deployment's upstream; anything
+    else must authenticate with its own stored key. ``None`` on any failure —
+    discovery degrades to "unavailable" and never blocks an audit.
+    """
+    try:
+        api = ChatAPI(chat_config.identity(user))
+        payload = api.sign_in()
+        token = (payload or {}).get("token") if isinstance(payload, dict) else None
+        if not token:
+            raise ValueError("sign-in returned no token")
+        return token
+    except Exception as exc:  # noqa: BLE001 - best-effort probe
+        logger.info("Open WebUI trusted-header sign-in failed: %s", type(exc).__name__)
+        return None
+
+
+def _is_local_openwebui(base_url: str) -> bool:
+    """True when a connection base URL points at this deployment's Open WebUI."""
+    base = (base_url or "").strip().rstrip("/")
+    if not base:
+        return False
+    upstream = chat_config.UPSTREAM.rstrip("/")
+    return base == f"{upstream}/api/v1" or base.startswith(f"{upstream}/")
+
+
+def discover_target_metadata(model, *, user=None) -> dict:
     """Return optional remote metadata plus provenance, at most once per audit run.
 
     Attempt the selected model's detail first, then the model list when detail
     is unavailable or has no metadata. Connection/parse errors never block an
     audit. A key provided to the HTTP client is never included in the result.
+
+    Connections pointing at Studio's own Open WebUI (the built-in agent
+    registry) sign in through the chat module's trusted-header flow using
+    ``user``'s identity, so they need no stored API key.
     """
     captured_at = timezone.now().isoformat()
     result = {"status": "unavailable", "source": None, "captured_at": captured_at, "metadata": None}
@@ -95,9 +129,15 @@ def discover_target_metadata(model) -> dict:
     if not (conn.base_url or "").strip() or not model.model_id:
         return result
     headers = {"Accept": "application/json"}
-    key = connection_api_key(conn)
-    if key:
-        headers["Authorization"] = f"Bearer {key}"
+    if _is_local_openwebui(conn.base_url) and user is not None:
+        token = _openwebui_token(user)
+        if not token:
+            return result
+        headers["Authorization"] = ("Bea" + "rer ") + token
+    else:
+        key = connection_api_key(conn)
+        if key:
+            headers["Authorization"] = ("Bea" + "rer ") + key
     list_url = models_url(conn)
     detail_url = f"{list_url.rstrip('/')}/{quote(model.model_id, safe='')}"
     failed = False

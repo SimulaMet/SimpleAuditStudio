@@ -315,7 +315,7 @@ def create_audit_run(
     # Capture the target's declared metadata once, before execution. Retrieval
     # failure never changes whether the audit can run. Remote metadata is not a
     # trusted statement of actual agent behavior or available permissions.
-    discovery = discover_target_metadata(target_model)
+    discovery = discover_target_metadata(target_model, user=user)
     inputs = frozen_inputs(
         target_model=target_model, auditor_model=auditor_model, judge_model=judge_model, judge=judge,
         max_turns_override=max_turns_override, language_override=language_override,

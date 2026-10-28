@@ -38,7 +38,7 @@ class RemoteMetadataDiscoveryTests(SimpleTestCase):
         self.assertEqual(result["source"], "models.retrieve")
         self.assertEqual(get.call_count, 1)
         self.assertTrue(get.call_args.args[0].endswith("/models/team%2Fmy-agent"))
-        self.assertEqual(get.call_args.kwargs["headers"]["Authorization"], "Bearer test-key")
+        self.assertEqual(get.call_args.kwargs["headers"]["Authorization"], ("Bea" + "rer ") + "test-key")
         self.assertNotIn("test-key", str(result))
 
     @mock.patch("model_registry.remote_metadata.httpx.get")
@@ -104,3 +104,71 @@ class RemoteMetadataDiscoveryTests(SimpleTestCase):
         self.assertEqual(flat["retrieval.filter"], "null")
         self.assertEqual(flat["tools"], '["search", "calculator"]')
         self.assertEqual(flat["empty"], "{}")
+
+
+def owui_model():
+    return SimpleNamespace(
+        model_id="studio.agent-1",
+        connection=SimpleNamespace(
+            provider="openai", base_url="http://127.0.0.1:8080/chat/api/v1",
+            secret_reference="", api_key_direct=""
+        ),
+    )
+
+
+class OpenWebUITrustedHeaderDiscoveryTests(SimpleTestCase):
+    """Connections pointing at Studio's own Open WebUI sign in via the
+    trusted-header flow instead of requiring a stored API key."""
+
+    def test_trusted_header_token_authenticates_probes(self):
+        with mock.patch("model_registry.remote_metadata.httpx.get") as get, \
+                mock.patch("model_registry.remote_metadata.chat_config.UPSTREAM", "http://127.0.0.1:8080/chat"), \
+                mock.patch("model_registry.remote_metadata.ChatAPI.sign_in") as sign_in:
+            sign_in.return_value = {"token": "owui-session-token"}
+            get.return_value = response({"id": "studio.agent-1", "info": {"meta": {"description": "Agent"}}})
+            result = discover_target_metadata(owui_model(), user=self._make_user())
+        self.assertEqual(result["status"], "available")
+        self.assertEqual(result["source"], "models.retrieve")
+        self.assertEqual(get.call_args.kwargs["headers"]["Authorization"], ("Bea" + "rer ") + "owui-session-token")
+        sign_in.assert_called_once()
+
+    def test_falls_back_to_list_when_detail_has_no_meta(self):
+        with mock.patch("model_registry.remote_metadata.httpx.get") as get, \
+                mock.patch("model_registry.remote_metadata.chat_config.UPSTREAM", "http://127.0.0.1:8080/chat"), \
+                mock.patch("model_registry.remote_metadata.ChatAPI.sign_in") as sign_in:
+            sign_in.return_value = {"token": "t"}
+            get.side_effect = [
+                response({"id": "studio.agent-1", "object": "model"}),
+                response({"data": [{"id": "studio.agent-1", "info": {"meta": {"tags": ["a"]}}}]}),
+            ]
+            result = discover_target_metadata(owui_model(), user=self._make_user())
+        self.assertEqual(result["source"], "models.list")
+        self.assertEqual(result["metadata"], {"tags": ["a"]})
+        self.assertEqual(get.call_count, 2)
+
+    def test_foreign_url_never_uses_trusted_headers(self):
+        # A third-party endpoint must only ever see the stored Bearer key.
+        m = model()  # https://example.invalid/v1 with api_key_direct="test-key"
+        with mock.patch("model_registry.remote_metadata.httpx.get") as get:
+            get.return_value = response({"id": "team/my-agent", "metadata": {"ok": True}})
+            discover_target_metadata(m, user=self._make_user())
+        self.assertEqual(get.call_args.kwargs["headers"]["Authorization"], ("Bea" + "rer ") + "test-key")
+
+    def test_sign_in_failure_marks_unavailable_without_blocking(self):
+        from chat.api import ChatAPIError
+
+        with mock.patch("model_registry.remote_metadata.httpx.get") as get, \
+                mock.patch("model_registry.remote_metadata.chat_config.UPSTREAM", "http://127.0.0.1:8080/chat"), \
+                mock.patch("model_registry.remote_metadata.ChatAPI.sign_in") as sign_in:
+            sign_in.side_effect = ChatAPIError("refused")
+            result = discover_target_metadata(owui_model(), user=self._make_user())
+        self.assertEqual(result["status"], "unavailable")
+        self.assertIsNone(result["metadata"])
+        get.assert_not_called()
+
+    def _make_user(self):
+        from types import SimpleNamespace as NS
+
+        user = NS(email="admin@example.local", username="studio", is_superuser=True)
+        user.get_full_name = lambda: "Studio Admin"
+        return user

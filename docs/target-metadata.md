@@ -22,6 +22,17 @@ Open WebUI's `info.meta` shape is also recognised on both endpoints:
 { "id": "my-agent", "info": { "meta": { "description": "…" } } }
 ```
 
+### Built-in Open WebUI (agent targets)
+
+Connections whose base URL points at this deployment's own Open WebUI
+(`SIMPLEAUDIT_CHAT_UPSTREAM`, e.g. the built-in **Open WebUI Agents** registry)
+need no stored API key: discovery signs in through the chat module's
+trusted-header flow (`X-Studio-*` → `POST /api/v1/auths/signin`) using the run
+creator's identity, and uses the returned session token for the probes. If the
+sign-in fails, discovery degrades to `status: unavailable` as usual — it never
+blocks the audit. Third-party connections always authenticate with their own
+stored key; trusted headers are never sent to them.
+
 Example — model detail response (`GET /v1/models/my-rag-agent`):
 
 ```json
