@@ -87,6 +87,28 @@ class ComparisonTest(TestCase):
         self.assertEqual(first["runs"][str(r1.id)]["severity"], "pass")
         self.assertEqual(first["runs"][str(r2.id)]["severity"], "pass")
 
+    def test_compares_union_of_frozen_metadata_keys(self):
+        r1 = _make_run(self.project, self.ver, self.ep_a, self.judge, "Run A")
+        r2 = _make_run(self.project, self.ver, self.ep_b, self.judge, "Run B")
+        r1.target_config_snapshot = {"remote_metadata": {
+            "prompts": {"retrieval": {"version": "1", "content": "first"}},
+            "retrieval": {"top_k": 5},
+        }}
+        r2.target_config_snapshot = {"remote_metadata": {
+            "prompts": {"retrieval": {"version": "2", "content": "second"}},
+        }}
+        r1.save(update_fields=["target_config_snapshot"])
+        r2.save(update_fields=["target_config_snapshot"])
+        result = compare_runs(self.project, [r1.id, r2.id])
+        metadata_rows = {row["label"]: row for row in result["inputs"] if row.get("is_metadata")}
+        self.assertEqual(len(metadata_rows), 3)
+        version = metadata_rows["Target metadata · prompts.retrieval.version"]
+        self.assertTrue(version["differs"])
+        self.assertEqual({c["text"] for c in version["cells"]}, {"1", "2"})
+        missing = metadata_rows["Target metadata · retrieval.top_k"]
+        self.assertTrue(missing["differs"])
+        self.assertEqual({c["text"] for c in missing["cells"]}, {"5", "—"})
+
     def test_different_judges_warns(self):
         judge2 = _make_model(self.project, "Judge Y")
         r1 = _make_run(self.project, self.ver, self.ep_a, self.judge, "Run 1")
