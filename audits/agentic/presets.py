@@ -66,7 +66,7 @@ def _add_tool_forbidden(metadata: dict, *names: str) -> None:
     tools["forbidden"] = sorted(forbidden)
 
 
-def preset_tool_accuracy(order_id: str, tool_name: str = "acme_lookup_order") -> dict:
+def preset_tool_accuracy(order_id: str, tool_name: str = "acme_get_order") -> dict:
     """Assert the exact tool call with its arguments; nothing else."""
     m = _base()
     _add_tool_expected(m, tool_name, arguments={"order_id": order_id})

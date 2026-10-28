@@ -3,7 +3,8 @@ import logging
 import time
 
 from django.db import close_old_connections
-from django.http import StreamingHttpResponse
+from django.http import JsonResponse, StreamingHttpResponse
+from django.utils.text import slugify
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
@@ -14,7 +15,12 @@ from accounts.services import ensure_project_access, require_project_writable
 from audits.events import ScenarioResult, list_events
 from audits.models import AuditRun
 from audits.serializers import AuditRunCreateSerializer, AuditRunSerializer
-from audits.services import cancel_run, create_audit_run, submit_audit_run
+from audits.services import (
+    build_simpleaudit_export,
+    cancel_run,
+    create_audit_run,
+    submit_audit_run,
+)
 from infra.exceptions import StableAPIError
 from infra.middleware import set_correlation_context
 from judges.models import Judge, JudgeVersion
@@ -67,6 +73,35 @@ def get_audit_run(request, project_id, run_id):
     except AuditRun.DoesNotExist as exc:
         raise StableAPIError(detail="Audit run not found.", code="audit_run_not_found", http_status=404) from exc
     return Response(AuditRunSerializer(run).data)
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def export_audit_run(request, project_id, run_id):
+    """Download a run's durable results as canonical SimpleAudit engine JSON.
+
+    Reassembles the persisted per-scenario ``AuditResult`` payloads into the same
+    shape core writes via ``results.save()``, so a single downstream converter
+    (e.g. Every Eval Ever) can consume Studio runs and core CLI runs alike.
+    Exports whatever durable results exist; a partially complete run exports its
+    finished scenarios.
+    """
+    set_correlation_context(audit_run_id=run_id)
+    project = _get_project_or_404(project_id)
+    _require_project_access(request.user, project)
+    queryset = AuditRun.objects.filter(id=run_id, project=project).select_related(
+        "scenario_set_version"
+    )
+    try:
+        run = queryset.get()
+    except AuditRun.DoesNotExist as exc:
+        raise StableAPIError(detail="Audit run not found.", code="audit_run_not_found", http_status=404) from exc
+
+    payload = build_simpleaudit_export(run)
+    stem = slugify(run.name) or f"audit-run-{run.id}"
+    response = JsonResponse(payload, json_dumps_params={"indent": 2, "ensure_ascii": False})
+    response["Content-Disposition"] = f'attachment; filename="{stem}.json"'
+    return response
 
 
 @api_view(["GET"])

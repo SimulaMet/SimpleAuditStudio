@@ -27,9 +27,12 @@ def _basic_header(username, password):
 
 
 def _otlp_body():
-    return json.dumps(
-        {"resourceSpans": [{"scopeSpans": [{"spans": [{"traceId": "ab" * 16, "spanId": "cd" * 8, "name": "turn"}]}]}]}
-    )
+    # One auditable span (a tool call); the receiver drops transport spans.
+    span = {
+        "traceId": "ab" * 16, "spanId": "cd" * 8, "name": "turn",
+        "attributes": [{"key": "gen_ai.tool.name", "value": {"stringValue": "acme_get_order"}}],
+    }
+    return json.dumps({"resourceSpans": [{"scopeSpans": [{"spans": [span]}]}]})
 
 
 class OTLPHeaderParsingTest(TestCase):
@@ -248,6 +251,11 @@ class OtlpSpanPersistenceTest(TestCase):
         self.nc = otlp.create_credential(project=self.project, connection=self.conn, auth_mode="basic", user=self.user)
 
     def _body(self, spans):
+        # Spans without an explicit kind are tool steps here, so they're auditable.
+        for span in spans:
+            span.setdefault("attributes", [
+                {"key": "gen_ai.tool.name", "value": {"stringValue": span["name"]}},
+            ])
         return json.dumps({"resourceSpans": [{"scopeSpans": [{"spans": spans}]}]})
 
     def test_ingest_persists_normalized_span(self):
@@ -386,7 +394,8 @@ class OTLPProtobufIngestionTest(TestCase):
 
     def test_json_export_still_works_alongside_protobuf(self):
         body = json.dumps({"resourceSpans": [{"scopeSpans": [{"spans": [
-            {"traceId": self.TRACE_ID, "spanId": "55" * 8, "name": "json span", "kind": 1}]}]}]})
+            {"traceId": self.TRACE_ID, "spanId": "55" * 8, "name": "json span",
+             "attributes": [{"key": "gen_ai.tool.name", "value": {"stringValue": "json_tool"}}]}]}]}]})
         self.assertEqual(self._post(body.encode(), "application/json").status_code, 200)
         self.assertEqual(self._post(self.BODY).status_code, 200)
         rows = otlp_views.get_spans_for_trace_db(self.nc.credential.target_id, self.TRACE_ID)

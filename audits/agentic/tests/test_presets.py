@@ -33,7 +33,7 @@ def test_preset_tool_accuracy_emits_only_tools():
     m = _ok(build_preset("tool_accuracy", order_id="ACME-1001"))
     assert set(m) == {"schema_version", "trace", "enforcement", "tools"}
     assert m["tools"]["expected"] == [{
-        "name": "acme_lookup_order", "min_calls": 1,
+        "name": "acme_get_order", "min_calls": 1,
         "arguments": {"order_id": "ACME-1001"}, "arguments_mode": "any",
     }]
     # no retrieval/trajectory/policy/budgets silently filled
@@ -81,7 +81,7 @@ def test_build_preset_unknown_name_raises():
 
 def test_adders_are_chainable_and_minimal():
     m = base_metadata()
-    assert add_tool_expected(m, "acme_lookup_order", arguments={"order_id": "X"}) is m
+    assert add_tool_expected(m, "acme_get_order", arguments={"order_id": "X"}) is m
     add_tool_forbidden(m, "acme_send_customer_email")
     add_retrieval_required(m, "Acme Retail Policy", min_documents=1)
     add_policy_read_only(m)

@@ -314,11 +314,18 @@ WORKOS_CLIENT_ID = os.environ.get("WORKOS_CLIENT_ID", "")
 WORKOS_API_KEY = os.environ.get("WORKOS_API_KEY", "")
 WORKOS_ENABLED = bool(WORKOS_CLIENT_ID and WORKOS_API_KEY)
 
+# Gravatar avatars: off by default, since loading one sends the MD5 hash of the
+# user's email to gravatar.com. When off, templates show the user's initial.
+SIMPLEAUDIT_GRAVATAR = env_bool("SIMPLEAUDIT_GRAVATAR", False)
+
 # Demo mode: prefill the login form with demo credentials and show a hint banner
 # (public demos / HF Spaces).
 DEMO_MODE = env_bool("DEMO_MODE", False)
 DEMO_USERNAME = os.environ.get("DEMO_USERNAME", "studio")
-DEMO_PASSWORD = os.environ.get("DEMO_PASSWORD", "admin123")
+DEMO_PASSWORD = os.environ.get("DEMO_PASSWORD", "localdevpass123")
+# Optional: override the demo-mode login banner with custom HTML (trusted
+# operator content only). When empty, the built-in banner is shown.
+DEMO_BANNER_HTML = os.environ.get("DEMO_BANNER_HTML", "")
 
 # Framing policy:
 # - Demo mode (HF Spaces / public demos): allow cross-origin framing so the

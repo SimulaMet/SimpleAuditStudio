@@ -72,15 +72,15 @@ REAL_AGENIC_EVALUATION = {
 
 REAL_SPANS = [
     _span(
-        "f062125f30609f9f", "acme_lookup_order", "TOOL", 0.05,
+        "f062125f30609f9f", "acme_get_order", "TOOL", 0.05,
         **{
-            "gen_ai.tool.name": "acme_lookup_order",
+            "gen_ai.tool.name": "acme_get_order",
             "gen_ai.tool.call.arguments": '{"order_id": "ACME-9999"}',
             "gen_ai.tool.call.result": '{"error": "not found"}',
         },
     ),
     # Duplicate span id on purpose: repeated calls must anchor uniquely.
-    _span("f062125f30609f9f", "acme_lookup_order", "TOOL", 0.10),
+    _span("f062125f30609f9f", "acme_get_order", "TOOL", 0.10),
     _span(
         "397f73d050fb1b64", "query_knowledge_files", "RETRIEVER", 0.0,
         **{
@@ -112,6 +112,66 @@ class AgenticViewHelperTests(TestCase):
         self.assertIsNone(_agentic_timeline_view({}))
         self.assertIsNone(_agentic_timeline_view({"judgment": {}}))
         self.assertIsNone(_agentic_timeline_view({"judgment": {"evidence_spans": []}}))
+
+    def test_timeline_merges_tool_markers_when_otlp_has_no_tool_spans(self):
+        """OWUI exports only CHAIN+LLM spans; tool steps must still appear."""
+        llm_span = _span("a1", "chat_completion", "LLM", 0.0, **{
+            "gen_ai.provider.name": "openai",
+            "gen_ai.request.model": "default",
+        })
+        chain_span = _span("b2", "invoke_workflow", "CHAIN", -0.1)
+        conv = [
+            {"role": "user", "content": "What is the refund policy?"},
+            {"role": "assistant", "content": (
+                'Thinking: I need to check the knowledge base.\n\n'
+                '[TOOL_CALL acme_search_knowledge()]{"query": "refund policy"}\n\n'
+                '[TOOL_RESULT acme_search_knowledge][{"source": "Acme Retail Policy", "text": "30 days..."}]\n\n'
+                'The refund window is 30 days from delivery. Here are your options:'
+            )},
+        ]
+        rep = {
+            "judgment": {"evidence_spans": [chain_span, llm_span]},
+            "conversation": conv,
+        }
+        tl = _agentic_timeline_view(rep)
+        self.assertIsNotNone(tl)
+        # Must contain both the real LLM span and a synthesized tool row.
+        kinds = {r["kind"].upper() for r in tl["rows"]}
+        self.assertIn("LLM", kinds)
+        self.assertIn("TOOL", kinds)
+        # The tool row carries the tool name and KB source.
+        tool_rows = [r for r in tl["rows"] if r["kind"].upper() == "TOOL"]
+        self.assertEqual(len(tool_rows), 1)
+        self.assertIn("acme_search_knowledge", tool_rows[0]["name"])
+        self.assertEqual(tool_rows[0]["kb_sources"], ["Acme Retail Policy"])
+        # Real spans come first (earlier timestamps), synthetic after.
+        self.assertEqual(tl["rows"][0]["span_id"], "b2")
+
+    def test_timeline_no_merge_when_real_tool_spans_exist(self):
+        """When OTLP already has TOOL spans, no synthetic duplicates."""
+        tool_span = _span("t1", "acme_get_order", "TOOL", 0.05, **{
+            "gen_ai.tool.name": "acme_get_order",
+            "gen_ai.tool.call.arguments": '{"order_id": "ACME-9999"}',
+        })
+        llm_span = _span("a1", "chat_completion", "LLM", 0.0)
+        conv = [
+            {"role": "user", "content": "Order status?"},
+            {"role": "assistant", "content": (
+                '[TOOL_CALL acme_get_order()]{"order_id": "ACME-9999"}\n\n'
+                '[TOOL_RESULT acme_get_order][{"status": "shipped"}]\n\n'
+                'Your order ACME-9999 has been shipped and is on its way.'
+            )},
+        ]
+        rep = {
+            "judgment": {"evidence_spans": [llm_span, tool_span]},
+            "conversation": conv,
+        }
+        tl = _agentic_timeline_view(rep)
+        self.assertIsNotNone(tl)
+        # Only one tool row (the real OTLP one), no synthetic duplicate.
+        tool_rows = [r for r in tl["rows"] if r["kind"].upper() == "TOOL"]
+        self.assertEqual(len(tool_rows), 1)
+        self.assertEqual(tool_rows[0]["span_id"], "t1")
 
     def test_findings_prioritized_severity_then_status(self):
         cards = _agentic_findings_view(REAL_AGENIC_EVALUATION)
@@ -209,16 +269,16 @@ class AgenticResultPageRenderTests(TestCase):
         # The failing check card cites its span via the resolved anchor.
         self.assertContains(resp, 'href="#trace-span-1-f062125f30609f9f"')
         self.assertContains(resp, "tool.arguments")
-        self.assertContains(resp, "Agentic audit")
+        self.assertContains(resp, "Agentic check data")
 
     def test_blocks_self_hide_without_agentic_data(self):
         resp = self._get({"severity": "pass", "summary": "plain", "conversation": []})
-        for marker in ("Trajectory timeline", "Agentic audit", "Semantic judge", "Agentic check data"):
+        for marker in ("Trajectory timeline", "Agentic check data", "Semantic agentic evaluation"):
             self.assertNotContains(resp, marker)
 
     def test_judge_panel_hides_without_semantic_judgement(self):
         resp = self._get(self._result())
-        self.assertNotContains(resp, "Semantic judge")
+        self.assertNotContains(resp, "Semantic agentic evaluation")
         # Add the target-contract semantic judgement -> panel appears.
         rep = self._result()
         rep["agentic_evaluation"]["semantic_judgement"] = {
@@ -229,7 +289,7 @@ class AgenticResultPageRenderTests(TestCase):
             "dimensions": {"grounding": {"status": "PASS", "rationale": "ok", "span_ids": ["f062125f30609f9f"]}},
         }
         resp = self._get(rep)
-        self.assertContains(resp, "Semantic judge")
+        self.assertContains(resp, "Semantic agentic evaluation")
         self.assertContains(resp, "Model: ")
         self.assertContains(resp, "Prompt: ")
         # Dimension citation jumps to the (first) evidence row.

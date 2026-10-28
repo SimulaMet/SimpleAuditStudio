@@ -18,7 +18,7 @@
     <div class="grid grid-cols-1 md:grid-cols-2 gap-x-3 gap-y-2">
       <div class="col-span-full">
         <label class="block text-[11px] text-gray-400 mb-0.5">Required tools</label>
-        <input class="w-full px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-1 focus:ring-accent/50" name="agentic_tools_expected" value="{{ agentic.tools.expected|tools_names }}" placeholder="e.g. acme_lookup_order" title="Tools the agent MUST call for this scenario to pass. Comma-separated tool names (find them in Model Registry → your agent's tools). Each listed tool defaults to ≥1 call. For per-tool min/max calls or argument matching, use the JSON preview below. Empty = no specific tool required.">
+        <input class="w-full px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-1 focus:ring-accent/50" name="agentic_tools_expected" value="{{ agentic.tools.expected|tools_names }}" placeholder="e.g. acme_get_order" title="Tools the agent MUST call for this scenario to pass. Comma-separated tool names (find them in Model Registry → your agent's tools). Each listed tool defaults to ≥1 call. For per-tool min/max calls or argument matching, use the JSON preview below. Empty = no specific tool required.">
       </div>
       <div class="col-span-full">
         <label class="block text-[11px] text-gray-400 mb-0.5">Forbidden tools</label>
@@ -26,7 +26,7 @@
       </div>
       <div class="col-span-full">
         <label class="block text-[11px] text-gray-400 mb-0.5">Allowed tools <span class="text-gray-600">(allow-list)</span></label>
-        <input class="w-full px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-1 focus:ring-accent/50" name="agentic_tools_allowed" value="{{ agentic.tools.allowed|join:', ' }}" placeholder="e.g. acme_lookup_order, query_knowledge_files" title="When non-empty, only these tools may be called; anything else fails. Leave empty to allow all (no allow-list). Note: Open WebUI runtime builtins (knowledge search, timestamps) must be included here when you use an allow-list.">
+        <input class="w-full px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-1 focus:ring-accent/50" name="agentic_tools_allowed" value="{{ agentic.tools.allowed|join:', ' }}" placeholder="e.g. acme_get_order, query_knowledge_files" title="When non-empty, only these tools may be called; anything else fails. Leave empty to allow all (no allow-list). Note: Open WebUI runtime builtins (knowledge search, timestamps) must be included here when you use an allow-list.">
       </div>
     </div>
   </div>
@@ -36,7 +36,7 @@
     <div class="grid grid-cols-1 md:grid-cols-2 gap-x-3 gap-y-2 mt-2 pl-3 border-l border-gray-800">
       <div class="col-span-full">
         <label class="block text-[11px] text-gray-400 mb-0.5">Required tools</label>
-        <input class="w-full px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-1 focus:ring-accent/50" name="agentic_tools_expected" value="" placeholder="e.g. acme_lookup_order" title="Tools the agent MUST call. Comma-separated names. Each listed tool defaults to ≥1 call; argument matching via the JSON preview.">
+        <input class="w-full px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-1 focus:ring-accent/50" name="agentic_tools_expected" value="" placeholder="e.g. acme_get_order" title="Tools the agent MUST call. Comma-separated names. Each listed tool defaults to ≥1 call; argument matching via the JSON preview.">
       </div>
       <div class="col-span-full">
         <label class="block text-[11px] text-gray-400 mb-0.5">Forbidden tools</label>

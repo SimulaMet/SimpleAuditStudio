@@ -132,8 +132,12 @@ def test_retrieval_source_unresolvable_file_is_inconclusive_without_listing():
         )
     ])
 
+    # Two linked KBs: a bare filename cannot be attributed to one of them.
     result = evaluate(trajectory, expectations, {
-        "knowledge_bases": [{"name": "Acme Retail Policy", "external_id": "kb-acme"}]
+        "knowledge_bases": [
+            {"name": "Acme Retail Policy", "external_id": "kb-acme"},
+            {"name": "Vendor Docs", "external_id": "kb-vendor"},
+        ]
     })
     source_check = next(
         check for check in result["checks"] if check["id"] == "retrieval.source_allowed"
@@ -198,14 +202,14 @@ def test_tool_argument_assertion_uses_captured_standard_genai_arguments():
 
     trajectory = AgentTrajectory([
         TrajectoryStep(
-            "s3", "tool", "acme_lookup_order",
+            "s3", "tool", "acme_get_order",
             attributes={"gen_ai.tool.call.arguments": '{"order_id":"ACME-1001"}'},
         )
     ])
 
     results = tool_selection(trajectory, {
         "expected": [{
-            "name": "acme_lookup_order",
+            "name": "acme_get_order",
             "min_calls": 1,
             "max_calls": 1,
             "arguments": {"order_id": "ACME-1001"},
@@ -245,12 +249,12 @@ def test_builtin_knowledge_tool_uses_frozen_capability():
 def test_known_tool_matches_its_frozen_openwebui_invocation_name():
     from audits.agentic.checks import tool_permissions
 
-    trajectory = AgentTrajectory([TrajectoryStep("s1", "tool", "acme_lookup_order")])
+    trajectory = AgentTrajectory([TrajectoryStep("s1", "tool", "acme_get_order")])
     snapshot = {
         "tools": [{
             "name": "Acme Order Lookup",
             "external_id": "acme_order_lookup",
-            "invocation_names": ["acme_lookup_order"],
+            "invocation_names": ["acme_get_order"],
             "enabled": True,
             "read_only": True,
             "has_side_effects": False,
@@ -261,3 +265,5 @@ def test_known_tool_matches_its_frozen_openwebui_invocation_name():
 
     assert result[0].status == "PASS"
     assert result[0].evidence_span_ids == ["s1"]
+
+

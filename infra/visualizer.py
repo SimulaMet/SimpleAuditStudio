@@ -517,16 +517,10 @@ def _inject_sidebar(html: str, request) -> str:
 
     # render_to_string with a plain context does not run context processors, so
     # pass the values the partial needs explicitly (user, gravatar).
-    user = getattr(request, "user", None)
-    gravatar = None
-    if user is not None and user.is_authenticated and user.email:
-        import hashlib
+    from infra.context_processors import gravatar_for
 
-        gravatar = (
-            "https://www.gravatar.com/avatar/"
-            + hashlib.md5(user.email.strip().lower().encode("utf-8")).hexdigest()
-            + "?d=identicon&s=128"
-        )
+    user = getattr(request, "user", None)
+    gravatar = gravatar_for(user)
     sidebar = render_to_string(
         "partials/visualizer_sidebar.html",
         {"request": request, "user": user, "gravatar_url": gravatar},

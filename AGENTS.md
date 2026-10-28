@@ -1,5 +1,21 @@
 # AGENTS.md
 
+## First action in any coding-agent session
+
+Run `uv run manage.py dev agent-info` from the checkout. It describes the
+supported local lifecycle commands, ownership, automatic port allocation,
+worktree isolation, cleanup and restart rules. Run `uv run manage.py dev status`
+before launching services. `uv run manage.py dev` is idempotent: if the current
+worktree already has a live owner, it reports the URL and exits.
+
+**Never use `pkill`, `kill -9`, `lsof -ti ... | xargs kill`, or the old `devctl.sh`
+port-clearing logic.** Ordinary Django Python edits use runserver autoreload;
+template edits require only a browser refresh. Hatchet worker Python code does
+not automatically reload in the current architecture; coordinate a full
+`dev restart` only when no audit must be interrupted. Do not point another
+worktree's Python at the main checkout server and claim that branch's code
+was tested. `reset`/`uninstall` destroy data and require explicit permission.
+
 SimpleAudit Studio — an audit platform for LLM systems. It wraps the external
 SimpleAudit engine (Target → Auditor → Judge runs over versioned scenario sets)
 with a Django web UI, a durable worker, and an optional Open WebUI chat module.

@@ -8,13 +8,13 @@ def test_normalizes_genai_execute_tool_name_for_tool_checks():
             "name": "execute_tool",
             "attributes": {
                 "gen_ai.operation.name": "execute_tool",
-                "gen_ai.tool.name": "acme_lookup_order",
+                "gen_ai.tool.name": "acme_get_order",
             },
         }
     ])
 
     assert trajectory.steps[0].kind == "tool"
-    assert trajectory.steps[0].name == "acme_lookup_order"
+    assert trajectory.steps[0].name == "acme_get_order"
 
 
 def test_normalizes_standard_and_openinference_shapes_and_preserves_unknown():
@@ -35,7 +35,7 @@ def test_synthesizes_data_scope_from_order_id_argument():
             "name": "execute_tool",
             "attributes": {
                 "gen_ai.operation.name": "execute_tool",
-                "gen_ai.tool.name": "acme_lookup_order",
+                "gen_ai.tool.name": "acme_get_order",
                 "gen_ai.tool.call.arguments": '{"order_id": "ACME-1001"}',
             },
         }
@@ -66,7 +66,7 @@ def test_explicit_data_scope_attribute_wins_over_synthesis():
             "name": "execute_tool",
             "attributes": {
                 "gen_ai.operation.name": "execute_tool",
-                "gen_ai.tool.name": "acme_lookup_order",
+                "gen_ai.tool.name": "acme_get_order",
                 "gen_ai.tool.call.arguments": '{"order_id": "ACME-1001"}',
                 "data_scope": ["order:ACME-9999"],
             },

@@ -547,14 +547,13 @@ class EnrichTraceConfigTest(TestCase):
         self.assertEqual(enriched["mode"], "studio")
         self.assertEqual(enriched["target_id"], nc.credential.target_id)
 
-    def test_studio_mode_no_credential_empty_target_id(self):
+    def test_studio_mode_no_credential_runs_without_tracing(self):
         from infra.tests.factories import ModelConnectionFactory, ProjectFactory
         from infra.tracing import enrich_trace_config
 
         project = ProjectFactory()
         conn = ModelConnectionFactory(project=project, name="plain")
-        enriched = enrich_trace_config({"mode": "studio"}, {"connection_id": conn.id})
-        self.assertEqual(enriched["target_id"], "")
+        self.assertIsNone(enrich_trace_config({"mode": "studio"}, {"connection_id": conn.id}))
 
     def test_non_studio_config_passthrough(self):
         from infra.tracing import enrich_trace_config

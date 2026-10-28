@@ -27,6 +27,7 @@ from __future__ import annotations
 import os
 import secrets
 import signal
+import sys
 import threading
 import time
 import webbrowser
@@ -38,6 +39,10 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         prog="simpleaudit-studio",
         description="Run SimpleAudit Studio locally (minimal config, no Docker).",
+    )
+    parser.add_argument(
+        "action", nargs="?", choices=["status", "down", "reset", "uninstall", "restart", "help", "agent-info"],
+        help="Optional lifecycle action. Use `spin agent-info` for coding-agent rules.",
     )
     parser.add_argument(
         "--port", type=int, default=int(os.environ.get("PORT", "8000")),
@@ -78,6 +83,16 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    from simpleaudit_studio.lifecycle import Instance, act, start
+    instance = Instance("spin")
+    if act(instance, args.action, yes=args.yes):
+        return
+    explicit_port = "--port" in sys.argv[1:] or any(a.startswith("--port=") for a in sys.argv[1:])
+    requested = int(os.environ.get("PORT", str(args.port)))
+    if not start(instance, requested_port=requested, explicit_port=explicit_port):
+        return
+    args.port = int(os.environ["PORT"])
+
     # Set local mode BEFORE Django reads settings
     os.environ["SIMPLEAUDIT_MINIMAL"] = "1"
     # Pin the explicit mode so `manage.py mode` / resolve_mode() report "embedded".
@@ -102,7 +117,7 @@ def main() -> None:
     print("=" * 60)
     print()
     print(f"💾 Data folder: {data_dir()}  (set SIMPLEAUDIT_DATA_DIR to change)")
-    adopted = adopt_legacy_database()
+    adopted = None if os.environ.get("SIMPLEAUDIT_SKIP_LEGACY_ADOPTION") else adopt_legacy_database()
     if adopted:
         source, runs = adopted
         print(f"   Brought over your data from an earlier version ({runs} run{'s' if runs != 1 else ''}):")
@@ -249,7 +264,7 @@ def main() -> None:
     _start_pipelines_sidecar()
 
     username = os.environ.get("BOOTSTRAP_USERNAME", "studio")
-    password = os.environ.get("BOOTSTRAP_PASSWORD", "admin123")
+    password = os.environ.get("BOOTSTRAP_PASSWORD", "localdevpass123")
 
     # One-time sign-in token: the browser opens the URL below, and the first
     # request that presents it is the only one that works (see auto_login_view).
@@ -527,7 +542,7 @@ def _seed_admin_only() -> None:
 
     username = os.environ.get("BOOTSTRAP_USERNAME", "studio")
     email = os.environ.get("BOOTSTRAP_EMAIL", "admin@localhost")
-    password = os.environ.get("BOOTSTRAP_PASSWORD", "admin123")
+    password = os.environ.get("BOOTSTRAP_PASSWORD", "localdevpass123")
     project_name = os.environ.get("BOOTSTRAP_PROJECT_NAME", "Demo Project")
 
     bootstrap_admin_and_default_project(
@@ -554,11 +569,11 @@ def _run_visualize_only(args) -> None:
 
     ports.resolve_port_conflict(
         port, "the web server", "spin --port <free port>",
-        force_kill=not args.no_force_kill, yes=args.yes,
+        force_kill=False, yes=args.yes,
     )
 
     username = os.environ.get("BOOTSTRAP_USERNAME", "studio")
-    password = os.environ.get("BOOTSTRAP_PASSWORD", "admin123")
+    password = os.environ.get("BOOTSTRAP_PASSWORD", "localdevpass123")
 
     auto_login_token = secrets.token_urlsafe(32)
     os.environ["SIMPLEAUDIT_AUTO_LOGIN_TOKEN"] = auto_login_token
@@ -605,7 +620,7 @@ def _seed_demo_data() -> None:
     # Respect env vars (set by Dockerfile for HF Space, or defaults for local)
     username = os.environ.get("BOOTSTRAP_USERNAME", "studio")
     email = os.environ.get("BOOTSTRAP_EMAIL", "admin@localhost")
-    password = os.environ.get("BOOTSTRAP_PASSWORD", "admin123")
+    password = os.environ.get("BOOTSTRAP_PASSWORD", "localdevpass123")
     project_name = os.environ.get("BOOTSTRAP_PROJECT_NAME", "Demo Project")
 
     _user, project = bootstrap_admin_and_default_project(

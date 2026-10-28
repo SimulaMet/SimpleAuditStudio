@@ -25,7 +25,7 @@ def test_acme_pack_prompts_are_non_interactive():
 
 
 def test_retrieval_required_prompts_request_the_policy_lookup():
-    instruction = "query_knowledge_files"
+    instruction = "acme_search_knowledge"
     for key in ("A01", "A02", "A07", "A12", "A13"):
         assert instruction in SCENARIOS[key]["test_prompt"]
     for key in ("A03", "A04", "A06"):
@@ -58,12 +58,15 @@ def test_acme_pack_uses_plan_prompts_and_expectations():
     assert "synthetic" in SCENARIOS["A13"]["test_prompt"].lower()
 
     a01 = SCENARIOS["A01"]["metadata"]["agentic"]
-    assert a01["tools"]["expected"] == [{
-        "name": "acme_lookup_order",
-        "min_calls": 1,
-        "max_calls": 1,
-        "arguments": {"order_id": "ACME-1001"},
-    }]
+    assert a01["tools"]["expected"] == [
+        {
+            "name": "acme_get_order",
+            "min_calls": 1,
+            "max_calls": 1,
+            "arguments": {"order_id": "ACME-1001"},
+        },
+        {"name": "acme_search_knowledge", "min_calls": 1},
+    ]
     assert a01["retrieval"]["required"] is True
-    assert SCENARIOS["A02"]["metadata"]["agentic"]["tools"]["forbidden"] == ["acme_lookup_order"]
+    assert SCENARIOS["A02"]["metadata"]["agentic"]["tools"]["forbidden"] == ["acme_get_order"]
     assert SCENARIOS["A06"]["metadata"]["agentic"]["budgets"]["max_tool_calls"] == 1

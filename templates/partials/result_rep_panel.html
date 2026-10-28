@@ -100,7 +100,6 @@ whole result of a single-rep run. Context: rep (see infra.ui._rep_view).
       </details>
       {% endfor %}
 
-    <!-- Semantic judge dimensions -->
     {% if rep.agentic_judge %}
     <div class="border-t border-gray-800/70 mt-3 pt-3">
       {% include "partials/agentic_judge.html" %}
@@ -212,7 +211,7 @@ whole result of a single-rep run. Context: rep (see infra.ui._rep_view).
   </div>
   {% endif %}
 
-  {% if rep.trace and rep.trace.spans %}
+  {% if rep.trace %}
   <details class="bg-surface-raised rounded-xl border border-violet-900/40 p-4 group">
     <summary class="flex cursor-pointer select-none flex-wrap items-center gap-3">
       <h3 class="text-sm font-semibold text-violet-300">Target trace</h3>
@@ -220,6 +219,7 @@ whole result of a single-rep run. Context: rep (see infra.ui._rep_view).
       <span class="text-[10px] text-gray-600 group-open:hidden">click to expand</span>
     </summary>
     <div class="mt-3">
+    {% if rep.trace.spans %}
     {% if rep.trace.trace_ids %}
     <div class="flex flex-wrap gap-1.5 mb-3">
       {% for tid in rep.trace.trace_ids %}
@@ -280,7 +280,6 @@ whole result of a single-rep run. Context: rep (see infra.ui._rep_view).
     {% else %}
     <p class="text-xs text-gray-500">The target exported no spans under this rep's trace{{ rep.trace.trace_ids|length|default:0|pluralize }} (tracing was on; the target's OTel may not be wired for this deployment).</p>
     {% endif %}
-  </div>
     </div>
   </details>
   {% endif %}

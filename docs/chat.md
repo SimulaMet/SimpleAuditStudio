@@ -226,7 +226,7 @@ unset: the iframe loads the same-origin `/chat/`.
 | `SIMPLEAUDIT_CHAT_CMD`          | auto                     | command that starts Open WebUI             |
 | `SIMPLEAUDIT_CHAT_IDENTITY_TTL` | `5`                      | seconds the proxy caches who a cookie is   |
 | `SIMPLEAUDIT_CHAT_SYNC_DELAY`   | `2`                      | seconds a model-connection push waits      |
-| `SIMPLEAUDIT_CHAT_OTLP`         | `false` outside embedded CLI; `true` for `uvx` | export Open WebUI's spans to Studio's OTLP listener |
+| `SIMPLEAUDIT_CHAT_OTLP`         | `true` (all modes)                          | export Open WebUI's spans to Studio's OTLP listener |
 | `SIMPLEAUDIT_CHAT_OTLP_ENDPOINT`| full OTLP listener URL   | the `/otlp/v1/traces` ingestion URL (embedded: `http://127.0.0.1:<port>/otlp/v1/traces`, docker: `http://web:8000/otlp/v1/traces`) — the exporter uses it as-is |
 | `SIMPLEAUDIT_CHAT_OTLP_SERVICE_NAME` | `open-webui`         | the service name Open WebUI tags its spans with |
 | `SIMPLEAUDIT_PIPELINES`             | off                  | run the Pipelines filter service (chat → Langfuse tracing) as a sidecar |
@@ -250,9 +250,18 @@ requirements files.
 Compose and development modes leave it off unless explicitly enabled. The
 embedded `uvx simpleaudit-studio` launcher enables structural tracing by default
 so future Agent audits can show operation names, timing, and other non-content
-attributes; set `SIMPLEAUDIT_CHAT_OTLP=false` to opt out. Prompt, output, tool
-argument/result, and retrieved-document content capture remains opt-in and is
-not enabled by this default. When enabled, the demo uses the Studio listener's
+attributes; set `SIMPLEAUDIT_CHAT_OTLP=false` to opt out. Capture levels are per OTLP
+credential; the default is `structural`. API keys and secret-looking tokens are
+redacted at every level. What each level keeps:
+
+| Content | `structural` (default) | `inputs` | `full` |
+|---|---|---|---|
+| Span identity, timing, status, kind | yes | yes | yes |
+| Tool arguments and results | yes | yes | yes |
+| Retrieval sources and documents | yes | yes | yes |
+| Prompts and input messages | yes | yes | yes |
+| Completions and output messages | yes | no | yes |
+| Span events and raw result/output fields | no | no | yes | When enabled, the demo uses the Studio listener's
 `none` credential unless a basic/bearer credential is configured. The exporter
 is the standard OTel one, so the environment variables are the standard ones,
 with two Open WebUI specifics:

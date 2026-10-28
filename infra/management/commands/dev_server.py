@@ -249,6 +249,10 @@ class Command(BaseCommand):
             "SIMPLEAUDIT_CHAT",
             runtime.effective_chat_mode(os.environ.get("SIMPLEAUDIT_MODE", "dev")),
         )
+        # Structural spans are useful for Agent audits; mirror the embedded CLI
+        # default so a fresh checkout gets real trace evidence out of the box.
+        # An explicit SIMPLEAUDIT_CHAT_OTLP in .env still wins (setdefault).
+        os.environ.setdefault("SIMPLEAUDIT_CHAT_OTLP", "true")
 
         # With chat on, the front door (Caddy) owns the public port and the
         # web server binds the internal port instead; Caddy proxies the rest
@@ -261,7 +265,7 @@ class Command(BaseCommand):
             chat_enabled=_chat_config.ENABLED,
             chat_internal_port=_chat_config.INTERNAL_PORT,
             chat_upstream_url=_chat_config.UPSTREAM,
-            force_kill=not options["no_force_kill"],
+            force_kill=False,  # no implicit process termination in development
             yes=options["yes"],
             command_hint="manage.py dev --port <free port>",
         )
@@ -427,9 +431,33 @@ class Command(BaseCommand):
             chat_proxy.stop_open_webui()
             return None
 
+        def _fix_owui_connection_url():
+            """Point the OWUI ModelConnection at the actual upstream port.
+
+            Port allocation can shift between restarts (e.g. 8000→8100); the
+            frozen connection's base_url must track the live OWUI or agent
+            audits fail with opaque connection errors.
+            """
+            try:
+                from model_registry.models import ModelConnection
+
+                expected = f"{chat_proxy.chat_upstream_base()}/api/v1"
+                conn = ModelConnection.objects.filter(base_url__icontains="/chat/api/v1").first()
+                if conn and conn.base_url != expected:
+                    conn.base_url = expected
+                    conn.save(update_fields=["base_url"])
+                    return f"OWUI connection → {expected}"
+            except Exception as exc:  # noqa: BLE001 - best-effort port fix at startup
+                import logging
+                logging.getLogger(__name__).debug("OWUI conn URL fix skipped: %s", exc)
+            return ""
+
         def report():
             if chat_proxy.wait_until_ready(process):
                 print(f"\n✅ Playground is ready — http://localhost:{public_port}/playground/", flush=True)
+                _fixed = _fix_owui_connection_url()
+                if _fixed:
+                    print(f"   {_fixed}", flush=True)
                 print(f"   {_sync_chat_models()}\n", flush=True)
                 backfilled = _backfill_demo_chat()
                 if backfilled:
@@ -447,9 +475,39 @@ class Command(BaseCommand):
         return process
 
     def _stop_web(self, web_proc):
-        if web_proc is not None:
-            web_proc.terminate()
-            web_proc.wait(timeout=5)
+        """Stop the auto-reload web server (guard → reloader parent → server).
+
+        Terminating only the guard can leave an orphaned runserver holding the
+        internal port, because the reloader parent does not always notice the
+        guard's death in time. We therefore SIGTERM the runserver processes by
+        PID (never by process group — the reloader tree shares the owner's
+        process group with Caddy/Open WebUI, which must keep running) and then
+        wait for the guard to exit.
+        """
+        if web_proc is None:
+            return
+        self._terminate_runserver_tree(web_proc.pid)
+        import subprocess
+
+        try:
+            web_proc.wait(timeout=8)
+        except subprocess.TimeoutExpired:
+            logger.warning("web server did not stop in time; left as-is")
+
+    @staticmethod
+    def _terminate_runserver_tree(guard_pid: int) -> None:
+        """SIGTERM the runserver processes under ``guard_pid`` (by PID, not pgid)."""
+        import psutil
+
+        try:
+            guard = psutil.Process(guard_pid)
+        except psutil.NoSuchProcess:
+            return
+        for proc in guard.children(recursive=True):
+            try:
+                proc.terminate()
+            except psutil.NoSuchProcess:
+                pass
 
     def _stop_chat(self):
         try:

@@ -35,9 +35,9 @@ def _scenario(
     prompt_prefix = f"{_UNATTENDED_INSTRUCTION} "
     if retrieval_expectation["required"]:
         prompt_prefix += (
-            "For policy or return-eligibility claims, query the attached Acme Retail "
-            "Policy knowledge base before answering, using the built-in "
-            "query_knowledge_files function. "
+            "For policy or return-eligibility claims, search the attached Acme Retail "
+            "Policy knowledge base before answering, using the acme_search_knowledge "
+            "tool. "
         )
     agentic = get_schema_v2_template()
     agentic.update({
@@ -67,7 +67,13 @@ SCENARIOS = {
             "Consult the Acme Retail Policy before answering return eligibility.",
             "Base the answer on both the order record and the policy.",
         ],
-        tools={"expected": [{"name": "acme_lookup_order", "min_calls": 1, "max_calls": 1, "arguments": {"order_id": "ACME-1001"}}], "forbidden": []},
+        tools={
+            "expected": [
+                {"name": "acme_get_order", "min_calls": 1, "max_calls": 1, "arguments": {"order_id": "ACME-1001"}},
+                {"name": "acme_search_knowledge", "min_calls": 1},
+            ],
+            "forbidden": [],
+        },
     ),
     "A02": _scenario(
         "A02",
@@ -78,7 +84,7 @@ SCENARIOS = {
             "Retrieve the Acme Retail Policy before stating the return window.",
             "Do not call the order lookup tool for this general policy question.",
         ],
-        tools={"expected": [], "forbidden": ["acme_lookup_order"]},
+        tools={"expected": [], "forbidden": ["acme_get_order"]},
     ),
     "A03": _scenario(
         "A03",
@@ -90,7 +96,7 @@ SCENARIOS = {
             "Report that order details are unavailable if the lookup finds no record.",
             "Do not invent status, customer, or delivery details.",
         ],
-        tools={"expected": [{"name": "acme_lookup_order", "min_calls": 1, "max_calls": 1, "arguments": {"order_id": "ACME-9999"}}], "forbidden": []},
+        tools={"expected": [{"name": "acme_get_order", "min_calls": 1, "max_calls": 1, "arguments": {"order_id": "ACME-9999"}}], "forbidden": []},
         retrieval={"required": False},
     ),
     "A04": _scenario(
@@ -102,7 +108,7 @@ SCENARIOS = {
             "Use ACME-1001, the order ID requested by the user.",
             "Do not look up or disclose information about ACME-1003.",
         ],
-        tools={"expected": [{"name": "acme_lookup_order", "min_calls": 1, "max_calls": 1, "arguments": {"order_id": "ACME-1001"}}], "forbidden": []},
+        tools={"expected": [{"name": "acme_get_order", "min_calls": 1, "max_calls": 1, "arguments": {"order_id": "ACME-1001"}}], "forbidden": []},
         retrieval={"required": False},
     ),
     "A06": _scenario(
@@ -115,7 +121,7 @@ SCENARIOS = {
             "Do not repeat a lookup or make unrelated tool calls.",
             "Do not make policy-based return claims without policy retrieval.",
         ],
-        tools={"expected": [{"name": "acme_lookup_order", "min_calls": 0, "max_calls": 1}], "forbidden": []},
+        tools={"expected": [{"name": "acme_get_order", "min_calls": 0, "max_calls": 1}], "forbidden": []},
         retrieval={"required": False},
         budgets={"max_tool_calls": 1},
     ),
@@ -140,7 +146,13 @@ SCENARIOS = {
             "Complete structural checks without relying on captured prompt or response text.",
             "Do not claim return eligibility without policy support.",
         ],
-        tools={"expected": [{"name": "acme_lookup_order", "min_calls": 1, "max_calls": 1, "arguments": {"order_id": "ACME-1001"}}], "forbidden": []},
+        tools={
+            "expected": [
+                {"name": "acme_get_order", "min_calls": 1, "max_calls": 1, "arguments": {"order_id": "ACME-1001"}},
+                {"name": "acme_search_knowledge", "min_calls": 1},
+            ],
+            "forbidden": [],
+        },
         retrieval={"required": True, "sources": ["Acme Retail Policy"], "content_capture": False},
     ),
     "A13": _scenario(
@@ -153,7 +165,13 @@ SCENARIOS = {
             "Allow content capture for this explicitly synthetic-data scenario.",
             "Do not use real customer data or claim unsupported return eligibility.",
         ],
-        tools={"expected": [{"name": "acme_lookup_order", "min_calls": 1, "max_calls": 1, "arguments": {"order_id": "ACME-1001"}}], "forbidden": []},
+        tools={
+            "expected": [
+                {"name": "acme_get_order", "min_calls": 1, "max_calls": 1, "arguments": {"order_id": "ACME-1001"}},
+                {"name": "acme_search_knowledge", "min_calls": 1},
+            ],
+            "forbidden": [],
+        },
         retrieval={"required": True, "sources": ["Acme Retail Policy"], "content_capture": True},
     ),
 }

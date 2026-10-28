@@ -831,6 +831,24 @@ function openScriptModal() {
         </span>
       </div>
       {% endfor %}
+      {% if target_metadata_rows %}
+      <div class="mt-3 pt-3 border-t border-gray-800">
+        <p class="text-[10px] uppercase tracking-wide text-gray-500 mb-2">Target Metadata</p>
+        {% for field in target_metadata_rows %}
+        <div class="flex justify-between gap-3 py-1 border-b border-gray-800/40 last:border-0">
+          <span class="text-gray-500 min-w-0 break-all font-mono">{{ field.key }}</span>
+          {% if field.long %}
+          <details class="min-w-0 max-w-[65%] text-right group">
+            <summary class="cursor-pointer text-gray-300 break-words">{{ field.value|truncatechars:90 }}</summary>
+            <pre class="mt-1 max-h-64 overflow-auto text-left whitespace-pre-wrap break-words rounded bg-surface-overlay p-2 text-[11px] text-gray-300">{{ field.value }}</pre>
+          </details>
+          {% else %}
+          <span class="min-w-0 max-w-[65%] text-right text-gray-300 whitespace-pre-wrap break-words">{{ field.value }}</span>
+          {% endif %}
+        </div>
+        {% endfor %}
+      </div>
+      {% endif %}
       {% if frozen_agent %}
       <div class="mt-3 pt-3 border-t border-gray-800">
         <p class="text-[10px] uppercase tracking-wide text-gray-500 mb-2">Agent</p>
