@@ -20,10 +20,11 @@ dependencies = [
     "pydantic>=2.7,<3",
     "sentry-sdk[django]>=2.0",
     "workos==10.4.0",
-    # The agentic evaluator requires the tracing/evidence APIs from the public
-    # SimpleAudit main branch; do not point release metadata at a developer's
+    # SimpleAudit 0.5.0 (Inspect/OpenEnv extras, target extension points) is
+    # back-compatible with everything Studio uses; 0.4.x stays allowed for
+    # existing installs. Do not point release metadata at a developer's
     # local filesystem.
-    "simpleaudit>=0.4.0,<0.5.0",
+    "simpleaudit>=0.4.0,<0.6.0",
     "cronsim==2.7",
     "psutil>=7.2.2",
     "opentelemetry-proto>=1.45.0",
