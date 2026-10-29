@@ -24,7 +24,7 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from simpleaudit.tracing.auth import parse_basic_header, parse_bearer_header
-from simpleaudit.tracing.store import SpanStore, normalize_span
+from simpleaudit.tracing.store import _OTLP_SPAN_KIND_NAMES, SpanStore, normalize_span
 
 from audits.agentic.auditable import select_auditable_spans
 from infra.exceptions import StableAPIError
@@ -94,6 +94,58 @@ def get_spans_for_trace_db(target_id: str, trace_id: str) -> list[dict]:
     ]
 
 
+# gen_ai.operation.name values that identify a more specific span type than the
+# generic OTLP proto kind (INTERNAL/SERVER/...) normalizes to. Some targets
+# (e.g. OpenWebUI's agent tool loop) emit tool/retrieval activity with rich
+# gen_ai.* attributes but no openinference.span.kind, so normalize_span falls
+# back to the raw proto kind and mislabels them (e.g. as LLM). Refine here so
+# downstream code can filter on the real kind without re-parsing attributes.
+_OPERATION_NAME_TO_KIND = {
+    "execute_tool": "TOOL",
+    "retrieval": "RETRIEVER",
+    "embedding": "EMBEDDING",
+    "rerank": "RERANKER",
+}
+
+
+def _refine_span_kind(span: dict) -> str:
+    """Return the best span kind, preferring explicit attributes over fallbacks.
+
+    ``span`` may be a raw parsed span or an already-normalized one; both carry
+    the same ``attributes`` mapping. Priority: an explicit
+    ``openinference.span.kind`` / ``span.kind`` attribute, else a
+    ``gen_ai.operation.name`` that names a concrete operation, else the kind
+    ``normalize_span`` would produce (raw proto kind or CHAIN). Never downgrades
+    a kind that is already more specific than CHAIN/LLM.
+    """
+    attrs = span.get("attributes") or {}
+    current = (span.get("kind") or "CHAIN")
+    current = _OTLP_SPAN_KIND_NAMES.get(current, current) if isinstance(current, int) else current
+    current = str(current).upper()
+
+    # An explicit OpenInference/OpenTelemetry span-kind attribute wins outright.
+    explicit = attrs.get("openinference.span.kind") or attrs.get("span.kind")
+    if isinstance(explicit, str) and explicit.strip():
+        return explicit.strip().upper()
+
+    refined = _OPERATION_NAME_TO_KIND.get(str(attrs.get("gen_ai.operation.name", "")).lower())
+    if refined and current in ("CHAIN", "LLM"):
+        return refined
+    return current
+
+
+def _stamp_refined_kind(raw_spans: list[dict]) -> None:
+    """Set each raw span's ``kind`` to its refined value, in place.
+
+    ``normalize_span`` reads ``raw.get("kind")`` (as a string) when no explicit
+    span-kind attribute is present, so stamping here makes BOTH the in-memory
+    SpanStore (which normalizes internally) and the DB persistence path agree
+    on the kind without either needing its own refinement pass.
+    """
+    for span in raw_spans:
+        span["kind"] = _refine_span_kind(span)
+
+
 def _persist_spans(target_id: str, raw_spans: list[dict], capture_level: str = "structural") -> None:
     """Idempotently persist normalized spans to the DB for cross-process reads.
 
@@ -114,7 +166,7 @@ def _persist_spans(target_id: str, raw_spans: list[dict], capture_level: str = "
             span_id=span_id,
             defaults={
                 "name": (span.get("name") or "span")[:500],
-                "kind": (span.get("kind") or "CHAIN")[:50],
+                "kind": _refine_span_kind(span)[:50],
                 "parent_span_id": span.get("parent_span_id"),
                 "start_time": span.get("start_time"),
                 "end_time": span.get("end_time"),
@@ -270,6 +322,9 @@ def otlp_traces(request):
         from audits.agentic.privacy import apply_content_capture_level
 
         captured_spans = apply_content_capture_level(raw_spans, cred.capture_level)
+        # Classify tool/retrieval/embedding spans by their gen_ai operation so
+        # both the in-memory store and DB persistence agree on the kind.
+        _stamp_refined_kind(captured_spans)
         _store_for_target(cred.target_id).add_many(captured_spans)
         try:
             _persist_spans(cred.target_id, captured_spans, cred.capture_level)

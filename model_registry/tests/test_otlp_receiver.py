@@ -483,3 +483,88 @@ class OTLPFlagTest(TestCase):
         finally:
             otlp_config.ENABLED = old
             self._reload_urlconf()
+
+
+def _span_with_attrs(span_id, name, attrs, *, kind=None):
+    """Build one OTLP/HTTP-JSON span with the given string attributes."""
+    span = {"traceId": "ab" * 16, "spanId": span_id, "name": name}
+    if kind is not None:
+        span["kind"] = kind
+    if attrs:
+        span["attributes"] = [
+            {"key": k, "value": {"stringValue": str(v)}} for k, v in attrs.items()
+        ]
+    return span
+
+
+class SpanKindRefinementTest(TestCase):
+    """Tool/retrieval spans are classified by their gen_ai operation, not the
+    generic OTLP proto kind (which would mislabel them as LLM/INTERNAL)."""
+
+    def setUp(self):
+        self.user = UserFactory()
+        self.project = ProjectFactory()
+        MembershipFactory(user=self.user, project=self.project, role="admin")
+        self.conn = ModelConnectionFactory(project=self.project, name="owui-a")
+        self.client = Client(SERVER_NAME="localhost")
+        nc = otlp.create_credential(
+            project=self.project, connection=self.conn, auth_mode="basic", user=self.user
+        )
+        self.target_id = nc.credential.target_id
+        self.auth = _basic_header(nc.credential.username, nc.secret)
+
+    def _post_spans(self, spans):
+        body = json.dumps({"resourceSpans": [{"scopeSpans": [{"spans": spans}]}]})
+        resp = self.client.post(
+            "/otlp/v1/traces", data=body, content_type="application/json",
+            HTTP_AUTHORIZATION=self.auth,
+        )
+        self.assertEqual(resp.status_code, 200)
+        return otlp_views.get_spans_for_target(self.target_id)
+
+    def test_execute_tool_operation_is_stored_as_tool_kind(self):
+        spans = self._post_spans([
+            _span_with_attrs("s1" * 8, "acme_get_order", {
+                "gen_ai.operation.name": "execute_tool",
+                "gen_ai.tool.name": "acme_get_order",
+            }, kind=3),  # OTLP CLIENT proto int -> would normalize to CLIENT
+        ])
+        self.assertEqual(len(spans), 1)
+        self.assertEqual(spans[0]["kind"], "TOOL")
+
+    def test_retrieval_operation_is_stored_as_retriever_kind(self):
+        spans = self._post_spans([
+            _span_with_attrs("s2" * 8, "retrieval", {
+                "gen_ai.operation.name": "retrieval",
+            }, kind=1),
+        ])
+        self.assertEqual(spans[0]["kind"], "RETRIEVER")
+
+    def test_explicit_openinference_kind_wins_over_operation(self):
+        spans = self._post_spans([
+            _span_with_attrs("s3" * 8, "some_span", {
+                "openinference.span.kind": "AGENT",
+                "gen_ai.operation.name": "execute_tool",
+            }),
+        ])
+        self.assertEqual(spans[0]["kind"], "AGENT")
+
+    def test_plain_llm_span_keeps_llm_kind(self):
+        spans = self._post_spans([
+            _span_with_attrs("s4" * 8, "chat", {
+                "openinference.span.kind": "LLM",
+                "gen_ai.operation.name": "chat",
+            }),
+        ])
+        self.assertEqual(spans[0]["kind"], "LLM")
+
+    def test_refine_helper_never_downgrades_specific_kind(self):
+        from model_registry.otlp_views import _refine_span_kind
+
+        # A span already classified TOOL must not be demoted by an unrelated op.
+        self.assertEqual(_refine_span_kind({"kind": "TOOL", "attributes": {}}), "TOOL")
+        # CHAIN + execute_tool upgrades to TOOL.
+        self.assertEqual(
+            _refine_span_kind({"kind": "CHAIN", "attributes": {"gen_ai.operation.name": "execute_tool"}}),
+            "TOOL",
+        )
