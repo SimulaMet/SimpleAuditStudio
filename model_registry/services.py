@@ -365,6 +365,41 @@ def sync_agent_to_openwebui(agent, user) -> str:
         return "skipped"
 
 
+def _sync_internal_agent_connection_base_url(connection) -> None:
+    """Keep the internal agent connection's base_url pointing at live OWUI.
+
+    The traced-route logic (``infra/engine.py``) only activates when this
+    connection's ``base_url`` contains ``/chat/api/v1``. That value is derived
+    from ``chat.config.UPSTREAM`` (which carries the live Open WebUI host/port
+    *and* the ``/chat`` subpath), but the connection row is created once and
+    otherwise never re-synced. Across restarts the port changes, so a stale
+    base_url silently disables trace capture for every subsequent agent run.
+
+    Re-derive the base_url from the current UPSTREAM each time an agent model
+    reference is ensured, so the connection always tracks the running instance.
+    No-op when the value is already correct; best-effort (never raises).
+    """
+    from model_registry.models import ModelConnection
+
+    if not isinstance(connection, ModelConnection):
+        return
+    if connection.name not in INTERNAL_AGENT_CONNECTION_NAMES:
+        return
+    try:
+        from chat import config as chat_config
+
+        expected = f"{chat_config.UPSTREAM}/api/v1"
+        if connection.base_url != expected:
+            connection.base_url = expected
+            connection.save(update_fields=["base_url"])
+    except Exception:  # tracing config must never break agent sync
+        import logging
+
+        logging.getLogger(__name__).warning(
+            "Failed to sync internal agent connection base_url", exc_info=True
+        )
+
+
 def _ensure_agent_model_reference(agent, user) -> None:
     """Register the synced OpenWebUI agent as one Studio picker model.
 
@@ -400,6 +435,7 @@ def _ensure_agent_model_reference(agent, user) -> None:
             updated.append("model_id")
         if updated:
             model.save(update_fields=updated + ["updated_at"])
+        _sync_internal_agent_connection_base_url(model.connection)
         return
 
     connection, _ = ModelConnection.objects.get_or_create(

@@ -435,3 +435,62 @@ class ToolSyncTest(_SyncBase):
         resp = self._api(f"/api/tools/{tool.id}/", "delete")
         self.assertEqual(resp.status_code, 204)
         api.delete_tool.assert_called_once_with("tool-abc")
+
+
+class InternalAgentConnectionBaseURLSyncTest(TestCase):
+    """The internal agent connection's base_url must track the live Open WebUI.
+
+    The traced-route logic (infra/engine.py) only activates when the internal
+    "Open WebUI Agents" connection's base_url contains ``/chat/api/v1``. That
+    value is derived from ``chat.config.UPSTREAM`` (live host/port + subpath),
+    but the row is otherwise created once and never re-synced, so a port change
+    across restarts silently disables trace capture. The guard re-derives it on
+    every agent-model ensure.
+    """
+
+    def setUp(self):
+        from infra.tests.factories import ProjectFactory
+
+        self.project = ProjectFactory()
+
+    def _internal_conn(self, base_url):
+        from infra.tests.factories import ModelConnectionFactory
+
+        return ModelConnectionFactory(
+            project=self.project, name="Open WebUI Agents", base_url=base_url
+        )
+
+    def test_stale_base_url_is_resynced_to_upstream(self):
+        from unittest import mock
+
+        from model_registry.services import _sync_internal_agent_connection_base_url
+
+        conn = self._internal_conn("http://127.0.0.1:8180/api/v1")  # stale port, missing /chat
+        with mock.patch("chat.config.UPSTREAM", "http://127.0.0.1:8280/chat"):
+            _sync_internal_agent_connection_base_url(conn)
+        conn.refresh_from_db()
+        self.assertEqual(conn.base_url, "http://127.0.0.1:8280/chat/api/v1")
+
+    def test_correct_base_url_is_left_alone(self):
+        from unittest import mock
+
+        from model_registry.services import _sync_internal_agent_connection_base_url
+
+        conn = self._internal_conn("http://127.0.0.1:8280/chat/api/v1")
+        with mock.patch("chat.config.UPSTREAM", "http://127.0.0.1:8280/chat"):
+            _sync_internal_agent_connection_base_url(conn)
+        conn.refresh_from_db()
+        self.assertEqual(conn.base_url, "http://127.0.0.1:8280/chat/api/v1")
+
+    def test_user_named_connection_is_not_touched(self):
+        from unittest import mock
+
+        from model_registry.services import _sync_internal_agent_connection_base_url
+
+        conn = self._internal_conn("http://my-custom-host:9999/v1")
+        conn.name = "My Custom Agent Endpoint"
+        conn.save(update_fields=["name"])
+        with mock.patch("chat.config.UPSTREAM", "http://127.0.0.1:8280/chat"):
+            _sync_internal_agent_connection_base_url(conn)
+        conn.refresh_from_db()
+        self.assertEqual(conn.base_url, "http://my-custom-host:9999/v1")
