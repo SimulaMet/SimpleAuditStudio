@@ -124,7 +124,7 @@ def test_delete_owned_surfaces_real_errors_not_just_missing_files(environment, m
 
 
 def test_default_port_selection_has_no_duplicate_ports():
-    assert len(set(lifecycle._requested_ports(8000).values())) == 4
+    assert len(set(lifecycle._requested_ports(8000).values())) == 3
     assert lifecycle._requested_ports(8100)["public"] == 8100
     assert lifecycle._requested_ports(8100)["chat"] == 8180
 

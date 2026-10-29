@@ -208,7 +208,8 @@ def _fixture_provenance_check() -> tuple[str, str, str]:
 
 def _ui_check() -> tuple[str, bool, str]:
     source = RESULT_PANEL_PATH.read_text()
-    valid = "check.evidence_span_ids" in source and "rep.trace" in source
+    # Check evidence links are rendered from the per-check evidence list (the trace card was removed).
+    valid = "check.evidence_spans" in source and "trace-span-" in source
     return "ui-evidence-linking", valid, "result panel does not render check or trace evidence"
 
 
