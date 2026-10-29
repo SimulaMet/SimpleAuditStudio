@@ -187,13 +187,15 @@ services:
   # forward /chat/* WITHOUT stripping the prefix (see the Caddyfile header).
   open-webui:
     profiles: ["chat"]
-    image: ${OPEN_WEBUI_IMAGE:-ghcr.io/sushantgautam/open-webui:v0.12.0.3-subpath}
+    image: ${OPEN_WEBUI_IMAGE:-ghcr.io/sushantgautam/open-webui:v0.12.4.1-subpath}
     environment:
       WEBUI_SUBPATH: /chat
       WEBUI_AUTH_TRUSTED_EMAIL_HEADER: X-Studio-Email
       WEBUI_AUTH_TRUSTED_NAME_HEADER: X-Studio-Name
       WEBUI_AUTH_TRUSTED_ROLE_HEADER: X-Studio-Role
       ENABLE_SIGNUP: "false"
+      # Studio pins the Open WebUI build; hide its "new version" banner by default.
+      ENABLE_VERSION_UPDATE_CHECK: ${ENABLE_VERSION_UPDATE_CHECK:-false}
       # Nothing in this stack serves Ollama; Open WebUI polls it otherwise.
       ENABLE_OLLAMA_API: "false"
       # Same origin as Studio; the browser reaches it at /chat/ via chat-proxy.

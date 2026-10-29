@@ -229,6 +229,7 @@ unset: the iframe loads the same-origin `/chat/`.
 | `SIMPLEAUDIT_CHAT_OTLP`         | `true` (all modes)                          | export Open WebUI's spans to Studio's OTLP listener |
 | `SIMPLEAUDIT_CHAT_OTLP_ENDPOINT`| full OTLP listener URL   | the `/otlp/v1/traces` ingestion URL (embedded: `http://127.0.0.1:<port>/otlp/v1/traces`, docker: `http://web:8000/otlp/v1/traces`) — the exporter uses it as-is |
 | `SIMPLEAUDIT_CHAT_OTLP_SERVICE_NAME` | `open-webui`         | the service name Open WebUI tags its spans with |
+| `ENABLE_VERSION_UPDATE_CHECK` | `false`                | Open WebUI's "new version available" banner; off by default because Studio pins the build. Set `true` to show it |
 | `SIMPLEAUDIT_PIPELINES`             | off                  | run the Pipelines filter service (chat → Langfuse tracing) as a sidecar |
 | `SIMPLEAUDIT_PIPELINES_PORT`        | `9099`               | port the filter service listens on (loopback only) |
 | `SIMPLEAUDIT_PIPELINES_FORWARD`     | unset                | upstream OpenAI-compatible base to forward model calls to; unset = canned replies (pure capture) |

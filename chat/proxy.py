@@ -585,7 +585,7 @@ def start_open_webui(studio_port: int | None = None) -> subprocess.Popen:
 OWUI_WHEEL_URL = os.environ.get(
     "SIMPLEAUDIT_CHAT_WHEEL",
     "https://github.com/SushantGautam/open-webui/releases/download/"
-    "v0.12.0.3-subpath/open_webui-0.12.0.3-py3-none-any.whl",
+    "v0.12.4.1-subpath/open_webui-0.12.4.1-py3-none-any.whl",
 )
 OWUI_PACKAGE = os.environ.get("SIMPLEAUDIT_CHAT_PACKAGE", "open-webui")
 
@@ -776,6 +776,9 @@ def _spawn(home: Path, studio_port: int | None = None) -> subprocess.Popen:
         # Nothing here serves Ollama, and Open WebUI polls it on every page load
         # (a 500 per poll in the console) and shows an empty section in settings.
         "ENABLE_OLLAMA_API": "false",
+        # Studio pins the Open WebUI build, so its "new version available"
+        # banner is noise. Operators can still opt back in with the env var.
+        "ENABLE_VERSION_UPDATE_CHECK": os.environ.get("ENABLE_VERSION_UPDATE_CHECK", "false"),
         "WEBUI_URL": chat.public_url(),
     }
     if chat.OTLP_ENABLED:
