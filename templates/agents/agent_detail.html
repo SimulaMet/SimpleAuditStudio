@@ -64,6 +64,9 @@
           {% if openwebui_live.knowledge %}
           · {{ openwebui_live.knowledge|length }} knowledge base{{ openwebui_live.knowledge|length|pluralize }}
           {% endif %}
+          {% if openwebui_live.tool_ids %}
+          · {{ openwebui_live.tool_ids|length }} tool{{ openwebui_live.tool_ids|length|pluralize }}
+          {% endif %}
         </p>
         {% else %}
         <p class="text-xs text-amber-400">
