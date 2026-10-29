@@ -3405,6 +3405,7 @@ _REP_KNOWN_KEYS = {
     "severity", "rationale", "evidence", "judge_rationale", "judgment", "scenario_name",
     "scenario_description", "expected_behavior", "file_uri", "_rep_index", "_language", "error",
     "trace_ids",
+    "trace_evidence",
     "agentic_evaluation",
     *(f"{r}_{d}_tokens" for r in _REP_TOKEN_ROLES for d in ("input", "output")),
 }
@@ -3555,6 +3556,20 @@ _AGENTIC_SPAN_KIND_ICONS = {
 }
 
 
+def _span_label(sid: str) -> str:
+    """Short display label for a synthetic conversation span id.
+
+    Display only: the id itself stays the link anchor, so these links keep working.
+    """
+    if sid.startswith("conv-tool-result-"):
+        return f"tool-result-{sid.rsplit('-', 1)[-1]}"
+    if sid.startswith("conv-tool-"):
+        return f"tool-{sid.rsplit('-', 1)[-1]}"
+    if sid.startswith("conv-response-"):
+        return "response"
+    return sid
+
+
 def _agentic_span_view(span: dict) -> dict | None:
     """One evidence span as a timeline row (chronological ordering key included)."""
     if not isinstance(span, dict) or not span.get("span_id"):
@@ -3572,6 +3587,7 @@ def _agentic_span_view(span: dict) -> dict | None:
     start = span.get("start_time")
     return {
         "span_id": str(span["span_id"]),
+        "label": _span_label(str(span["span_id"])),
         "kind": span.get("kind") or "",
         "icon": icon,
         "tone": tone,
@@ -4101,6 +4117,13 @@ def _rep_view(rep: dict, index: int) -> dict:
     )
     grade = _judge_grade(rep.get("judgment"))
     agentic = rep.get("agentic_evaluation") if isinstance(rep.get("agentic_evaluation"), dict) else None
+    if agentic and isinstance(agentic.get("checks"), list):
+        # Each check's evidence ids come with display labels; the ids stay the link anchors.
+        agentic = {**agentic, "checks": [
+            {**c, "evidence_spans": [{"id": str(sid), "label": _span_label(str(sid))} for sid in (c.get("evidence_span_ids") or [])]}
+            if isinstance(c, dict) else c
+            for c in agentic["checks"]
+        ]}
     timeline = _agentic_timeline_view(rep)
     # Finding cards and judge dimensions cite span ids; resolve each to its
     # unique DOM anchor so a jump link lands on the correct row even when span
@@ -4108,16 +4131,6 @@ def _rep_view(rep: dict, index: int) -> dict:
     findings = _agentic_findings_view(agentic or {})
     judge = _agentic_judge_view(agentic or {})
     anchor_for = timeline["anchor_for"] if timeline else {}
-
-    def _span_label(sid: str) -> str:
-        """Human-friendly label for a synthetic span id."""
-        if sid.startswith("conv-tool-"):
-            # Look up the tool name from the timeline rows
-            row = next((r for r in (timeline or {}).get("rows", []) if r.get("span_id") == sid), None)
-            return (row or {}).get("tool_name") or f"Tool {sid.rsplit('-', 1)[-1]}"
-        if sid.startswith("conv-response-"):
-            return "Response"
-        return sid
 
     for card in findings:
         card["spans"] = [

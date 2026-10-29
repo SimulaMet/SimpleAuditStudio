@@ -26,7 +26,7 @@ The "Focus" button toggles a wide mode that pushes the app chrome aside.
       </div>
       <details class="agentic-tl-card min-w-0 flex-1 rounded-lg border border-gray-800/70 bg-surface-overlay/40 group-open:border-violet-800/50">
         <summary class="cursor-pointer select-none flex flex-wrap items-center gap-x-2 gap-y-1 px-3 py-2">
-          <span class="shrink-0 px-1.5 py-0.5 rounded bg-surface-overlay/60 border border-gray-800 text-[10px] uppercase tracking-wide {{ s.tone }}" title="{{ s.kind }}">{{ s.kind|default:"STEP" }}</span>
+          <span class="shrink-0 px-1.5 py-0.5 rounded bg-surface-overlay/60 border border-gray-800 text-[10px] uppercase tracking-wide {{ s.tone }}" title="{{ s.kind }}">{{ s.label|default:s.kind|default:"STEP" }}</span>
           <span class="min-w-0 truncate text-sm text-gray-200" title="{{ s.name }}">{{ s.name }}</span>
           {% if s.tool_name %}<span class="min-w-0 truncate text-xs text-gray-500" title="{{ s.tool_name }}">· {{ s.tool_name }}</span>{% endif %}
           {% if s.kb_sources %}
