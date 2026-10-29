@@ -4,7 +4,8 @@ The design form lets every input take one or more values. Inputs with one
 value are *fixed*; inputs with several are *factors* (what the experiment
 compares). The cartesian product of all values is the list of runs, each an
 ordinary frozen AuditRun linked to the Experiment. A design that expands to a
-single run launches it directly, without an Experiment.
+single run still becomes an Experiment: a singleton with empty factors, so
+every launch from New Experiment has its own shareable results page.
 """
 from __future__ import annotations
 
@@ -144,32 +145,49 @@ def parse_design(post, project) -> dict:
         missing = [i for i in ids if i not in found]
         if missing:
             raise DesignError(f"A selected {label} model isn't available in this workspace.")
+        # Agent wrapper models (studio.agent-*) are targets only: an auditor or
+        # judge grades conversations as a bare model, so the agent's KB/tools
+        # have no meaning in those roles. The picker hides them; this rejects
+        # hand-crafted or stale submissions that still carry them.
+        if axis != "target":
+            bad = [m.display_name for m in found.values() if m.model_id.startswith("studio.agent-")]
+            if bad:
+                raise DesignError(
+                    f"Agents can't be used as {label} models: " + ", ".join(bad)
+                    + ". Pick a regular model for that role."
+                )
         models[axis] = [found[i] for i in dict.fromkeys(ids)]
-
-    # Judges: version ids, and/or "latest:<judge id>" (always latest: unpinned,
-    # so repeating runs follow new versions).
-    raw = [v for v in dict.fromkeys(post.getlist("judge")) if v]
-    if not raw:
-        raise DesignError("Pick at least one judge.")
-    follow_ids = [v.split(":", 1)[1] for v in raw if v.startswith("latest:")]
-    pinned_ids = [v for v in raw if not v.startswith("latest:")]
-    judges = list(
-        JudgeVersion.objects.filter(pk__in=pinned_ids, judge__project=project).select_related("judge")
-    )
-    follow = list(Judge.objects.filter(pk__in=follow_ids, project=project))
-    if len(judges) != len(pinned_ids) or len(follow) != len(follow_ids):
-        raise DesignError("A selected judge is not in this workspace.")
-    for judge in follow:
-        latest = judge.versions.select_related("judge").order_by("-version").first()
-        if latest is None:
-            raise DesignError(f"Judge “{judge.name}” has no version.")
-        latest.follow_latest = True
-        judges.append(latest)
-    judges.sort(key=lambda v: (v.judge.name, is_follow(v), v.version))
 
     # When an agent is the target, its base_model IS the target model.
     if agent is not None and not models.get("target"):
         models["target"] = [agent.base_model]
+
+    all_decision = _all_decision_targets(models["target"])
+
+    # Judges: version ids, and/or "latest:<judge id>" (always latest: unpinned,
+    # so repeating runs follow new versions). All-decision designs skip this:
+    # choice_match grades in code and no judge model is called.
+    if all_decision:
+        judges = [_decision_judge_version(project)]
+    else:
+        raw = [v for v in dict.fromkeys(post.getlist("judge")) if v]
+        if not raw:
+            raise DesignError("Pick at least one judge.")
+        follow_ids = [v.split(":", 1)[1] for v in raw if v.startswith("latest:")]
+        pinned_ids = [v for v in raw if not v.startswith("latest:")]
+        judges = list(
+            JudgeVersion.objects.filter(pk__in=pinned_ids, judge__project=project).select_related("judge")
+        )
+        follow = list(Judge.objects.filter(pk__in=follow_ids, project=project))
+        if len(judges) != len(pinned_ids) or len(follow) != len(follow_ids):
+            raise DesignError("A selected judge is not in this workspace.")
+        for judge in follow:
+            latest = judge.versions.select_related("judge").order_by("-version").first()
+            if latest is None:
+                raise DesignError(f"Judge “{judge.name}” has no version.")
+            latest.follow_latest = True
+            judges.append(latest)
+        judges.sort(key=lambda v: (v.judge.name, is_follow(v), v.version))
 
     n_reps_raw = (post.get("n_repetitions") or "").strip()
     try:
@@ -196,8 +214,21 @@ def parse_design(post, project) -> dict:
     languages = _split_values(post.get("language", ""), str)
 
     # The target's system prompt lives in the generation config (the engine
-    # reads it there); the field wins over a key typed into the JSON.
+    # reads it there). A picked versioned prompt fills the textarea client-side,
+    # but we re-resolve it server-side so a non-JS post is still correct; the
+    # resolved text then wins over a key typed into the JSON. We keep the
+    # resolved version object too so the run can freeze *which* prompt was used.
     system_prompt = (post.get("system_prompt") or "").strip()
+    prompt_version = None
+    prompt_version_id = (post.get("system_prompt_version") or "").strip()
+    if prompt_version_id:
+        from prompts.models import SystemPromptVersion
+
+        pv = SystemPromptVersion.objects.filter(
+            pk=prompt_version_id, prompt__project=project).select_related("prompt").first()
+        if pv is not None:
+            prompt_version = pv
+            system_prompt = pv.content.strip()
     if system_prompt:
         gen_config = {**(gen_config or {}), "system_prompt": system_prompt}
 
@@ -246,6 +277,7 @@ def parse_design(post, project) -> dict:
         "language": languages,
         "n_repetitions": n_reps if n_reps and n_reps > 1 else None,
         "gen_config": gen_config or None,
+        "system_prompt_version": prompt_version,
         "target_trace": target_trace,
         "target_trace_by_model": target_trace_by_model,
     }
@@ -267,6 +299,26 @@ def run_count(design: dict) -> int:
     return n
 
 
+def _all_decision_targets(targets: list) -> bool:
+    """True when every selected target is a decision model."""
+    return bool(targets) and all(m.is_decision for m in targets)
+
+
+def _decision_judge_version(project):
+    """A Choice Match judge version for this workspace, created on first use."""
+    from judges.models import JudgeVersion
+    from judges.services import create_judge, unique_name
+
+    existing = JudgeVersion.objects.filter(
+        judge__project=project, base="choice_match"
+    ).order_by("judge__name", "version").first()
+    if existing:
+        return existing
+    name = unique_name(project, "Choice Match")
+    judge = create_judge(project=project, name=name, base="choice_match")
+    return judge.latest
+
+
 def expand(design: dict) -> list[dict]:
     """Every combination of the design's values, as run specs."""
     if run_count(design) > MAX_RUNS_PER_EXPERIMENT:
@@ -274,11 +326,22 @@ def expand(design: dict) -> list[dict]:
             f"This design makes {run_count(design)} runs; the limit is {MAX_RUNS_PER_EXPERIMENT}. "
             "Fix more inputs to one value, or split it into several experiments."
         )
+    all_decision = _all_decision_targets(design["target"])
+    # All-decision designs have no auditor or judge model; give them a
+    # placeholder so the cartesian product isn't empty (overwritten below).
+    axes = {k: design[k] for k in DESIGN_AXES}
+    if all_decision:
+        axes["auditor"] = [None]
+        axes["judge_model"] = [None]
     specs = []
-    for combo in itertools.product(*(design[key] for key in DESIGN_AXES)):
+    for combo in itertools.product(*(axes[key] for key in DESIGN_AXES)):
         spec = dict(zip(DESIGN_AXES, combo, strict=True))
+        if all_decision:
+            spec["auditor"] = spec["judge_model"] = spec["target"]
+            spec["max_turns"] = 1
         spec["n_repetitions"] = design["n_repetitions"]
         spec["gen_config"] = design["gen_config"]
+        spec["system_prompt_version"] = design.get("system_prompt_version")
         spec["agent"] = design.get("agent")
         if design.get("agent") is not None:
             spec["target_trace"] = design.get("target_trace")
@@ -305,6 +368,7 @@ def spec_to_run(spec: dict, name: str) -> dict:
         "language": spec["language"],
         "n_repetitions": spec["n_repetitions"],
         "gen_config": spec["gen_config"],
+        "system_prompt_version": spec.get("system_prompt_version"),
         "target_trace": spec.get("target_trace"),
     }
 
@@ -332,7 +396,12 @@ def spec_label(spec: dict, factors: list[str]) -> str:
 
 def spec_warnings(spec: dict) -> list[str]:
     warnings = []
-    if spec["judge_model"].pk == spec["target"].pk:
+    if spec["target"].is_decision:
+        warnings.append(
+            "Decision targets are graded by the Choice Match judge (choice_match); "
+            "no judge model is called."
+        )
+    elif spec["judge_model"].pk == spec["target"].pk:
         warnings.append("Judge model is the target model: it grades itself.")
     for role, model in (("Target", spec["target"]), ("Auditor", spec["auditor"]), ("Judge", spec["judge_model"])):
         if not model.has_key:
@@ -401,7 +470,7 @@ def factors_from_runs(runs: list[dict]) -> list[str]:
 
 def spec_to_row(spec: dict) -> str:
     """Serialise the non-editable part of a spec for the review form."""
-    return json.dumps({
+    row = {
         "v": spec["scenario_set"].pk,
         "f": 1 if is_follow(spec["scenario_set"]) else 0,
         "t": spec["target"].pk,
@@ -409,7 +478,11 @@ def spec_to_row(spec: dict) -> str:
         "jm": spec["judge_model"].pk,
         "j": spec["judge"].pk,
         "jf": 1 if is_follow(spec["judge"]) else 0,
-    })
+    }
+    spv = spec.get("system_prompt_version")
+    if spv is not None:
+        row["spv"] = spv.pk
+    return json.dumps(row)
 
 
 def launch_experiment(*, project, user, name: str, runs: list[dict], repeat: dict | None = None) -> Experiment:
@@ -445,7 +518,7 @@ def launch_experiment(*, project, user, name: str, runs: list[dict], repeat: dic
                 user=user,
                 name=r["name"],
                 scenario_set_version=r["version"],
-                target_model=r["target"],
+                target_model=None if r.get("agent") else r["target"],
                 auditor_model=r["auditor"],
                 judge_model=r["judge_model"],
                 judge=r["judge"],
@@ -453,6 +526,7 @@ def launch_experiment(*, project, user, name: str, runs: list[dict], repeat: dic
                 language_override=r["language"],
                 n_repetitions_override=r["n_repetitions"],
                 gen_config_override=r["gen_config"],
+                system_prompt_version=r.get("system_prompt_version"),
                 experiment=experiment,
                 agent=r.get("agent"),
                 trace_config={} if r.get("target_trace") is False else None,

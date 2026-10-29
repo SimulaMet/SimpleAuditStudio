@@ -1,0 +1,36 @@
+<div class="max-w-4xl mx-auto px-6 pt-10 pb-20 w-full">
+  <h1 class="text-3xl md:text-4xl font-bold text-white tracking-tight">Public Experiments</h1>
+  <p class="mt-3 text-gray-400 max-w-2xl leading-relaxed mb-8">
+    Audit experiments shared by their owners with anyone on the internet — no account required.
+    Each one is a reproducible run of the Target&nbsp;→&nbsp;Auditor&nbsp;→&nbsp;Judge engine.
+  </p>
+
+  {% if experiments %}
+  <div class="grid sm:grid-cols-2 gap-4">
+    {% for e in experiments %}
+    <a href="/experiments/{{ e.id }}/"
+       class="group rounded-2xl border border-gray-800 bg-surface-raised p-5 hover:border-accent/50 transition-colors">
+      <div class="flex items-start justify-between gap-3">
+        <h3 class="text-base font-semibold text-gray-100 group-hover:text-accent transition-colors line-clamp-2">{{ e.name }}</h3>
+        <span class="shrink-0 inline-flex items-center px-2 py-0.5 rounded-full text-[11px] bg-emerald-900/40 text-emerald-300 border border-emerald-800/50">Public</span>
+      </div>
+      <div class="mt-3 flex flex-wrap gap-1">
+        {% for l in e.factor_labels %}
+        <span class="px-2 py-0.5 rounded-full text-[11px] bg-accent/15 text-accent">{{ l }}</span>
+        {% empty %}<span class="text-xs text-gray-600">—</span>{% endfor %}
+      </div>
+      <p class="mt-3 text-xs text-gray-500">
+        {{ e.summary.done }}/{{ e.summary.total }} runs done
+        {% if e.summary.active %}<span class="text-amber-400">· {{ e.summary.active }} active</span>{% endif %}
+        · <time data-local datetime="{{ e.created_at|date:'c' }}">{{ e.created_at|date:"M j, Y" }}</time>
+      </p>
+    </a>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="py-16 text-center">
+    <p class="text-sm text-gray-400">No public experiments yet.</p>
+    <p class="text-xs text-gray-500 mt-1">Experiments appear here once an admin marks them public.</p>
+  </div>
+  {% endif %}
+</div>

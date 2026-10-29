@@ -22,6 +22,7 @@ from infra.tests.factories import (
     ScenarioSetVersionFactory,
     UserFactory,
     judge_for,
+    system_prompt_for,
 )
 
 _PROVENANCE = mock.Mock(version="0.2.1", commit="", source="metadata")
@@ -45,6 +46,9 @@ class _ExperimentBase(TestCase):
         self.t1 = RegisteredModelFactory(connection=conn, display_name="GPT")
         self.t2 = RegisteredModelFactory(connection=conn, display_name="Claude")
         self.judge = RegisteredModelFactory(connection=conn, display_name="Qwen")
+        self.decision = RegisteredModelFactory(
+            connection=conn, display_name="Jev", capabilities={"decision": True}
+        )
         for target in (
             mock.patch("audits.services.resolve_engine_provenance", return_value=_PROVENANCE),
             mock.patch("audits.services.submit_audit_run"),
@@ -64,6 +68,19 @@ class _ExperimentBase(TestCase):
             "language": "",
             "n_repetitions": "3",
             "gen_config_json": '{"judge_params": {"temperature": 0}}',
+        }
+        data.update(extra)
+        return data
+
+    def _decision(self, **extra):
+        """A design POST for a decision-only target: no judge or auditor fields."""
+        data = {
+            "scenario_set": [self.set_a.id],
+            "target_model": [self.decision.id],
+            "max_turns": "3",
+            "language": "",
+            "n_repetitions": "1",
+            "gen_config_json": "",
         }
         data.update(extra)
         return data
@@ -93,32 +110,71 @@ class _ExperimentBase(TestCase):
 
 class ExperimentFlowTests(_ExperimentBase):
     def test_design_page_renders_multi_pickers(self):
-        agent = AgentFactory(
-            project=self.project, base_model=self.t1, external_id="studio.agent-99"
-        )
-        agent_conn = ModelConnectionFactory(
-            project=self.project, name="Open WebUI Agents",
-            base_url="http://127.0.0.1:8080/chat/api/v1",
-        )
-        agent_model = RegisteredModelFactory(
-            connection=agent_conn, project=self.project,
-            model_id=agent.external_id, display_name=agent.name,
-        )
-        page = self.client.get("/experiments/new/")
+        # Agents only appear in the picker while chat is enabled.
+        with mock.patch("chat.config.ENABLED", True):
+            agent = AgentFactory(
+                project=self.project, base_model=self.t1, external_id="studio.agent-99"
+            )
+            agent_conn = ModelConnectionFactory(
+                project=self.project, name="Open WebUI Agents",
+                base_url="http://127.0.0.1:8080/chat/api/v1",
+            )
+            agent_model = RegisteredModelFactory(
+                connection=agent_conn, project=self.project,
+                model_id=agent.external_id, display_name=agent.name,
+            )
+            page = self.client.get("/experiments/new/")
         self.assertContains(page, "New Experiment")
         self.assertContains(page, 'type="checkbox" name="target_model"')
-        self.assertContains(page, f'name="auditor_model" value="{agent_model.id}"')
-        self.assertContains(page, f'name="judge_model" value="{agent_model.id}"')
+        # Agents are offered as targets only — never as auditor/judge models.
         self.assertContains(page, f'name="agent_id" value="{agent.id}"')
+        self.assertNotContains(page, f'name="auditor_model" value="{agent_model.id}"')
+        self.assertNotContains(page, f'name="judge_model" value="{agent_model.id}"')
         self.assertContains(page, 'name="scenario_version"')
 
-    def test_single_combination_launches_directly(self):
+    def test_decision_target_design_page_still_shows_all_pickers(self):
+        # GET design page: JS hides columns client-side; server renders all.
+        page = self.client.get("/experiments/new/")
+        self.assertContains(page, 'name="auditor_model"')
+        self.assertContains(page, 'name="judge_model"')
+
+    def test_single_combination_becomes_a_singleton_experiment(self):
+        # Anything launched from New Experiment is an Experiment, even one run.
         resp = self.client.post("/experiments/new/", self._design(target_model=[self.t1.id], max_turns="3"))
+        exp = Experiment.objects.get()
         run = AuditRun.objects.get()
-        self.assertRedirects(resp, f"/runs/{run.id}/", fetch_redirect_response=False)
-        self.assertIsNone(run.experiment_id)
-        self.assertFalse(Experiment.objects.exists())
+        self.assertRedirects(resp, f"/experiments/{exp.id}/", fetch_redirect_response=False)
+        self.assertEqual(exp.factors, [])  # nothing varies across one run
+        self.assertEqual(list(exp.runs.all()), [run])
+        self.assertEqual(run.experiment, exp)
         self.assertEqual(run.generation_parameters_snapshot["max_turns"], 3)
+
+    def test_decision_target_launches_without_judge_and_forces_max_turns_one(self):
+        resp = self.client.post("/experiments/new/", self._decision())
+        exp = Experiment.objects.get()
+        run = AuditRun.objects.get()
+        self.assertRedirects(resp, f"/experiments/{exp.id}/", fetch_redirect_response=False)
+        # max_turns forced to 1 regardless of the submitted value.
+        self.assertEqual(run.generation_parameters_snapshot["max_turns"], 1)
+        # The target model stands in for both auditor and judge_model FKs.
+        self.assertEqual(run.auditor_model_id, self.decision.id)
+        self.assertEqual(run.judge_model_id, self.decision.id)
+        # The judge version is choice_match, not the workspace default.
+        snap = run.judge_config_snapshot
+        self.assertEqual(snap["judge"]["base"], "choice_match")
+
+    def test_singleton_experiment_page_renders(self):
+        self.client.post("/experiments/new/", self._design(target_model=[self.t1.id], max_turns="3"))
+        exp = Experiment.objects.get()
+        page = self.client.get(f"/experiments/{exp.id}/")
+        self.assertContains(page, "Single run")
+        self.assertContains(page, "Pass rate")
+        self.assertEqual(page.context["row_factor"], None)
+        self.assertEqual(page.context["col_factor"], None)
+        # The list page shows it with a single-run badge instead of factors.
+        listing = self.client.get("/experiments/")
+        self.assertContains(listing, exp.name)
+        self.assertContains(listing, "single run")
 
     def test_multi_design_shows_review_without_launching(self):
         resp = self.client.post("/experiments/new/", self._design())
@@ -129,6 +185,23 @@ class ExperimentFlowTests(_ExperimentBase):
         self.assertContains(resp, "Launch")
         self.assertFalse(AuditRun.objects.exists())
 
+    def test_decision_target_review_forces_max_turns_and_hides_judge_model_column(self):
+        # Two scenario sets × one decision target → multi-run review screen.
+        review = self.client.post(
+            "/experiments/new/",
+            self._decision(scenario_set=[self.set_a.id, self.set_b.id]),
+        )
+        self.assertTemplateUsed(review, "experiment_review.html")
+        rows = review.context["rows"]
+        self.assertEqual(len(rows), 2)
+        # max_turns forced to 1 on every row.
+        self.assertTrue(all(r["max_turns"] == 1 for r in rows))
+        # No judge_model column; choice_match note shown once at top.
+        self.assertNotIn("judge_model", [k for k, _ in review.context["columns"]])
+        self.assertIn(
+            "All runs: Decision targets are graded by the Choice Match judge (choice_match); no judge model is called.",
+            review.context["design_warnings"],
+        )
 
     def test_launch_creates_experiment_with_selected_runs(self):
         review = self.client.post("/experiments/new/", self._design())
@@ -165,11 +238,43 @@ class ExperimentFlowTests(_ExperimentBase):
         self.assertEqual(set(page.context["sel"]["target"]), {str(self.t1.id), str(self.t2.id)})
         self.assertEqual(page.context["clone"]["max_turns"], "3, 5")
 
+    def test_decision_target_back_to_design_keeps_all_pickers(self):
+        # Going back from review to design re-renders the full form; JS
+        # hides columns client-side based on the selected targets.
+        review = self.client.post(
+            "/experiments/new/",
+            self._decision(scenario_set=[self.set_a.id, self.set_b.id]),
+        )
+        back = {"action": "edit"}
+        for key, value in review.context["design_post"]:
+            back.setdefault(f"design__{key}", []).append(value)
+        page = self.client.post("/experiments/new/", back)
+        self.assertTemplateUsed(page, "experiment_new.html")
+        # All pickers are rendered; JS handles visibility.
+        self.assertContains(page, 'name="auditor_model"')
+        self.assertContains(page, 'name="judge_model"')
+
     def test_design_errors_are_explained(self):
         resp = self.client.post("/experiments/new/", self._design(judge=[]))
         self.assertContains(resp, "Pick at least one judge.")
         resp = self.client.post("/experiments/new/", self._design(max_turns="3, lots"))
         self.assertContains(resp, "Max turns")
+
+    def test_mixed_decision_and_chat_targets_show_choice_match_warning(self):
+        # Mixed targets: both rows get the same auditor/judge; only the
+        # decision row gets the choice_match warning.
+        review = self.client.post(
+            "/experiments/new/",
+            self._design(target_model=[self.t1.id, self.decision.id], max_turns=""),
+        )
+        self.assertTemplateUsed(review, "experiment_review.html")
+        rows = review.context["rows"]
+        decision_row = next(r for r in rows if json.loads(r["spec"])["t"] == self.decision.id)
+        chat_row = next(r for r in rows if json.loads(r["spec"])["t"] == self.t1.id)
+        # Decision row: choice_match warning present.
+        self.assertTrue(any("Choice Match judge" in w for w in decision_row["warnings"]))
+        # Chat row: no choice_match warning.
+        self.assertFalse(any("Choice Match judge" in w for w in chat_row["warnings"]))
 
     def test_run_cap(self):
         from audits.experiments import MAX_RUNS_PER_EXPERIMENT
@@ -314,6 +419,18 @@ class ReviewWarningTests(_ExperimentBase):
         )
         rows = review.context["rows"]
         self.assertEqual(sum("grades itself" in " ".join(r["warnings"]) for r in rows), 1)
+
+    def test_decision_target_warning_shown_once_for_all_rows(self):
+        # Two scenario sets × one decision target → 2 runs; note is shared.
+        review = self.client.post(
+            "/experiments/new/",
+            self._decision(scenario_set=[self.set_a.id, self.set_b.id]),
+        )
+        self.assertIn(
+            "All runs: Decision targets are graded by the Choice Match judge (choice_match); no judge model is called.",
+            review.context["design_warnings"],
+        )
+        self.assertTrue(all(not r["warnings"] for r in review.context["rows"]))
 
 
 class ScenarioVersionPickTests(_ExperimentBase):
@@ -462,6 +579,88 @@ class JudgeAndSystemPromptTests(_ExperimentBase):
         prompts = [r.generation_parameters_snapshot.get("system_prompt") for r in exp.runs.order_by("id")]
         self.assertEqual(prompts, ["You are Acme's bot.", None])
         self.assertEqual(exp.factors, ["target", "system_prompt"])
+
+    def test_predefined_prompt_picker_is_offered_when_prompts_exist(self):
+        # No prompts → context empty and no radio rows rendered.
+        page = self.client.get("/experiments/new/")
+        self.assertEqual(page.context["system_prompts"], [])
+        self.assertNotContains(page, 'type="radio" name="system_prompt_version"')
+        prompt = system_prompt_for(self.project, name="Support bot", content="You are the Acme support bot.")
+        version = prompt.latest
+        page = self.client.get("/experiments/new/")
+        # Rendered like the Scenario-sets block: a row per prompt with an
+        # expandable Versions list of radios (single selection, no row checkbox).
+        self.assertContains(page, f'type="radio" name="system_prompt_version" value="{version.id}"')
+        self.assertNotContains(page, 'data-prompt-toggle')
+        self.assertContains(page, "Support bot")
+        self.assertContains(page, "Versions ▾")
+        self.assertIn(prompt, page.context["system_prompts"])
+
+    def test_picking_a_predefined_prompt_bakes_content_and_source_into_the_run(self):
+        prompt = system_prompt_for(self.project, name="Support bot", content="You are the Acme support bot.")
+        version = prompt.latest
+        # One target → a singleton launches straight away (no review screen).
+        self.client.post(
+            "/experiments/new/",
+            self._design(target_model=[self.t1.id], max_turns="3",
+                         system_prompt=version.content, system_prompt_version=str(version.id)),
+        )
+        run = AuditRun.objects.get()
+        snap = run.generation_parameters_snapshot
+        self.assertEqual(snap["system_prompt"], "You are the Acme support bot.")
+        self.assertEqual(snap["system_prompt_source"], {"prompt": "Support bot", "version": 1})
+        self.assertEqual(run.system_prompt_version_id, version.id)
+
+    def test_free_text_prompt_has_no_source_in_manifest(self):
+        self.client.post(
+            "/experiments/new/",
+            self._design(target_model=[self.t1.id], max_turns="3", system_prompt="Typed by hand."),
+        )
+        run = AuditRun.objects.get()
+        snap = run.generation_parameters_snapshot
+        self.assertEqual(snap["system_prompt"], "Typed by hand.")
+        self.assertNotIn("system_prompt_source", snap)
+        self.assertIsNone(run.system_prompt_version_id)
+
+    def test_predefined_prompt_shows_on_review_and_survives_launch(self):
+        prompt = system_prompt_for(self.project, name="Support bot", content="You are the Acme support bot.")
+        version = prompt.latest
+        # Two targets → multi-run design → review screen shows the resolved prompt.
+        review = self.client.post(
+            "/experiments/new/",
+            self._design(max_turns="",
+                         system_prompt=version.content, system_prompt_version=str(version.id)),
+        )
+        self.assertEqual({r["system_prompt"] for r in review.context["rows"]}, {version.content})
+        # The row spec carries the version id so it survives the review round-trip.
+        specs = [json.loads(r["spec"]) for r in review.context["rows"]]
+        self.assertTrue(all(s.get("spv") == version.id for s in specs))
+        self.client.post("/experiments/new/", self._review_to_launch_payload(review))
+        runs = list(Experiment.objects.get().runs.all())
+        prompts = [r.generation_parameters_snapshot.get("system_prompt") for r in runs]
+        self.assertEqual(prompts, ["You are the Acme support bot.", "You are the Acme support bot."])
+        sources = [r.generation_parameters_snapshot.get("system_prompt_source") for r in runs]
+        self.assertEqual(sources, [{"prompt": "Support bot", "version": 1}] * 2)
+        self.assertTrue(all(r.system_prompt_version_id == version.id for r in runs))
+
+    def test_predefined_prompt_wins_over_textarea_without_js(self):
+        # Server re-resolves the picked version even when JS never filled the box.
+        prompt = system_prompt_for(self.project, name="Support bot", content="Picked prompt text.")
+        version = prompt.latest
+        self.client.post(
+            "/experiments/new/",
+            self._design(target_model=[self.t1.id], max_turns="3",
+                         system_prompt="", system_prompt_version=str(version.id)),
+        )
+        self.assertEqual(AuditRun.objects.get().generation_parameters_snapshot["system_prompt"], "Picked prompt text.")
+
+    def test_unknown_prompt_version_falls_back_to_textarea(self):
+        self.client.post(
+            "/experiments/new/",
+            self._design(target_model=[self.t1.id], max_turns="3",
+                         system_prompt="Typed by hand.", system_prompt_version="999999"),
+        )
+        self.assertEqual(AuditRun.objects.get().generation_parameters_snapshot["system_prompt"], "Typed by hand.")
 
     def test_clone_prefills_judge_and_system_prompt(self):
         self.client.post("/experiments/new/", self._design(target_model=[self.t1.id], max_turns="3", system_prompt="Be terse."))

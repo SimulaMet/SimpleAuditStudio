@@ -21,7 +21,7 @@ Field names match the single-select partial so one-run posts look the same.
       <input type="search" data-filter placeholder="Search models…" aria-label="Search {{ label|lower }} choices"
              class="w-full mb-1.5 px-2.5 py-1.5 rounded-lg bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-2 focus:ring-accent/50">
       <div data-filter-list class="h-60 overflow-y-auto rounded-lg border border-gray-800 bg-surface-overlay/40 divide-y divide-gray-800/60">
-        {% if agent_models %}
+        {% if role == "target" and agent_models %}
         <p data-filter-group="agents" class="px-2.5 pt-2 pb-1 text-[10px] uppercase tracking-wide text-gray-600 flex items-center gap-1.5">
           <span>Agents</span>
           <span class="normal-case px-1 py-0.5 rounded bg-gray-800 text-gray-500" title="Agent = model + knowledge bases + tools + retrieval">this workspace</span>
@@ -29,19 +29,14 @@ Field names match the single-select partial so one-run posts look the same.
         {% for model in agent_models %}
         <div data-filter-item data-group="agents" class="flex items-center gap-2 px-2.5 py-1.5 text-sm hover:bg-surface-overlay">
           <label class="flex items-start gap-2 min-w-0 flex-1 cursor-pointer" title="Agent: {{ model.agent.name }} · Base: {{ model.agent.base_model.display_name }}">
-            {% if role == "target" %}
             <input type="checkbox" name="agent_id" value="{{ model.agent.id }}" class="mt-0.5 accent-emerald-500"
                    {% if sel.agent_id == model.agent.id|stringformat:"s" %}checked{% endif %}>
-            {% else %}
-            <input type="checkbox" name="{{ role }}_model" value="{{ model.id }}" class="mt-0.5 accent-emerald-500"
-                   {% if model.id|stringformat:"d" in chosen %}checked{% endif %}>
-            {% endif %}
             <span class="min-w-0">
               <span class="text-gray-200 block truncate">{{ model.agent.name }}</span>
               <span class="text-[11px] text-gray-500 block truncate">{{ model.model_id }} · {{ model.agent.base_model.display_name }}</span>
             </span>
           </label>
-          {% if role == "target" and model.has_otlp %}
+          {% if model.has_otlp %}
           <label class="flex items-center gap-1 text-[10px] text-gray-500 cursor-pointer shrink-0" title="Collect OTLP spans from this agent. Uncheck to use its /v1 response as a plain model response.">
             <input type="hidden" name="agent_trace_{{ model.agent.id }}" value="0">
             <input type="checkbox" name="agent_trace_{{ model.agent.id }}" value="1" {% if sel.agent_id != model.agent.id|stringformat:"s" or sel.agent_trace|default:True %}checked{% endif %} class="accent-gray-500">
@@ -67,7 +62,14 @@ Field names match the single-select partial so one-run posts look the same.
             <input type="checkbox" name="{{ role }}_model" value="{{ m.id }}" class="mt-0.5 accent-[currentColor]"
                    {% if m.id|stringformat:"d" in chosen %}checked{% endif %}>
             <span class="min-w-0">
-              <span class="text-gray-200 block truncate">{{ m.display_name }}</span>
+              <span class="text-gray-200 block truncate">
+                {{ m.display_name }}
+                {% if m.is_decision %}
+                {# Probed on /connections/ and persisted as capabilities.decision. #}
+                <span class="align-middle text-[10px] font-medium text-violet-300 bg-violet-900/30 border border-violet-700/50 rounded px-1.5 py-0.5"
+                      title="Decision model: answers one fixed-option question with probabilities (System One). {% if role == 'target' %}A run against it is a single turn and needs a scenario with a decision block.{% else %}In this role it is called through its chat endpoint like any other model; only a target run uses the decision surface.{% endif %}">decision</span>
+                {% endif %}
+              </span>
               <span class="text-[11px] text-gray-500 block truncate">{{ m.model_id }}{% if not m.has_key %} · <span class="text-yellow-500">no key set</span>{% endif %}</span>
               {% if m.description %}<span class="text-[11px] text-gray-500/80 italic block truncate">{{ m.description }}</span>{% endif %}
             </span>

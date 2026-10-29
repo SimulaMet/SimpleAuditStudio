@@ -115,10 +115,24 @@
           <p class="text-[11px] text-gray-600"><code>{language}</code> is replaced with the run's language.</p>
         </details>
 
+        <details class="group">
+          <summary class="cursor-pointer select-none text-xs text-gray-500 hover:text-gray-300">
+            Agentic guidance <span class="text-gray-600">(optional, for agentic scenarios)</span>
+          </summary>
+          <textarea name="agentic_guidance" rows="3" spellcheck="false" placeholder="e.g. Prioritize grounding failures over tool selection issues."
+                    class="mt-1 w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-xs text-gray-200 focus:outline-none focus:ring-2 focus:ring-accent/50 resize-y">{{ form.agentic_guidance|default:'' }}</textarea>
+          <p class="text-[11px] text-gray-600">When a scenario has agentic controls, this instruction is appended to the judge prompt alongside the deterministic check results. Leave empty for the default weighting.</p>
+        </details>
+
         <details id="preview-box" class="group">
           <summary class="cursor-pointer select-none text-xs text-gray-500 hover:text-gray-300" title="Exactly what the judge model receives as its instructions">Full judge prompt <span class="text-gray-600">(preview)</span></summary>
           <p class="mt-1 text-[11px] text-red-400 hidden" id="preview-error"></p>
+          <div class="mt-1 flex gap-1 border-b border-gray-800">
+            <button type="button" id="tab-base" class="px-2 py-1 text-[11px] rounded-t bg-accent/20 text-accent font-medium">Base</button>
+            <button type="button" id="tab-agentic" class="px-2 py-1 text-[11px] rounded-t text-gray-500 hover:text-gray-300">Agentic (with trace)</button>
+          </div>
           <pre class="mt-1 max-h-72 overflow-auto whitespace-pre-wrap break-words rounded bg-surface-overlay p-2 text-[11px] text-gray-300" id="preview-text"></pre>
+          <pre class="mt-1 max-h-72 overflow-auto whitespace-pre-wrap break-words rounded bg-surface-overlay p-2 text-[11px] text-gray-300 hidden" id="preview-text-agentic"></pre>
         </details>
         {% if cloning %}<input type="hidden" name="clone" value="{{ cloning.id }}"><input type="hidden" name="note" value="{{ form.note }}">{% endif %}
         {% if judge %}
@@ -329,6 +343,25 @@ auditor = ModelAuditor(
   // Live preview of the full judge prompt, built by SimpleAudit on the server.
   const preview = document.getElementById('preview-box');
   let timer;
+  let activeTab = 'base';
+  const tabBase = document.getElementById('tab-base');
+  const tabAgentic = document.getElementById('tab-agentic');
+  const previewText = document.getElementById('preview-text');
+  const previewAgentic = document.getElementById('preview-text-agentic');
+  tabBase.addEventListener('click', () => {
+    activeTab = 'base';
+    tabBase.className = 'px-2 py-1 text-[11px] rounded-t bg-accent/20 text-accent font-medium';
+    tabAgentic.className = 'px-2 py-1 text-[11px] rounded-t text-gray-500 hover:text-gray-300';
+    previewText.classList.remove('hidden');
+    previewAgentic.classList.add('hidden');
+  });
+  tabAgentic.addEventListener('click', () => {
+    activeTab = 'agentic';
+    tabAgentic.className = 'px-2 py-1 text-[11px] rounded-t bg-accent/20 text-accent font-medium';
+    tabBase.className = 'px-2 py-1 text-[11px] rounded-t text-gray-500 hover:text-gray-300';
+    previewAgentic.classList.remove('hidden');
+    previewText.classList.add('hidden');
+  });
   function schedulePreview() {
     if (!preview.open) return;
     clearTimeout(timer);
@@ -341,7 +374,10 @@ auditor = ModelAuditor(
         const out = await resp.json();
         document.getElementById('preview-error').textContent = out.error || '';
         document.getElementById('preview-error').classList.toggle('hidden', !out.error);
-        if (!out.error) document.getElementById('preview-text').textContent = out.judge_prompt;
+        if (!out.error) {
+          previewText.textContent = out.judge_prompt;
+          previewAgentic.textContent = out.agentic_prompt || '(no agentic variant for this judge)';
+        }
       } catch (e) { /* offline: keep the last preview */ }
     }, 350);
   }

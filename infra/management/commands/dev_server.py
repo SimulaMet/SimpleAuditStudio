@@ -70,15 +70,9 @@ def _sync_chat_models() -> str:
     keys, deleted connections), and a chat pinned to a connection whose key was
     not pushed answers "Not authenticated" until the next connection save.
     """
-    from chat.api import ChatAPIError
-    from chat.sync import push_now
+    from chat.sync import startup_sync
 
-    try:
-        result = push_now()
-    except ChatAPIError as exc:
-        return f"Models not synced to chat: {exc}"
-    kept = f", kept {result['kept']} added in chat" if result["kept"] else ""
-    return f"Synced {result['pushed']} model connection(s) to chat{kept}."
+    return " ".join(startup_sync())
 
 
 def _backfill_demo_chat() -> str:
@@ -109,6 +103,36 @@ def _backfill_demo_chat() -> str:
         )
     except Exception as exc:  # noqa: BLE001 - runs in a startup thread; log, don't crash
         logger.info("Demo chat backfill skipped: %s", exc)
+
+
+def _seed_agentic_demo() -> str:
+    """Preload the completed Agentic demo run once its agent is synced to chat.
+
+    ``seed_agentic_demo`` needs the Support Refund Assistant's ``external_id``
+    (set by ``_backfill_demo_chat`` above), so it can only succeed after the
+    chat stack is ready. Idempotent: skips when the demo run already exists.
+    Never raises — a missing fixture or unmet precondition just logs and moves
+    on, so first-run never blocks on the agentic demo.
+    """
+    try:
+        from io import StringIO
+
+        from django.contrib.auth import get_user_model
+
+        from accounts.models import Project
+
+        user = get_user_model().objects.order_by("id").first()
+        project = Project.objects.order_by("id").first()
+        if user is None or project is None:
+            return ""
+        out = StringIO()
+        call_command("seed_agentic_demo", project=project.id, stdout=out)
+        return out.getvalue().strip()
+    except CommandError as exc:
+        logger.info("Agentic demo seed skipped: %s", exc)
+        return ""
+    except Exception as exc:  # noqa: BLE001 - runs in a startup thread; log, don't crash
+        logger.info("Agentic demo seed skipped: %s", exc)
         return ""
 
 
@@ -215,6 +239,10 @@ class Command(BaseCommand):
             "SIMPLEAUDIT_CHAT",
             runtime.effective_chat_mode(os.environ.get("SIMPLEAUDIT_MODE", "dev")),
         )
+        # Structural spans are useful for Agent audits; mirror the embedded CLI
+        # default so a fresh checkout gets real trace evidence out of the box.
+        # An explicit SIMPLEAUDIT_CHAT_OTLP in .env still wins (setdefault).
+        os.environ.setdefault("SIMPLEAUDIT_CHAT_OTLP", "true")
 
         # With chat on, the front door (Caddy) owns the public port and the
         # web server binds the internal port instead; Caddy proxies the rest
@@ -227,7 +255,7 @@ class Command(BaseCommand):
             chat_enabled=_chat_config.ENABLED,
             chat_internal_port=_chat_config.INTERNAL_PORT,
             chat_upstream_url=_chat_config.UPSTREAM,
-            force_kill=not options["no_force_kill"],
+            force_kill=False,  # no implicit process termination in development
             yes=options["yes"],
             command_hint="manage.py dev --port <free port>",
         )
@@ -260,8 +288,22 @@ class Command(BaseCommand):
             import secrets
 
             os.environ["SIMPLEAUDIT_AUTO_LOGIN_TOKEN"] = secrets.token_urlsafe(32)
+            # Prefer Caddy (:8000) when it's running so the browser session
+            # matches the user-facing URL; fall back to the direct Studio port.
+            # SIMPLEAUDIT_BROWSER_PORT overrides (set by devctl.sh when Caddy
+            # is known to be part of the stack but may not be up yet at check time).
+            _browser_port = int(os.environ.get("SIMPLEAUDIT_BROWSER_PORT", "0")) or options["port"]
+            if not os.environ.get("SIMPLEAUDIT_BROWSER_PORT"):
+                try:
+                    import requests as _req
+
+                    _caddy_ok = _req.get("http://127.0.0.1:8000/", timeout=1).status_code < 500
+                except (_req.RequestException, OSError):
+                    _caddy_ok = False
+                if _caddy_ok:
+                    _browser_port = 8000
             auto_login_url = (
-                f"http://localhost:{options['port']}/auto-login/?"
+                f"http://localhost:{_browser_port}/auto-login/?"
                 f"token={os.environ['SIMPLEAUDIT_AUTO_LOGIN_TOKEN']}"
             )
 
@@ -373,13 +415,40 @@ class Command(BaseCommand):
             chat_proxy.stop_open_webui()
             return None
 
+        def _fix_owui_connection_url():
+            """Point the OWUI ModelConnection at the actual upstream port.
+
+            Port allocation can shift between restarts (e.g. 8000→8100); the
+            frozen connection's base_url must track the live OWUI or agent
+            audits fail with opaque connection errors.
+            """
+            try:
+                from model_registry.models import ModelConnection
+
+                expected = f"{chat_proxy.chat_upstream_base()}/api/v1"
+                conn = ModelConnection.objects.filter(base_url__icontains="/chat/api/v1").first()
+                if conn and conn.base_url != expected:
+                    conn.base_url = expected
+                    conn.save(update_fields=["base_url"])
+                    return f"OWUI connection → {expected}"
+            except Exception as exc:  # noqa: BLE001 - best-effort port fix at startup
+                import logging
+                logging.getLogger(__name__).debug("OWUI conn URL fix skipped: %s", exc)
+            return ""
+
         def report():
             if chat_proxy.wait_until_ready(process):
                 print(f"\n✅ Playground is ready — http://localhost:{public_port}/playground/", flush=True)
+                _fixed = _fix_owui_connection_url()
+                if _fixed:
+                    print(f"   {_fixed}", flush=True)
                 print(f"   {_sync_chat_models()}\n", flush=True)
                 backfilled = _backfill_demo_chat()
                 if backfilled:
                     print(f"   {backfilled}", flush=True)
+                agentic = _seed_agentic_demo()
+                if agentic:
+                    print(f"   {agentic}", flush=True)
             elif process.poll() is not None:
                 print(f"\n⚠️  Chat stopped (exit {process.returncode}). Studio is unaffected.", flush=True)
                 print(f"   What happened: {chat_proxy.log_path()}\n", flush=True)
@@ -390,9 +459,39 @@ class Command(BaseCommand):
         return process
 
     def _stop_web(self, web_proc):
-        if web_proc is not None:
-            web_proc.terminate()
-            web_proc.wait(timeout=5)
+        """Stop the auto-reload web server (guard → reloader parent → server).
+
+        Terminating only the guard can leave an orphaned runserver holding the
+        internal port, because the reloader parent does not always notice the
+        guard's death in time. We therefore SIGTERM the runserver processes by
+        PID (never by process group — the reloader tree shares the owner's
+        process group with Caddy/Open WebUI, which must keep running) and then
+        wait for the guard to exit.
+        """
+        if web_proc is None:
+            return
+        self._terminate_runserver_tree(web_proc.pid)
+        import subprocess
+
+        try:
+            web_proc.wait(timeout=8)
+        except subprocess.TimeoutExpired:
+            logger.warning("web server did not stop in time; left as-is")
+
+    @staticmethod
+    def _terminate_runserver_tree(guard_pid: int) -> None:
+        """SIGTERM the runserver processes under ``guard_pid`` (by PID, not pgid)."""
+        import psutil
+
+        try:
+            guard = psutil.Process(guard_pid)
+        except psutil.NoSuchProcess:
+            return
+        for proc in guard.children(recursive=True):
+            try:
+                proc.terminate()
+            except psutil.NoSuchProcess:
+                pass
 
     def _stop_chat(self):
         try:

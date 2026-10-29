@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "simpleaudit-studio"
-version = "0.5.8"
+version = "0.5.29"
 description = "Production AI model audit platform — one-liner demo mode via uvx"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -20,23 +20,25 @@ dependencies = [
     "pydantic>=2.7,<3",
     "sentry-sdk[django]>=2.0",
     "workos==10.4.0",
-    # PyPI release (not a git ref): PyPI forbids direct URL dependencies in
-    # package metadata, so the engine must be a registry dependency. 0.2.0 is
-    # the first release containing run_scenario_reps (n_repetitions support);
-    # 0.2.1 adds the native on_turn per-phase progress callback; 0.3.1 adds
-    # the traceparent-to-wire forwarding this repo's tracing relies on;
-    # 0.3.2 also preserves GenAI content attributes through OTLP parsing.
-    "simpleaudit==0.3.2",
+    # SimpleAudit 0.5.0 (Inspect/OpenEnv extras, target extension points) is
+    # back-compatible with everything Studio uses; 0.4.x stays allowed for
+    # existing installs. Do not point release metadata at a developer's
+    # local filesystem.
+    "simpleaudit>=0.4.0,<0.6.0",
     "cronsim==2.7",
     "psutil>=7.2.2",
     "opentelemetry-proto>=1.45.0",
     "caddyserver>=2.11.7",
+    "watchfiles>=1.1.0",
 ]
 
 # package = false: Studio is run, not installed as a wheel (hatchling rejects
 # direct-reference dependencies otherwise).
 [tool.uv]
 package = false
+
+[tool.hatch.metadata]
+allow-direct-references = true
 
 [project.optional-dependencies]
 postgres = ["psycopg[binary]==3.2.13"]
@@ -82,6 +84,7 @@ packages = [
     "scenarios",
     "model_registry",
     "judges",
+    "prompts",
     "deploy",
     "templates",
     "static",

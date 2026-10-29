@@ -2,7 +2,9 @@ import json
 import logging
 import time
 
-from django.http import StreamingHttpResponse
+from django.db import close_old_connections
+from django.http import JsonResponse, StreamingHttpResponse
+from django.utils.text import slugify
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
@@ -13,7 +15,12 @@ from accounts.services import ensure_project_access, require_project_writable
 from audits.events import ScenarioResult, list_events
 from audits.models import AuditRun
 from audits.serializers import AuditRunCreateSerializer, AuditRunSerializer
-from audits.services import cancel_run, create_audit_run, submit_audit_run
+from audits.services import (
+    build_simpleaudit_export,
+    cancel_run,
+    create_audit_run,
+    submit_audit_run,
+)
 from infra.exceptions import StableAPIError
 from infra.middleware import set_correlation_context
 from judges.models import Judge, JudgeVersion
@@ -66,6 +73,35 @@ def get_audit_run(request, project_id, run_id):
     except AuditRun.DoesNotExist as exc:
         raise StableAPIError(detail="Audit run not found.", code="audit_run_not_found", http_status=404) from exc
     return Response(AuditRunSerializer(run).data)
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def export_audit_run(request, project_id, run_id):
+    """Download a run's durable results as canonical SimpleAudit engine JSON.
+
+    Reassembles the persisted per-scenario ``AuditResult`` payloads into the same
+    shape core writes via ``results.save()``, so a single downstream converter
+    (e.g. Every Eval Ever) can consume Studio runs and core CLI runs alike.
+    Exports whatever durable results exist; a partially complete run exports its
+    finished scenarios.
+    """
+    set_correlation_context(audit_run_id=run_id)
+    project = _get_project_or_404(project_id)
+    _require_project_access(request.user, project)
+    queryset = AuditRun.objects.filter(id=run_id, project=project).select_related(
+        "scenario_set_version"
+    )
+    try:
+        run = queryset.get()
+    except AuditRun.DoesNotExist as exc:
+        raise StableAPIError(detail="Audit run not found.", code="audit_run_not_found", http_status=404) from exc
+
+    payload = build_simpleaudit_export(run)
+    stem = slugify(run.name) or f"audit-run-{run.id}"
+    response = JsonResponse(payload, json_dumps_params={"indent": 2, "ensure_ascii": False})
+    response["Content-Disposition"] = f'attachment; filename="{stem}.json"'
+    return response
 
 
 @api_view(["GET"])
@@ -143,12 +179,15 @@ def create_audit_run_view(request, project_id):
         user=request.user,
         name=data["name"],
         scenario_set_version=scenario_set_version,
-        target_model=target_model,
+        target_model=None if agent else target_model,
         auditor_model=auditor_model,
         judge_model=judge_model,
         judge=judge,
         trace_config=data.get("trace_config") or None,
         agent=agent,
+        max_turns_override=data.get("max_turns"),
+        n_repetitions_override=data.get("n_repetitions"),
+        language_override=data.get("language") or None,
     )
 
     # Enqueue durable work. This is best-effort: if the job system is unavailable
@@ -255,19 +294,32 @@ def stream_audit_run_events(request, project_id, run_id):
     def event_stream():
         sent_after = after_id
         start = time.monotonic()
-        while True:
-            if time.monotonic() - start > _SSE_MAX_DURATION_SECONDS:
-                yield "event: timeout\ndata: {}\n\n"
-                break
-            events = list_events(run.id, after_id=sent_after, limit=_SSE_BATCH_SIZE)
-            for e in events:
-                sent_after = e["id"]
-                data = json.dumps({"kind": e["kind"], "version_item_id": e["version_item_id"], "payload": e["payload"], "ts": e["created_at"]})
-                yield f"id: {e['id']}\nevent: {e['kind']}\ndata: {data}\n\n"
-                if e["kind"] in _TERMINAL_EVENT_KINDS:
-                    return
-            if len(events) < _SSE_BATCH_SIZE:
-                time.sleep(_SSE_POLL_INTERVAL_SECONDS)
+        try:
+            while True:
+                if time.monotonic() - start > _SSE_MAX_DURATION_SECONDS:
+                    yield "event: timeout\ndata: {}\n\n"
+                    break
+                events = list_events(run.id, after_id=sent_after, limit=_SSE_BATCH_SIZE)
+                for e in events:
+                    sent_after = e["id"]
+                    data = json.dumps({"kind": e["kind"], "version_item_id": e["version_item_id"], "payload": e["payload"], "ts": e["created_at"]})
+                    yield f"id: {e['id']}\nevent: {e['kind']}\ndata: {data}\n\n"
+                    if e["kind"] in _TERMINAL_EVENT_KINDS:
+                        return
+                if len(events) < _SSE_BATCH_SIZE:
+                    # Release (or recycle) the DB connection while idle so a
+                    # long-lived stream does not pin a Postgres connection per thread.
+                    close_old_connections()
+                    time.sleep(_SSE_POLL_INTERVAL_SECONDS)
+        except (GeneratorExit, SystemExit, KeyboardInterrupt):
+            # Normal stream teardown: the client disconnected (GeneratorExit is
+            # raised when the response iterator is closed), or the worker process
+            # is shutting down / interrupted (SystemExit / Ctrl+C). These are
+            # expected during an hour-long poll loop — swallow them so they don't
+            # surface as noise in error tracking. Re-raising lets Python run any
+            # pending finally blocks and propagate the correct close semantics.
+            logger.debug("SSE stream for run %s ended early (client disconnect or shutdown)", run.id)
+            raise
 
     response = StreamingHttpResponse(event_stream(), content_type="text/event-stream")
     response["Cache-Control"] = "no-cache"

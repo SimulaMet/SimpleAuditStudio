@@ -42,7 +42,9 @@ def _simula_model(project):
     conn = ModelConnection.objects.filter(project=project, name="SimulaChat").first()
     if conn is None:
         return None
-    return RegisteredModel.objects.filter(connection=conn, model_id="default").first()
+    return (RegisteredModel.objects.filter(connection=conn, model_id="copilot-auto-efficiency").first()
+            or RegisteredModel.objects.filter(connection=conn, model_id="default").first()
+            or RegisteredModel.objects.filter(connection=conn, enabled=True).order_by("id").first())
 
 
 def _demo_agent(project):
@@ -61,11 +63,11 @@ def _owui_api(user):
     return ChatAPI.as_user(user)
 
 
-def _ensure_simula_in_owui(api, simula_conn):
+def _ensure_simula_in_owui(api, simula_conn, model_id):
     """Make sure the SimulaChat connection is in Open WebUI's provider list.
 
-    Returns the Open WebUI id of the ``default`` model
-    (``<connection PK>.default``) or None when it cannot be determined.
+    Returns the Open WebUI id of the selected model
+    (``<connection PK>.<model_id>``) or None when it cannot be determined.
     Idempotent: reuses the connection's PK, so the id is stable across runs.
     """
     from chat.api import connection_payload
@@ -73,7 +75,7 @@ def _ensure_simula_in_owui(api, simula_conn):
     api.push_connections([connection_payload(simula_conn)])
     # Open WebUI registers the model under ``<prefix>.<model_id>`` once the
     # provider is known; the id is deterministic from the connection PK.
-    return f"{simula_conn.id}.default"
+    return f"{simula_conn.id}.{model_id}"
 
 
 def setup_demo_audit(project, user, log=logger.info) -> dict[str, str]:
@@ -110,7 +112,9 @@ def setup_demo_audit(project, user, log=logger.info) -> dict[str, str]:
     api = _owui_api(user)
     if api is not None:
         try:
-            simula_owui_id = _ensure_simula_in_owui(api, simula_conn)
+            simula_owui_id = _ensure_simula_in_owui(
+                api, simula_conn, simula_model.model_id
+            )
             status["simula"] = "in-owui"
         except Exception as exc:  # noqa: BLE001 - best-effort wiring
             log("Demo audit: Open WebUI unreachable, SimulaChat not pushed: %s", exc)
@@ -147,29 +151,10 @@ def setup_demo_audit(project, user, log=logger.info) -> dict[str, str]:
 
     # 4. Studio-side target: a model connection for Open WebUI + a registered
     # model for the agent, so the platform can audit the agent like any model.
-    from model_registry.models import ModelConnection, RegisteredModel
+    from model_registry.services import agent_target_model
 
-    owui_conn, _ = ModelConnection.objects.get_or_create(
-        project=project, name="Open WebUI Agent",
-        defaults={
-            "provider": "openai",
-            # Open WebUI's own OpenAI-compatible completions endpoint.
-            "base_url": "http://127.0.0.1:8080/chat/api/v1",
-            "description": "Targets the live Open WebUI agent (Support Refund Assistant).",
-            "enabled": True,
-            "created_by": user,
-        },
-    )
-    _target_model, _ = RegisteredModel.objects.get_or_create(
-        connection=owui_conn, project=project,
-        model_id=f"studio.agent-{agent.pk}",
-        defaults={
-            "display_name": "Support Refund Assistant (Open WebUI)",
-            "enabled": True,
-            "default_parameters": {"max_turns": 3},
-            "created_by": user,
-        },
-    )
+    _target_model = agent_target_model(agent)
+    owui_conn = _target_model.connection
     status["studio_target"] = "ready"
 
     # 5. OTLP credential (none auth) so Studio captures the run's spans.
@@ -187,10 +172,10 @@ def setup_demo_audit(project, user, log=logger.info) -> dict[str, str]:
     # 7. A queued audit run so the demo is visible in the UI.
     # Agent-target runs must use the Agent's base model as target_model. The
     # Open WebUI connection above is a chat-facing resource; the audit service
-    # deliberately rejects a wrapper model that does not equal agent.base_model.
+    # the audit service resolves the shared Agent wrapper target.
     status["run"] = (
         "submitted"
-        if _create_demo_run(project, user, agent, simula_model, simula_model, log)
+        if _create_demo_run(project, user, agent, None, simula_model, log)
         else "queued"
     )
     return status
@@ -207,9 +192,9 @@ def _demo_scenario_documents() -> list[dict]:
     from infra.seed import _fixture_dir
 
     docs = []
-    for filename, title in (
-        ("refunds_and_returns_policy.md", "Acme Retail Refunds & Returns Policy"),
-        ("shipping_and_delivery_guide.md", "Acme Retail Shipping & Delivery Guide"),
+    for filename in (
+        "refunds_and_returns_policy.md",
+        "shipping_and_delivery_guide.md",
     ):
         path = Path(_fixture_dir("sample_docs")) / filename
         if not path.exists():
@@ -217,10 +202,9 @@ def _demo_scenario_documents() -> list[dict]:
         docs.append({
             "text": path.read_text(encoding="utf-8"),
             "source": filename,
-            # SimpleAudit validates this against its fixed authority ladder;
-            # the human-readable title remains available as the source name.
+            # SimpleAudit accepts a fixed document-mark schema; the filename is
+            # the human-readable source label.
             "authority": "guidance",
-            "title": title,
         })
     return docs
 
@@ -376,17 +360,12 @@ def _seed_demo_scenarios(project, user, log) -> None:
         create_scenario,
         create_scenario_set,
         publish_scenario_set_version,
+        update_scenario_content,
     )
 
     set_name = "Acme Refund Demo (Agent)"
     existing = ScenarioSet.objects.filter(project=project, name=set_name).first()
-    if existing and existing.versions.exists():
-        log(f"Demo audit: scenario set '{set_name}' already published; skipping.")
-        return
-
-    if existing:
-        existing.delete()
-    scenario_set = create_scenario_set(
+    scenario_set = existing or create_scenario_set(
         project=project, user=user, name=set_name,
         description="Refund scenarios for the Support Refund Assistant demo agent "
                     "(adapted from the audit-suite spec; KB context via documents).",
@@ -394,14 +373,21 @@ def _seed_demo_scenarios(project, user, log) -> None:
     documents = _demo_scenario_documents()
     scenario_ids = []
     for spec in DEMO_SCENARIOS:
-        scenario = create_scenario(
-            project=project, user=user,
-            key=spec["key"], title=spec["title"], description=spec["description"],
-            expected_behavior=spec["expected_behavior"], test_prompt=spec["test_prompt"],
-            severity_ceiling=spec.get("severity_ceiling", ""),
-            documents=documents,
-            category="refund", tags=["refund", "demo", "agent"],
-        )
+        scenario = scenario_set.project.scenarios.filter(key=spec["key"]).first()
+        if scenario is None:
+            scenario = create_scenario(
+                project=project, user=user,
+                key=spec["key"], title=spec["title"], description=spec["description"],
+                expected_behavior=spec["expected_behavior"], test_prompt=spec["test_prompt"],
+                severity_ceiling=spec.get("severity_ceiling", ""), documents=documents,
+                category="refund", tags=["refund", "demo", "agent"],
+            )
+        else:
+            update_scenario_content(
+                scenario=scenario, user=user, description=spec["description"],
+                expected_behavior=spec["expected_behavior"], test_prompt=spec["test_prompt"],
+                severity_ceiling=spec.get("severity_ceiling", ""), documents=documents,
+            )
         scenario_ids.append(scenario.id)
     publish_scenario_set_version(
         scenario_set=scenario_set, user=user, scenario_ids=scenario_ids

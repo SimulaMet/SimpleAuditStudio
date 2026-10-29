@@ -226,19 +226,13 @@ unset: the iframe loads the same-origin `/chat/`.
 | `SIMPLEAUDIT_CHAT_CMD`          | auto                     | command that starts Open WebUI             |
 | `SIMPLEAUDIT_CHAT_IDENTITY_TTL` | `5`                      | seconds the proxy caches who a cookie is   |
 | `SIMPLEAUDIT_CHAT_SYNC_DELAY`   | `2`                      | seconds a model-connection push waits      |
-| `SIMPLEAUDIT_CHAT_OTLP`         | `false`                  | export Open WebUI's spans to Studio's OTLP listener |
+| `SIMPLEAUDIT_CHAT_OTLP`         | `true` (all modes)                          | export Open WebUI's spans to Studio's OTLP listener |
 | `SIMPLEAUDIT_CHAT_OTLP_ENDPOINT`| full OTLP listener URL   | the `/otlp/v1/traces` ingestion URL (embedded: `http://127.0.0.1:<port>/otlp/v1/traces`, docker: `http://web:8000/otlp/v1/traces`) — the exporter uses it as-is |
 | `SIMPLEAUDIT_CHAT_OTLP_SERVICE_NAME` | `open-webui`         | the service name Open WebUI tags its spans with |
-| `OTEL_GENAI_CAPTURE_INPUTS` | `true` in the Compose example | capture model input messages |
-| `OTEL_GENAI_CAPTURE_OUTPUTS` | `true` in the Compose example | capture model output messages |
-| `OTEL_GENAI_CAPTURE_SYSTEM_INSTRUCTIONS` | `true` in the Compose example | capture system instructions |
-| `OTEL_GENAI_CAPTURE_TOOL_ARGUMENTS` | `true` in the Compose example | capture tool arguments |
-| `OTEL_GENAI_CAPTURE_TOOL_RESULTS` | `true` in the Compose example | capture tool results |
-| `OTEL_GENAI_CAPTURE_RETRIEVAL_QUERY` | `true` in the Compose example | capture retrieval queries |
-| `OTEL_GENAI_CAPTURE_RETRIEVAL_DOCUMENTS` | `true` in the Compose example | capture retrieved document content |
-| `OTEL_GENAI_CAPTURE_EMBEDDING_TEXT` | `true` in the Compose example | capture embedding input text |
-| `OTEL_GENAI_CAPTURE_EMBEDDING_VECTORS` | `false` | capture embedding vectors |
-| `OTEL_GENAI_CONTENT_MAX_LENGTH` | `2000` | maximum characters per captured field |
+| `ENABLE_RAG_HYBRID_SEARCH` | `true`                | hybrid (BM25 + vector) retrieval; on by default |
+| `ENABLE_QUERIES_CACHE` | `true`                 | cache retrieval queries; on by default |
+| `ENABLE_KB_EXEC` | `true`                       | filesystem-style knowledge exec for agentic RAG; on by default |
+| `ENABLE_VERSION_UPDATE_CHECK` | `false`                | Open WebUI's "new version available" banner; off by default because Studio pins the build. Set `true` to show it |
 
 ## Exporting Open WebUI's spans to Studio (OTLP)
 
@@ -252,10 +246,24 @@ its wheel metadata. This matters for embedded mode, which installs the wheel
 directly; Docker installs the same dependencies from Open WebUI's backend
 requirements files.
 
-It is off by default. When enabled it exports **unauthenticated** by default —
-no credentials are sent — which matches the listener's default fallback to an
-enabled `none` credential. The exporter is the standard OTel one, so the
-environment variables are the standard ones, with two Open WebUI specifics:
+Compose and development modes leave it off unless explicitly enabled. The
+embedded `uvx simpleaudit-studio` launcher enables structural tracing by default
+so future Agent audits can show operation names, timing, and other non-content
+attributes; set `SIMPLEAUDIT_CHAT_OTLP=false` to opt out. Capture levels are per OTLP
+credential; the default is `structural`. API keys and secret-looking tokens are
+redacted at every level. What each level keeps:
+
+| Content | `structural` (default) | `inputs` | `full` |
+|---|---|---|---|
+| Span identity, timing, status, kind | yes | yes | yes |
+| Tool arguments and results | yes | yes | yes |
+| Retrieval sources and documents | yes | yes | yes |
+| Prompts and input messages | yes | yes | yes |
+| Completions and output messages | yes | no | yes |
+| Span events and raw result/output fields | no | no | yes | When enabled, the demo uses the Studio listener's
+`none` credential unless a basic/bearer credential is configured. The exporter
+is the standard OTel one, so the environment variables are the standard ones,
+with two Open WebUI specifics:
 
 - Open WebUI selects the HTTP exporter from `OTEL_OTLP_SPAN_EXPORTER`
   (`http`), **not** the standard `OTEL_EXPORTER_OTLP_PROTOCOL`. `http`
@@ -273,9 +281,6 @@ So enabling it is one line:
 ```bash
 # .env (docker) — or the equivalent environment in embedded mode
 SIMPLEAUDIT_CHAT_OTLP=true
-# The Compose example enables bounded GenAI content capture for the protected
-# Studio receiver. Keep the receiver access-controlled and turn individual
-# flags off when the corresponding content must not leave Open WebUI.
 ```
 
 For an authenticated target (a `basic` or `bearer` OTLP credential instead of a
@@ -375,7 +380,19 @@ and reranking settings at `/admin-settings/?tab=knowledge`. The page is
 superuser-only and never sends stored provider secrets to the browser. Normal
 users only receive the agent-scoped Retrieval Profile. Studio
 also records that profile in the synced Open WebUI model metadata for audit and
-integration consumers; Open WebUI's own RAG engine remains globally configured.
+integration consumers. The bundled filter `chat/openwebui_functions/studio_rag_overrides.py`
+applies those per-agent retrieval settings (search mode, top K, final K, relevance
+threshold, BM25 weight, full context) to chats with attached files. Models without
+them use Open WebUI's global RAG settings.
+
+**Startup sync.** Studio pushes its whole chat state to Open WebUI at startup:
+connections, the bundled functions (the RAG overrides filter), OTLP credentials
+and every agent. It runs when the worker starts, when the compose web container
+boots (`python manage.py sync_chat_startup`), and when `manage.py dev` or `spin`
+starts. Connection saves also push on their own, and
+`python manage.py sync_chat_models` pushes connections on demand. A Studio upgrade
+that changes a bundled file reaches Open WebUI on the next start.
+
 Agent edit pages show a safe live projection of those global settings for
 context. When an audit targets an agent, the same projection is frozen into
 the run's `agent_config_snapshot`; it contains no provider credentials.
@@ -383,6 +400,13 @@ the run's `agent_config_snapshot`; it contains no provider credentials.
 ## Removing it
 
 Set `SIMPLEAUDIT_CHAT=disabled`, or pass `--disable-chat` to the CLI.
+
+With chat off, the Playground page and the whole Agents surface are hidden from
+the sidebar, and the `/agents/`, `/agents/knowledge/`, and `/agents/tools/` pages
+show a "chat not enabled" notice instead of their managers (agents sync to
+Open WebUI, so they need it to be useful). In **Admin settings** the three
+Open WebUI-backed tabs — Knowledge &amp; Retrieval, Web Search, and Sub-agents —
+are hidden, and requesting their `?tab=` URLs redirects to the Overview.
 
 To drop the code, delete the `chat/` app and `deploy/openwebui-subpath/`,
 then remove its four references: `"chat"` in `INSTALLED_APPS`, the `chat/` route

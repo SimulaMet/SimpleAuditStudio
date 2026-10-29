@@ -9,6 +9,32 @@ durable background jobs, and records every run as a frozen, reproducible
 experiment. See [domain-model.md](domain-model.md) for the data model and
 [deployment.md](deployment.md) for how to run it.
 
+## Agentic safety auditing (T01-T25)
+
+Agent runs attach OTLP evidence to each scenario result. Evidence resolver hook (T01)
+extracts three-tier evidence structure (trace_ids, all_span_refs, selected_spans).
+Worker normalizes spans into provider-neutral trajectory (T04, 30+ fields) and
+runs deterministic checks: trace integrity, tool selection, permissions, retrieval
+requirements, sequence constraints, handoffs, and error tracking (T05-T07).
+
+Checks use robust argument matchers (T06: exact, subset, json_schema, regex, one_of,
+numeric_range, case_insensitive, normalized_uri, entity_equality, custom) and
+trajectory order checks (exact/subsequence/partial-order/forbidden/loops).
+
+Semantic judge extends base judge with agentic dimensions (T10); StateProbe protocol
+verifies before/after state in side-effect agents (T09). Schema validation (T11)
+ensures v1→v2 safe migration. Verdict policy (T15) applies 7 ordered decision rules.
+Orchestrator (Phase 1) chains flow: evidence→trajectory→checks→semantic judge→verdict.
+
+Results stored under `agentic_evaluation` beside ordinary SimpleAudit judgment;
+Agentic evaluator failure is `ERROR` and does not discard ordinary result. Missing
+evidence is `INCONCLUSIVE`, never implicit pass. UI (Phase 2) renders scenario form
+with agentic metadata and results grouped by check category (Phase 2: ui_helpers.py).
+
+Embedded mode enables structural OTLP by default; set `SIMPLEAUDIT_CHAT_OTLP=false`
+to opt out. Content capture stays opt-in; span structure remains useful when absent.
+Never put API keys in scenario metadata or source control.
+
 ## 1. Components
 
 ```mermaid

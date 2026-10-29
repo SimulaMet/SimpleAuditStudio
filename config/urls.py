@@ -27,8 +27,11 @@ from infra.ui import (
     ConnectionsView,
     DashboardView,
     DiscoverModelsView,
+    EmbeddingModelDetailView,
+    EmbeddingModelSearchView,
     ExperimentDetailView,
     ExperimentRenameView,
+    ExperimentSetVisibilityView,
     ExperimentsView,
     HealthView,
     JudgeScriptView,
@@ -41,6 +44,7 @@ from infra.ui import (
     OTLPCredentialRotateView,
     OTLPCredentialToggleView,
     ProfileView,
+    PublicExperimentsView,
     RegisterView,
     RunArchiveView,
     RunCancelView,
@@ -60,6 +64,7 @@ from infra.ui import (
     ScenarioSetCreateView,
     ScenarioSetDeleteView,
     ScenarioSetRenameView,
+    ScenarioSetVersionDeleteView,
     ScenariosView,
     WorkOSLoginView,
     WorkOSVerifyView,
@@ -78,6 +83,7 @@ from infra.visualizer import (
 )
 from judges.views import JudgeDetailView, JudgePreviewView, JudgesView
 from model_registry import otlp_config, otlp_views
+from prompts.views import PromptDetailView, PromptsView
 
 # --- Static file serving ---------------------------------------------------
 # For the canonical Docker Compose self-hosted deployment Django serves its
@@ -167,6 +173,9 @@ urlpatterns = [
     # "/" is the dashboard when signed in and the public landing page otherwise.
     path("", home_view, name="dashboard"),
     path("landing/", LandingView.as_view(always_show=True), name="landing_page"),
+    # Public experiment gallery — readable without login (the target of the
+    # "See public experiments" buttons on / and /login/).
+    path("public-experiments/", PublicExperimentsView.as_view(), name="public_experiments"),
     # UI (server-rendered CBVs)
     path("login/", LoginView.as_view(), name="login"),
     # Local one-liner demo only (404 unless MINIMAL_CONFIG): the CLI opens this
@@ -178,12 +187,27 @@ urlpatterns = [
     path("auth/workos/verify/", WorkOSVerifyView.as_view(), name="workos_verify"),
     path("workspaces/", WorkspacesView.as_view(), name="workspaces"),
     path("admin-settings/", AdminView.as_view(), name="admin_settings"),
+    path(
+        "api/admin/embedding-models/search/",
+        EmbeddingModelSearchView.as_view(),
+        name="embedding_model_search",
+    ),
+    path(
+        "api/admin/embedding-models/detail/",
+        EmbeddingModelDetailView.as_view(),
+        name="embedding_model_detail",
+    ),
     path("profile/", ProfileView.as_view(), name="profile"),
     path("health/", HealthView.as_view(), name="health"),
     path("experiments/new/", NewExperimentView.as_view(), name="new_experiment"),
     path("experiments/", ExperimentsView.as_view(), name="experiments"),
     path("experiments/<int:experiment_id>/", ExperimentDetailView.as_view(), name="experiment_detail"),
     path("experiments/<int:experiment_id>/rename/", ExperimentRenameView.as_view(), name="experiment_rename"),
+    path(
+        "experiments/<int:experiment_id>/set-visibility/",
+        ExperimentSetVisibilityView.as_view(),
+        name="experiment_set_visibility",
+    ),
     path("monitors/", MonitorsView.as_view(), name="monitors"),
     path("monitors/<int:monitor_id>/", MonitorDetailView.as_view(), name="monitor_detail"),
     path(
@@ -195,6 +219,7 @@ urlpatterns = [
     path("scenarios/set-create/", ScenarioSetCreateView.as_view(), name="scenario_set_create"),
     path("scenarios/set-rename/<int:set_id>/", ScenarioSetRenameView.as_view(), name="scenario_set_rename"),
     path("scenarios/set-delete/<int:set_id>/", ScenarioSetDeleteView.as_view(), name="scenario_set_delete"),
+    path("scenarios/version-delete/<int:set_id>/", ScenarioSetVersionDeleteView.as_view(), name="scenario_version_delete"),
     path("scenarios/create/", ScenarioCreateView.as_view(), name="scenario_create"),
     path("scenarios/edit/<int:scenario_id>/", ScenarioEditView.as_view(), name="scenario_edit"),
     path("scenarios/delete/<int:scenario_id>/", ScenarioDeleteView.as_view(), name="scenario_delete"),
@@ -221,6 +246,9 @@ urlpatterns = [
     path("judges/new/", JudgeDetailView.as_view(), name="judge_new"),
     path("judges/preview/", JudgePreviewView.as_view(), name="judge_preview"),
     path("judges/<int:judge_id>/", JudgeDetailView.as_view(), name="judge_detail"),
+    path("prompts/", PromptsView.as_view(), name="prompts"),
+    path("prompts/new/", PromptDetailView.as_view(), name="prompt_new"),
+    path("prompts/<int:prompt_id>/", PromptDetailView.as_view(), name="prompt_detail"),
     path("compare/", CompareView.as_view(), name="compare"),
     path("runs/<int:run_id>/", RunDetailView.as_view(), name="run_detail"),
     path("runs/<int:run_id>/cancel/", RunCancelView.as_view(), name="run_cancel"),
@@ -254,6 +282,7 @@ urlpatterns = [
 # /chat/ by Caddy (the subpath build); Studio owns /playground/ — the wrapper page with
 # the model-picker bar — plus /chat/authz, the forward-auth endpoint Caddy
 # calls. All 404 unless SIMPLEAUDIT_CHAT is set. See chat/config.py.
+from chat import api_passthrough
 from chat.views import authz as _chat_authz
 from chat.views import css_mask as _chat_css_mask
 from chat.views import loader_mask as _chat_loader_mask
@@ -263,6 +292,15 @@ urlpatterns += [
     path("chat/authz", _chat_authz, name="chat_authz"),
     path("chat/css-mask", _chat_css_mask, name="chat_css_mask"),
     path("chat/loader-mask", _chat_loader_mask, name="chat_loader_mask"),
+    # Studio's OpenAI-compatible model API (issue #24): external clients call
+    # these with a personal API key (Authorization: Bearer sa_api_…). They live
+    # under Studio's own routing — NOT /chat/* — so Caddy's forward-auth (which
+    # bounces cookie-less requests to /login/) never sees them. All 404 unless
+    # SIMPLEAUDIT_CHAT is set (checked inside each view).
+    path("api/v1/models", api_passthrough.api_models, name="api-v1-models"),
+    path("api/v1/chat/completions", api_passthrough.api_chat_completions, name="api-v1-chat-completions"),
+    path("api/v1/keys/issue/", api_passthrough.issue_api_key, name="api-v1-key-issue"),
+    path("api/v1/keys/revoke/", api_passthrough.revoke_api_key, name="api-v1-key-revoke"),
 ]
 
 # OTLP listener (machine-to-machine span ingestion + credential management).

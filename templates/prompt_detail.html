@@ -1,0 +1,139 @@
+{% extends "base.html" %}
+{% block title %}{% if prompt %}{{ prompt.name }}{% else %}New system prompt{% endif %} — System Prompts — SimpleAudit{% endblock %}
+{% block content %}
+<a href="{% url 'prompts' %}" class="text-xs text-gray-500 hover:text-accent">← System Prompts</a>
+<div class="flex flex-wrap items-center justify-between gap-3 mt-1 mb-4">
+  <div class="flex flex-wrap items-center gap-2 min-w-0">
+    <h1 class="text-lg font-semibold text-gray-100 truncate">{% if prompt %}{{ prompt.name }}{% else %}New system prompt{% endif %}</h1>
+    {% if shown %}{% include "partials/version_badge.html" with number=shown.version latest=shown_is_latest count=versions|length %}{% endif %}
+  </div>
+  {% if shown %}
+  <div class="flex flex-wrap items-center gap-2">
+    {% if previous %}
+    <button type="button" data-diff-open="{{ previous.version }}:{{ shown.version }}" title="See what changed from v{{ previous.version }} to v{{ shown.version }}"
+            class="px-3 py-1.5 rounded-lg bg-surface-overlay border border-gray-700 text-xs text-gray-300 hover:text-white">Changes from v{{ previous.version }}</button>
+    {% endif %}
+    <a href="{% url 'prompt_new' %}?clone={{ shown.id }}" data-write title="Start a new prompt prefilled from v{{ shown.version }}; nothing is saved until you create it"
+       class="px-3 py-1.5 rounded-lg bg-surface-overlay border border-gray-700 text-xs text-gray-300 hover:text-white">Clone v{{ shown.version }}</a>
+    <form method="post" action="{% url 'prompts' %}" data-write data-confirm="Delete system prompt “{{ prompt.name }}” and its {{ versions|length }} version{{ versions|length|pluralize }}?">
+      {% csrf_token %}<input type="hidden" name="action" value="delete"><input type="hidden" name="prompt_id" value="{{ prompt.id }}">
+      <button title="Delete this prompt and all its versions" class="px-3 py-1.5 rounded-lg bg-red-900/30 text-xs text-red-400 hover:bg-red-900/50">Delete</button>
+    </form>
+  </div>
+  {% endif %}
+</div>
+
+{% if cloning %}
+<p class="mb-4 text-xs text-gray-300 bg-accent/10 border border-accent/30 rounded-lg px-3 py-2">
+  Prefilled from <a href="{% url 'prompt_detail' cloning.prompt_id %}?v={{ cloning.version }}" class="text-accent hover:underline">{{ cloning.label }}</a>. Nothing is saved until you click <strong>Create prompt</strong>.
+</p>
+{% endif %}
+{% if shown and shown != latest %}
+<p class="mb-4 text-xs text-amber-300 bg-amber-900/20 rounded-lg px-3 py-2">
+  Viewing v{{ shown.version }} (latest is <a href="?v={{ latest.version }}" class="underline">v{{ latest.version }}</a>). Saving creates a new version from these values.
+</p>
+{% endif %}
+
+<div class="grid grid-cols-1 lg:grid-cols-3 gap-4 items-start">
+  <form method="post" class="lg:col-span-2 bg-surface-raised rounded-xl border border-gray-800 p-4 space-y-4 min-w-0" id="prompt-form">
+    {% csrf_token %}
+    <fieldset class="space-y-4" {% if not can_write %}disabled{% endif %}>
+      <label class="block text-xs text-gray-500">Name
+        <input type="text" name="name" value="{{ form.name }}" required maxlength="250" placeholder="e.g. Medical assistant guardrails"
+               class="mt-1 w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm text-gray-100 focus:outline-none focus:ring-2 focus:ring-accent/50"></label>
+      <label class="block text-xs text-gray-500">Description <span class="text-gray-600">(optional, not versioned)</span>
+        <textarea name="description" rows="2" maxlength="2000" placeholder="What this prompt does and when to use it"
+                  class="mt-1 w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm text-gray-100 focus:outline-none focus:ring-2 focus:ring-accent/50">{{ form.description }}</textarea></label>
+
+      <div class="border-t border-gray-800 pt-4 space-y-4">
+        <p class="text-[11px] text-gray-500">Content is versioned: changing it saves a new version. Name and description are not. The note explains what changed and why (like a commit message).</p>
+        <label class="block text-xs text-gray-500">Prompt content
+          <textarea name="content" rows="16" maxlength="20000" placeholder="You are a medical assistant. Always advise consulting a physician for…"
+                    class="mt-1 w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm font-mono text-gray-100 focus:outline-none focus:ring-2 focus:ring-accent/50 resize-y leading-relaxed">{{ form.content }}</textarea></label>
+        <label class="block text-xs text-gray-500">Note <span class="text-gray-600">(what changed and why — like a commit message)</span>
+          <input type="text" name="note" value="{{ form.note }}" maxlength="500" placeholder="e.g. Added drug-interaction disclaimer; tightened tone for pediatric cases"
+                 class="mt-1 w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm text-gray-100 focus:outline-none focus:ring-2 focus:ring-accent/50"></label>
+      </div>
+
+      <div class="flex items-center gap-2 pt-2">
+        <button type="submit" class="px-4 py-2 rounded-lg bg-accent text-white text-sm font-medium hover:bg-accent-hover">
+          {% if prompt %}Save{% if not shown_is_latest %} (new version){% endif %}{% else %}Create prompt{% endif %}
+        </button>
+        <a href="{% if prompt %}{% url 'prompt_detail' prompt.id %}{% else %}{% url 'prompts' %}{% endif %}" class="px-3 py-2 rounded-lg text-sm text-gray-400 hover:text-gray-200">Cancel</a>
+      </div>
+    </fieldset>
+  </form>
+
+  <aside class="space-y-4 min-w-0">
+    {% if prompt %}
+    <div class="bg-surface-raised rounded-xl border border-gray-800 p-4">
+      <h2 class="text-sm font-semibold text-gray-300 mb-2">Versions</h2>
+      <ol class="space-y-1">
+        {% for v in versions %}
+        <li class="relative">
+          <a href="?v={{ v.version }}" {% if v == shown %}aria-current="true"{% endif %}
+             class="block rounded-lg px-2.5 py-2 text-xs {% if v == shown %}bg-accent/15{% else %}hover:bg-surface-overlay{% endif %}">
+            <span class="flex items-baseline justify-between gap-2">
+              <span class="{% if v == shown %}text-accent font-medium{% else %}text-gray-200{% endif %}">v{{ v.version }}{% if forloop.first %} · latest{% endif %}</span>
+              <span class="text-gray-500 shrink-0 pr-9" title="{{ v.created_at|date:'M j, Y, H:i' }}">{{ v.created_at|date:"M j, Y" }}</span>
+            </span>
+            {% if v.note %}<span class="block text-gray-400 truncate" title="{{ v.note }}">{{ v.note }}</span>{% endif %}
+            <span class="block text-gray-600">{% if v.created_by %}{{ v.created_by.username }}{% endif %} · {{ v.content|length }} chars</span>
+          </a>
+          <div class="absolute right-2 top-1.5 flex items-center gap-1" data-write>
+            <a href="?v={{ v.version }}#content" title="Edit starting from v{{ v.version }}; saving creates a new version" aria-label="Edit from v{{ v.version }}"
+               class="text-xs text-gray-500 hover:text-accent">✎</a>
+            {% if versions|length > 1 %}
+            <form method="post" action="{% url 'prompts' %}" data-confirm="Delete {{ prompt.name }} v{{ v.version }}? Other versions keep their numbers.">
+              {% csrf_token %}<input type="hidden" name="action" value="delete_version"><input type="hidden" name="version_id" value="{{ v.id }}">
+              <button title="Delete v{{ v.version }}" aria-label="Delete v{{ v.version }}" class="text-xs text-gray-600 hover:text-red-400">✕</button>
+            </form>
+            {% else %}
+            <span class="text-xs text-gray-700 cursor-help" title="The only version: delete the prompt instead" aria-hidden="true">✕</span>
+            {% endif %}
+          </div>
+          {% if v.previous_number %}
+          <button type="button" data-diff-open="{{ v.previous_number }}:{{ v.version }}" title="See what changed from v{{ v.previous_number }} to v{{ v.version }}"
+                  class="absolute right-2 bottom-1.5 px-1.5 py-0.5 rounded text-[11px] text-gray-400 hover:text-accent hover:bg-surface-overlay">Changes</button>
+          {% endif %}
+        </li>
+        {% endfor %}
+      </ol>
+    </div>
+    {% endif %}
+    <div class="bg-surface-raised rounded-xl border border-gray-800 p-4 text-xs text-gray-400 space-y-2">
+      <h2 class="text-sm font-semibold text-gray-300">How prompts work</h2>
+      <p>A system prompt is the standing instruction your agent or audit target follows. Versioning it means:</p>
+      <ul class="list-disc list-inside space-y-1">
+        <li>Every edit saves a new immutable version with a note.</li>
+        <li>Runs pin the exact version they used, so results stay reproducible.</li>
+        <li>You can diff any two versions to see exactly what changed.</li>
+        <li>Compare runs across prompt versions to measure impact.</li>
+      </ul>
+    </div>
+  </aside>
+</div>
+
+{% if versions|length > 1 %}
+{% include "partials/version_diff_modal.html" with id="prompt-diff" title="What changed" versions=versions %}
+{% include "partials/version_diff_js.html" %}
+{{ diff_versions|json_script:"diff-data" }}
+<script>
+(function () {
+  const VERSIONS = Object.fromEntries(JSON.parse(document.getElementById('diff-data').textContent).map(v => [v.version, v]));
+  const meta = v => `<span class="block"><span class="text-gray-300">v${v.version}</span> <span class="text-gray-500">· ${esc(v.created)}${v.note ? ' · ' + esc(v.note) : ''}</span></span>`;
+  const diff = VersionDiff.modal('prompt-diff', api => {
+    const a = VERSIONS[api.from.value], b = VERSIONS[api.to.value];
+    const rows = a.fields.map((f, i) => ({ ...f, from: f.value, to: b.fields[i].value }));
+    const changes = VersionDiff.fields(rows);
+    api.body.innerHTML = `<p class="mb-3">${meta(a)}<span class="block">→ ${meta(b)}</span></p>` + (
+      a === b ? '<p class="text-gray-400">Pick two different versions.</p>'
+      : rows.every(r => JSON.stringify(r.from) === JSON.stringify(r.to)) ? '<p class="text-green-400">✓ No differences between these versions.</p>'
+      : changes);
+  });
+  document.querySelectorAll('[data-diff-open]').forEach(btn =>
+    btn.addEventListener('click', () => diff.open(...btn.dataset.diffOpen.split(':'))));
+})();
+</script>
+{% endif %}
+{% endblock %}

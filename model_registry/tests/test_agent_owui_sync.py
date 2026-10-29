@@ -58,6 +58,21 @@ class _SyncBase(TestCase):
         return api
 
 
+class OpenWebUIToolInvocationNamesTest(TestCase):
+    def test_reads_function_names_from_registered_tool_specs(self):
+        from integrations.openwebui.client import OpenWebUIAdapter
+
+        api = mock.Mock()
+        api.tools.return_value = [
+            {"id": "acme_order_lookup", "specs": [{"name": "acme_get_order"}]},
+            {"id": "other", "specs": [{"name": "other_tool"}]},
+        ]
+
+        names = OpenWebUIAdapter(api).tool_invocation_names(["acme_order_lookup"])
+
+        self.assertEqual(names, {"acme_order_lookup": ["acme_get_order"]})
+
+
 class _ChatDisabledBase(_SyncBase):
     def setUp(self):
         super().setUp()
@@ -118,14 +133,14 @@ class AgentSyncTest(_SyncBase):
         metadata = api.update_workspace_model.call_args.kwargs["metadata"]
         self.assertTrue(metadata["capabilities"]["file_context"])
         self.assertFalse(metadata["capabilities"]["web_search"])
-        self.assertFalse(metadata["builtinTools"]["knowledge"])
+        self.assertTrue(metadata["builtinTools"]["knowledge"])
         self.assertFalse(metadata["builtinTools"]["memory"])
         self.assertFalse(metadata["builtinTools"]["notifications"])
         self.assertEqual(metadata["toolIds"], ["owui-tool-1"])
 
     def test_pushes_agent_retrieval_settings_as_studio_metadata(self):
         api = self._mock_chat()
-        settings = {"search_mode": "hybrid", "top_k": 9, "rerank_enabled": True, "full_context": True}
+        settings = {"search_mode": "hybrid", "top_k": 9, "full_context": True}
         agent = AgentFactory(project=self.project, retrieval_settings=settings)
 
         resp = self._api(f"/api/agents/{agent.id}/", "put", {
@@ -137,8 +152,10 @@ class AgentSyncTest(_SyncBase):
         self.assertEqual(resp.status_code, 200)
         pushed = api.create_workspace_model.call_args.kwargs["metadata"]
         self.assertEqual(pushed["simpleaudit"]["retrieval"]["top_k"], 9)
-        self.assertTrue(pushed["simpleaudit"]["retrieval"]["rerank_enabled"])
-        self.assertEqual(api.create_workspace_model.call_args.kwargs["params"], settings)
+        self.assertNotIn("rerank_enabled", pushed["simpleaudit"]["retrieval"])
+        # Open WebUI forwards ``params`` to the upstream provider. Retrieval
+        # controls belong in the Studio metadata, not provider request args.
+        self.assertEqual(api.create_workspace_model.call_args.kwargs["params"], {})
 
     def test_create_pushes_workspace_model_and_backfills_id(self):
         api = self._mock_chat()
@@ -164,7 +181,7 @@ class AgentSyncTest(_SyncBase):
         self.assertEqual(call.args[1], "Synced Agent")
         self.assertEqual(call.kwargs["base_model_id"], f"{model.connection_id}.{model.model_id}")
         self.assertEqual(
-            call.kwargs["knowledge"], [{"id": "owui-kb-1", "name": kb.name, "type": "file"}]
+            call.kwargs["knowledge"], [{"id": "owui-kb-1", "name": kb.name, "type": "collection"}]
         )
         # The pushed config points at the OWUI model, so chat can pin it.
         self.assertEqual(agent.config_snapshot()["openwebui_model_id"], agent.external_id)

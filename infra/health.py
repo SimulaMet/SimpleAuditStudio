@@ -162,6 +162,49 @@ def _worker_probe() -> dict[str, Any]:
     return {"status": "up", "idle": True}
 
 
+def _studio_version() -> str | None:
+    """Version of SimpleAudit Studio itself (installed dist or pyproject.toml)."""
+    from django.conf import settings
+
+    version = getattr(settings, "VERSION", None)
+    if version:
+        return version
+    try:
+        from config.settings import _pkg_version
+
+        return _pkg_version()
+    except Exception:  # noqa: BLE001 - version display must never break the panel
+        return None
+
+
+def _studio_commit() -> str | None:
+    """Git commit of this checkout (HEAD), or None when not a git repo."""
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parent.parent
+    for candidate in (root / ".git", root):
+        if (candidate / "HEAD").is_file() or (candidate / "HEAD").is_dir():
+            break
+    else:
+        return None
+    try:
+        import subprocess
+
+        out = subprocess.run(
+            ["git", "-C", str(root), "rev-parse", "HEAD"],
+            capture_output=True, text=True, timeout=2, check=False,
+        )
+        commit = out.stdout.strip()
+        return commit if out.returncode == 0 and commit else None
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
+def studio_provenance() -> dict[str, Any]:
+    """Version + git commit of SimpleAudit Studio itself (for the Health card)."""
+    return {"version": _studio_version(), "commit": _studio_commit()}
+
+
 def _engine_probe() -> dict[str, Any]:
     from infra.simpleaudit_package import resolve_engine_provenance
 
@@ -173,6 +216,7 @@ def _engine_probe() -> dict[str, Any]:
         "version": prov.version,
         "commit": prov.commit,
         "source": prov.source,
+        "studio": studio_provenance(),
     }
 
 

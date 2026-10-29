@@ -100,6 +100,26 @@ class OpenWebUIAdapter:
         """All knowledge bases visible to the current user, as plain dicts."""
         return self._api.knowledge_bases()
 
+    def tool_invocation_names(self, external_ids: list[str]) -> dict[str, list[str]]:
+        """Return executable function names for selected Open WebUI tool IDs."""
+        wanted = set(external_ids)
+        if not wanted:
+            return {}
+        try:
+            items = self._api.tools()
+        except ChatAPIError:
+            logger.warning("Could not read Open WebUI tool specifications for frozen audit metadata.")
+            return {}
+        return {
+            str(item.get("id")): [
+                str(spec["name"])
+                for spec in item.get("specs", [])
+                if isinstance(spec, dict) and spec.get("name")
+            ]
+            for item in items
+            if isinstance(item, dict) and item.get("id") in wanted
+        }
+
     def list_tools(self) -> list[dict[str, Any]]:
         """All toolkit tools registered in OpenWebUI.
 
@@ -156,14 +176,14 @@ class OpenWebUIAdapter:
         return f"{chat_model_prefix(model.connection)}.{model.model_id}"
 
     def _knowledge_refs(self, agent: Agent) -> list[dict[str, Any]]:
-        """``meta.knowledge`` entries: file-shaped refs to the agent's KBs.
+        """``meta.knowledge`` entries for the agent's attached KB collections.
 
-        The OpenWebUI chat runtime reads ``meta.knowledge`` at completion time
-        and treats each ``{"id", "name", "type": "file"}`` entry as a
-        knowledge source. KBs without an OpenWebUI id are not linkable yet.
+        Open WebUI distinguishes knowledge collections from individual files;
+        its built-in knowledge tools require collection references. KBs without
+        an Open WebUI id are not linkable yet.
         """
         return [
-            {"id": kb.external_id, "name": kb.name, "type": "file"}
+            {"id": kb.external_id, "name": kb.name, "type": "collection"}
             for kb in agent.knowledge_bases.all()
             if kb.external_id
         ]
@@ -191,11 +211,14 @@ class OpenWebUIAdapter:
         base_model_id = self.agent_base_model_id(agent)
         knowledge = self._knowledge_refs(agent)
         tool_ids = self._tool_ids(agent)
-        retrieval = agent.retrieval_settings or {}
         capabilities = normalized_agent_capabilities(agent.capabilities)
         # Knowledge context is derived from Studio's attached knowledge bases;
         # it is not a second agent checkbox.
         capabilities["model"]["file_context"] = bool(knowledge)
+        # OpenWebUI gates its native knowledge tools separately from the
+        # attached model knowledge list.  An attached KB must therefore enable
+        # the category or no retrieval span/tool can ever be produced.
+        capabilities["builtin_tools"]["knowledge"] = bool(knowledge)
         description = agent.system_prompt or agent.description or agent.name
         metadata = {
             "capabilities": capabilities["model"],
@@ -214,7 +237,10 @@ class OpenWebUIAdapter:
                     self._api.update_workspace_model(
                         model_id, agent.name, base_model_id=base_model_id,
                         description=description, knowledge=knowledge,
-                        params=retrieval,
+                        # ``params`` are forwarded to the upstream model
+                        # provider; keep Studio retrieval controls in the
+                        # metadata namespace below instead.
+                        params={},
                         metadata=metadata,
                     )
                     status = "updated"
@@ -226,7 +252,7 @@ class OpenWebUIAdapter:
                     self._api.create_workspace_model(
                         model_id, agent.name, base_model_id=base_model_id,
                         description=description, knowledge=knowledge,
-                        params=retrieval,
+                        params={},
                         metadata=metadata,
                     )
                     status = "created"
@@ -235,7 +261,7 @@ class OpenWebUIAdapter:
                     self._api.create_workspace_model(
                         model_id, agent.name, base_model_id=base_model_id,
                         description=description, knowledge=knowledge,
-                        params=retrieval,
+                        params={},
                         metadata=metadata,
                     )
                     status = "created"

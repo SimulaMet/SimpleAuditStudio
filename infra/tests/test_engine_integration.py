@@ -119,6 +119,435 @@ class RoleKwargsFilteringTest(TestCase):
         self.assertEqual(filtered, {"timeout": 60})
 
 
+class OpenWebUISavedChatParamsTest(TestCase):
+    def test_saved_chat_drops_agent_unsupported_generation_fields(self):
+        from infra.trace_target import _openwebui_saved_chat_params
+
+        params = {
+            "temperature": 0.0,
+            "max_tokens": 512,
+            "reasoning_effort": "none",
+            "search_mode": "hybrid",
+            "top_k": 5,
+            "relevance_threshold": 0.2,
+            "extra_body": {
+                "reasoning_effort": "none",
+                "session_id": "simpleaudit-agent-1",
+            },
+        }
+        self.assertEqual(
+            _openwebui_saved_chat_params(params),
+            {
+                "temperature": 0.0,
+                "max_tokens": 512,
+                "extra_body": {"session_id": "simpleaudit-agent-1"},
+            },
+        )
+
+
+class AgentRequestWiringTest(TestCase):
+    """Frozen Agent capabilities become standard Open WebUI request fields."""
+
+    def test_agent_snapshot_injects_tools_as_openai_function_definitions(self):
+        """Agent tools become OpenAI function-calling definitions in target_params."""
+        from infra.engine import augment_agent_generation
+
+        generation = {"target_params": {"temperature": 0.0, "reasoning_effort": "none"}}
+        snapshot = {
+            "agent_id": 1,
+            "tools": [
+                {
+                    "external_id": "acme_get_order",
+                    "description": "Look up an order.",
+                    "input_schema": {"type": "object", "properties": {"order_id": {"type": "string"}}, "required": ["order_id"]},
+                }
+            ],
+            "capabilities": {"knowledge_search": True},
+            "knowledge_bases": [{"name": "Acme Retail Policy"}],
+        }
+
+        result = augment_agent_generation(generation, snapshot)
+
+        tp = result["target_params"]
+        self.assertEqual(tp["temperature"], 0.0)
+        self.assertNotIn("reasoning_effort", tp)
+        tool_names = [t["function"]["name"] for t in tp.get("tools", [])]
+        self.assertIn("acme_get_order", tool_names)
+        # knowledge_search capability injects the local policy search fixture
+        self.assertIn("acme_search_knowledge", tool_names)
+
+    def test_existing_openwebui_request_fields_win(self):
+        from infra.engine import augment_agent_generation
+
+        generation = {"target_params": {"extra_body": {"session_id": "run-session", "tool_ids": ["custom"]}}}
+        result = augment_agent_generation(generation, {"agent_id": 2, "tools": [{"external_id": "ignored"}]})
+
+        self.assertEqual(result["target_params"]["extra_body"], {"session_id": "run-session", "tool_ids": ["custom"]})
+
+    def test_agent_system_prompt_becomes_target_persona(self):
+        """A run without its own system prompt executes the agent's persona."""
+        from infra.engine import augment_agent_generation
+
+        snapshot = {
+            "agent_id": 1,
+            "system_prompt": "You are the Acme Retail Support Refund Assistant.",
+        }
+        result = augment_agent_generation({}, snapshot)
+        self.assertEqual(result["system_prompt"], "You are the Acme Retail Support Refund Assistant.")
+
+    def test_explicit_run_system_prompt_wins_over_agent(self):
+        from infra.engine import augment_agent_generation
+
+        snapshot = {"agent_id": 1, "system_prompt": "Agent persona."}
+        result = augment_agent_generation({"system_prompt": "Run-specific persona."}, snapshot)
+        self.assertEqual(result["system_prompt"], "Run-specific persona.")
+
+    def test_blank_agent_system_prompt_is_not_injected(self):
+        from infra.engine import augment_agent_generation
+
+        result = augment_agent_generation({}, {"agent_id": 1, "system_prompt": "   "})
+        self.assertNotIn("system_prompt", result)
+
+    def test_untraced_agent_run_executes_base_model_directly(self):
+        from infra.engine import augment_agent_generation
+
+        snapshot = {"agent_id": 1, "base_model": {"connection_id": 3, "model_id": "default"}}
+        result = augment_agent_generation({}, snapshot)
+        self.assertEqual(result["_agent_base_model"], {"connection_id": 3, "model_id": "default"})
+
+    def test_traced_agent_run_routes_through_owui_compat_endpoint(self):
+        """Traced runs carry _agent_base_model AND the OWUI route override."""
+        from infra.engine import augment_agent_generation
+
+        snapshot = {"agent_id": 1, "base_model": {"connection_id": 3, "model_id": "default"}}
+        target = {"connection_id": 2, "base_url": "http://127.0.0.1:8080/chat/api/v1"}
+        result = augment_agent_generation({}, snapshot, via_wrapper=True, target=target)
+        # Both traced and untraced runs execute the base model directly;
+        # traced runs additionally get the OWUI route for span export.
+        self.assertEqual(result["_agent_base_model"], {"connection_id": 3, "model_id": "default"})
+        self.assertEqual(result["_owui_route"], {"connection_id": 2})
+        self.assertTrue(result["_agent_target"])
+
+        # Without an OWUI target, no route override is added.
+        result2 = augment_agent_generation({}, snapshot, via_wrapper=True, target={"connection_id": 5, "base_url": "https://other.invalid/v1"})
+        self.assertNotIn("_owui_route", result2)
+
+    def test_agent_target_drops_provider_reasoning_default_but_judge_keeps_it(self):
+        from infra.engine import auditor_kwargs, augment_agent_generation
+
+        target = {
+            "model_id": "agent",
+            "provider": "openai",
+            "base_url": "https://target.invalid/v1",
+            "default_parameters": {"reasoning_effort": "none"},
+        }
+        judge = {
+            "model_id": "judge",
+            "provider": "openai",
+            "base_url": "https://judge.invalid/v1",
+            "default_parameters": {"reasoning_effort": "none"},
+            "judge": {"spec": {}},
+        }
+        auditor = {
+            "model_id": "auditor",
+            "provider": "openai",
+            "base_url": "https://auditor.invalid/v1",
+            "default_parameters": {},
+        }
+
+        with mock.patch("infra.engine._client_defaults", return_value={}):
+            kwargs, _ = auditor_kwargs(
+                target=target,
+                auditor=auditor,
+                judge=judge,
+                generation=augment_agent_generation(
+                    {"target_params": {}}, {"agent_id": 1}
+                ),
+                resolve_key=lambda _snapshot: "test-key",
+            )
+
+        # reasoning_effort is stripped from the target's generation params;
+        # target_params may be None when no other params survive the filter.
+        self.assertNotIn("reasoning_effort", kwargs.get("target_params") or {})
+        self.assertEqual(kwargs["judge_params"]["reasoning_effort"], "none")
+
+
+class TargetTracePropagationTest(TestCase):
+    """The target request must carry the engine's W3C trace context."""
+
+    def test_model_target_forwards_trace_headers(self):
+        import asyncio
+        from types import SimpleNamespace
+
+        from simpleaudit.targets.base import TargetContext
+
+        from infra.engine import build_model_auditor
+
+        calls = []
+
+        async def acompletion(**kwargs):
+            calls.append(kwargs)
+            return SimpleNamespace(
+                choices=[SimpleNamespace(message=SimpleNamespace(content="ok"))],
+                usage=None,
+            )
+
+        client = SimpleNamespace(acompletion=acompletion)
+        snapshots = {
+            "target": _snap("target"),
+            "auditor": _snap("auditor"),
+            "judge": _snap("judge"),
+        }
+        with mock.patch("simpleaudit.model_auditor.ModelAuditor._create_anyllm_client", return_value=client):
+            auditor, _language = build_model_auditor(**snapshots)
+            asyncio.run(
+                auditor.target.send(
+                    user="hello",
+                    context=TargetContext(
+                        trace_headers={
+                            "traceparent": "00-" + "1" * 32 + "-" + "2" * 16 + "-01",
+                        }
+                    ),
+                )
+            )
+
+        # W3C trace context is a studio-level parameter: consumed for the
+        # saved-chat request options, never forwarded as an OpenAI field.
+        self.assertNotIn("extra_headers", calls[0])
+
+    def test_repetition_runner_uses_context_aware_auditor(self):
+        from infra import engine
+        from infra.trace_target import TraceContextModelAuditor
+
+        captured = {}
+
+        class FakeExperiment:
+            def __init__(self, **_kwargs):
+                import simpleaudit.experiment as experiment_module
+
+                captured["auditor_class"] = experiment_module.ModelAuditor
+
+            async def run_scenario_reps(self, **_kwargs):
+                return []
+
+        with mock.patch("simpleaudit.experiment.AuditExperiment", FakeExperiment):
+            engine.run_scenario_repeated(
+                name="dose",
+                description="Ask about a dose.",
+                expected_behavior=["Refuse"],
+                test_prompt="Dose?",
+                target=_snap("t"),
+                auditor=_snap("a"),
+                judge=_snap("j"),
+                trace_config=None,
+            )
+
+        self.assertIs(captured["auditor_class"], TraceContextModelAuditor)
+
+    def test_model_target_uses_streaming_for_openwebui_tool_continuation(self):
+        """Open WebUI executes native tools only on its streaming response path."""
+        import asyncio
+        from types import SimpleNamespace
+
+        from simpleaudit.targets.base import TargetContext
+
+        from infra.trace_target import TraceContextModelTarget
+
+        calls = []
+
+        async def chunks():
+            yield SimpleNamespace(
+                choices=[SimpleNamespace(delta=SimpleNamespace(content="final answer"))],
+                usage=None,
+            )
+
+        async def acompletion(**kwargs):
+            calls.append(kwargs)
+            return chunks()
+
+        target = TraceContextModelTarget(client=SimpleNamespace(acompletion=acompletion), model="local")
+        response = asyncio.run(
+            target.send(
+                user="Call the order tool.",
+                params={"extra_body": {"session_id": "session-1"}},
+                context=TargetContext(trace_headers={"traceparent": "00-" + "1" * 32 + "-" + "2" * 16 + "-01"}),
+            )
+        )
+
+        self.assertEqual(response.content, "final answer")
+        self.assertTrue(calls[0]["stream"])
+        # extra_body is forwarded as a genuine OpenAI request field; the
+        # studio-level trace headers are not.
+        self.assertEqual(calls[0]["extra_body"], {"session_id": "session-1"})
+        self.assertNotIn("extra_headers", calls[0])
+
+    def test_model_target_uses_saved_chat_path_for_openwebui_server_tools(self):
+        """Open WebUI's API path must create a chat for server-side tool execution."""
+        import asyncio
+        from types import SimpleNamespace
+
+        from simpleaudit.targets.base import TargetContext
+
+        from infra.trace_target import TraceContextModelTarget
+
+        calls = []
+
+        class RawClient:
+            base_url = "http://127.0.0.1:8080/chat/api/v1/"
+            assistant_id = None
+
+            async def post(self, path, *, cast_to, body, options):
+                calls.append(("post", path, body, options))
+                self.assistant_id = body["message_ids"][0]["message_id"]
+                return {"status": True, "chat_id": "chat-1"}
+
+            async def get(self, path, *, cast_to, options):
+                calls.append(("get", path, options))
+                return {
+                    "chat": {
+                        "history": {
+                            "messages": {
+                                "server-assistant-id": {
+                                    "role": "assistant",
+                                    "done": True,
+                                    "content": "The order is refundable.",
+                                }
+                            }
+                        }
+                    }
+                }
+
+        async def acompletion(**_kwargs):
+            raise AssertionError("direct completion path must not bypass Open WebUI tool execution")
+
+        provider = SimpleNamespace(client=RawClient(), acompletion=acompletion)
+        target = TraceContextModelTarget(client=provider, model="studio.agent-1")
+        response = asyncio.run(
+            target.send(
+                user="Call the order tool.",
+                params={
+                    "extra_body": {
+                        "session_id": "session-1",
+                        "tool_ids": ["acme_order_lookup"],
+                    }
+                },
+                context=TargetContext(trace_headers={"traceparent": "00-" + "1" * 32 + "-" + "2" * 16 + "-01"}),
+            )
+        )
+
+        self.assertEqual(response.content, "The order is refundable.")
+        self.assertEqual(calls[0][0:2], ("post", "/chat/completions"))
+        self.assertEqual(calls[0][2]["parent_id"], None)
+        self.assertEqual(calls[0][2]["tool_ids"], ["acme_order_lookup"])
+        self.assertEqual(calls[0][3]["headers"]["traceparent"], "00-" + "1" * 32 + "-" + "2" * 16 + "-01")
+        self.assertEqual(calls[1][0:2], ("get", "/chats/chat-1"))
+
+    def test_streaming_call_never_forwards_studio_only_params_to_openai_client(self):
+        """extra_headers (W3C trace context) must not leak into the OpenAI request."""
+        import asyncio
+        from types import SimpleNamespace
+
+        from simpleaudit.targets.base import TargetContext
+
+        from infra.trace_target import TraceContextModelTarget
+
+        calls = []
+
+        async def chunks():
+            yield SimpleNamespace(
+                choices=[SimpleNamespace(delta=SimpleNamespace(content="ok"))],
+                usage=None,
+            )
+
+        async def acompletion(**kwargs):
+            calls.append(kwargs)
+            return chunks()
+
+        target = TraceContextModelTarget(client=SimpleNamespace(acompletion=acompletion), model="local")
+        response = asyncio.run(
+            target.send(
+                user="hello",
+                params={"temperature": 0.2},
+                context=TargetContext(trace_headers={"traceparent": "00-" + "1" * 32 + "-" + "2" * 16 + "-01"}),
+            )
+        )
+
+        self.assertEqual(response.content, "ok")
+        self.assertNotIn("extra_headers", calls[0])
+        self.assertEqual(calls[0]["temperature"], 0.2)
+
+    def test_streaming_call_forwards_extra_body_as_openai_request_field(self):
+        """extra_body (session metadata) reaches OWUI's compat endpoint via any_llm."""
+        import asyncio
+        from types import SimpleNamespace
+
+        from infra.trace_target import TraceContextModelTarget
+
+        calls = []
+
+        async def chunks():
+            yield SimpleNamespace(
+                choices=[SimpleNamespace(delta=SimpleNamespace(content="ok"))],
+                usage=None,
+            )
+
+        async def acompletion(**kwargs):
+            calls.append(kwargs)
+            return chunks()
+
+        target = TraceContextModelTarget(client=SimpleNamespace(acompletion=acompletion), model="local")
+        asyncio.run(
+            target.send(
+                user="hello",
+                params={"extra_body": {"session_id": "simpleaudit-agent-7"}},
+            )
+        )
+
+        self.assertEqual(calls[0]["extra_body"], {"session_id": "simpleaudit-agent-7"})
+
+
+class ExtraBodyRoutingTest(TestCase):
+    """extra_body travels as a per-request param and never as a client kwarg."""
+
+    def test_auditor_kwargs_extracts_extra_body_out_of_params(self):
+        from infra.engine import auditor_kwargs
+
+        kwargs, _ = auditor_kwargs(
+            target=_snap("tgt"),
+            auditor=_snap("aud"),
+            judge=_snap("jdg"),
+            generation={
+                "_agent_target": True,
+                "target_params": {
+                    "temperature": 0.1,
+                    "extra_body": {"session_id": "simpleaudit-agent-1"},
+                },
+            },
+        )
+
+        self.assertNotIn("extra_body", kwargs.get("params") or {})
+        self.assertNotIn("extra_body", kwargs.get("target_params") or {})
+        self.assertEqual(kwargs["extra_body"], {"session_id": "simpleaudit-agent-1"})
+        # The remaining generation fields survive the extraction.
+        self.assertEqual(kwargs["target_params"], {"temperature": 0.1})
+
+    def test_endpoint_default_parameters_extra_body_reaches_constructor_handoff(self):
+        """An endpoint snapshot carrying extra_body in default_parameters still
+        extracts it (via gen_params routing) instead of leaking it to the client."""
+        from infra.engine import auditor_kwargs
+
+        kwargs, _ = auditor_kwargs(
+            target=_snap("tgt", default_parameters={"extra_body": {"session_id": "s-1"}}),
+            auditor=_snap("aud"),
+            judge=_snap("jdg"),
+        )
+
+        self.assertEqual(kwargs["extra_body"], {"session_id": "s-1"})
+        self.assertNotIn("extra_body", kwargs.get("params") or {})
+        self.assertNotIn("extra_body", kwargs.get("target_params") or {})
+        self.assertNotIn("extra_body", kwargs.get("target_kwargs") or {})
+
+
 
 def _snap(model_id, **extra):
     return {"model_id": model_id, "provider": "openai", "base_url": f"http://{model_id}.local/v1", **extra}
@@ -126,6 +555,18 @@ def _snap(model_id, **extra):
 
 class AuditorKwargsTest(TestCase):
     """Each role gets its own model, endpoint, client kwargs and params."""
+
+    def test_reasoning_effort_is_forwarded_as_a_request_parameter(self):
+        from infra.engine import auditor_kwargs
+
+        kwargs, _ = auditor_kwargs(
+            target=_snap("tgt"),
+            auditor=_snap("aud"),
+            judge=_snap("jdg", default_parameters={"reasoning_effort": "none"}),
+        )
+
+        self.assertEqual(kwargs["judge_params"], {"reasoning_effort": "none"})
+        self.assertEqual(kwargs["judge_kwargs"], {"timeout": 180, "max_retries": 1})
 
     def test_roles_map_to_their_own_snapshot(self):
         from infra.engine import auditor_kwargs

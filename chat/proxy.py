@@ -240,6 +240,16 @@ def _caddyfile(port: int, internal_port: int | None = None) -> str:
         # placeholder expands empty because _start_caddy spawns Caddy with
         # WEBUI_SUBPATH="". {http.request.uri} preserves the query string.
         # Dead code once the fork is rebuilt with the ${base} prefix.
+        #
+        # NOTE: the v0.12.0 build also has a second class of broken
+        # base-prefixing where "${base}" renders as LITERAL text (quoted JS
+        # strings), so "Back" from a KB/tool detail page hits
+        # /chat/workspace/<section>/$%7Bbase%7D/workspace/<section>. That one
+        # is NOT repaired here: this Caddy build's path matchers can't express
+        # it (a bare '$' is treated as a placeholder, and path_regexp is
+        # non-functional in v2.11.7). It is fixed at the source by patching
+        # the installed frontend bundle (see deploy/openwebui-subpath/README.md
+        # "Known fork defect").
         "\thandle /workspace/* {",
         f"\t\tredir {{env.WEBUI_SUBPATH}}{chat.SUBPATH}{{http.request.uri}} 308",
         "\t}",
@@ -575,9 +585,20 @@ def start_open_webui(studio_port: int | None = None) -> subprocess.Popen:
 OWUI_WHEEL_URL = os.environ.get(
     "SIMPLEAUDIT_CHAT_WHEEL",
     "https://github.com/SushantGautam/open-webui/releases/download/"
-    "v0.11.4.3-subpath/open_webui-0.11.4.3-py3-none-any.whl",
+    "v0.12.4.4-subpath/open_webui-0.12.4.4-py3-none-any.whl",
 )
 OWUI_PACKAGE = os.environ.get("SIMPLEAUDIT_CHAT_PACKAGE", "open-webui")
+
+
+def _owui_install_requirement() -> str:
+    """Install the wheel with telemetry's declared observability extras.
+
+    The fork's telemetry setup imports these instrumentors at module import
+    time, so installing only the base wheel leaves the managed runtime unable
+    to start even though the wheel metadata declares them as an optional
+    extra.
+    """
+    return f"{OWUI_PACKAGE}[observability] @ {OWUI_WHEEL_URL}"
 
 
 def _wheel_marker(managed: Path) -> Path:
@@ -661,7 +682,7 @@ def _locate_owui_interpreter(home: Path) -> str:
             subprocess.run([uv, "venv", str(managed), "--python", "3.11", "--seed"],
                            check=True, capture_output=True, timeout=120)
             subprocess.run(
-                [managed_py, "-m", "pip", "install", OWUI_WHEEL_URL],
+                [managed_py, "-m", "pip", "install", _owui_install_requirement()],
                 check=True, capture_output=True, timeout=900,
             )
             if _probe_interpreter(str(managed_py)):
@@ -755,6 +776,14 @@ def _spawn(home: Path, studio_port: int | None = None) -> subprocess.Popen:
         # Nothing here serves Ollama, and Open WebUI polls it on every page load
         # (a 500 per poll in the console) and shows an empty section in settings.
         "ENABLE_OLLAMA_API": "false",
+        # Retrieval defaults Studio always wants: hybrid search (BM25 + vector), cached
+        # retrieval queries, and filesystem-style knowledge exec. Env-overridable.
+        "ENABLE_RAG_HYBRID_SEARCH": os.environ.get("ENABLE_RAG_HYBRID_SEARCH", "true"),
+        "ENABLE_QUERIES_CACHE": os.environ.get("ENABLE_QUERIES_CACHE", "true"),
+        "ENABLE_KB_EXEC": os.environ.get("ENABLE_KB_EXEC", "true"),
+        # Studio pins the Open WebUI build, so its "new version available"
+        # banner is noise. Operators can still opt back in with the env var.
+        "ENABLE_VERSION_UPDATE_CHECK": os.environ.get("ENABLE_VERSION_UPDATE_CHECK", "false"),
         "WEBUI_URL": chat.public_url(),
     }
     if chat.OTLP_ENABLED:

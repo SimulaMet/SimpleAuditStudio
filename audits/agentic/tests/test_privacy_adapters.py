@@ -1,0 +1,125 @@
+import json
+
+from audits.agentic.adapters.openinference import normalize as normalize_openinference
+from audits.agentic.adapters.openwebui import normalize as normalize_openwebui
+from audits.agentic.adapters.otel_genai import normalize as normalize_otel
+from audits.agentic.privacy import apply_content_capture_level, serialize_for_judge
+
+SECRET = "sk-test-123456789012345"
+
+
+def _span():
+    return {
+        "trace_id": "trace-1",
+        "span_id": "span-1",
+        "name": "execute_tool",
+        "kind": "tool",
+        "status": "OK",
+        "attributes": {
+            "gen_ai.tool.name": "lookup",
+            "gen_ai.tool.call.arguments": json.dumps({"order": "123"}),
+            "gen_ai.tool.call.result": {"email": "user@example.test"},
+            "authorization": f"Bearer {SECRET}",
+        },
+    }
+
+
+def test_capture_levels_are_additive_and_redact_before_persistence_or_judge():
+    structural = apply_content_capture_level([_span()], "structural")[0]
+    inputs = apply_content_capture_level([_span()], "inputs")[0]
+    full = serialize_for_judge([_span()], "full")[0]
+
+    # Default structural keeps the tool arguments and results the checks read.
+    assert "gen_ai.tool.call.arguments" in structural["attributes"]
+    assert "gen_ai.tool.call.result" in structural["attributes"]
+    assert "gen_ai.tool.call.result" in full["attributes"]
+    encoded = json.dumps([structural, inputs, full])
+    assert SECRET not in encoded
+    assert "authorization" in encoded  # key remains useful for auditability
+    assert "[REDACTED]" in encoded
+
+
+def test_provider_adapters_return_common_trajectory_and_preserve_missing_content():
+    otel = normalize_otel([_span()])
+    openinference = normalize_openinference([{
+        "span_id": "i1", "name": "tool", "attributes": {
+            "openinference.span.kind": "TOOL",
+            "tool.name": "lookup",
+            "tool.parameters": {"order": "123"},
+        },
+    }])
+    openwebui = normalize_openwebui([{
+        "span_id": "w1", "name": "owui tool",
+        "attributes": {"openwebui.span.kind": "TOOL", "openwebui.tool.name": "search"},
+    }])
+
+    assert otel.tools()[0].name == "lookup"
+    assert otel.tools()[0].result == {"email": "user@example.test"}
+    assert openinference.tools()[0].kind == "tool"
+    assert openinference.tools()[0].arguments == {"order": "123"}
+    assert openwebui.tools()[0].name == "search"
+    assert openwebui.tools()[0].arguments is None
+
+
+def test_openwebui_adapter_synthesizes_data_scope_from_order_id():
+    span = {
+        "trace_id": "trace-1",
+        "span_id": "span-9",
+        "name": "execute_tool",
+        "kind": "tool",
+        "status": "OK",
+        "attributes": {
+            "gen_ai.tool.name": "acme_get_order",
+            "gen_ai.tool.call.arguments": json.dumps({"order_id": "ACME-1001"}),
+        },
+    }
+    trajectory = normalize_openwebui([span])
+    step = trajectory.steps[0]
+    assert step.kind == "tool"
+    assert step.attributes.get("data_scope") == ["order:ACME-1001"]
+
+
+def test_openwebui_adapter_leaves_non_order_tools_without_scope():
+    span = {
+        "trace_id": "trace-1",
+        "span_id": "span-10",
+        "name": "execute_tool",
+        "kind": "tool",
+        "status": "OK",
+        "attributes": {
+            "gen_ai.tool.name": "query_knowledge_bases",
+            "gen_ai.tool.call.arguments": json.dumps({"query": "refund policy"}),
+        },
+    }
+    trajectory = normalize_openwebui([span])
+    assert trajectory.steps[0].attributes.get("data_scope") is None
+
+
+def test_default_keeps_necessary_content_and_inputs_drops_model_output():
+    span = {
+        "trace_id": "t", "span_id": "s", "name": "chat", "kind": "LLM",
+        "attributes": {
+            "gen_ai.prompt": "user prompt",
+            "gen_ai.completion": "model completion",
+            "llm.output_messages.0.message.content": "model text",
+            "gen_ai.tool.call.arguments": '{"order_id": "ACME-1001"}',
+            "gen_ai.tool.call.result": '{"status": "Delivered"}',
+        },
+        "events": [{"name": "debug"}],
+    }
+    structural = apply_content_capture_level([span], "structural")[0]
+    attrs = structural["attributes"]
+    assert attrs["gen_ai.prompt"] == "user prompt"
+    assert attrs["gen_ai.completion"] == "model completion"
+    assert attrs["gen_ai.tool.call.arguments"] == '{"order_id": "ACME-1001"}'
+    assert attrs["gen_ai.tool.call.result"] == '{"status": "Delivered"}'
+    assert "events" not in structural
+
+    inputs = apply_content_capture_level([span], "inputs")[0]["attributes"]
+    assert inputs["gen_ai.prompt"] == "user prompt"
+    assert "gen_ai.completion" not in inputs
+    assert not any(key.startswith("llm.output_messages.") for key in inputs)
+
+    full = apply_content_capture_level([span], "full")[0]
+    assert full["attributes"]["gen_ai.completion"] == "model completion"
+    assert full["events"] == [{"name": "debug"}]

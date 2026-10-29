@@ -5,7 +5,7 @@
   <h1 class="text-lg font-semibold text-gray-100">Experiments</h1>
   <a href="{% url 'new_experiment' %}" class="px-3 py-1.5 rounded-lg bg-accent text-white text-xs font-medium hover:bg-accent-hover">+ New Experiment</a>
 </div>
-<p class="text-sm text-gray-500 mb-6 max-w-3xl">Groups of runs launched together to compare models or settings. Single runs appear on the Dashboard.</p>
+<p class="text-sm text-gray-500 mb-6 max-w-3xl">Groups of runs launched together to compare models or settings. A design that yields a single run still becomes an experiment (one run, nothing compared), so every launch has its own results page.</p>
 
 <div class="bg-surface-raised rounded-xl border border-gray-800 p-4">
   {% if experiments %}
@@ -16,6 +16,7 @@
           <th class="text-left px-3 py-2 font-medium">Name</th>
           <th class="text-left px-3 py-2 font-medium">Compares</th>
           <th class="text-left px-3 py-2 font-medium">Progress</th>
+          <th class="text-left px-3 py-2 font-medium">Visibility</th>
           <th class="text-left px-3 py-2 font-medium">Created</th>
         </tr>
       </thead>
@@ -23,11 +24,26 @@
         {% for e in experiments %}
         <tr class="border-b border-gray-800/50 hover:bg-surface-overlay/50 cursor-pointer" onclick="location='/experiments/{{ e.id }}/'">
           <td class="px-3 py-2.5 text-gray-200 font-medium max-w-[20rem] truncate"><a href="/experiments/{{ e.id }}/" class="hover:text-accent">{{ e.name }}</a></td>
-          <td class="px-3 py-2.5"><div class="flex flex-wrap gap-1">{% for l in e.factor_labels %}<span class="px-2 py-0.5 rounded-full text-[11px] bg-accent/15 text-accent">{{ l }}</span>{% empty %}<span class="text-xs text-gray-600">—</span>{% endfor %}</div></td>
+          <td class="px-3 py-2.5"><div class="flex flex-wrap gap-1">{% for l in e.factor_labels %}<span class="px-2 py-0.5 rounded-full text-[11px] bg-accent/15 text-accent">{{ l }}</span>{% empty %}<span class="px-2 py-0.5 rounded-full text-[11px] bg-gray-800 text-gray-500">single run</span>{% endfor %}</div></td>
           <td class="px-3 py-2.5 text-xs text-gray-400 whitespace-nowrap">
             {{ e.summary.done }}/{{ e.summary.total }} runs done
             {% if e.summary.active %}<span class="text-amber-400">· {{ e.summary.active }} active</span>{% endif %}
             {% if e.summary.failed %}<span class="text-red-400">· {{ e.summary.failed }} failed</span>{% endif %}
+          </td>
+          <td class="px-3 py-2.5 whitespace-nowrap" onclick="event.stopPropagation()">
+            {% if e.is_public %}
+            <span class="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] bg-emerald-900/40 text-emerald-300 border border-emerald-800/50">Public</span>
+            {% else %}
+            <span class="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] bg-gray-800/60 text-gray-400 border border-gray-700/50">Private</span>
+            {% endif %}
+            {% if can_manage_visibility %}
+            <form method="post" action="{% url 'experiment_set_visibility' e.id %}" class="inline ml-2"
+                  data-confirm="{% if e.is_public %}Make this experiment private again? Only workspace members will be able to see it.{% else %}Make this experiment public? Anyone with the URL will be able to view it — including its runs and results — without an account.{% endif %}">
+              {% csrf_token %}
+              <input type="hidden" name="visibility" value="{% if e.is_public %}private{% else %}public{% endif %}">
+              <button type="submit" class="text-[11px] text-gray-500 hover:text-accent underline underline-offset-2">{% if e.is_public %}Make private{% else %}Make public{% endif %}</button>
+            </form>
+            {% endif %}
           </td>
           <td class="px-3 py-2.5 text-xs text-gray-500 whitespace-nowrap"><time data-local datetime="{{ e.created_at|date:'c' }}">{{ e.created_at|date:"M j, H:i" }} UTC</time>{% if e.created_by %} · {{ e.created_by.username }}{% endif %}</td>
         </tr>

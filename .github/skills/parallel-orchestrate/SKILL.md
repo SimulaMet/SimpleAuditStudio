@@ -1,8 +1,8 @@
 ---
 name: parallel-orchestrate
 description: Parallel-first orchestration convention for substantial tasks
+disable-model-invocation: true
 ---
-
 Use parallel subagents aggressively for independent work. Optimize for
 wall-clock time, not token count. Treat model calls as cheap. Keep yourself
 as the coordinator and integrator. Verify claims with repository evidence

@@ -141,6 +141,8 @@ class Command(BaseCommand):
         from audits.models import Experiment
 
         by_label = {f"Demo: {spec.get('label', spec['pack'])}": spec.get("experiment") for spec in runs_spec}
+        # Experiments flagged "public" in the fixture are visible without login.
+        public_names = {spec["experiment"] for spec in runs_spec if spec.get("experiment") and spec.get("public")}
         groups: dict[str, list] = {}
         for run in runs:
             name = by_label.get(run.name)
@@ -149,7 +151,12 @@ class Command(BaseCommand):
         for name, members in groups.items():
             values = [run_factor_values(r) for r in members]
             factors = [key for key in FACTORS if len({v[key] for v in values}) > 1]
-            experiment = Experiment.objects.create(project=project, name=name, factors=factors, created_by=user)
+            visibility = (
+                Experiment.Visibility.PUBLIC if name in public_names else Experiment.Visibility.PRIVATE
+            )
+            experiment = Experiment.objects.create(
+                project=project, name=name, factors=factors, created_by=user, visibility=visibility
+            )
             for run in members:
                 run.experiment = experiment
                 run.save(update_fields=["experiment"])

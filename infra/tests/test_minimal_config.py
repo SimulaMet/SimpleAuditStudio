@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import os
 import urllib.request
+from pathlib import Path
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
@@ -32,7 +33,7 @@ class TestDemoBootSequence(TestCase):
         user, project = bootstrap_admin_and_default_project(
             username="studio",
             email="admin@localhost",
-            password="admin12345",
+            password="localdevpass12345",
             project_name="Demo Project",
         )
         self.assertEqual(user.username, "studio")
@@ -60,7 +61,7 @@ class TestDemoBootSequence(TestCase):
         from model_registry.models import ModelConnection
 
         _, project = bootstrap_admin_and_default_project(
-            username="studio", email="admin@localhost", password="admin12345",
+            username="studio", email="admin@localhost", password="localdevpass12345",
             project_name="Demo Project",
         )
         call_command("seed_platform", project=project.id, verbosity=0)
@@ -68,6 +69,22 @@ class TestDemoBootSequence(TestCase):
         conn = ModelConnection.objects.filter(enabled=True).first()
         self.assertIsNotNone(conn)
         self.assertEqual(conn.base_url, "https://api.openai.com/v1")
+
+    def test_stop_does_not_remove_foreign_embedded_handshake(self):
+        """A wiring-only process must not erase the server's handshake."""
+        import tempfile
+
+        from infra import minimal_config
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            handshake_path = Path(temp_dir) / "embedded-hatchet-handshake.json"
+            handshake_path.write_text("shared", encoding="utf-8")
+            with (
+                patch.object(minimal_config, "_embedded_client", None),
+                patch.object(minimal_config, "_handshake_path", return_value=handshake_path),
+            ):
+                minimal_config.stop_embedded_hatchet()
+            self.assertTrue(handshake_path.exists())
 
     def test_restore_real_model_endpoints_repairs_mock(self):
         """A connection left pointing at the local mock is repaired to OpenAI."""
@@ -78,7 +95,7 @@ class TestDemoBootSequence(TestCase):
         from simpleaudit_studio.cli import _restore_real_model_endpoints
 
         _, project = bootstrap_admin_and_default_project(
-            username="studio", email="admin@localhost", password="admin12345",
+            username="studio", email="admin@localhost", password="localdevpass12345",
             project_name="Demo Project",
         )
         call_command("seed_platform", project=project.id, verbosity=0)
@@ -176,13 +193,14 @@ class TestAutoLoginToken(TestCase):
 
     def tearDown(self):
         os.environ.pop("SIMPLEAUDIT_AUTO_LOGIN_TOKEN", None)
+        os.environ.pop("SIMPLEAUDIT_AUTO_LOGIN_NEXT", None)
 
-    def _login(self, token=None):
+    def _login(self, token=None, follow=True):
         url = "/auto-login/"
         if token is not None:
             url += f"?token={token}"
         # follow=True: the view 302s to the dashboard after signing in.
-        return self.client.get(url, follow=True)
+        return self.client.get(url, follow=follow)
 
     @override_settings(MINIMAL_CONFIG=True)
     def test_valid_token_logs_in_and_consumes(self):
@@ -192,6 +210,29 @@ class TestAutoLoginToken(TestCase):
             self.assertEqual(response.wsgi_request.user.username, "studio")
             # The token is single-use: it must be gone after the first login.
             self.assertNotIn("SIMPLEAUDIT_AUTO_LOGIN_TOKEN", os.environ)
+
+    @override_settings(MINIMAL_CONFIG=True)
+    def test_redirects_to_visualizer_when_next_set(self):
+        # visualize-only mode sets SIMPLEAUDIT_AUTO_LOGIN_NEXT so the
+        # one-time link lands on the visualizer, not the dashboard.
+        env = {"SIMPLEAUDIT_AUTO_LOGIN_TOKEN": self.TOKEN, "SIMPLEAUDIT_AUTO_LOGIN_NEXT": "/visualizer/"}
+        with patch.dict(os.environ, env):
+            response = self._login(self.TOKEN, follow=False)
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response.headers["Location"], "/visualizer/")
+
+    @override_settings(MINIMAL_CONFIG=True)
+    def test_next_must_be_a_relative_path(self):
+        # An absolute (http://) or protocol-relative (//evil) value must be
+        # ignored so a tampered env var can't turn this into an open redirect.
+        for bad in ("https://evil.example.com", "//evil.example.com", ""):
+            with patch.dict(
+                os.environ,
+                {"SIMPLEAUDIT_AUTO_LOGIN_TOKEN": self.TOKEN, "SIMPLEAUDIT_AUTO_LOGIN_NEXT": bad},
+            ):
+                response = self._login(self.TOKEN, follow=False)
+            self.assertEqual(response.status_code, 302)
+            self.assertNotIn("evil.example.com", response.headers["Location"])
 
     @override_settings(MINIMAL_CONFIG=True)
     def test_token_cannot_be_replayed(self):

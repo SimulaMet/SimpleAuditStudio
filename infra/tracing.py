@@ -31,6 +31,13 @@ from typing import Any, Self
 
 logger = logging.getLogger("simpleaudit.tracing")
 
+# Dedicated pool for the studio span-store DB reads (see
+# StudioTraceProvider._fetch_db). Never used for writes.
+from concurrent.futures import ThreadPoolExecutor as _ThreadPoolExecutor
+from datetime import UTC
+
+_SPAN_FETCH_POOL = _ThreadPoolExecutor(max_workers=2, thread_name_prefix="otlp-span-fetch")
+
 
 class TempoTraceProvider:
     """Fetch traces from a Grafana Tempo backend by trace id.
@@ -114,7 +121,7 @@ class TempoTraceProvider:
 
         try:
             client = httpx.Client(
-                headers=self._headers,
+                headers={**self._headers, "Accept": "application/json"},
                 timeout=self._timeout,
                 transport=self._transport,
             )
@@ -128,6 +135,10 @@ class TempoTraceProvider:
             logger.warning("Tempo trace fetch failed for %s: %s", url, exc)
             return []
 
+        # Tempo's JSON trace response keys the export as "batches"; the OTLP
+        # shape the parser expects is "resourceSpans".
+        if isinstance(payload, dict) and "batches" in payload and "resourceSpans" not in payload:
+            payload = {"resourceSpans": payload["batches"]}
         raw_spans = parse_otlp_json(payload)
         if not raw_spans:
             return []
@@ -192,6 +203,73 @@ class StudioTraceProvider:
                 return []
             time.sleep(self._retry_interval)
 
+    def fetch_window(self, start_ts: float, end_ts: float) -> list[dict[str, Any]]:
+        """Spans received during [start_ts, end_ts] for this target.
+
+        Fallback for targets that do not propagate the W3C traceparent
+        (e.g. OpenWebUI generates its own trace IDs). Matches by target_id
+        and the wall-clock window the run executed in. Filters out raw
+        HTTP transport spans that carry no agent-level semantics.
+
+        The Django ORM read must run on a sync thread: the engine calls this
+        from inside its asyncio loop (per-scenario evidence collection), and
+        a synchronous ORM query on a thread with a live event loop raises
+        SynchronousOnlyOperation. Mirrors ``_fetch_db``'s thread hop.
+        """
+        if not self._target_id:
+            return []
+        from datetime import datetime
+
+        def _read() -> list[dict[str, Any]]:
+            from django.db import close_old_connections
+
+            from model_registry.models import OtlpSpan
+
+            close_old_connections()  # the pool thread's connection may be stale
+            dt_start = datetime.fromtimestamp(start_ts, tz=UTC)
+            dt_end = datetime.fromtimestamp(end_ts, tz=UTC)
+            rows = OtlpSpan.objects.filter(
+                target_id=self._target_id,
+                received_at__gte=dt_start,
+                received_at__lte=dt_end,
+            ).order_by("received_at")
+            results = []
+            for r in rows:
+                attrs = r.attributes or {}
+                # Only keep OpenInference semantic spans (agent-level tool
+                # calls, LLM completions, workflow chains).  Raw OTel
+                # HTTP/ASGI spans don't carry this attribute and are pure
+                # transport noise.
+                if "openinference.span.kind" not in attrs:
+                    continue
+                results.append({
+                    "trace_id": r.trace_id,
+                    "span_id": r.span_id,
+                    "name": r.name,
+                    "kind": r.kind,
+                    "parent_span_id": r.parent_span_id or "",
+                    "start_time": r.start_time or 0,
+                    "end_time": r.end_time or 0,
+                    "status": r.status,
+                    "attributes": r.attributes or {},
+                })
+            return results
+
+        import asyncio
+
+        try:
+            in_loop = asyncio.get_running_loop() is not None
+        except RuntimeError:
+            in_loop = False
+
+        try:
+            if in_loop:
+                return _SPAN_FETCH_POOL.submit(_read).result(timeout=30)
+            return _read()
+        except Exception as exc:  # noqa: BLE001 - tracing must not break the run
+            logger.warning("Studio span window fetch failed for %s: %s", self._target_id, exc)
+            return []
+
     def __enter__(self) -> Self:
         return self.start()
 
@@ -202,11 +280,36 @@ class StudioTraceProvider:
 
     @staticmethod
     def _fetch_db(target_id: str, trace_id: str) -> list[dict[str, Any]]:
-        """One read of the listener's persisted spans (no retry here)."""
+        """One read of the listener's persisted spans (no retry here).
+
+        The engine can call ``fetch`` from inside its asyncio loop (per-turn
+        evidence collection). The Django ORM cannot run on a thread with a
+        live event loop (``SynchronousOnlyOperation``), so when a loop is
+        running the DB read is pushed onto a dedicated sync thread; from a
+        plain sync context it runs inline (which also keeps transactional
+        tests, whose rows are only visible on the test thread, working).
+        """
         from model_registry.otlp_views import get_spans_for_trace_db
 
-        try:
+        def _read() -> list[dict[str, Any]]:
+            from django.db import close_old_connections
+
+            close_old_connections()  # the pool thread's connection may be stale
             return get_spans_for_trace_db(target_id, trace_id)
+
+        import asyncio
+
+        try:
+            in_loop = asyncio.get_running_loop() is not None
+        except RuntimeError:
+            in_loop = False
+
+        try:
+            if in_loop:
+                # Shared executor: the sync read is isolated from the engine's
+                # loop thread.
+                return _SPAN_FETCH_POOL.submit(_read).result(timeout=30)
+            return _read()
         except Exception as exc:  # noqa: BLE001 - tracing must not break the run
             logger.warning("Studio span fetch failed for %s/%s: %s", target_id, trace_id, exc)
             return []
@@ -248,7 +351,13 @@ def enrich_trace_config(trace_config: dict[str, Any] | None, target_snapshot: di
     """
     if not trace_config or str(trace_config.get("mode") or "").strip().lower() != "studio":
         return trace_config
-    return {**trace_config, "target_id": studio_target_id(target_snapshot) or ""}
+    target_id = studio_target_id(target_snapshot)
+    if not target_id:
+        # The credential was revoked or deleted after the run was queued. Run
+        # without trace evidence rather than failing the whole audit.
+        logger.warning("Studio trace target has no enabled OTLP credential; running without traces")
+        return None
+    return {**trace_config, "target_id": target_id}
 
 
 def build_trace_provider(config: dict[str, Any] | None) -> Any | None:
@@ -289,9 +398,12 @@ def build_trace_provider(config: dict[str, Any] | None) -> Any | None:
         target_id = (config.get("target_id") or "").strip()
         if not target_id:
             raise ValueError("trace config mode='studio' requires a non-empty target_id")
+        # Use a short per-trace-id fetch timeout so the settle loop isn't
+        # blocked: targets that don't propagate W3C traceparent (e.g. OWUI)
+        # will never match by trace ID, and the window fallback handles them.
         return StudioTraceProvider(
             target_id,
-            timeout=float(config.get("timeout") or 15.0),
+            timeout=float(config.get("timeout") or 3.0),
             retry_interval=float(config.get("retry_interval") or 0.5),
             fetcher=config.get("fetcher"),
         )

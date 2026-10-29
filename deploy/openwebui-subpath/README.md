@@ -105,6 +105,29 @@ Against a real Caddy + this image + a mock OpenAI endpoint, in a real browser:
 - `src/routes/+layout.svelte` + ~111 more — `goto`/`href`/`location.href` → `${base}/...`;
   socket.io subpath goes on `path`, never the namespace arg
 
+**Known fork defect (v0.12.0), fixed at the source:** the port shipped 12 base-prefixings
+where `${base}` renders as LITERAL text — navigation calls written as *quoted* JS strings
+(`goto("${base}/workspace/tools")`) instead of template literals. The visible symptom is
+"Back" from a KB / tool / prompt / skill / model / functions / automations detail page
+navigating to `/chat/workspace/<section>/$%7Bbase%7D/workspace/<section>` ("Not found").
+
+This is **not** repairable at the Caddy front door: this Caddy build treats a bare `$` in a
+`path` matcher as a placeholder, and `path_regexp` is non-functional in v2.11.7 (verified:
+even `path_regexp foo` never matches). The fix is to patch the installed frontend bundle so
+the 12 quoted `"${base}/…"` args become template literals `` `${base}/…` ``. They live under
+`open_webui/frontend/_app/immutable/{nodes,chunks}/*.js` (10 files). A helper does it:
+
+```bash
+uv run python scripts/patch_owui_base.py          # patch in place (idempotent)
+uv run python scripts/patch_owui_base.py --check   # report only, no writes
+```
+
+Static files, so no OWUI restart is needed — but **re-running Studio's dev server re-extracts
+the wheel and wipes the patch**, so re-run the script after a full restart (or rebuild the fork
+image with real `${base}` interpolation, which removes the need entirely). When re-porting to a
+newer SHA, grep the regenerated patch for `["']\$\{base\}/` (quoted, not backticked) to check
+whether the defect persists.
+
 ## Upgrading (when you bump `SHA`)
 
 ```bash
@@ -117,20 +140,21 @@ git -C o apply --check subpath.patch      # non-zero = needs a rebase
 **Full procedure: [`UPGRADE.md`](./UPGRADE.md)** — including a copy-paste
 agent prompt with the subpath invariants to preserve and the evidence bar to
 hit. v0.11.4 drift was 33/121 files clean, 88 with conflicts (8 of the 9 core
-files) and was **ported on 2026-10-04** (see UPGRADE.md outcome log). Treat
-each upstream bump as a porting task, not a re-apply. **Do not** promote a
-SHA until `apply --check` passes and the E2E (WS 101 + one LLM round-trip)
-re-passes. Distribution context (fork, ghcr.io, pip caveats): [`DESIGN.md`](./DESIGN.md).
+files) and was **ported on 2026-10-04**; v0.12.0 was **ported on 2026-10-14**
+(see UPGRADE.md outcome log). Treat each upstream bump as a porting task, not
+a re-apply. **Do not** promote a SHA until `apply --check` passes and the E2E
+(WS 101 + one LLM round-trip) re-passes. Distribution context (fork, ghcr.io,
+pip caveats): [`DESIGN.md`](./DESIGN.md).
 
 ## Status
 
-**Built, E2E-verified, published, and wired in (2026-10-04).**
-`subpath.patch` is the v0.11.4 port (123 files) pinned to `8bd8b4f`; the fork
-`github.com/sushantgautam/open-webui` ships `main` = v0.11.4 + subpath with CI
+**Built, E2E-verified, published, and wired in (2026-10-14).**
+`subpath.patch` is the v0.12.0 port (198 files) pinned to `15818d88`; the fork
+`github.com/sushantgautam/open-webui` ships `main` = v0.12.0 + subpath with CI
 publishing to ghcr.io (root on push, `-subpath` on `webui_subpath` dispatch).
 
 The cutover is done: `docker-compose.yml` pulls
-`ghcr.io/sushantgautam/open-webui:v0.11.4.3-subpath` (set `WEBUI_SUBPATH=/chat`),
+`ghcr.io/sushantgautam/open-webui:v0.12.0-subpath` (set `WEBUI_SUBPATH=/chat`),
 `chat-proxy` (Caddy, no profile) is the **only published port** and runs
 `Caddyfile.subpath`, Studio's wrapper page moved to `/playground/`, and
 `Caddyfile.chat` + the separate cross-origin port are retired. Embedded

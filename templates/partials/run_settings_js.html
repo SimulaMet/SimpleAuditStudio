@@ -1,8 +1,63 @@
 {% comment %}
-Behaviour for run_settings.html: generation-config normalisation and
-submit-time JSON validation.
+Behaviour for run_settings.html: predefined-prompt picker sync, generation-config
+normalisation and submit-time JSON validation.
 {% endcomment %}
 <script>
+// System Prompt picker: one selectable prompt. Each prompt row has a radio on
+// its name (= latest version) plus a "Versions ▾" expander with a radio per
+// version. All radios share one name, so the browser keeps exactly one checked;
+// picking any of them fills the box below. Typing your own text clears the
+// selection so it can't be silently overridden.
+(function() {
+  const fieldset = document.querySelector('[data-axis="system_prompt_version"]');
+  const ta = document.getElementById('system-prompt');
+  if (!fieldset || !ta) return;
+
+  const allRadios = () => [...fieldset.querySelectorAll('input[name="system_prompt_version"]')];
+
+  function syncAll() {
+    fieldset.querySelectorAll('[data-prompt-row]').forEach(row => {
+      const rs = [...row.querySelectorAll('input[name="system_prompt_version"]')];
+      const rowChecked = rs.find(r => r.checked);
+      const nameRadio = row.querySelector('[data-row-radio]');
+      const summary = row.querySelector('[data-prompt-summary]');
+      if (!rs.length) return;
+      // The name radio means "latest". It stays checked whenever the row's pick
+      // is the latest version, regardless of which element the browser marked.
+      if (nameRadio) nameRadio.checked = !!rowChecked && rowChecked.hasAttribute('data-latest');
+      if (!summary) return;
+      if (rowChecked) summary.textContent = `v${rowChecked.dataset.version}` + (rowChecked.hasAttribute('data-latest') ? ' · latest' : ' · older version');
+      else {
+        const latest = rs.find(r => 'latest' in r.dataset);
+        summary.textContent = latest ? `v${latest.dataset.version} · latest` : '';
+      }
+    });
+    const checked = allRadios().find(r => r.checked);
+    if (checked && ta.value !== checked.dataset.content) ta.value = checked.dataset.content || '';
+  }
+
+  // Same name → the browser enforces single selection; we just refresh UI.
+  allRadios().forEach(r => r.addEventListener('change', syncAll));
+
+  // Versions ▾ / ▴ expand-collapse per row.
+  fieldset.querySelectorAll('[data-prompt-row]').forEach(row => {
+    const btn = row.querySelector('[data-version-toggle]');
+    if (btn) btn.addEventListener('click', () => {
+      const list = row.querySelector('[data-version-list]');
+      const open = list.classList.toggle('hidden') === false;
+      btn.setAttribute('aria-expanded', String(open));
+      btn.textContent = open ? 'Versions ▴' : 'Versions ▾';
+    });
+  });
+
+  // Typing your own prompt clears the picker so the frozen run uses your text.
+  ta.addEventListener('input', () => {
+    allRadios().forEach(r => { r.checked = false; });
+    fieldset.querySelectorAll('[data-prompt-summary]').forEach(s => s.textContent = 'custom');
+  });
+
+  syncAll();
+})();
 // Keep only real overrides: drop empty/null entries and retry values equal to
 // the engine defaults, so no-op keys aren't frozen into the manifest.
 function cleanGenConfig(obj) {

@@ -261,20 +261,43 @@ def start_embedded_hatchet() -> Any:
         with _isolated_embedded_process():
             client = Hatchet.from_embedded(config)
         _embedded_client = client
+        handshake = os.environ.get("HATCHET_EMBEDDED_HANDSHAKE")
+        if handshake:
+            _handshake_path(data_dir).write_text(handshake, encoding="utf-8")
         print("✅ Hatchet engine ready.\n")
         return client
+
+
+def _handshake_path(data_dir: str | None = None):
+    from pathlib import Path
+
+    return Path(data_dir or _data_dir()).parent / "embedded-hatchet-handshake.json"
+
+
+def get_persisted_embedded_handshake() -> str | None:
+    path = _handshake_path()
+    try:
+        return path.read_text(encoding="utf-8") if path.exists() else None
+    except OSError:
+        return None
 
 
 def stop_embedded_hatchet() -> None:
     """Stop the embedded Hatchet engine cleanly."""
     global _embedded_client
     with _embedded_lock:
+        owned_embedded_client = _embedded_client is not None
         if _embedded_client is not None:
             try:
                 _embedded_client.stop_embedded()
             except Exception:
                 logger.warning("Error stopping embedded Hatchet", exc_info=True)
             _embedded_client = None
+        if owned_embedded_client:
+            try:
+                _handshake_path().unlink(missing_ok=True)
+            except OSError:
+                logger.warning("Could not remove persisted embedded Hatchet handshake", exc_info=True)
 
 
 def get_embedded_client() -> Any | None:

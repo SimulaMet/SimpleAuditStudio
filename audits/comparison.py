@@ -13,10 +13,21 @@ import math
 from audits.events import ScenarioResult
 from audits.models import AuditRun
 from audits.services import frozen_judge, frozen_name
+from audits.target_metadata import frozen_target_metadata
 
 # Ordinal scale for fragility metrics (matches the SimpleAudit visualizer).
 _SEV_ORDER = ["pass", "low", "medium", "high", "critical"]
 _SEV_RANK = {sev: i for i, sev in enumerate(_SEV_ORDER)}
+
+
+def _system_prompt_label(run: AuditRun) -> str:
+    """The run's target system prompt, tagged with its predefined version if any."""
+    snap = run.generation_parameters_snapshot or {}
+    text = snap.get("system_prompt") or "none"
+    source = snap.get("system_prompt_source")
+    if source:
+        return f"{text} · [{source['prompt']} v{source['version']}]"
+    return text
 
 
 def _fragility(severities: list[str]) -> dict | None:
@@ -172,7 +183,7 @@ def compare_runs(project, run_ids: list[int]) -> dict:
         ("Judge", lambda r: frozen_judge(r)["label"]),
         ("Judge format", lambda r: frozen_judge(r)["output_label"]),
         ("Judge model", lambda r: frozen_name(r, "judge", with_id=True)),
-        ("System prompt", lambda r: (r.generation_parameters_snapshot or {}).get("system_prompt") or "none"),
+        ("System prompt", _system_prompt_label),
         ("Scenario set version", lambda r: r.scenario_set_version.label if r.scenario_set_version else "—"),
         ("SimpleAudit version", lambda r: f"{r.simpleaudit_version} ({r.git_commit[:8]}…)" if r.simpleaudit_version and r.git_commit else (r.simpleaudit_version or "—")),
         ("Temperature (target)", lambda r: (r.generation_parameters_snapshot or {}).get("temperature_target", "—")),
@@ -207,6 +218,22 @@ def compare_runs(project, run_ids: list[int]) -> dict:
             cells.append(_cell(text, url))
         differs = len({c["text"] for c in cells}) > 1
         input_rows.append({"label": label, "cells": cells, "differs": differs})
+
+    # The union of frozen target metadata keys is compared, including keys
+    # absent from some runs. No provider calls are made while comparing.
+    metadata_by_run = [frozen_target_metadata(r) for r in runs]
+    all_metadata_keys = sorted({key for values in metadata_by_run for key in values})
+    for key in all_metadata_keys:
+        cells = []
+        for metadata in metadata_by_run:
+            value = metadata.get(key, "—")
+            cells.append({"text": value, "url": None, "long": len(value) > 160})
+        input_rows.append({
+            "label": f"Target metadata · {key}",
+            "cells": cells,
+            "differs": len({cell["text"] for cell in cells}) > 1,
+            "is_metadata": True,
+        })
 
     return {
         "compatible": len(warnings) == 0,

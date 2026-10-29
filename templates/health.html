@@ -46,7 +46,7 @@
 <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wide mb-3">Components</h2>
 <div id="component-grid" class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3 mb-8">
   {% for name, comp in health.components.items %}
-  {# min-w-0: a long detail or model name must not widen the grid column. #}
+  <!-- min-w-0: a long detail or model name must not widen the grid column. -->
   <div class="hcard bg-surface-raised rounded-xl border border-gray-800 p-4 min-w-0 {% if name == "model_endpoints" %}col-span-2 md:col-span-1{% endif %}" data-component="{{ name }}">
     <div class="flex items-center justify-between gap-2 mb-2">
       <span class="text-sm font-medium text-gray-200 capitalize truncate">{% if name == "model_endpoints" %}Model endpoints{% else %}{{ name }}{% endif %}</span>
@@ -55,7 +55,10 @@
     <p class="hcard-scroll text-xs text-gray-500 min-h-[1rem] break-words" data-detail title="{{ comp.detail|default:'' }}">{{ comp.detail|default:"" }}</p>
     <p class="text-xs text-gray-600 mt-1" data-latency>{% if comp.latency_ms is not None %}{{ comp.latency_ms }} ms{% endif %}</p>
     {% if name == "engine" %}
-    <p class="text-xs text-gray-500 mt-1 truncate" data-engine title="{{ comp.version|default:'' }}{% if comp.commit %} · {{ comp.commit }}{% endif %}">{{ comp.version|default:"—" }}{% if comp.commit %} · {{ comp.commit|slice:":8" }}{% endif %}</p>
+    <div class="mt-1 space-y-0.5">
+      <p class="text-xs text-gray-500 truncate" data-studio-title title="SimpleAudit Studio {{ comp.studio.version|default:'?' }}{% if comp.studio.commit %} · {{ comp.studio.commit }}{% endif %}"><span class="text-gray-400 font-medium">Studio</span>&nbsp;{{ comp.studio.version|default:"?" }}{% if comp.studio.commit %} · {{ comp.studio.commit|slice:":8" }}{% endif %}</p>
+      <p class="text-xs text-gray-500 truncate" data-engine-title title="SimpleAudit engine {{ comp.version|default:'?' }}{% if comp.commit %} · {{ comp.commit }}{% endif %}"><span class="text-gray-400 font-medium">SimpleAudit</span>&nbsp;{{ comp.version|default:"?" }}{% if comp.commit %} · {{ comp.commit|slice:":8" }}{% endif %}</p>
+    </div>
     {% endif %}
     {% if name == "model_endpoints" %}
     <div class="hcard-scroll mt-2 space-y-2 pr-1" data-endpoints>
@@ -199,8 +202,24 @@
       if (detail) { detail.textContent = comp.detail || ""; detail.title = comp.detail || ""; }
       const lat = card.querySelector("[data-latency]");
       if (lat) lat.textContent = comp.latency_ms != null ? comp.latency_ms + " ms" : "";
-      const eng = card.querySelector("[data-engine]");
-      if (eng) eng.textContent = (comp.version || "—") + (comp.commit ? " · " + String(comp.commit).slice(0, 8) : "");
+      // Engine card: two labeled lines — Studio (this app) and SimpleAudit (engine).
+      if (name === "engine") {
+        const studio = comp.studio || {};
+        const sv = card.querySelector("[data-studio-title]");
+        if (sv) {
+          const sVer = studio.version || "?";
+          const sCommit = studio.commit ? " · " + String(studio.commit).slice(0, 8) : "";
+          sv.innerHTML = '<span class="text-gray-400 font-medium">Studio</span>&nbsp;' + esc(sVer + sCommit);
+          sv.title = "SimpleAudit Studio " + sVer + (studio.commit ? " · " + studio.commit : "");
+        }
+        const eng = card.querySelector("[data-engine-title]");
+        if (eng) {
+          const eVer = comp.version || "?";
+          const eCommit = comp.commit ? " · " + String(comp.commit).slice(0, 8) : "";
+          eng.innerHTML = '<span class="text-gray-400 font-medium">SimpleAudit</span>&nbsp;' + esc(eVer + eCommit);
+          eng.title = "SimpleAudit engine " + eVer + (comp.commit ? " · " + comp.commit : "");
+        }
+      }
       // Model endpoints grouped by connection
       if (comp.groups) {
         const list = card.querySelector("[data-endpoints]");

@@ -8,6 +8,11 @@
       {% if error %}
         <div class="text-sm text-red-400 bg-red-900/30 rounded-lg px-3 py-2">{{ error }}</div>
       {% endif %}
+      {% if registration_disabled %}
+        <p class="text-sm text-gray-400">
+          Self-registration is currently disabled. Contact an administrator to get an account.
+        </p>
+      {% endif %}
       <div>
         <label class="block text-xs font-medium text-gray-400 mb-1.5 uppercase tracking-wide">Username</label>
         <input type="text" name="username" required

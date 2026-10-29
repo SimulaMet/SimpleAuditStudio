@@ -75,6 +75,24 @@ class AdminUserCrudApiTest(TestCase):
         self.assertEqual(resp.status_code, 409)
         self.assertEqual(resp.json()["error"]["code"], "email_taken")
 
+    def test_create_user_weak_password_returns_400_with_message(self):
+        """A policy-failing password must yield a clean 400 with the reason,
+        not an unhandled 500 (regression for issue #30)."""
+        resp = post_json(self.client, "/api/admin/users/", {"username": "weakling", "password": "abc"})
+        self.assertEqual(resp.status_code, 400)
+        body = resp.json()
+        self.assertEqual(body["error"]["code"], "password_invalid")
+        self.assertIn("too short", body["error"]["message"].lower())
+        self.assertFalse(User.objects.filter(username="weakling").exists())
+
+    def test_update_user_weak_password_returns_400_with_message(self):
+        target = UserFactory(username="jane")
+        resp = patch_json(self.client, f"/api/admin/users/{target.id}/", {"password": "abc"})
+        self.assertEqual(resp.status_code, 400)
+        body = resp.json()
+        self.assertEqual(body["error"]["code"], "password_invalid")
+        self.assertIn("too short", body["error"]["message"].lower())
+
     def test_update_user_email(self):
         target = UserFactory(username="jane", email="jane@old.com")
         resp = patch_json(self.client, f"/api/admin/users/{target.id}/", {"email": "jane@new.com"})

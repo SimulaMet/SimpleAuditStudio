@@ -50,13 +50,19 @@ def connections_to_push() -> list[dict]:
 
 
 def push_now(payloads: list[dict] | None = None) -> dict[str, int]:
-    """Push connections (all of them by default). Raises ChatAPIError on refusal."""
+    """Push connections (all of them by default). Raises ChatAPIError on refusal.
+
+    Also installs/updates the bundled chat functions (``ensure_rag_overrides_function``);
+    that part never raises — connection sync stays the only failure path here.
+    """
     api = ChatAPI.as_user(_admin())
     pushed = connections_to_push() if payloads is None else payloads
     result = api.push_connections(pushed)
     # Studio never serves Ollama; leaving it on costs a failing request per page
     # load and an empty section in Open WebUI's settings.
     api.disable_ollama()
+    ensure_rag_overrides_function(api)
+    ensure_agent_otlp_credentials()
     _reconcile_model_ids(api, pushed)
     from chat.access_sync import reconcile_safely
 
@@ -147,3 +153,127 @@ def _admin():
     if user is None:
         raise NoAdminError("No superuser to act as; Open WebUI's provider config needs an admin.")
     return user
+
+
+#: Per-model retrieval settings (search mode, top K, final K, threshold, BM25
+#: weight, full context) applied to every chat with files attached.
+RAG_OVERRIDES_FUNCTION_ID = "studio_rag_overrides"
+RAG_OVERRIDES_FUNCTION_FILE = os.path.join(
+    os.path.dirname(__file__), "openwebui_functions", "studio_rag_overrides.py"
+)
+
+
+def ensure_agent_otlp_credentials() -> int:
+    """Give each workspace's Open WebUI Agents connection an open OTLP credential.
+
+    Agent runs show the trace checkbox only when their connection has an enabled
+    OTLP credential, and Open WebUI exports its spans to Studio unauthenticated, so
+    a ``none`` credential is the right default here. Only runs when chat tracing is
+    on. Idempotent; returns how many credentials it created. Never raises.
+    """
+    if not (config.ENABLED and config.OTLP_ENABLED):
+        return 0
+    from model_registry.models import ModelConnection, OTLPCredential
+    from model_registry.otlp_services import create_credential
+
+    created = 0
+    try:
+        user = _admin()
+        connections = ModelConnection.objects.filter(name="Open WebUI Agents", enabled=True)
+        for conn in connections.select_related("project"):
+            if OTLPCredential.objects.filter(project=conn.project, connection=conn, enabled=True).exists():
+                continue
+            create_credential(project=conn.project, connection=conn, auth_mode="none", user=user)
+            created += 1
+    except Exception:
+        logger.info("Agent OTLP credential sync skipped", exc_info=True)
+    return created
+
+
+def _install_function(api: ChatAPI, function_id: str, path: str, label: str) -> tuple[str | None, str]:
+    """Create or update one bundled function file. Returns ``(id, report line)``.
+
+    Never raises: a missing file, a chat that is down, or an odd API shape
+    yields ``(None, report)`` so callers can keep going.
+    """
+    try:
+        with open(path, encoding="utf-8") as fh:
+            content = fh.read()
+    except OSError as exc:
+        return None, f"{label} unavailable ({exc})"
+
+    try:
+        functions = api.list_functions()
+        existing = next((f for f in functions if f.get("id") == function_id), None)
+        if existing is None:
+            created = api.create_function(function_id, content, function_id=function_id)
+            return created.get("id", function_id), f"{label} installed ({function_id})."
+        if (existing.get("content") or "") != content:
+            api.update_function_content(function_id, function_id, content)
+            return function_id, f"{label} updated."
+        return function_id, f"{label} up to date."
+    except ChatAPIError as exc:
+        logger.info("%s sync skipped: %s", label, exc)
+        return None, f"{label} not synced: {exc}"
+    except Exception:
+        # Bundled functions are additive; anything unexpected (odd API shape, chat
+        # down) must never break connection sync or startup.
+        logger.info("%s sync skipped", label, exc_info=True)
+        return None, f"{label} sync skipped (see logs)."
+
+
+def sync_all_agents() -> int:
+    """Push every agent to Open WebUI. Returns how many were created or updated."""
+    from model_registry.models import Agent
+    from model_registry.services import sync_agent_to_openwebui
+
+    user = _admin()
+    synced = 0
+    for agent in Agent.objects.select_related("project", "created_by"):
+        if sync_agent_to_openwebui(agent, user) != "skipped":
+            synced += 1
+    return synced
+
+
+def startup_sync() -> list[str]:
+    """The whole chat sync, run at startup. Returns report lines.
+
+    ``push_now`` covers connections, the bundled functions and the agent OTLP
+    credentials; this adds every agent. Best-effort: a chat that is down or still
+    starting is reported and skipped, never raised, so the process still starts.
+    """
+    if not config.ENABLED:
+        return []
+    try:
+        result = push_now()
+        reports = [f"Synced {result['pushed']} model connection(s) to chat."]
+        reports.append(f"Synced {sync_all_agents()} agent(s) to chat.")
+    except Exception as exc:
+        logger.info("Startup chat sync skipped", exc_info=True)
+        return [f"Chat not synced at startup: {exc}"]
+    return reports
+
+
+def ensure_rag_overrides_function(api: ChatAPI | None = None) -> str:
+    """Install the RAG overrides filter and keep it active and global. Returns a report line.
+
+    Global means every model runs it, including models Studio never saw, so the
+    retrieval settings apply everywhere and do not depend on per-model binding.
+    Best-effort, like the other bundled-function installs.
+    """
+    api = api or ChatAPI.as_user(_admin())
+    function_id, report = _install_function(
+        api, RAG_OVERRIDES_FUNCTION_ID, RAG_OVERRIDES_FUNCTION_FILE, "RAG overrides filter"
+    )
+    if function_id is None:
+        return report
+    try:
+        fn = api.get_function(function_id)
+        if not fn.get("is_active"):
+            api.request("POST", f"/api/v1/functions/id/{function_id}/toggle")
+        if not fn.get("is_global"):
+            api.request("POST", f"/api/v1/functions/id/{function_id}/toggle/global")
+    except Exception:
+        logger.info("RAG overrides filter activation skipped", exc_info=True)
+        return "RAG overrides filter installed, but not activated (see logs)."
+    return report

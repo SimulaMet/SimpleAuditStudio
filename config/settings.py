@@ -5,6 +5,7 @@ development (SIMPLEAUDIT_LOCAL_SQLITE) and the single-container demo
 (see infra/minimal_config.py).
 """
 import os
+import re
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -18,12 +19,29 @@ def env_bool(name: str, default: bool = False) -> bool:
 
 
 def _pkg_version() -> str:
+    """Version of SimpleAudit Studio itself.
+
+    Prefers the installed distribution's metadata (uvx / pip installs); in a
+    source checkout the package is not installed, so fall back to the
+    pyproject.toml ``[project] version`` next to this file.
+    """
     from importlib.metadata import PackageNotFoundError, version
 
     try:
         return version("simpleaudit-studio")
     except PackageNotFoundError:
-        return "dev"
+        pass
+    try:
+        from pathlib import Path
+
+        pyproject = Path(__file__).resolve().parent.parent / "pyproject.toml"
+        for line in pyproject.read_text(encoding="utf-8").splitlines():
+            m = re.match(r'^version\s*=\s*"([^"]+)"', line.strip())
+            if m:
+                return m.group(1)
+    except OSError:
+        pass
+    return "dev"
 
 
 def env_list(name: str, default: str = "") -> list[str]:
@@ -132,6 +150,7 @@ INSTALLED_APPS = [
     "scenarios",
     "model_registry",
     "judges",
+    "prompts",
     "audits",
     "infra",
     # Optional module: its URLs 404 and nothing runs unless SIMPLEAUDIT_CHAT is
@@ -295,11 +314,18 @@ WORKOS_CLIENT_ID = os.environ.get("WORKOS_CLIENT_ID", "")
 WORKOS_API_KEY = os.environ.get("WORKOS_API_KEY", "")
 WORKOS_ENABLED = bool(WORKOS_CLIENT_ID and WORKOS_API_KEY)
 
+# Gravatar avatars: off by default, since loading one sends the MD5 hash of the
+# user's email to gravatar.com. When off, templates show the user's initial.
+SIMPLEAUDIT_GRAVATAR = env_bool("SIMPLEAUDIT_GRAVATAR", False)
+
 # Demo mode: prefill the login form with demo credentials and show a hint banner
 # (public demos / HF Spaces).
 DEMO_MODE = env_bool("DEMO_MODE", False)
 DEMO_USERNAME = os.environ.get("DEMO_USERNAME", "studio")
-DEMO_PASSWORD = os.environ.get("DEMO_PASSWORD", "admin123")
+DEMO_PASSWORD = os.environ.get("DEMO_PASSWORD", "localdevpass123")
+# Optional: override the demo-mode login banner with custom HTML (trusted
+# operator content only). When empty, the built-in banner is shown.
+DEMO_BANNER_HTML = os.environ.get("DEMO_BANNER_HTML", "")
 
 # Framing policy:
 # - Demo mode (HF Spaces / public demos): allow cross-origin framing so the
@@ -361,6 +387,10 @@ else:
     # Set to "tls" or "mtls" (with HATCHET_CLIENT_TLS_* env vars) for TLS deployments.
     HATCHET_TLS_STRATEGY = os.environ.get("HATCHET_TLS_STRATEGY", "none")
 WORKER_POOL = os.environ.get("WORKER_POOL", "cpu")
+# Max concurrent scenario repetitions the worker claims from Hatchet. Each slot
+# holds one in-flight scenario task; keep this within what the model API rate
+# limits and container memory can sustain.
+WORKER_SLOT_COUNT = int(os.environ.get("WORKER_SLOT_COUNT", "8"))
 # NOTE: SimpleAudit engine provenance (version + optional commit) is NOT a
 # setting here. It is resolved from the installed package metadata at runtime by
 # infra.simpleaudit_package.resolve_engine_provenance(), so the web and worker

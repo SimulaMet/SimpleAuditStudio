@@ -223,13 +223,21 @@ class ChatAPI:
         """One knowledge base, with the names of the files in it."""
         item = self.request("GET", f"/api/v1/knowledge/{knowledge_id}")
         summary = _knowledge_summary(item)
-        summary["files"] = [
-            {
-                "id": file.get("id"),
-                "name": (file.get("meta") or {}).get("name") or file.get("filename") or "",
-            }
-            for file in (item.get("files") or [])
-        ]
+        files: list[dict[str, Any]] = []
+        for file in (item.get("files") or []):
+            if not isinstance(file, dict):
+                continue
+            meta = file.get("meta") if isinstance(file.get("meta"), dict) else {}
+            files.append(
+                {
+                    "id": file.get("id"),
+                    "name": meta.get("name") or file.get("filename") or "",
+                    # OWUI stores the sha256 hex of the content here; seed
+                    # reconciliation compares it against local fixture hashes.
+                    "hash": meta.get("file_hash"),
+                }
+            )
+        summary["files"] = files
         return summary
 
     # --- push: resources -> Open WebUI (one-time seeding / admin) ----------
@@ -246,6 +254,32 @@ class ChatAPI:
             "POST", f"/api/v1/knowledge/{knowledge_id}/file/add",
             json={"file_id": file_id},
         )
+
+    # --- functions (user/model hooks) ---------------------------------------
+    def list_functions(self) -> list[dict[str, Any]]:
+        return self.request("GET", "/api/v1/functions/") or []
+
+    def get_function(self, function_id: str) -> dict[str, Any]:
+        return self.request("GET", f"/api/v1/functions/id/{function_id}")
+
+    def update_function_content(
+        self, function_id: str, name: str, content: str
+    ) -> dict[str, Any]:
+        """Replace a function's code. Open WebUI validates + re-registers it."""
+        return self.request(
+            "POST", f"/api/v1/functions/id/{function_id}/update",
+            json={"id": function_id, "name": name, "content": content, "meta": {}},
+        )
+
+    def create_function(self, name: str, content: str, function_id: str) -> dict[str, Any]:
+        """Create a function; ``function_id`` is Open WebUI's slug for it."""
+        payload = {
+            "id": function_id,
+            "name": name,
+            "content": content,
+            "meta": {},
+        }
+        return self.request("POST", "/api/v1/functions/create", json=payload)
 
     def create_tool(self, tool_id: str, name: str, content: str, description: str = "") -> dict[str, Any]:
         """Register a Python tool in Open WebUI's toolkit (the Tools page).
@@ -403,6 +437,17 @@ class ChatAPI:
             for model in (models or [])
             if isinstance(model, dict) and model.get("id")
         ]
+
+    def chat_completion(self, payload: dict[str, Any]) -> Any:
+        """Run an OpenAI-shaped completion through Open WebUI, as this user.
+
+        ``payload`` is passed through to OWUI's ``/api/v1/chat/completions``
+        unchanged (it must carry ``model`` — the prefixed id
+        ``<connection id>.<model id>`` — and ``messages``). Returns OWUI's JSON
+        response, which is already OpenAI-compatible, so callers can hand it
+        back to their client verbatim.
+        """
+        return self.request("POST", "/api/v1/chat/completions", json=payload)
 
 
 

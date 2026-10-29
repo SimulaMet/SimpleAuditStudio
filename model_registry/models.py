@@ -104,6 +104,11 @@ class RegisteredModel(models.Model):
         """Whether the parent connection has an API key configured."""
         return self.connection.has_key
 
+    @property
+    def is_decision(self) -> bool:
+        """A System One decision model (answers fixed-option questions)."""
+        return bool((self.capabilities or {}).get("decision"))
+
 
 class OtlpSpan(models.Model):
     """A span pushed to Studio's OTLP listener, persisted for cross-process reads.
@@ -177,6 +182,8 @@ class OTLPCredential(models.Model):
     # Stable identifier stamped onto every span this credential authenticates.
     target_id = models.CharField(max_length=250)
     enabled = models.BooleanField(default=True)
+    # Content policy applied before spans enter memory or durable storage.
+    capture_level = models.CharField(max_length=20, default="structural")
     created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -194,6 +201,40 @@ class OTLPCredential(models.Model):
     @property
     def display_name(self) -> str:
         return self.username or self.target_id
+
+
+class ApiCredential(models.Model):
+    """A personal API key that lets an external client call Studio's models.
+
+    One credential per user. The client authenticates Studio's OpenAI-compatible
+    passthrough (``/api/v1/chat/completions`` and ``/api/v1/models``) with
+    ``Authorization: ****** The key acts as its owner: every request is scoped to
+    the models the owner can see in their active workspace, and the completion
+    is proxied to Open WebUI running as that user.
+
+    Only a salted hash of the token is stored — the plaintext ``sa_api_…`` token
+    is shown once at creation and cannot be read back. Mirrors :class:`OTLPCredential`.
+    """
+
+    project = models.ForeignKey("accounts.Project", on_delete=models.CASCADE, related_name="api_credentials")
+    user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="api_credential")
+    # Salted SHA-256 of the bearer token.
+    secret_hash = models.BinaryField()
+    salt = models.BinaryField()
+    # Non-secret lookup prefix of the token (e.g. "sa_api_abc123def456"). Lets
+    # verification do an indexed lookup instead of hashing against every row.
+    # Never used for authentication — only the salted hash is.
+    token_prefix = models.CharField(max_length=32, blank=True, default="", db_index=True)
+    enabled = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "core_api_credential"
+        ordering = ["project__name", "user__email"]
+
+    def __str__(self) -> str:
+        return f"API key {self.user.email or self.user.username}"
 
 
 class KnowledgeReindex(models.Model):
@@ -235,9 +276,8 @@ def default_retrieval_settings() -> dict:
     return {
         "search_mode": "semantic",
         "top_k": 5,
-        "rerank_enabled": False,
-        "rerank_top_k": 4,
-        "relevance_threshold": None,
+        "final_k": 5,
+        "relevance_threshold": 0.0,
         "bm25_weight": None,
         "full_context": False,
     }
@@ -451,7 +491,12 @@ class Agent(models.Model):
     def __str__(self) -> str:
         return self.name
 
-    def config_snapshot(self, *, server_rag: dict | None = None) -> dict:
+    def config_snapshot(
+        self,
+        *,
+        server_rag: dict | None = None,
+        tool_invocation_names: dict[str, list[str]] | None = None,
+    ) -> dict:
         """A serialisable snapshot of the agent's full configuration.
 
         Used by audit runs to freeze the configuration at execution time so
@@ -468,10 +513,29 @@ class Agent(models.Model):
                 "connection_id": self.base_model.connection_id,
             },
             "system_prompt": self.system_prompt,
-            "knowledge_bases": list(
-                self.knowledge_bases.values_list("id", "name", "external_id", "version")
-            ),
-            "tools": list(self.tools.values_list("id", "name", "type")),
+            "knowledge_bases": [
+                {
+                    "id": kb.id, "name": kb.name, "external_id": kb.external_id,
+                    "authority": kb.authority, "trust_level": kb.trust_level,
+                    "sensitivity": kb.sensitivity, "version": kb.version,
+                    "valid_from": kb.valid_from.isoformat() if kb.valid_from else None,
+                    "valid_until": kb.valid_until.isoformat() if kb.valid_until else None,
+                }
+                for kb in self.knowledge_bases.all()
+            ],
+            "tools": [
+                {
+                    "id": tool.id, "name": tool.name, "external_id": tool.external_id,
+                    "invocation_names": (tool_invocation_names or {}).get(tool.external_id, []),
+                    "type": tool.type, "description": tool.description,
+                    "input_schema": tool.input_schema, "output_schema": tool.output_schema,
+                    "read_only": tool.read_only, "has_side_effects": tool.has_side_effects,
+                    "external_network": tool.external_network,
+                    "handles_sensitive_data": tool.handles_sensitive_data,
+                    "enabled": tool.enabled,
+                }
+                for tool in self.tools.all()
+            ],
             "retrieval": self.retrieval_settings,
             # Read-only Open WebUI global RAG settings captured at audit-run
             # creation. The live source remains Open WebUI.

@@ -207,6 +207,16 @@ Fields:
 
 Rules:
 
+- `capabilities.decision` — set by automatic detection when models are
+  added on **Connections → Discover models**. Any OpenAI-compatible
+  connection (Ollama, vLLM, …) is probed once per model with a 2-option
+  question on `{api-root}/v1/systemone` (the System One endpoint shared by
+  Ollama and vLLM): a `200` marks the model as a decision model, while a
+  `400` "does not support decision" (Ollama) or `501` (vLLM) marks it as
+  not one, with no inference spent either way. OpenRouter connections use
+  the model-id prefix heuristic (`typesafe/`, `jev`) because its
+  `/v1/systemone` endpoint is a paid proxy without a public model listing.
+  Models can be used as decision targets only when this flag is `true`.
 - unique `(connection_id, model_id)`
 - display name is user-facing; `model_id` is provider-specific
 - inherits auth from its connection
@@ -340,8 +350,9 @@ A group of runs launched together from one design on New Experiment
 judge model, judges, max turns, language) takes one or more values; the cartesian product is
 the list of runs, each an ordinary `AuditRun` with `experiment_id` set. The
 review step can drop, rename, edit (settings, system prompt and generation config) or
-duplicate runs before launch. A design that yields a single run launches it
-directly, without an `Experiment`.
+duplicate runs before launch. A design that yields a single run still becomes
+an `Experiment`: a singleton with empty `factors`, so every launch from New
+Experiment has its own shareable results page.
 
 Fields: `project_id`, `name`, `factors` (JSON list of the inputs that differ
 across its runs, computed from the final runs), `created_by`, timestamps.

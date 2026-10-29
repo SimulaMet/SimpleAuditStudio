@@ -35,7 +35,7 @@ class BootstrapTests(TestCase):
                 "bootstrap_platform",
                 username="studio",
                 email="admin@example.local",
-                password="admin123456789",
+                password="localdevpass123456789",
                 project_name="Default",
             )
 

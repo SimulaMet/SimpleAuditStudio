@@ -13,6 +13,25 @@ from infra.exceptions import StableAPIError
 User = get_user_model()
 
 
+def _validate_password_or_raise(password: str) -> None:
+    """Run Django's password validators and surface failures as a clean 400.
+
+    ``validate_password`` raises ``django.core.exceptions.ValidationError``,
+    which is not a DRF ``APIException`` — letting it escape the view produces
+    an unhandled 500 with no JSON body, so the frontend shows only a generic
+    "Request failed (500)" instead of the actual policy message.
+    """
+    from django.contrib.auth.password_validation import validate_password
+    from django.core.exceptions import ValidationError as DjangoValidationError
+
+    try:
+        validate_password(password)
+    except DjangoValidationError as exc:
+        raise StableAPIError(
+            detail=" ".join(exc.messages), code="password_invalid", http_status=400
+        ) from exc
+
+
 def has_local_password(user) -> bool:
     """True when the user has a usable local password hash.
 
@@ -284,9 +303,7 @@ def admin_create_user(*, admin_user, username: str, email: str = "", password: s
     clean_email = (email or "").strip()
     if clean_email and User.objects.filter(email__iexact=clean_email).exists():
         raise StableAPIError(detail="Email already exists.", code="email_taken", http_status=409)
-    from django.contrib.auth.password_validation import validate_password
-
-    validate_password(password)
+    _validate_password_or_raise(password)
     user = User.objects.create_user(
         username=clean_username,
         email=clean_email,
@@ -338,9 +355,7 @@ def admin_update_user(
     if is_superuser is not None:
         target.is_superuser = bool(is_superuser)
     if password:
-        from django.contrib.auth.password_validation import validate_password
-
-        validate_password(password)
+        _validate_password_or_raise(password)
         target.set_password(password)
     target.save()
     return target
@@ -442,3 +457,29 @@ def is_any_project_admin(user) -> bool:
     if user.is_superuser:
         return True
     return ProjectMembership.objects.filter(user=user, role=ProjectMembership.Role.ADMIN).exists()
+
+
+# ─── Site settings ───────────────────────────────────────────────────────────
+
+from accounts.models import SiteSetting
+
+SITE_SETTING_DEFAULTS = {
+    "registration_enabled": True,
+}
+
+
+def get_site_setting(key: str):
+    """Value of a site setting, falling back to its default when unset."""
+    row = SiteSetting.objects.filter(key=key).first()
+    if row is None:
+        return SITE_SETTING_DEFAULTS.get(key)
+    return row.value
+
+
+def set_site_setting(key: str, value) -> None:
+    SiteSetting.objects.update_or_create(key=key, defaults={"value": value})
+
+
+def registration_enabled() -> bool:
+    """Whether anonymous self-registration is currently allowed (default: yes)."""
+    return bool(get_site_setting("registration_enabled"))

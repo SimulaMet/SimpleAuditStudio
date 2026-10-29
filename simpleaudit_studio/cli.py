@@ -27,6 +27,7 @@ from __future__ import annotations
 import os
 import secrets
 import signal
+import sys
 import threading
 import time
 import webbrowser
@@ -38,6 +39,10 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         prog="simpleaudit-studio",
         description="Run SimpleAudit Studio locally (minimal config, no Docker).",
+    )
+    parser.add_argument(
+        "action", nargs="?", choices=["status", "down", "reset", "uninstall", "restart", "help", "agent-info"],
+        help="Optional lifecycle action. Use `spin agent-info` for coding-agent rules.",
     )
     parser.add_argument(
         "--port", type=int, default=int(os.environ.get("PORT", "8000")),
@@ -78,16 +83,23 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    from simpleaudit_studio.lifecycle import Instance, act, start
+    instance = Instance("spin")
+    if act(instance, args.action, yes=args.yes):
+        return
+    explicit_port = "--port" in sys.argv[1:] or any(a.startswith("--port=") for a in sys.argv[1:])
+    requested = int(os.environ.get("PORT", str(args.port)))
+    if not start(instance, requested_port=requested, explicit_port=explicit_port):
+        return
+    args.port = int(os.environ["PORT"])
+
     # Set local mode BEFORE Django reads settings
     os.environ["SIMPLEAUDIT_MINIMAL"] = "1"
     # Pin the explicit mode so `manage.py mode` / resolve_mode() report "embedded".
     os.environ.setdefault("SIMPLEAUDIT_MODE", "embedded")
     # Chat is part of the bundle; --disable-chat (or SIMPLEAUDIT_CHAT=disabled)
     # opts out.
-    if args.disable_chat:
-        os.environ["SIMPLEAUDIT_CHAT"] = "off"
-    else:
-        os.environ.setdefault("SIMPLEAUDIT_CHAT", "embedded")
+    _set_embedded_chat_defaults(disable_chat=args.disable_chat)
     os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings")
     os.environ.setdefault("DJANGO_SECRET_KEY", "local-insecure-key-change-for-shared-use")
     os.environ.setdefault("DJANGO_ALLOWED_HOSTS", "localhost,127.0.0.1")
@@ -105,7 +117,7 @@ def main() -> None:
     print("=" * 60)
     print()
     print(f"💾 Data folder: {data_dir()}  (set SIMPLEAUDIT_DATA_DIR to change)")
-    adopted = adopt_legacy_database()
+    adopted = None if os.environ.get("SIMPLEAUDIT_SKIP_LEGACY_ADOPTION") else adopt_legacy_database()
     if adopted:
         source, runs = adopted
         print(f"   Brought over your data from an earlier version ({runs} run{'s' if runs != 1 else ''}):")
@@ -144,7 +156,34 @@ def main() -> None:
             print(f"⚠️  --results_dir '{resolved}' is not a directory; the visualizer file tree will be empty.")
         else:
             set_results_dir(resolved)
-            print(f"📂 Visualizer results dir: {resolved}\n")
+            print(f"📂 Visualizer results dir: {resolved}")
+            # Guard against pointing the visualizer at a very broad tree
+            # (the home folder, the cwd, ...): the file tree scans the whole
+            # directory, so such paths are slow at best and useless at worst.
+            home = os.path.realpath(os.path.expanduser("~"))
+            if os.path.realpath(resolved) == home:
+                print("⚠️  That is your home folder. Point --results_dir at a folder of "
+                      "SimpleAudit result JSON files instead; the scan will still run "
+                      "but the visualizer will show a warning.")
+            elif os.path.realpath(resolved) == os.path.realpath(os.getcwd()):
+                print("⚠️  That is your current working directory. Point --results_dir at a "
+                      "folder of SimpleAudit result JSON files instead; the scan will "
+                      "still run but the visualizer will show a warning.")
+            # Print the bounded-scan limits so the user knows what to expect.
+            from infra.visualizer import (
+                _max_file_size,
+                _max_inspected_files,
+                _max_tree_depth,
+                _scan_time_budget,
+            )
+
+            print(
+                f"   Scan limits:   {_max_inspected_files()} files, "
+                f"{_scan_time_budget():.0f}s budget, "
+                f"depth {_max_tree_depth()}, "
+                f"{_max_file_size() // (1024 * 1024)} MB/file"
+            )
+            print()
 
     # --- Visualize-only: just run the web server, no worker/hatchet/chat ---
     if args.visualize_only:
@@ -221,7 +260,7 @@ def main() -> None:
             print()
 
     username = os.environ.get("BOOTSTRAP_USERNAME", "studio")
-    password = os.environ.get("BOOTSTRAP_PASSWORD", "admin123")
+    password = os.environ.get("BOOTSTRAP_PASSWORD", "localdevpass123")
 
     # One-time sign-in token: the browser opens the URL below, and the first
     # request that presents it is the only one that works (see auto_login_view).
@@ -286,6 +325,17 @@ def main() -> None:
                 mock_server.shutdown()
 
 
+def _set_embedded_chat_defaults(*, disable_chat: bool) -> None:
+    """Set embedded chat defaults before Django loads its settings."""
+    if disable_chat:
+        os.environ["SIMPLEAUDIT_CHAT"] = "off"
+        return
+    os.environ.setdefault("SIMPLEAUDIT_CHAT", "embedded")
+    # Structural spans are useful for future Agent audits. Open WebUI's
+    # content-capture controls remain independent and opt-in.
+    os.environ.setdefault("SIMPLEAUDIT_CHAT_OTLP", "true")
+
+
 def start_chat(chat_proxy, internal_port: int):
     """Start Open WebUI and its front door, and report readiness in the background.
 
@@ -311,6 +361,9 @@ def start_chat(chat_proxy, internal_port: int):
             backfilled = _backfill_demo_chat()
             if backfilled:
                 print(f"   {backfilled}", flush=True)
+            agentic_demo = _backfill_agentic_demo()
+            if agentic_demo:
+                print(f"   {agentic_demo}", flush=True)
         elif process.poll() is not None:
             print(f"\n⚠️  Chat stopped (exit {process.returncode}). Studio is unaffected.")
             print(f"   What happened: {chat_proxy.log_path()}\n", flush=True)
@@ -328,15 +381,9 @@ def _sync_chat_models() -> str:
     Signals keep it in step afterwards (chat/signals.py); this is the first one,
     for a chat that has just started or was off while connections changed.
     """
-    from chat.api import ChatAPIError
-    from chat.sync import push_now
+    from chat.sync import startup_sync
 
-    try:
-        result = push_now()
-    except ChatAPIError as exc:
-        return f"Models not synced to chat: {exc}"
-    kept = f", kept {result['kept']} added in chat" if result["kept"] else ""
-    return f"Synced {result['pushed']} model connection(s) to chat{kept}."
+    return " ".join(startup_sync())
 
 
 def _backfill_demo_chat() -> str:
@@ -368,6 +415,28 @@ def _backfill_demo_chat() -> str:
     except Exception as exc:  # noqa: BLE001 - runs in a startup thread; don't crash it
         print(f"   Demo chat backfill skipped: {exc}", flush=True)
         return ""
+
+
+def _backfill_agentic_demo() -> str:
+    """Preload the synthetic completed Agentic example after Agent sync."""
+    from io import StringIO
+
+    from django.contrib.auth import get_user_model
+    from django.core.management import call_command
+
+    from accounts.models import Project
+
+    user = get_user_model().objects.order_by("id").first()
+    project = Project.objects.order_by("id").first()
+    if user is None or project is None:
+        return ""
+    output = StringIO()
+    try:
+        call_command("seed_agentic_demo", project=project.id, stdout=output, verbosity=0)
+    except Exception as exc:  # noqa: BLE001 - startup demo data must not prevent Studio running
+        print(f"   Preloaded Agentic example not ready: {exc}", flush=True)
+        return ""
+    return output.getvalue().strip()
 
 
 def _ensure_ports_available(args) -> None:
@@ -428,7 +497,7 @@ def _seed_admin_only() -> None:
 
     username = os.environ.get("BOOTSTRAP_USERNAME", "studio")
     email = os.environ.get("BOOTSTRAP_EMAIL", "admin@localhost")
-    password = os.environ.get("BOOTSTRAP_PASSWORD", "admin123")
+    password = os.environ.get("BOOTSTRAP_PASSWORD", "localdevpass123")
     project_name = os.environ.get("BOOTSTRAP_PROJECT_NAME", "Demo Project")
 
     bootstrap_admin_and_default_project(
@@ -455,14 +524,17 @@ def _run_visualize_only(args) -> None:
 
     ports.resolve_port_conflict(
         port, "the web server", "spin --port <free port>",
-        force_kill=not args.no_force_kill, yes=args.yes,
+        force_kill=False, yes=args.yes,
     )
 
     username = os.environ.get("BOOTSTRAP_USERNAME", "studio")
-    password = os.environ.get("BOOTSTRAP_PASSWORD", "admin123")
+    password = os.environ.get("BOOTSTRAP_PASSWORD", "localdevpass123")
 
     auto_login_token = secrets.token_urlsafe(32)
     os.environ["SIMPLEAUDIT_AUTO_LOGIN_TOKEN"] = auto_login_token
+    # After the one-time sign-in, land on the visualizer instead of the
+    # dashboard (which has no useful content in visualize-only mode).
+    os.environ["SIMPLEAUDIT_AUTO_LOGIN_NEXT"] = "/visualizer/"
     auto_login_url = f"http://localhost:{port}/auto-login/?token={auto_login_token}"
 
     print("┌─────────────────────────────────────────────────────────┐")
@@ -503,7 +575,7 @@ def _seed_demo_data() -> None:
     # Respect env vars (set by Dockerfile for HF Space, or defaults for local)
     username = os.environ.get("BOOTSTRAP_USERNAME", "studio")
     email = os.environ.get("BOOTSTRAP_EMAIL", "admin@localhost")
-    password = os.environ.get("BOOTSTRAP_PASSWORD", "admin123")
+    password = os.environ.get("BOOTSTRAP_PASSWORD", "localdevpass123")
     project_name = os.environ.get("BOOTSTRAP_PROJECT_NAME", "Demo Project")
 
     _user, project = bootstrap_admin_and_default_project(
@@ -513,8 +585,10 @@ def _seed_demo_data() -> None:
         project_name=project_name,
     )
 
-    # Seed scenario packs + model connections + demo audit runs (all idempotent)
+    # Seed the regular demo resources and both scenario packs before Open WebUI
+    # starts; the precomputed Agentic run waits until the Agent is synced.
     call_command("seed_platform", project=project.id, verbosity=0)
+    call_command("seed_agentic_scenarios", project=project.id, verbosity=0)
 
 
 def _update_model_endpoints(mock_url: str) -> None:

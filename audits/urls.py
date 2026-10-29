@@ -17,6 +17,11 @@ urlpatterns = [
         name="audit-run-results",
     ),
     path(
+        "projects/<int:project_id>/audit-runs/<int:run_id>/export/",
+        views.export_audit_run,
+        name="audit-run-export",
+    ),
+    path(
         "projects/<int:project_id>/audit-runs/<int:run_id>/events/poll/",
         views.poll_audit_run_events,
         name="audit-run-events-poll",

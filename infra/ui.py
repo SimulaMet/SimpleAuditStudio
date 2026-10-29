@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import re
+from datetime import UTC, datetime
 
 from django.contrib import messages
 from django.contrib.auth import login, logout
@@ -27,15 +28,18 @@ from audits.events import ScenarioResult
 from audits.models import AuditRun
 from audits.services import create_audit_run, frozen_name, submit_audit_run
 from infra.chat_feature import chat_enabled
-from infra.hashing import scenario_revision_hash
+from infra.seo import SITE_NAME, _share_context
 from scenarios.models import (
     Scenario,
-    ScenarioRevision,
     ScenarioSet,
     ScenarioSetVersion,
     ScenarioSetVersionItem,
 )
-from scenarios.services import publish_scenario_set_version
+from scenarios.services import (
+    create_scenario,
+    publish_scenario_set_version,
+    update_scenario_content,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +48,50 @@ logger = logging.getLogger(__name__)
 
 class ProjectMixin(LoginRequiredMixin):
     """Scope all queries to request.project (set by ProjectMiddleware)."""
+
+
+def _public_experiment_filter(request) -> dict:
+    """Query kwargs that scope an Experiment lookup to what ``request`` may read.
+
+    Authenticated users see only their active workspace's experiments (the
+    existing behavior — no cross-project leak). Anonymous visitors see only
+    public experiments, across every project.
+    """
+    from audits.models import Experiment
+
+    if request.user.is_authenticated:
+        return {"project": request.project}
+    return {"visibility": Experiment.Visibility.PUBLIC}
+
+
+def _public_run_queryset(request):
+    """An AuditRun queryset scoped to what ``request`` may read.
+
+    Authenticated: the active workspace's runs (unchanged). Anonymous: runs
+    whose parent experiment is public. A run with no experiment is never
+    publicly readable, so guessing a run id yields 404 rather than a leak.
+    """
+    from audits.models import Experiment
+
+    qs = AuditRun.objects.all()
+    if request.user.is_authenticated:
+        return qs.filter(project=request.project)
+    return qs.filter(
+        experiment__isnull=False,
+        experiment__visibility=Experiment.Visibility.PUBLIC,
+    )
+
+
+class PublicReadableMixin:
+    """Allow anonymous reads of PUBLIC experiments/runs/results.
+
+    Replaces LoginRequiredMixin on views that expose public content. When the
+    user is signed in it behaves exactly like before (scoped to
+    request.project); when anonymous it restricts lookups to public objects
+    via ``_public_experiment_filter`` / ``_public_run_queryset``. Private
+    objects are invisible to anonymous users (404, not 403, so existence is
+    not leaked).
+    """
 
 
 class AdminRequiredMixin(LoginRequiredMixin):
@@ -99,6 +147,151 @@ def _int(value, default: int = 0) -> int:
         return default
 
 
+# Form fields that carry an explicit off/false value (checkbox pairs with a
+# hidden "0" sentinel). These stay written even when unchecked so an explicit
+# false remains an assertion after save.
+_EXPLICIT_FALSE_FIELDS = {
+    "agentic_rerank_required",
+    "agentic_policy_read_only",
+    "agentic_policy_allow_side_effects",
+    "agentic_approvals_must_precede_execution",
+    "agentic_semantic_judge_enabled",
+}
+
+
+def _merge_structured_agentic_fields(metadata: dict, post) -> dict:
+    """Merge authoring controls into agentic metadata without dropping extensions.
+
+    Sparse semantics: a section is only created when at least one of its form
+    fields carries a non-empty value (or an explicit false from a checkbox
+    pair). Untouched sections are removed again rather than being filled with
+    dormant defaults, so absence stays "not checked". Fields whose empty form
+    value maps to ``None``/empty list drop out of the saved section entirely;
+    unknown top-level and per-section fields round-trip untouched.
+    """
+    has_control = any(
+        key.startswith("agentic_") and key != "agentic_scenario"
+        and (key in _EXPLICIT_FALSE_FIELDS or str(post.get(key, "")).strip() != "")
+        for key in post
+    )
+    if not has_control:
+        return metadata
+    agentic = dict(metadata.get("agentic") or {})
+    agentic.setdefault("schema_version", 2)
+
+    def csv(name):
+        return [value.strip() for value in post.get(name, "").split(",") if value.strip()]
+
+    def number(name):
+        value = post.get(name)
+        if value in (None, ""):
+            return None
+        return int(value)
+
+    def boolean(name):
+        return post.get(name) == "1"
+
+    def json_value(name):
+        value = post.get(name, "").strip()
+        if not value:
+            return []
+        parsed = json.loads(value)
+        if not isinstance(parsed, list):
+            raise TypeError(f"Field '{name}' must be a JSON array, got {type(parsed).__name__}")
+        return parsed
+
+    # (section, key, value, include_when_empty) — include_when_empty marks the
+    # explicit-false checkbox sentinels that must survive as assertions.
+    planned = [
+        ("tools", "expected", [{"name": name, "min_calls": 1, "max_calls": None} for name in csv("agentic_tools_expected")], False),
+        ("tools", "forbidden", csv("agentic_tools_forbidden"), False),
+        ("tools", "allowed", csv("agentic_tools_allowed"), False),
+        ("retrieval", "sources", csv("agentic_sources"), False),
+        ("retrieval", "min_documents", number("agentic_retrieval_min_documents"), False),
+        ("retrieval", "max_documents", number("agentic_retrieval_max_documents"), False),
+        ("rerank", "required", boolean("agentic_rerank_required"), True),
+        ("rerank", "min_calls", number("agentic_rerank_min_calls"), False),
+        ("rerank", "max_calls", number("agentic_rerank_max_calls"), False),
+        ("policy", "read_only", boolean("agentic_policy_read_only"), True),
+        ("policy", "allowed_data_scopes", csv("agentic_policy_allowed_data_scopes"), False),
+        ("policy", "forbidden_data_scopes", csv("agentic_policy_forbidden_data_scopes"), False),
+        ("policy", "forbidden_side_effects", csv("agentic_policy_forbidden_side_effects"), False),
+        ("policy", "allowed_destinations", csv("agentic_policy_allowed_destinations"), False),
+        ("policy", "allow_side_effects", boolean("agentic_policy_allow_side_effects"), True),
+        ("guardrails", "required", csv("agentic_guardrails_required"), False),
+        ("guardrails", "must_pass", csv("agentic_guardrails_must_pass"), False),
+        ("guardrails", "before_actions", json_value("agentic_guardrails_before_actions"), False),
+        ("approvals", "required_for", csv("agentic_approvals_required_for"), False),
+        ("approvals", "must_precede_execution", boolean("agentic_approvals_must_precede_execution"), True),
+        ("handoffs", "allowed", csv("agentic_handoffs_allowed"), False),
+        ("handoffs", "forbidden", csv("agentic_handoffs_forbidden"), False),
+        ("handoffs", "required", csv("agentic_handoffs_required"), False),
+        ("handoffs", "max_handoffs", number("agentic_handoffs_max_handoffs"), False),
+        ("handoffs", "max_depth", number("agentic_handoffs_max_depth"), False),
+        ("trajectory", "required_sequence", csv("agentic_sequence"), False),
+        ("trajectory", "max_steps", number("agentic_trajectory_max_steps"), False),
+        ("trajectory", "max_retries_per_tool", number("agentic_trajectory_max_retries_per_tool"), False),
+        ("trajectory", "max_identical_consecutive_calls", number("agentic_trajectory_max_identical_consecutive_calls"), False),
+        ("budgets", "max_tool_calls", number("agentic_max_tool_calls"), False),
+        ("budgets", "max_errors", number("agentic_budgets_max_errors"), False),
+        ("state", "assertions", json_value("agentic_state_assertions"), False),
+        ("semantic_judge", "enabled", boolean("agentic_semantic_judge_enabled"), True),
+        ("semantic_judge", "criteria", csv("agentic_semantic_judge_criteria"), False),
+    ]
+
+    # Sections the form owns: rebuilt from scratch so stale values from a
+    # previous revision do not leak through once their fields are cleared.
+    owned_sections = {section for section, _, _, _ in planned}
+    for section in sorted(owned_sections & set(agentic)):
+        del agentic[section]
+
+    for section, key, value, include_when_empty in planned:
+        empty = value in (None, [], "", False)
+        if empty and not include_when_empty:
+            continue
+        current = dict(agentic.get(section) or {})
+        if empty and value is False:
+            current[key] = False
+        elif value is None:
+            current.pop(key, None)
+        else:
+            current[key] = value
+        agentic[section] = current
+
+    # retrieval.required follows the sources field: present only when the
+    # author entered at least one source.
+    if "agentic_sources" in post:
+        sources = csv("agentic_sources")
+        retrieval = dict(agentic.get("retrieval") or {})
+        if sources:
+            retrieval["required"] = True
+        else:
+            retrieval.pop("required", None)
+        if retrieval:
+            agentic["retrieval"] = retrieval
+
+    # semantic_judge.enabled=True is implied when criteria were entered.
+    if "agentic_semantic_judge_criteria" in post and csv("agentic_semantic_judge_criteria"):
+        semantic = dict(agentic.get("semantic_judge") or {})
+        semantic["enabled"] = True
+        agentic["semantic_judge"] = semantic
+
+    mode = post.get("agentic_enforcement_mode", "")
+    if mode:
+        current = dict(agentic.get("enforcement") or {})
+        current["mode"] = mode
+        agentic["enforcement"] = current
+
+    # Drop sections left empty by this merge (e.g. cleared all tools fields).
+    for section in owned_sections:
+        if agentic.get(section) in ({}, None):
+            agentic.pop(section, None)
+
+    result = dict(metadata)
+    result["agentic"] = agentic
+    return result
+
+
 def _require_write_access(request):
     """Guard for UI forms that change data: redirect back with an error when blocked, else None."""
     reason = write_block_reason(request)
@@ -136,11 +329,30 @@ class LoginView(TemplateView):
     def get_context_data(self, **kw):
         kw.setdefault("form", AuthenticationForm())
         from django.conf import settings
+
+        from accounts.services import registration_enabled
+
         if getattr(settings, "DEMO_MODE", False):
             kw["demo_mode"] = True
             kw["demo_username"] = settings.DEMO_USERNAME
             kw["demo_password"] = settings.DEMO_PASSWORD
+            kw["demo_banner_html"] = getattr(settings, "DEMO_BANNER_HTML", "")
         kw["workos_enabled"] = getattr(settings, "WORKOS_ENABLED", False)
+        kw["registration_enabled"] = registration_enabled()
+        # The login page is what unauthenticated visitors land on when they
+        # share a link (and the entry point for bot traffic), so it carries
+        # full share-card metadata pointing at the public gallery.
+        kw.update(
+            _share_context(
+                self.request,
+                title=f"{SITE_NAME} — Reproducible AI Model Auditing Platform",
+                description=(
+                    "SimpleAudit Studio is a self-hostable platform for running reproducible AI "
+                    "model audits. Browse public experiments without an account."
+                ),
+            )
+        )
+        kw["page_canonical"] = self.request.build_absolute_uri("/public-experiments/")
         return super().get_context_data(**kw)
 
     def post(self, request, *args, **kwargs):
@@ -157,13 +369,26 @@ class LoginView(TemplateView):
 class RegisterView(TemplateView):
     template_name = "auth/register.html"
 
+    def _registration_disabled(self) -> bool:
+        from accounts.services import registration_enabled
+
+        return not registration_enabled()
+
     def get(self, request, *args, **kwargs):
         if request.user.is_authenticated:
             return redirect("dashboard")
         return super().get(request, *args, **kwargs)
 
+    def get_context_data(self, **kw):
+        kw["registration_disabled"] = self._registration_disabled()
+        return super().get_context_data(**kw)
+
     def post(self, request, *args, **kwargs):
         from accounts.models import User
+        if self._registration_disabled():
+            return self.render_to_response(
+                self.get_context_data(error="Registration is currently disabled.")
+            )
         username = request.POST.get("username", "").strip()
         password = request.POST.get("password", "")
         email = request.POST.get("email", "").strip()
@@ -218,6 +443,12 @@ def auto_login_view(request):
     if user is None:
         raise Http404
     login(request, user)
+    # visualize-only mode sets this so the signed-in browser lands on the
+    # visualizer instead of the (unpopulated) dashboard. Trust the server
+    # env var, not the request: the browser only gets the token URL.
+    next_path = os.environ.get("SIMPLEAUDIT_AUTO_LOGIN_NEXT", "").strip()
+    if next_path.startswith("/") and not next_path.startswith("//"):
+        return redirect(next_path)
     return redirect("dashboard")
 
 
@@ -436,16 +667,22 @@ class WorkspacesView(LoginRequiredMixin, TemplateView):
 # ─── Super admin ─────────────────────────────────────────────────────────────
 
 
-def _admin_settings_tabs():
+def _admin_settings_tabs(chat_on: bool = False):
     base = reverse("admin_settings")
-    return [
+    tabs = [
         ("overview", "Overview", base),
         ("workspaces", "Workspaces", f"{base}?tab=workspaces"),
         ("users", "Users", f"{base}?tab=users"),
-        ("knowledge", "Knowledge & Retrieval", f"{base}?tab=knowledge"),
-        ("web-search", "Web Search", f"{base}?tab=web-search"),
-        ("sub-agents", "Sub-agents", f"{base}?tab=sub-agents"),
     ]
+    # These tabs edit Open WebUI (knowledge / web search / sub-agents); they
+    # are useless — and their API calls fail — while the chat module is off.
+    if chat_on:
+        tabs += [
+            ("knowledge", "Knowledge & Retrieval", f"{base}?tab=knowledge"),
+            ("web-search", "Web Search", f"{base}?tab=web-search"),
+            ("sub-agents", "Sub-agents", f"{base}?tab=sub-agents"),
+        ]
+    return tabs
 
 
 class AdminView(SuperuserRequiredMixin, TemplateView):
@@ -455,12 +692,17 @@ class AdminView(SuperuserRequiredMixin, TemplateView):
     template_name = "admin.html"
 
     def dispatch(self, request, *args, **kwargs):
-        # Keep Knowledge & Retrieval inside the existing tabbed admin surface.
-        if request.GET.get("tab") == "knowledge" or request.POST.get("tab") == "knowledge":
-            return KnowledgeRetrievalSettingsView.as_view()(request, *args, **kwargs)
-        if request.GET.get("tab") == "web-search" or request.POST.get("tab") == "web-search":
-            return WebSearchSettingsView.as_view()(request, *args, **kwargs)
-        if request.GET.get("tab") == "sub-agents" or request.POST.get("tab") == "sub-agents":
+        # Keep Knowledge / Web Search / Sub-agents inside the existing tabbed
+        # admin surface. They edit Open WebUI, so they are unreachable while the
+        # chat module is off (their API calls would fail).
+        tab = request.GET.get("tab") or request.POST.get("tab")
+        if tab in ("knowledge", "web-search", "sub-agents"):
+            if not chat_enabled():
+                return redirect(reverse("admin_settings"))
+            if tab == "knowledge":
+                return KnowledgeRetrievalSettingsView.as_view()(request, *args, **kwargs)
+            if tab == "web-search":
+                return WebSearchSettingsView.as_view()(request, *args, **kwargs)
             return SubagentSettingsView.as_view()(request, *args, **kwargs)
         return super().dispatch(request, *args, **kwargs)
 
@@ -492,13 +734,16 @@ class AdminView(SuperuserRequiredMixin, TemplateView):
         users = list(User.objects.order_by("username"))
         superuser_count = sum(1 for u in users if u.is_superuser)
 
+        from accounts.services import get_site_setting
+
         kw.update(
             tab=tab,
-            admin_tabs=_admin_settings_tabs(),
+            admin_tabs=_admin_settings_tabs(chat_enabled()),
             stats=stats,
             workspaces=stats["workspaces"],
             users=users,
             superuser_count=superuser_count,
+            registration_enabled=get_site_setting("registration_enabled"),
             managed_members=managed_members,
             manage_id=int(manage_id) if manage_id and manage_id.isdigit() else None,
         )
@@ -585,7 +830,7 @@ class KnowledgeRetrievalSettingsView(SuperuserRequiredMixin, TemplateView):
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         context["tab"] = "knowledge"
-        context["admin_tabs"] = _admin_settings_tabs()
+        context["admin_tabs"] = _admin_settings_tabs(chat_enabled())
         context.update({"settings_error": None, "settings": {}})
         from model_registry.models import KnowledgeReindex
 
@@ -710,7 +955,7 @@ class WebSearchSettingsView(SuperuserRequiredMixin, TemplateView):
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         context["tab"] = "web-search"
-        context["admin_tabs"] = _admin_settings_tabs()
+        context["admin_tabs"] = _admin_settings_tabs(chat_enabled())
         context["settings_error"] = None
         context["web_search"] = {}
         try:
@@ -763,7 +1008,7 @@ class SubagentSettingsView(SuperuserRequiredMixin, TemplateView):
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         context["tab"] = "sub-agents"
-        context["admin_tabs"] = _admin_settings_tabs()
+        context["admin_tabs"] = _admin_settings_tabs(chat_enabled())
         context["settings_error"] = None
         context["subagents"] = {}
         try:
@@ -788,6 +1033,107 @@ class SubagentSettingsView(SuperuserRequiredMixin, TemplateView):
         except Exception as exc:  # noqa: BLE001 - surface upstream failures in UI
             messages.error(request, f"Could not save sub-agent settings: {exc}")
         return redirect(f"{reverse('admin_settings')}?tab=sub-agents")
+
+
+class EmbeddingModelSearchView(SuperuserRequiredMixin, View):
+    """Proxy to the HuggingFace model API for sentence-transformers models.
+
+    The admin knowledge tab uses this so a superuser can browse and pick a
+    local embedding model without leaving the page.  Only ``sentence-transformers``
+    tagged repos are returned — those are the ones Open WebUI can load with its
+    built-in local embedding engine.
+    """
+
+    HF_URL = "https://huggingface.co/api/models"
+    MAX_RESULTS = 30
+
+    def get(self, request):
+        query = (request.GET.get("q") or "").strip()[:200]
+        limit = min(int(request.GET.get("limit", 15)), self.MAX_RESULTS)
+        params = {
+            "filter": "sentence-transformers",
+            "limit": str(limit),
+            "sort": "downloads",
+            "direction": "-1",
+        }
+        if query:
+            params["search"] = query
+        try:
+            import requests
+
+            resp = requests.get(self.HF_URL, params=params, timeout=8)
+            resp.raise_for_status()
+            models = resp.json()
+        except (requests.ConnectionError, requests.Timeout, requests.HTTPError):
+            return JsonResponse(
+                {"error": "Could not reach the HuggingFace model registry."},
+                status=502,
+            )
+        results = [
+            {
+                "id": m["id"],
+                "downloads": m.get("downloads", 0),
+                "likes": m.get("likes", 0),
+            }
+            for m in models
+            if isinstance(m, dict) and m.get("id")
+        ]
+        return JsonResponse({"results": results})
+
+
+class EmbeddingModelDetailView(SuperuserRequiredMixin, View):
+    """Fetch full details for a single HuggingFace model.
+
+    Returns architecture, parameter count, languages, tags, license, and
+    other metadata so the admin can make an informed selection before
+    committing to a model.
+    """
+
+    HF_URL = "https://huggingface.co/api/models/{model_id}"
+
+    def get(self, request):
+        model_id = (request.GET.get("model") or "").strip()[:200]
+        if not model_id or not re.match(r"^[a-zA-Z0-9._/-]+$", model_id):
+            return JsonResponse({"error": "Invalid model ID."}, status=400)
+        try:
+            import requests
+
+            resp = requests.get(
+                self.HF_URL.format(model_id=model_id), timeout=8
+            )
+            resp.raise_for_status()
+            data = resp.json()
+        except (requests.ConnectionError, requests.Timeout, requests.HTTPError):
+            return JsonResponse(
+                {"error": "Could not fetch model details from HuggingFace."},
+                status=502,
+            )
+        config = data.get("config") or {}
+        safetensors = data.get("safetensors") or {}
+        params_total = (safetensors.get("parameters") or {}).get("total") or safetensors.get("total")
+        tags = data.get("tags") or []
+        # Language tags are short ISO codes (e.g. "en", "fr", "de") but exclude
+        # known non-language short tags like "tf" (TensorFlow) or "onnx".
+        _NON_LANG = {"tf", "onnx", "rust"}
+        languages = [t for t in tags if len(t) <= 3 and t.isalpha() and t not in _NON_LANG]
+        license_tag = next((t.split(":", 1)[1] for t in tags if t.startswith("license:")), None)
+        return JsonResponse({
+            "id": data.get("id", model_id),
+            "pipeline_tag": data.get("pipeline_tag", ""),
+            "architecture": (config.get("architectures") or [""])[0],
+            "model_type": config.get("model_type", ""),
+            "parameters": params_total,
+            "downloads": data.get("downloads", 0),
+            "likes": data.get("likes", 0),
+            "last_modified": data.get("lastModified", ""),
+            "languages": languages,
+            "license": license_tag,
+            "tags": [
+                t for t in tags
+                if not t.startswith(("dataset:", "arxiv:", "base_model:", "deploy:", "region:", "eval"))
+            ],
+            "gated": data.get("gated", False),
+        })
 
 
 # ─── Profile ─────────────────────────────────────────────────────────────────
@@ -900,6 +1246,7 @@ def _clone_from_run(source: AuditRun) -> dict:
         "auditor_model_id": source.auditor_model_id,
         "judge_model_id": source.judge_model_id,
         "judge_version_id": source.judge_version_id,
+        "system_prompt_version_id": source.system_prompt_version_id,
         "agent_id": source.agent_id,
         "max_turns": params.get("max_turns", ""),
         "language": params.get("language", ""),
@@ -926,6 +1273,7 @@ def _design_selection(post=None, clone=None) -> dict:
             "judge": post.getlist("judge"),
             "agent_id": agent_id,
             "agent_trace": "1" in post.getlist(f"agent_trace_{agent_id}") if agent_id else True,
+            "system_prompt_version": (post.get("system_prompt_version") or "").strip(),
         }
     if clone:
         # Clone pins the cloned run's exact version.
@@ -939,8 +1287,9 @@ def _design_selection(post=None, clone=None) -> dict:
             "judge": [str(clone["judge_version_id"])],
             "agent_id": agent_id,
             "agent_trace": True,
+            "system_prompt_version": str(clone.get("system_prompt_version_id") or ""),
         }
-    return {"sets": [], "versions": [], "target": [], "auditor": [], "judge_model": [], "judge": [], "agent_id": "", "agent_trace": True}
+    return {"sets": [], "versions": [], "target": [], "auditor": [], "judge_model": [], "judge": [], "agent_id": "", "agent_trace": True, "system_prompt_version": ""}
 
 
 def ex_repeat(repeat: dict) -> str:
@@ -1053,7 +1402,7 @@ class NewExperimentView(ProjectMixin, TemplateView):
         agent_rows = list(
             Agent.objects.filter(project=p, enabled=True)
             .select_related("base_model", "base_model__connection")
-        )
+        ) if chat_enabled() else []
         agent_by_external_id = {a.external_id: a for a in agent_rows if a.external_id}
         agent_models = list(
             RegisteredModel.objects.filter(
@@ -1074,10 +1423,31 @@ class NewExperimentView(ProjectMixin, TemplateView):
         for model in agent_models:
             model.agent = agent_by_external_id[model.model_id]
             model.has_otlp = model.connection_id in otlp_connection_ids
+        # Versioned system prompts for the picker: each row lists its versions
+        # (newest first) and which are ticked — same shape as the scenario-set
+        # rows so the template + JS can mirror that picker exactly.
+        from prompts.models import SystemPrompt, SystemPromptVersion
+
+        system_prompts = list(
+            SystemPrompt.objects.filter(project=p)
+            .prefetch_related(
+                Prefetch("versions", queryset=SystemPromptVersion.objects.order_by("-version"))
+            )
+            .order_by("name")
+        )
+        spv_selected = sel["system_prompt_version"]
+        for sp in system_prompts:
+            sp.version_list = list(sp.versions.all())
+            latest_id = str(sp.version_list[0].id) if sp.version_list else None
+            sp.ticked = {spv_selected} if spv_selected in {str(v.id) for v in sp.version_list} else set()
+            # Open the version list when a non-latest version is selected.
+            sp.show_versions = bool(sp.ticked - {latest_id})
+
         kw.update(
             sets=sets,
             connections=connections,
             agent_models=agent_models,
+            system_prompts=system_prompts,
             model_roles=[
                 ("target", "Target", "The model under test.", sel["target"]),
                 ("auditor", "Auditor", "Plays the user and probes the target.", sel["auditor"]),
@@ -1128,14 +1498,23 @@ class NewExperimentView(ProjectMixin, TemplateView):
         except ValueError as e:  # DesignError is a ValueError too
             return self._redesign(request.POST, str(e))
         if len(specs) == 1:
+            # One run still becomes an Experiment (a singleton): anything
+            # launched from New Experiment gets its own results page. The
+            # review screen is only for multi-run designs.
             return self._launch_single(request, specs[0], repeat)
         return self._review(request, design, specs, repeat)
 
     def _launch_single(self, request, spec, repeat):
-        """One run setup: launch it (unless starting later) and, if repeating, monitor it."""
+        """One run setup, always wrapped in a singleton Experiment.
+
+        Anything launched from New Experiment is an Experiment, even a single
+        run (empty factors — there is nothing to compare), so every launch has
+        its own shareable results page. Also monitors it when repeating.
+        """
         from django.db import transaction
 
-        from audits.experiments import spec_to_run
+        from audits.experiments import factors_from_runs, spec_to_run
+        from audits.models import Experiment
         from audits.monitors import create_monitor
 
         p = request.project
@@ -1144,13 +1523,19 @@ class NewExperimentView(ProjectMixin, TemplateView):
         run = monitor = None
         try:
             with transaction.atomic():
+                experiment = Experiment.objects.create(
+                    project=p,
+                    name=custom_name or f"{spec['target'].display_name} · {spec['scenario_set'].label}",
+                    factors=factors_from_runs([run_spec]),
+                    created_by=request.user,
+                )
                 if not repeat or repeat["start"] == "now":
                     run = create_audit_run(
                         project=p,
                         user=request.user,
                         name=custom_name or f"Run {timezone.now():%Y-%m-%d %H:%M}",
                         scenario_set_version=run_spec["version"],
-                        target_model=run_spec["target"],
+                        target_model=None if run_spec.get("agent") else run_spec["target"],
                         auditor_model=run_spec["auditor"],
                         judge_model=run_spec["judge_model"],
                         judge=run_spec["judge"],
@@ -1158,8 +1543,10 @@ class NewExperimentView(ProjectMixin, TemplateView):
                         language_override=run_spec["language"],
                         n_repetitions_override=run_spec["n_repetitions"],
                         gen_config_override=run_spec["gen_config"],
+                        system_prompt_version=run_spec.get("system_prompt_version"),
                         agent=run_spec.get("agent"),
                         trace_config={} if run_spec.get("target_trace") is False else None,
+                        experiment=experiment,
                     )
                 if repeat:
                     first_point = run
@@ -1171,6 +1558,7 @@ class NewExperimentView(ProjectMixin, TemplateView):
                         name=custom_name or f"{spec['target'].display_name} · {ex_label(spec)}",
                         run=run_spec,
                         repeat=repeat,
+                        experiment=experiment,
                         first_point=first_point,
                     )
         except Exception as e:  # noqa: BLE001 - surface any creation failure to the user
@@ -1179,7 +1567,7 @@ class NewExperimentView(ProjectMixin, TemplateView):
             submit_audit_run(run)
         if monitor:
             messages.success(request, f"Monitor “{monitor.name}” created: next run {monitor.next_run_at:%Y-%m-%d %H:%M} UTC.")
-        return redirect(f"/runs/{run.id}/" if run else f"/monitors/{monitor.id}/")
+        return redirect(f"/experiments/{experiment.id}/")
 
     # --- Review -------------------------------------------------------------
     # Rows carry the fixed part of a run (scenario version + models) as a JSON
@@ -1192,7 +1580,8 @@ class NewExperimentView(ProjectMixin, TemplateView):
                      duplicate=False):
         from audits import experiments as ex
 
-        spec = {"scenario_set": spec_objs["version"], **{r: spec_objs[r] for r in ("target", "auditor", "judge_model", "judge")}}
+        spec = {"scenario_set": spec_objs["version"], **{r: spec_objs[r] for r in ("target", "auditor", "judge_model", "judge")},
+                "system_prompt_version": spec_objs.get("system_prompt_version")}
         return {
             "i": i,
             "spec": ex.spec_to_row(spec),
@@ -1256,7 +1645,8 @@ class NewExperimentView(ProjectMixin, TemplateView):
             self._row_context(
                 i,
                 {"version": spec["scenario_set"], "target": spec["target"], "auditor": spec["auditor"],
-                 "judge_model": spec["judge_model"], "judge": spec["judge"]},
+                 "judge_model": spec["judge_model"], "judge": spec["judge"],
+                 "system_prompt_version": spec.get("system_prompt_version")},
                 name=ex.spec_label(spec, factors),
                 max_turns=spec["max_turns"],
                 language=spec["language"],
@@ -1308,6 +1698,11 @@ class NewExperimentView(ProjectMixin, TemplateView):
         judges = JudgeVersion.objects.select_related("judge").filter(
             judge__project=project
         ).in_bulk({spec["j"] for spec in specs.values()})
+        from prompts.models import SystemPromptVersion
+
+        prompt_versions = SystemPromptVersion.objects.filter(
+            prompt__project=project
+        ).in_bulk({spec.get("spv") for spec in specs.values() if spec.get("spv")})
 
         def lookup(found, pk, model):
             if pk not in found:
@@ -1324,15 +1719,17 @@ class NewExperimentView(ProjectMixin, TemplateView):
             if spec.get("jf"):
                 judge = copy.copy(judge)   # the flag is per row
                 judge.follow_latest = True
+            target_model = lookup(models, spec["t"], RegisteredModel)
+            is_dec = target_model.is_decision
             objs = {
                 "version": version,
-                "target": lookup(models, spec["t"], RegisteredModel),
+                "target": target_model,
                 "auditor": lookup(models, spec["a"], RegisteredModel),
                 "judge_model": lookup(models, spec["jm"], RegisteredModel),
                 "judge": judge,
             }
             name = (post.get(f"run-{i}-name") or "").strip() or f"Run {i + 1}"
-            mt = (post.get(f"run-{i}-max_turns") or "").strip()
+            mt = "1" if is_dec else (post.get(f"run-{i}-max_turns") or "").strip()
             lang = (post.get(f"run-{i}-language") or "").strip()
             reps = (post.get(f"run-{i}-n_repetitions") or "").strip()
             system_prompt = (post.get(f"run-{i}-system_prompt") or "").strip()
@@ -1372,6 +1769,7 @@ class NewExperimentView(ProjectMixin, TemplateView):
                 gen_config = {**(gen_config or {}), "system_prompt": system_prompt}
             elif gen_config:
                 gen_config.pop("system_prompt", None)   # cleared on review
+            prompt_version = prompt_versions.get(spec.get("spv")) if spec.get("spv") else None
             runs.append({
                 "name": name,
                 **objs,
@@ -1379,6 +1777,7 @@ class NewExperimentView(ProjectMixin, TemplateView):
                 "language": lang or None,
                 "n_repetitions": n_reps if n_reps and n_reps > 1 else None,
                 "gen_config": gen_config or None,
+                "system_prompt_version": prompt_version,
             })
         return rows, runs, errors
 
@@ -1444,15 +1843,45 @@ def _experiment_summary(runs) -> dict:
     }
 
 
-class ExperimentsView(ProjectMixin, TemplateView):
+def _public_experiment_description(experiment, runs) -> str:
+    """Meta description for a public experiment page (share-card friendly)."""
+    from audits.experiments import FACTORS, run_factor_values
+
+    labels = [FACTORS.get(f, f) for f in experiment.factors]
+    varied = [run_factor_values(r) for r in runs]
+    targets = sorted({v["target"] for v in varied})[:3]
+    bits = []
+    if labels:
+        bits.append("comparing " + ", ".join(labels))
+    if targets:
+        shown = " vs. ".join(targets)
+        if len({v["target"] for v in varied}) > len(targets):
+            shown += " and more"
+        bits.append(f"testing {shown}")
+    if not bits:
+        bits.append("reproducible AI model audit results")
+    summary = _experiment_summary(runs)
+    detail = f"{summary['done']} of {summary['total']} runs complete."
+    return f"Public audit experiment from SimpleAudit Studio: {' '.join(bits)}. {detail}"
+
+
+class ExperimentsView(PublicReadableMixin, TemplateView):
     template_name = "experiments.html"
+
+    def dispatch(self, request, *args, **kwargs):
+        # Anonymous visitors are routed to the dedicated public gallery, which
+        # uses the public (no-sidebar) layout and lists the same public
+        # experiments. Signed-in users get the full workspace page below.
+        if not request.user.is_authenticated:
+            return redirect("public_experiments")
+        return super().dispatch(request, *args, **kwargs)
 
     def get_context_data(self, **kw):
         from audits.experiments import FACTORS
         from audits.models import Experiment
 
         experiments = list(
-            Experiment.objects.filter(project=self.request.project)
+            Experiment.objects.filter(**_public_experiment_filter(self.request))
             .select_related("created_by")
             .prefetch_related("runs")
         )
@@ -1460,10 +1889,16 @@ class ExperimentsView(ProjectMixin, TemplateView):
             e.summary = _experiment_summary(list(e.runs.all()))
             e.factor_labels = [FACTORS.get(f, f) for f in e.factors]
         kw["experiments"] = experiments
+        kw["can_manage_visibility"] = self._is_admin()
         return super().get_context_data(**kw)
 
+    def _is_admin(self) -> bool:
+        from accounts.services import is_any_project_admin
 
-class ExperimentDetailView(ProjectMixin, TemplateView):
+        return is_any_project_admin(self.request.user)
+
+
+class ExperimentDetailView(PublicReadableMixin, TemplateView):
     template_name = "experiment_detail.html"
 
     def get_context_data(self, **kw):
@@ -1471,7 +1906,9 @@ class ExperimentDetailView(ProjectMixin, TemplateView):
         from audits.models import Experiment
         from audits.monitors import can_manage_monitor, drift_series, pass_counts
 
-        experiment = get_object_or_404(Experiment, pk=kw["experiment_id"], project=self.request.project)
+        experiment = get_object_or_404(
+            Experiment, pk=kw["experiment_id"], **_public_experiment_filter(self.request)
+        )
         runs = list(
             experiment.runs.select_related(
                 "scenario_set_version__scenario_set", "target_model", "auditor_model", "judge_model"
@@ -1511,6 +1948,12 @@ class ExperimentDetailView(ProjectMixin, TemplateView):
             m.latest_point = judged[-1] if judged else None
             m.drops = sum(1 for pt in points if pt["change"] == "drop")
             m.can_manage = can_manage_monitor(self.request.user, m)
+        # Public experiments are indexable and shareable; signed-in views of
+        # the same page stay noindex (the app default in base.html).
+        seo_kw = {}
+        if not self.request.user.is_authenticated:
+            description = _public_experiment_description(experiment, runs)
+            seo_kw = _share_context(self.request, title=f"{experiment.name} — {SITE_NAME}", description=description)
         kw.update(
             experiment=experiment,
             runs=runs,
@@ -1527,8 +1970,16 @@ class ExperimentDetailView(ProjectMixin, TemplateView):
             summary=_experiment_summary(current),
             monitors=monitors,
             run_ids=",".join(str(r.id) for r in current),
+            can_manage_visibility=self._is_admin(),
+            public_header=True,
+            **seo_kw,
         )
         return super().get_context_data(**kw)
+
+    def _is_admin(self) -> bool:
+        from accounts.services import is_any_project_admin
+
+        return is_any_project_admin(self.request.user)
 
 
 # ─── Monitors (recurring runs / drift) ──────────────────────────────────────
@@ -1732,8 +2183,9 @@ class ScenariosView(ProjectMixin, TemplateView):
         items = []
         versions = []
         viewing_version = None
-        if self.request.GET.get("set"):
-            selected = ScenarioSet.objects.filter(pk=self.request.GET["set"], project=p).first()
+        set_param = self.request.GET.get("set", "").strip()
+        if set_param.isdigit():
+            selected = ScenarioSet.objects.filter(pk=int(set_param), project=p).first()
             if selected:
                 versions = list(selected.versions.order_by("-version"))
                 # Check if a specific version is being viewed
@@ -1756,24 +2208,32 @@ class ScenariosView(ProjectMixin, TemplateView):
         return super().get_context_data(**kw)
 
 
-def _create_revision(scenario, description: str, user, expected_behavior: list | None = None, test_prompt: str = "",
-                     severity_ceiling: str = "", documents=None, file_uri=None) -> ScenarioRevision:
-    """Create the next revision for a scenario."""
-    rev = scenario.revisions.count() + 1
-    eb = expected_behavior or []
-    docs = documents or []
-    return ScenarioRevision.objects.create(
-        scenario=scenario, revision=rev, description=description,
-        expected_behavior=eb, test_prompt=test_prompt,
-        severity_ceiling=severity_ceiling or "", documents=docs, file_uri=file_uri,
-        content_hash=scenario_revision_hash(description=description, expected_behavior=eb, test_prompt=test_prompt,
-                                            severity_ceiling=severity_ceiling or "", documents=docs, file_uri=file_uri, metadata={}),
-        created_by=user,
-    )
-
-
 def _scenario_redirect(set_id: str | None):
     return redirect(f"/scenarios/?set={set_id}" if set_id else "/scenarios/")
+
+
+def _parse_decision_field(raw: str) -> tuple[dict | None, str | None]:
+    """Parse a scenario form's ``decision`` textarea into a block or an error.
+
+    Empty input means "no decision question" (returns ``(None, None)``). Valid
+    JSON is validated against the engine's schema so the web form and the API
+    reject the same malformed blocks; invalid input returns ``(None, message)``
+    for the caller to surface as a Django message.
+    """
+    text = (raw or "").strip()
+    if not text:
+        return None, None
+    try:
+        decision = json.loads(text)
+    except json.JSONDecodeError as exc:
+        return None, f"Decision question must be valid JSON: {exc.msg}"
+    from infra.engine import validate_decision_block
+
+    try:
+        validate_decision_block(decision)
+    except ValueError as exc:
+        return None, f"Invalid decision question: {exc}"
+    return decision, None
 
 
 def _publish_new_version(sset, user, extra_scenario_ids=None):
@@ -1841,6 +2301,46 @@ class ScenarioSetDeleteView(ProjectMixin, View):
         return redirect("/scenarios/")
 
 
+class ScenarioSetVersionDeleteView(ProjectMixin, View):
+    """Delete the latest version of a scenario set (only if unused by runs/monitors)."""
+
+    def post(self, request, set_id):
+        blocked = _require_write_access(request)
+        if blocked:
+            return blocked
+        sset = ScenarioSet.objects.filter(pk=set_id, project=request.project).first()
+        if not sset:
+            return redirect("/scenarios/")
+        latest = sset.versions.order_by("-version").first()
+        if not latest:
+            messages.error(request, "No versions to delete.")
+            return redirect(f"/scenarios/?set={set_id}")
+        # Only allow deleting the latest version (historical versions are immutable)
+        version_num = _int(request.POST.get("version"))
+        target = sset.versions.filter(version=version_num).first()
+        if not target:
+            messages.error(request, "Version not found.")
+            return redirect(f"/scenarios/?set={set_id}")
+        if target.version != latest.version:
+            messages.error(request, "Only the latest version can be deleted.")
+            return redirect(f"/scenarios/?set={set_id}")
+        # Block if any audit runs or monitors reference this version
+        from audits.models import AuditRun
+        run_count = AuditRun.objects.filter(scenario_set_version=target).count()
+        if run_count > 0:
+            messages.error(request, f"Cannot delete v{target.version}: {run_count} audit run(s) reference it.")
+            return redirect(f"/scenarios/?set={set_id}")
+        monitor_count = target.monitors.count()
+        if monitor_count > 0:
+            messages.error(request, f"Cannot delete v{target.version}: {monitor_count} monitor(s) reference it.")
+            return redirect(f"/scenarios/?set={set_id}")
+        # Safe to delete
+        ver_label = f"v{target.version}"
+        target.delete()
+        messages.success(request, f"Deleted {ver_label}.")
+        return redirect(f"/scenarios/?set={set_id}")
+
+
 class ScenarioCreateView(ProjectMixin, View):
     def post(self, request):
         blocked = _require_write_access(request)
@@ -1851,20 +2351,44 @@ class ScenarioCreateView(ProjectMixin, View):
         desc = request.POST.get("description", "")
         expected_behavior_raw = request.POST.get("expected_behavior", "").strip()
         expected_behavior = [line.strip() for line in expected_behavior_raw.splitlines() if line.strip()] if expected_behavior_raw else []
+        test_prompt = request.POST.get("test_prompt", "").strip()
         severity_ceiling = request.POST.get("severity_ceiling", "").strip().lower()
         documents_raw = request.POST.get("documents", "").strip()
-        documents = json.loads(documents_raw) if documents_raw else []
+        documents_raw = request.POST.get("documents", "").strip()
+        try:
+            documents = json.loads(documents_raw) if documents_raw else []
+        except json.JSONDecodeError:
+            messages.error(request, "Documents and agentic metadata must be valid JSON.")
+            return _scenario_redirect(request.POST.get("set_id", "").strip() or None)
+        # The raw metadata box is a read-only preview; the structured controls
+        # are the single source of truth. A new scenario has no prior revision
+        # to preserve, so unknown fields start empty.
+        if not request.POST.get("agentic_scenario"):
+            metadata = {}
+        else:
+            try:
+                metadata = _merge_structured_agentic_fields({}, request.POST)
+            except (ValueError, json.JSONDecodeError):
+                messages.error(request, "Structured agentic controls must contain valid numbers and JSON.")
+                return _scenario_redirect(request.POST.get("set_id", "").strip() or None)
         file_uri_raw = request.POST.get("file_uri", "").strip()
         file_uri = file_uri_raw or None
+        decision, decision_error = _parse_decision_field(request.POST.get("decision", ""))
+        if decision_error:
+            messages.error(request, decision_error)
+            return _scenario_redirect(request.POST.get("set_id", "").strip() or None)
+        if decision and request.POST.get("agentic_scenario"):
+            messages.error(request, "A scenario cannot be both agentic and a decision model — pick one.")
+            return _scenario_redirect(request.POST.get("set_id", "").strip() or None)
         set_id = request.POST.get("set_id", "").strip()
         if name:
             key = hashlib.sha256(name.encode()).hexdigest()[:12]
-            scenario, _created = Scenario.objects.get_or_create(
-                project=request.project, key=key,
-                defaults={"title": name, "category": category},
+            scenario = create_scenario(
+                project=request.project, user=request.user, key=key, title=name, category=category,
+                description=desc, expected_behavior=expected_behavior, test_prompt=test_prompt,
+                severity_ceiling=severity_ceiling, documents=documents, file_uri=file_uri,
+                decision=decision, metadata=metadata
             )
-            _create_revision(scenario, desc, request.user, expected_behavior=expected_behavior,
-                             severity_ceiling=severity_ceiling, documents=documents, file_uri=file_uri)
             # Auto-publish new version including this scenario
             if set_id:
                 sset = ScenarioSet.objects.filter(pk=set_id, project=request.project).first()
@@ -1887,29 +2411,54 @@ class ScenarioEditView(ProjectMixin, View):
             desc = request.POST.get("description", "")
             expected_behavior_raw = request.POST.get("expected_behavior", "").strip()
             expected_behavior = [line.strip() for line in expected_behavior_raw.splitlines() if line.strip()] if expected_behavior_raw else []
+            test_prompt = request.POST.get("test_prompt", "").strip()
             severity_ceiling = request.POST.get("severity_ceiling", "").strip().lower()
             documents_raw = request.POST.get("documents", "").strip()
-            documents = json.loads(documents_raw) if documents_raw else []
+            try:
+                documents = json.loads(documents_raw) if documents_raw else []
+            except json.JSONDecodeError:
+                messages.error(request, "Documents and agentic metadata must be valid JSON.")
+                return _scenario_redirect(set_id or None)
             file_uri_raw = request.POST.get("file_uri", "").strip()
             file_uri = file_uri_raw or None
+            decision, decision_error = _parse_decision_field(request.POST.get("decision", ""))
+            if decision_error:
+                messages.error(request, decision_error)
+                return _scenario_redirect(set_id or None)
+            if decision and request.POST.get("agentic_scenario"):
+                messages.error(request, "A scenario cannot be both agentic and a decision model — pick one.")
+                return _scenario_redirect(set_id or None)
             if title:
                 scenario.title = title
             scenario.category = category
             scenario.save()
 
-            # Only create a new revision + publish if content actually changed
-            latest_rev = scenario.revisions.order_by("-revision").first()
-            content_changed = (
-                latest_rev is None
-                or latest_rev.description != desc
-                or (latest_rev.expected_behavior or []) != expected_behavior
-                or latest_rev.severity_ceiling != severity_ceiling
-                or (latest_rev.documents or []) != documents
-                or latest_rev.file_uri != file_uri
+            # update_scenario_content handles change detection (returns latest if unchanged)
+            latest_rev_before = scenario.revisions.order_by("-revision").first()
+            # The raw metadata box is a read-only preview; the structured controls
+            # are the single source of truth. Unknown top-level fields survive an
+            # edit because they are carried over from the previous revision rather
+            # than re-read from the (now non-editable) textarea.
+            prior_metadata = dict(latest_rev_before.metadata or {}) if latest_rev_before else {}
+            if not request.POST.get("agentic_scenario"):
+                # The toggle disables agentic expectations, but must not erase
+                # unrelated metadata authored by older clients or imports.
+                metadata = prior_metadata
+                metadata.pop("agentic", None)
+            else:
+                try:
+                    metadata = _merge_structured_agentic_fields(prior_metadata, request.POST)
+                except (ValueError, json.JSONDecodeError):
+                    messages.error(request, "Structured agentic controls must contain valid numbers and JSON.")
+                    return _scenario_redirect(set_id or None)
+            rev = update_scenario_content(
+                scenario=scenario, user=request.user, description=desc,
+                expected_behavior=expected_behavior, test_prompt=test_prompt,
+                severity_ceiling=severity_ceiling, documents=documents, file_uri=file_uri,
+                decision=decision, metadata=metadata,
             )
+            content_changed = latest_rev_before is None or rev.revision > latest_rev_before.revision
             if content_changed:
-                _create_revision(scenario, desc, request.user, expected_behavior=expected_behavior,
-                                 severity_ceiling=severity_ceiling, documents=documents, file_uri=file_uri)
                 if set_id:
                     sset = ScenarioSet.objects.filter(pk=set_id, project=request.project).first()
                     if sset:
@@ -2000,23 +2549,20 @@ class ScenarioExportView(ProjectMixin, View):
         latest = sset.versions.order_by("-version").first()
         def _export_scenario(it):
             d = {"key": it.scenario.key, "title": it.scenario.title,
-                 "description": it.revision.description}
-            if it.scenario.category:
-                d["category"] = it.scenario.category
-            if it.revision.expected_behavior:
-                d["expected_behavior"] = it.revision.expected_behavior
-            if it.revision.test_prompt:
-                d["test_prompt"] = it.revision.test_prompt
-            if it.revision.severity_ceiling:
-                d["severity_ceiling"] = it.revision.severity_ceiling
-            if it.revision.documents:
-                d["documents"] = it.revision.documents
-            if it.revision.file_uri:
-                d["file_uri"] = it.revision.file_uri
+                 "description": it.revision.description,
+                 "expected_behavior": it.revision.expected_behavior,
+                 "test_prompt": it.revision.test_prompt,
+                 "severity_ceiling": it.revision.severity_ceiling,
+                 "documents": it.revision.documents,
+                 "file_uri": it.revision.file_uri,
+                 "decision": it.revision.decision,
+                 "metadata": it.revision.metadata,
+                 "category": it.scenario.category,
+                 "tags": it.scenario.tags or []}
             return d
 
         scenarios = [_export_scenario(it) for it in latest.items.select_related("scenario", "revision")] if latest else []
-        return JsonResponse({"set_name": sset.name, "scenarios": scenarios})
+        return JsonResponse({"format_version": 2, "set_name": sset.name, "scenarios": scenarios})
 
 
 class ScenarioImportView(ProjectMixin, View):
@@ -2029,6 +2575,8 @@ class ScenarioImportView(ProjectMixin, View):
             return JsonResponse({"error": "Not found"}, status=404)
         try:
             data = json.loads(request.body)
+            if data.get("format_version") not in (None, 2):
+                return JsonResponse({"error": "Unsupported scenario import format_version; expected 2."}, status=400)
             new_ids = []
             for item in data.get("scenarios", []):
                 key = item.get("key", f"imported_{int(timezone.now().timestamp())}")
@@ -2036,13 +2584,16 @@ class ScenarioImportView(ProjectMixin, View):
                     project=request.project, key=key,
                     defaults={"title": item.get("title", "Imported"), "category": item.get("category", "")},
                 )
-                _create_revision(
-                    scenario, item.get("description", ""), request.user,
+                update_scenario_content(
+                    scenario=scenario, user=request.user,
+                    description=item.get("description", ""),
                     expected_behavior=item.get("expected_behavior") or [],
                     test_prompt=item.get("test_prompt", ""),
                     severity_ceiling=item.get("severity_ceiling", ""),
                     documents=item.get("documents") or [],
                     file_uri=item.get("file_uri"),
+                    decision=item.get("decision"),
+                    metadata=item.get("metadata")  # Import includes metadata if present
                 )
                 new_ids.append(scenario.id)
             # Auto-publish after import (include newly imported scenarios)
@@ -2146,6 +2697,7 @@ class ConnectionsView(ProjectMixin, TemplateView):
 
     def post(self, request, *args, **kwargs):
         from model_registry.models import ModelConnection, RegisteredModel
+        from model_registry.services import detect_model_capabilities
 
         blocked = _require_write_access(request)
         if blocked:
@@ -2219,10 +2771,19 @@ class ConnectionsView(ProjectMixin, TemplateView):
             label = post.get("model_display_name", "").strip() if single else ""
             desc = post.get("model_description", "").strip()[:DESCRIPTION_MAX] if single else ""
             existing = set(conn.models.values_list("model_id", flat=True))
-            new = [RegisteredModel(connection=conn, project=p, model_id=m, display_name=label or m, description=desc,
-                                   enabled=True, created_by=request.user)
-                   for m in dict.fromkeys(ids) if m not in existing]
-            RegisteredModel.objects.bulk_create(new)
+            new_models = [m for m in dict.fromkeys(ids) if m not in existing]
+            # The discover dialog already probed each listed model via the
+            # System One endpoint (a decision model answers in milliseconds,
+            # anything else gets a fast 400/501 with no inference); it posts
+            # the result per model. A manually typed id is probed here.
+            for m in new_models:
+                flagged = post.get(f"decision:{m}") == "1"
+                caps = {"decision": True} if flagged else detect_model_capabilities(conn, m)
+                RegisteredModel.objects.create(
+                    connection=conn, project=p, model_id=m, display_name=label or m, description=desc,
+                    capabilities=caps, enabled=True, created_by=request.user,
+                )
+            new = new_models
             skipped = len(set(ids)) - len(new)
             messages.success(request, f"Added {len(new)} model{'s' if len(new) != 1 else ''} to {conn.name}."
                              + (f" {skipped} already there." if skipped else ""))
@@ -2459,7 +3020,7 @@ class DiscoverModelsView(ProjectMixin, View):
 
     def post(self, request):
         from model_registry.models import ModelConnection
-        from model_registry.services import fetch_remote_model_ids, http_error_detail
+        from model_registry.services import fetch_remote_models, http_error_detail
 
         # Looked up server-side (scoped to the workspace) so the API key never
         # reaches the browser.
@@ -2467,12 +3028,14 @@ class DiscoverModelsView(ProjectMixin, View):
         if conn is None:
             return JsonResponse({"error": "Connection not found in this workspace."}, status=404)
         try:
-            models = fetch_remote_model_ids(conn)
+            models = fetch_remote_models(conn)
         except ValueError as e:
             return JsonResponse({"error": str(e)}, status=400)
         except Exception as e:  # noqa: BLE001 - surface any upstream failure to the user
             return JsonResponse({"error": http_error_detail(e)}, status=502)
-        return JsonResponse({"models": models})
+        # One System One probe per model, so discovery on a server with many
+        # models can take a few seconds.
+        return JsonResponse({"models": models}, safe=False)
 
 
 # ─── Compare ─────────────────────────────────────────────────────────────────
@@ -2619,7 +3182,7 @@ class RunResultsFragmentView(ProjectMixin, View):
         return HttpResponse(html)
 
 
-class RunDetailView(ProjectMixin, DetailView):
+class RunDetailView(PublicReadableMixin, DetailView):
     template_name = "run_detail.html"
     context_object_name = "run"
     pk_url_kwarg = "run_id"
@@ -2628,7 +3191,15 @@ class RunDetailView(ProjectMixin, DetailView):
     )
 
     def get_queryset(self):
-        return self.queryset.filter(project=self.request.project)
+        # Authenticated: active workspace. Anonymous: runs of public experiments.
+        base = AuditRun.objects.select_related(
+            "scenario_set_version__scenario_set", "target_model", "auditor_model", "judge_model", "monitor", "experiment"
+        )
+        if self.request.user.is_authenticated:
+            return base.filter(project=self.request.project)
+        return _public_run_queryset(self.request).select_related(
+            "scenario_set_version__scenario_set", "target_model", "auditor_model", "judge_model", "monitor", "experiment"
+        )
 
     def get_context_data(self, **kw):
         ctx = super().get_context_data(**kw)
@@ -2665,9 +3236,26 @@ class RunDetailView(ProjectMixin, DetailView):
         from audits.services import ROLES, frozen_agent, frozen_judge, frozen_model
 
         ctx["frozen_models"] = [frozen_model(run, role) for role in ROLES]
+        from audits.target_metadata import metadata_rows
+        ctx["target_metadata_rows"] = metadata_rows(run)
         ctx["judge"] = frozen_judge(run)
-        ctx["system_prompt"] = (run.generation_parameters_snapshot or {}).get("system_prompt", "")
+        snap = run.generation_parameters_snapshot or {}
+        ctx["system_prompt"] = snap.get("system_prompt", "")
+        ctx["system_prompt_source"] = snap.get("system_prompt_source")
         ctx["frozen_agent"] = frozen_agent(run)
+        # Verdict split for the run-level agentic overview bar (percentages are
+        # computed here — the template engine has no float arithmetic).
+        agentic_metrics = (run.summary_metrics or {}).get("agentic_evaluation")
+        if isinstance(agentic_metrics, dict) and agentic_metrics.get("total"):
+            total = int(agentic_metrics["total"])
+            ctx["agentic_split"] = [
+                {"status": status, "count": count, "pct": round(count * 100 / total, 1)}
+                for status, count in (("PASS", agentic_metrics.get("passed")), ("FAIL", agentic_metrics.get("failed")), ("INCONCLUSIVE", agentic_metrics.get("inconclusive")))
+                if count
+            ]
+        else:
+            ctx["agentic_split"] = []
+        ctx["public_header"] = True
         return ctx
 
 
@@ -2719,6 +3307,75 @@ class ExperimentRenameView(ProjectMixin, View):
         return redirect("experiment_detail", experiment_id)
 
 
+class ExperimentSetVisibilityView(LoginRequiredMixin, View):
+    """Toggle an experiment between private and public. Admins only.
+
+    Only admins of the owning workspace may change visibility, so a member who
+    is not an admin (auditor/viewer) cannot expose their workspace's data to
+    anonymous visitors. Anonymous users are redirected to login by
+    LoginRequiredMixin; non-admins get a 403.
+    """
+
+    def post(self, request, experiment_id):
+        from accounts.services import is_any_project_admin
+        from audits.models import Experiment
+
+        if not is_any_project_admin(request.user):
+            return HttpResponseForbidden("Admin access required.")
+        # Scope to the active workspace so an admin of one workspace can't flip
+        # another workspace's experiment.
+        experiment = get_object_or_404(Experiment, pk=experiment_id, project=request.project)
+        value = request.POST.get("visibility")
+        valid = dict(Experiment.Visibility.choices)
+        if value not in valid:
+            messages.error(request, "Invalid visibility value.")
+            return redirect("experiment_detail", experiment_id)
+        experiment.visibility = value
+        experiment.save(update_fields=["visibility", "updated_at"])
+        label = "public" if value == Experiment.Visibility.PUBLIC else "private"
+        messages.success(request, f"Experiment marked {label}.")
+        return redirect("experiment_detail", experiment_id)
+
+
+class PublicExperimentsView(TemplateView):
+    """Anonymous-readable list of all public experiments (no login required).
+
+    Uses the public base template (no app sidebar) and shows only experiments
+    whose visibility is PUBLIC. This is the target of the "See public
+    experiments" buttons on the landing page and login screen.
+    """
+
+    template_name = "public_experiments.html"
+
+    def get_context_data(self, **kw):
+        from audits.experiments import FACTORS
+        from audits.models import Experiment
+
+        experiments = list(
+            Experiment.objects.filter(visibility=Experiment.Visibility.PUBLIC)
+            .select_related("created_by")
+            .prefetch_related("runs")
+        )
+        for e in experiments:
+            e.summary = _experiment_summary(list(e.runs.all()))
+            e.factor_labels = [FACTORS.get(f, f) for f in e.factors]
+        kw["experiments"] = experiments
+        kw["public_header"] = True
+        # Indexable public page: full share-card metadata (og:image + dims).
+        kw.update(
+            _share_context(
+                self.request,
+                title=f"Public Experiments — {SITE_NAME}",
+                description=(
+                    "Publicly shared audit experiments from SimpleAudit Studio. "
+                    "Reproducible AI model auditing results, viewable without an account."
+                ),
+            )
+        )
+        kw["current_year"] = datetime.now(UTC).year
+        return super().get_context_data(**kw)
+
+
 class RunRenameView(ProjectMixin, View):
     """Rename an audit run. The name is a display label only; it does not
     affect the frozen reproducibility manifest."""
@@ -2748,6 +3405,7 @@ _REP_KNOWN_KEYS = {
     "severity", "rationale", "evidence", "judge_rationale", "judgment", "scenario_name",
     "scenario_description", "expected_behavior", "file_uri", "_rep_index", "_language", "error",
     "trace_ids",
+    "agentic_evaluation",
     *(f"{r}_{d}_tokens" for r in _REP_TOKEN_ROLES for d in ("input", "output")),
 }
 # Span kinds worth surfacing in the result page's trace card (the same set the
@@ -2775,6 +3433,37 @@ def _trace_is_noise(span: dict) -> bool:
     return name == "get" and _trace_span_duration_ms(span) < 1.0
 
 
+#: (label, attribute keys) for the expandable span detail — the first key
+#: present wins. Content was already capture-level-sanitized at OTLP
+#: ingestion, so whatever is here is safe to show.
+_TRACE_SPAN_CONTENT_BLOCKS = (
+    ("Tool arguments", ("gen_ai.tool.call.arguments", "tool.arguments")),
+    ("Tool result", ("gen_ai.tool.call.result", "tool.result")),
+    ("Input", ("input.value", "gen_ai.prompt", "gen_ai.input.messages")),
+    ("Output", ("output.value", "gen_ai.completion", "gen_ai.output.messages")),
+)
+
+
+def _trace_span_content_blocks(span: dict) -> list[tuple[str, str]]:
+    """Human-readable (label, text) pairs for a span's content attributes."""
+    attrs = span.get("attributes")
+    if not isinstance(attrs, dict):
+        return []
+    blocks: list[tuple[str, str]] = []
+    for label, keys in _TRACE_SPAN_CONTENT_BLOCKS:
+        for key in keys:
+            value = attrs.get(key)
+            if value is None:
+                continue
+            if not isinstance(value, str):
+                import json as _json
+
+                value = _json.dumps(value, indent=2, default=str)
+            blocks.append((label, value))
+            break
+    return blocks
+
+
 def _trace_card_view(rep: dict) -> dict | None:
     """The trace section of one rep: W3C trace ids + the captured spans.
 
@@ -2787,17 +3476,33 @@ def _trace_card_view(rep: dict) -> dict | None:
     OpenInference semantic kinds surface their signal spans first, targets with
     plain OTel auto-instrumentation (raw SPAN_KIND_*, http.* attributes) are
     still readable because the meaningful operations are the long ones (the
-    model call, the request root).
+    model call, the request root). Each span also carries ``offset_ms``
+    (time since the earliest span — trajectory ordering) and ``content_blocks``
+    (tool args/results, input, output) for the expandable span detail.
     """
     trace_ids = rep.get("trace_ids") or []
     spans = ((rep.get("judgment") or {}).get("evidence_spans") or []) if isinstance(rep.get("judgment"), dict) else []
+    # The header reports every span the target exported; the evidence subset
+    # is what the judge selected, shown separately in the timeline.
+    captured = (rep.get("trace_evidence") or {}).get("all_spans") or []
+    if captured:
+        spans = captured
     if not trace_ids and not spans:
         return None
-    ranked = [
-        dict(s, dur_ms=round(_trace_span_duration_ms(s), 1))
-        for s in spans
-        if not _trace_is_noise(s)
-    ]
+    base_start = min(
+        (s.get("start_time") for s in spans if isinstance(s.get("start_time"), (int, float))),
+        default=None,
+    )
+    ranked = []
+    for s in spans:
+        if _trace_is_noise(s):
+            continue
+        start = s.get("start_time")
+        offset = round((start - base_start) * 1000.0, 1) if base_start is not None and isinstance(start, (int, float)) else None
+        ranked.append(
+            dict(s, dur_ms=round(_trace_span_duration_ms(s), 1), offset_ms=offset,
+                 content_blocks=_trace_span_content_blocks(s))
+        )
     signal = [s for s in ranked if str(s.get("kind") or "").upper() in _TRACE_CARD_KINDS]
     rest = [s for s in ranked if str(s.get("kind") or "").upper() not in _TRACE_CARD_KINDS]
     ranked = sorted(signal, key=_trace_span_duration_ms, reverse=True) + sorted(rest, key=_trace_span_duration_ms, reverse=True)
@@ -2825,6 +3530,450 @@ def _as_text_list(value) -> list[str]:
         else:
             out.append(str(item))
     return out
+
+
+# ─── Agentic results (evidence-linked findings, timeline, judge panel) ──────
+#
+# The judging lane (audits/agentic) attaches an ``agentic_evaluation`` dict to
+# each rep and puts captured spans on ``judgment["evidence_spans"]``. These
+# helpers turn that payload into presentation-ready structures; every block
+# self-hides when the corresponding data is absent, so the panels work with
+# both the current payload shape and the target contract.
+
+#: Finding cards sort by this severity rank first (CRITICAL > HIGH > MEDIUM > LOW).
+_AGENTIC_SEVERITY_RANK = {"critical": 0, "high": 1, "medium": 2, "low": 3}
+#: ...then by status (FAIL > INCONCLUSIVE > ERROR > PASS).
+_AGENTIC_STATUS_RANK = {"fail": 0, "inconclusive": 1, "error": 2, "pass": 3}
+#: Span kinds rendered as their own timeline row style (everything else is generic).
+_AGENTIC_SPAN_KIND_ICONS = {
+    "LLM": ("🧠", "text-sky-300"),
+    "RETRIEVER": ("📚", "text-emerald-300"),
+    "TOOL": ("🔧", "text-amber-300"),
+    "AGENT": ("🤖", "text-fuchsia-300"),
+    "GUARDRAIL": ("🛡️", "text-fuchsia-300"),
+    "EVALUATOR": ("⚖️", "text-violet-300"),
+}
+
+
+def _agentic_span_view(span: dict) -> dict | None:
+    """One evidence span as a timeline row (chronological ordering key included)."""
+    if not isinstance(span, dict) or not span.get("span_id"):
+        return None
+    attrs = span.get("attributes") if isinstance(span.get("attributes"), dict) else {}
+    kind = str(span.get("kind") or "").upper()
+    icon, tone = _AGENTIC_SPAN_KIND_ICONS.get(kind, ("•", "text-gray-400"))
+    tool_name = attrs.get("gen_ai.tool.name") or attrs.get("tool_name") or ""
+    # KB retrieval rows surface the observed source ids/names from attributes.
+    kb_sources = attrs.get("openwebui.retrieval.data_source") or attrs.get("retrieval.source_ids") or []
+    if isinstance(kb_sources, (str, int)):
+        kb_sources = [kb_sources]
+    elif not isinstance(kb_sources, list):
+        kb_sources = []
+    start = span.get("start_time")
+    return {
+        "span_id": str(span["span_id"]),
+        "kind": span.get("kind") or "",
+        "icon": icon,
+        "tone": tone,
+        "name": span.get("name") or tool_name or "step",
+        "tool_name": tool_name,
+        "kb_sources": [str(s) for s in kb_sources],
+        "started_at": start,
+        "duration_ms": round(_trace_span_duration_ms(span), 1),
+        "content_blocks": _trace_span_content_blocks(span),
+        "raw_json": json.dumps(span, indent=2, ensure_ascii=False, default=str),
+        "is_retrieval": kind == "RETRIEVER" or bool(kb_sources) or "retriev" in str(tool_name).lower(),
+    }
+
+
+def _synthetic_tool_spans(conv: list[dict]) -> list[dict]:
+    """Minimal TOOL/INFERENCE span rows derived from conversation tool markers.
+
+    Used both as the whole-timeline fallback (no OTLP at all) and — when OTLP
+    spans exist but carry no tool/retriever steps — as a merge so the
+    trajectory still shows what the agent actually did with tools and KB.
+    """
+    import re as _re
+
+    synthetic = []
+    idx = 0
+    # Streaming format: [TOOL_CALL name()]{"json"} — args after the ]
+    # Non-streaming format: [TOOL_CALL name({"json"})] — args inside ()
+    pat_stream = _re.compile(r"\[TOOL_CALL\s+(\w+)\(\)\]\s*(\{.*?\})?")
+    pat_nonstream = _re.compile(r"\[TOOL_CALL\s+(\w+)\(([^)]+)\)\]")
+    pat_result = _re.compile(r"\[TOOL_RESULT\s+(\w+)\](.*?)(?=\[TOOL_|$)", _re.DOTALL)
+    # Collect results per tool name (in order of appearance)
+    result_queue: dict[str, list[str]] = {}
+    for msg in conv:
+        content = (msg or {}).get("content", "") or ""
+        for rm in pat_result.finditer(content):
+            rname = rm.group(1)
+            rtext = rm.group(2).strip()
+            result_queue.setdefault(rname, []).append(rtext)
+    result_idx: dict[str, int] = {}
+    for msg in conv:
+        role = (msg or {}).get("role", "")
+        content = (msg or {}).get("content", "") or ""
+        if role != "assistant":
+            continue
+        found = list(pat_stream.finditer(content)) + list(pat_nonstream.finditer(content))
+        found.sort(key=lambda m: m.start())
+        for m in found:
+            name, args_raw = m.group(1), (m.group(2) or m.group(3) or "{}")
+            try:
+                args_preview = json.dumps(json.loads(args_raw))[:200]
+            except (json.JSONDecodeError, TypeError):
+                args_preview = args_raw[:200]
+            # Attach the next available result for this tool
+            ri = result_idx.get(name, 0)
+            result_text = None
+            if ri < len(result_queue.get(name, [])):
+                result_text = result_queue[name][ri]
+                result_idx[name] = ri + 1
+            attrs: dict = {
+                "tool_name": name,
+                "gen_ai.tool.call.arguments": args_preview,
+                "arguments": args_preview,
+            }
+            if result_text:
+                attrs["gen_ai.tool.call.result"] = result_text
+                attrs["tool.result"] = result_text
+                # Extract KB sources from retrieval-style results so the
+                # timeline row surfaces them like a real RETRIEVER span would.
+                # The result text may have trailing prose after the JSON.
+                stripped = result_text.strip()
+                if stripped.startswith(("[", "{")):
+                    # Find the matching closing bracket for the JSON portion.
+                    depth = 0
+                    end = 0
+                    for ci, ch in enumerate(stripped):
+                        if ch in "[{":
+                            depth += 1
+                        elif ch in "]}":
+                            depth -= 1
+                            if depth == 0:
+                                end = ci + 1
+                                break
+                    if end > 0:
+                        try:
+                            rdata = json.loads(stripped[:end])
+                            if isinstance(rdata, dict):
+                                src = rdata.get("source") or rdata.get("data_source")
+                                if src:
+                                    attrs["openwebui.retrieval.data_source"] = [src] if isinstance(src, str) else list(src)
+                            elif isinstance(rdata, list) and rdata and isinstance(rdata[0], dict):
+                                srcs = [d.get("source") for d in rdata if isinstance(d, dict) and d.get("source")]
+                                if srcs:
+                                    attrs["openwebui.retrieval.data_source"] = srcs
+                        except (json.JSONDecodeError, TypeError):
+                            pass
+            synthetic.append({
+                "span_id": f"conv-tool-{idx}",
+                "name": f"tool_call:{name}",
+                "start_time": 0.0,
+                "duration": 0.0,
+                "kind": "tool",
+                "attributes": attrs,
+                "status": "ok",
+            })
+            idx += 1
+        # Add a response/inference step for the prose after tool markers,
+        # matching the trajectory's conv-response-N span IDs so evidence
+        # links from judge dimensions resolve correctly.
+        parts = _re.split(r"\n\s*\n", content, maxsplit=1)
+        prose = ""
+        if len(parts) > 1:
+            candidate = parts[1].strip()
+            if candidate and not candidate.startswith(("{", "[")):
+                prose = candidate
+        if not prose or len(prose) < 20:
+            no_markers = _re.sub(
+                r"\[(?:TOOL_CALL|TOOL_RESULT)\s+\w+(?:\([^)]*\))?\][^\n]*", "", content,
+            ).strip()
+            if no_markers and not no_markers.startswith(("{", "[")):
+                prose = no_markers
+        if prose and len(prose) > 20:
+            synthetic.append({
+                "span_id": f"conv-response-{idx}",
+                "name": "final_response",
+                "start_time": 0.0,
+                "duration": 0.0,
+                "kind": "inference",
+                "attributes": {"output.value": prose},
+                "status": "ok",
+            })
+            idx += 1
+    return synthetic
+
+
+def _merge_synthesized_tool_spans(raw_spans: list[dict], synthetic: list[dict]) -> list[dict]:
+    """Interleave conversation-derived tool/response steps into real OTLP spans.
+
+    Open WebUI exports only CHAIN + LLM spans; its server-side tool loop and
+    KB retrieval leave no TOOL/RETRIEVER spans. Without this merge the
+    trajectory timeline shows nothing but ``chat_completion`` even though the
+    agent demonstrably called tools (markers are in the conversation). Real
+    OTLP tool/retriever spans always win: synthesized rows are added only for
+    tool names the trace does not already cover, appended after the last timed
+    span (they carry no timestamps of their own).
+    """
+    covered: set[str] = set()
+    for s in raw_spans:
+        attrs = s.get("attributes") if isinstance(s.get("attributes"), dict) else {}
+        name = attrs.get("gen_ai.tool.name") or attrs.get("tool_name")
+        kind = str(s.get("kind") or "").upper()
+        if name and (kind in ("TOOL", "RETRIEVER") or kind == ""):
+            covered.add(str(name))
+    extra = [s for s in synthetic if s.get("kind") == "tool" and s.get("attributes", {}).get("tool_name") not in covered]
+    if not extra:
+        return list(raw_spans)
+    base_start = min(
+        (s.get("end_time") for s in raw_spans if isinstance(s.get("end_time"), (int, float))),
+        default=None,
+    )
+    merged = list(raw_spans)
+    for i, s in enumerate(extra):
+        row = dict(s)
+        # Offset each synthetic step after the previous one, past the last real
+        # span, so chronological ordering is stable and honest (approximate).
+        offset = (base_start or 0.0) + 0.05 * (i + 1)
+        row["start_time"] = offset
+        row["end_time"] = offset + 0.01
+        merged.append(row)
+    return merged
+
+
+def _agentic_timeline_view(rep: dict) -> dict | None:
+    """Chronological full-width trajectory timeline for one rep's spans.
+
+    Repeated span ids get unique DOM anchors: the first occurrence keeps the
+    bare id, later ones gain ``-2``, ``-3``, … suffixes, and every finding
+    jump link resolves through the same mapping so duplicates land correctly.
+    Returns ``None`` when the rep carries no spans (the block hides itself).
+
+    When no OTLP evidence spans exist but the conversation contains captured
+    tool-call markers, synthesizes minimal span rows so evidence links work.
+    When OTLP spans exist but none are tool/retriever steps (Open WebUI only
+    exports CHAIN + LLM), the conversation-derived tool steps are merged in so
+    the trajectory reflects what the agent actually did.
+    """
+    raw_spans = ((rep.get("judgment") or {}).get("evidence_spans") or []) if isinstance(rep.get("judgment"), dict) else []
+    raw_spans = [s for s in raw_spans if isinstance(s, dict)]
+    if not raw_spans:
+        # Fallback: synthesize spans from conversation tool-call markers.
+        raw_spans = _synthetic_tool_spans(rep.get("conversation") or [])
+        if not raw_spans:
+            return None
+    elif any(
+        str(s.get("kind") or "").upper() in ("TOOL", "RETRIEVER") or "retriev" in str(s.get("name") or "").lower()
+        for s in raw_spans
+    ) is False:
+        # Real OTLP spans exist but carry no tool/retriever steps: OWUI's
+        # server-side tool loop leaves no such spans. Merge the
+        # conversation-derived steps in so the timeline is not all LLM.
+        raw_spans = _merge_synthesized_tool_spans(raw_spans, _synthetic_tool_spans(rep.get("conversation") or []))
+    base_start = min(
+        (s.get("start_time") for s in raw_spans if isinstance(s.get("start_time"), (int, float))),
+        default=None,
+    )
+    rows, seen = [], {}
+    # When all spans share the same start_time (synthetic fallback), preserve
+    # insertion order (chronological: tools → response) instead of sorting
+    # alphabetically by span_id which would put conv-response-N first.
+    has_real_times = any(
+        isinstance(s.get("start_time"), (int, float)) and s["start_time"] != 0.0
+        for s in raw_spans
+    )
+    if has_real_times:
+        ordered_spans = sorted(raw_spans, key=lambda x: (x.get("start_time") if isinstance(x.get("start_time"), (int, float)) else 0.0, str(x.get("span_id"))))
+    else:
+        ordered_spans = raw_spans
+    for s in ordered_spans:
+        row = _agentic_span_view(s)
+        if row is None:
+            continue
+        count = seen.get(row["span_id"], 0) + 1
+        seen[row["span_id"]] = count
+        row["anchor"] = row["span_id"] if count == 1 else f"{row['span_id']}-{count}"
+        row["offset_ms"] = (
+            round((row["started_at"] - base_start) * 1000.0, 1)
+            if base_start is not None and isinstance(row["started_at"], (int, float))
+            else None
+        )
+        rows.append(row)
+    if not rows:
+        return None
+    anchor_for: dict[str, str] = {}
+    for row in rows:
+        anchor_for.setdefault(row["span_id"], row["anchor"])
+    all_spans = (rep.get("trace_evidence") or {}).get("all_spans") or []
+    return {
+        "rows": rows,
+        "total": len(rows),
+        "captured": max(len(all_spans), len(rows)),
+        "anchor_for": anchor_for,
+        "spans_json": json.dumps(raw_spans, indent=2, ensure_ascii=False, default=str),
+    }
+
+
+def _agentic_findings_view(evaluation: dict) -> list[dict]:
+    """Per-check verdict cards, prioritized (severity, then status) with span jumps."""
+    checks = evaluation.get("checks") if isinstance(evaluation, dict) else None
+    if not isinstance(checks, list):
+        return []
+    cards = []
+    for check in checks:
+        if not isinstance(check, dict):
+            continue
+        status = str(check.get("status") or "INCONCLUSIVE").upper()
+        severity = str(check.get("severity") or "").lower()
+        span_ids = check.get("evidence_span_ids") or []
+        if not isinstance(span_ids, list):
+            span_ids = [span_ids]
+        cards.append({
+            "id": str(check.get("id") or "check"),
+            "category": str(check.get("category") or ""),
+            "status": status,
+            "severity": severity,
+            "summary": str(check.get("summary") or ""),
+            "expected": check.get("expected"),
+            "observed": check.get("observed"),
+            "reason": check.get("details").get("reason", "") if isinstance(check.get("details"), dict) else "",
+            "span_ids": [str(s) for s in span_ids if s],
+            # Raw evidence ids preserved for the rendered datalist (tooling contract).
+            "evidence_span_ids": [str(s) for s in span_ids if s],
+            "sort_key": (_AGENTIC_SEVERITY_RANK.get(severity, 99), _AGENTIC_STATUS_RANK.get(status.lower(), 99)),
+        })
+    cards.sort(key=lambda c: (c["sort_key"], c["id"]))
+    return cards
+
+
+_SEMANTIC_DIMENSION_LABELS = {
+    "process_safety": "Process Safety",
+    "grounding": "Grounding",
+    "task_completion": "Task Completion",
+    "tool_selection": "Tool Selection",
+    "tool_result_handling": "Tool Result Handling",
+    "efficiency": "Efficiency",
+}
+
+
+def _semantic_dimension_label(name: str) -> str:
+    return _SEMANTIC_DIMENSION_LABELS.get(name, name.replace("_", " ").title())
+
+
+def _agentic_judge_view(evaluation: dict) -> dict | None:
+    """Semantic judgement panel data. Hidden (``None``) when not present.
+
+    Accepts the target contract keys (``semantic_judgement`` / ``semantic``)
+    with dimensions, model/prompt versions and cited span ids.
+    """
+    if not isinstance(evaluation, dict):
+        return None
+    semantic = evaluation.get("semantic_judgement") or evaluation.get("semantic")
+    if not isinstance(semantic, dict) or not semantic:
+        return None
+    dimensions_raw = semantic.get("dimensions")
+    dimensions = []
+    if isinstance(dimensions_raw, dict):
+        for name, dim in dimensions_raw.items():
+            if not isinstance(dim, dict):
+                continue
+            span_ids = dim.get("span_ids") or []
+            if not isinstance(span_ids, list):
+                span_ids = [span_ids]
+            dimensions.append({
+                "name": str(name),
+                "label": _semantic_dimension_label(str(name)),
+                "status": str(dim.get("status") or "INCONCLUSIVE").upper(),
+                "rationale": str(dim.get("rationale") or ""),
+                "span_ids": [str(s) for s in span_ids if s],
+            })
+    elif isinstance(dimensions_raw, list):
+        for dim in dimensions_raw:
+            if not isinstance(dim, dict):
+                continue
+            span_ids = dim.get("span_ids") or []
+            if not isinstance(span_ids, list):
+                span_ids = [span_ids]
+            dimensions.append({
+                "name": str(dim.get("name") or "dimension"),
+                "status": str(dim.get("status") or "INCONCLUSIVE").upper(),
+                "rationale": str(dim.get("rationale") or ""),
+                "span_ids": [str(s) for s in span_ids if s],
+            })
+    return {
+        "status": str(semantic.get("status") or "INCONCLUSIVE").upper(),
+        "rationale": str(semantic.get("rationale") or ""),
+        "confidence": semantic.get("confidence"),
+        "uncertainty": str(semantic.get("uncertainty") or ""),
+        "model_version": str(semantic.get("model_version") or ""),
+        "prompt_version": str(semantic.get("prompt_version") or ""),
+        "dimensions": dimensions,
+    }
+
+
+def _agentic_trace_completeness_view(evaluation: dict, timeline: dict | None) -> dict | None:
+    """Trace completeness card (captured kinds / span count / missing reason)."""
+    if not isinstance(evaluation, dict):
+        return None
+    tc = evaluation.get("trace_completeness")
+    stats = evaluation.get("trajectory_stats") or {}
+    if not (isinstance(tc, dict) and tc) and not isinstance(stats, dict):
+        return None
+    tc = tc if isinstance(tc, dict) else {}
+    # ``trace_completeness`` (worker signal) reflects the FULL captured trace;
+    # the timeline only shows the selected evidence subset. Prefer the signal
+    # and fall back to the timeline for older payloads without it.
+    span_count = tc.get("span_count")
+    if span_count is None and timeline:
+        span_count = timeline["total"]
+    captured_kinds = tc.get("captured_kinds") or []
+    if not isinstance(captured_kinds, list):
+        captured_kinds = [captured_kinds]
+    if not captured_kinds and timeline:
+        captured_kinds = sorted({r["kind"] for r in timeline["rows"] if r["kind"]})
+    missing_reason = tc.get("missing_reason") or ""
+    complete = bool(tc.get("complete")) if "complete" in tc else (bool(captured_kinds) or (span_count or 0) > 0)
+    return {
+        "complete": complete,
+        "derived_from_conversation": bool(tc.get("derived_from_conversation")),
+        "span_count": span_count,
+        "captured_kinds": [str(k) for k in captured_kinds],
+        "missing_reason": str(missing_reason),
+        "total_steps": stats.get("total_steps") if isinstance(stats, dict) else None,
+        "tool_calls": stats.get("tool_calls") if isinstance(stats, dict) else None,
+        "errors": stats.get("errors") if isinstance(stats, dict) else None,
+    }
+
+
+def _agentic_overview_view(evaluation: dict) -> dict | None:
+    """First-viewport summary: overall verdict + explanation + observed vs expected."""
+    if not isinstance(evaluation, dict):
+        return None
+    verdict = evaluation.get("verdict") if isinstance(evaluation.get("verdict"), dict) else {}
+    status = str(verdict.get("status") or evaluation.get("status") or "").upper()
+    if not status:
+        return None
+    reason = str(verdict.get("reason") or evaluation.get("reason") or "")
+    checks = evaluation.get("checks") if isinstance(evaluation.get("checks"), list) else []
+    failed = [c for c in checks if isinstance(c, dict) and str(c.get("status")).upper() == "FAIL"]
+    inconclusive = [c for c in checks if isinstance(c, dict) and str(c.get("status")).upper() == "INCONCLUSIVE"]
+    passed = [c for c in checks if isinstance(c, dict) and str(c.get("status")).upper() == "PASS"]
+    return {
+        "status": status,
+        "reason": reason,
+        "n_checks": len(checks),
+        "n_passed": len(passed),
+        "n_failed": len(failed),
+        "n_inconclusive": len(inconclusive),
+        "first_failure": next(
+            (str(c.get("summary") or c.get("id")) for c in failed), None
+        ),
+        "first_inconclusive": next(
+            (str(c.get("summary") or c.get("id")) for c in inconclusive), None
+        ),
+    }
 
 
 # Judgment keys already shown as their own sections.
@@ -2893,8 +4042,29 @@ def _image_uris(rep: dict) -> list[str]:
     return out
 
 
+def _decision_answer(message: object) -> dict | None:
+    """``model_registry.decision.decision_answer``, imported lazily for Django app loading."""
+    from model_registry.decision import decision_answer
+
+    return decision_answer(message)
+
+
 def _rep_view(rep: dict, index: int) -> dict:
     """One judged conversation (a repetition, or the whole single-rep result)."""
+    def _token_count(value: object) -> int:
+        """Normalize provider-specific token values for display totals."""
+        if isinstance(value, bool):
+            return int(value)
+        if isinstance(value, (int, float)):
+            return int(value)
+        if isinstance(value, str):
+            try:
+                return int(value)
+            except ValueError:
+                return 0
+        return 0
+
+    import re as _re_fmt
     conversation = []
     turn = 0
     for msg in rep.get("conversation") or []:
@@ -2902,11 +4072,20 @@ def _rep_view(rep: dict, index: int) -> dict:
         # SimpleAudit drives the target with the auditor as "user".
         if role == "user":
             turn += 1
+        content = (msg or {}).get("content", "")
+        # The target emits [TOOL_CALL ...] / [TOOL_RESULT ...] markers inline
+        # with its final response text. Insert a blank line where a closing ]
+        # of a JSON tool-result payload (preceded by " or }) is immediately
+        # followed by prose, so the UI renders them on separate lines.
+        content = _re_fmt.sub(r'(?<=[\"\}])\](?=\w)', ']\n\n', content)
         conversation.append({
             "speaker": {"user": "Auditor", "assistant": "Target"}.get(role, role.title() or "Message"),
             "is_target": role == "assistant",
             "turn": turn,
-            "content": (msg or {}).get("content", ""),
+            "content": content,
+            # A decision target answers in options, not prose: content is empty
+            # and the answer sits beside it (SimpleAudit 0.4.0).
+            "decision": _decision_answer(msg),
         })
     tokens = [
         {
@@ -2917,10 +4096,46 @@ def _rep_view(rep: dict, index: int) -> dict:
         for r in _REP_TOKEN_ROLES
         if rep.get(f"{r}_input_tokens") is not None or rep.get(f"{r}_output_tokens") is not None
     ]
-    total_tokens = sum((t["input"] or 0) + (t["output"] or 0) for t in tokens)
+    total_tokens = sum(
+        _token_count(t["input"]) + _token_count(t["output"]) for t in tokens
+    )
     grade = _judge_grade(rep.get("judgment"))
+    agentic = rep.get("agentic_evaluation") if isinstance(rep.get("agentic_evaluation"), dict) else None
+    timeline = _agentic_timeline_view(rep)
+    # Finding cards and judge dimensions cite span ids; resolve each to its
+    # unique DOM anchor so a jump link lands on the correct row even when span
+    # ids repeat.
+    findings = _agentic_findings_view(agentic or {})
+    judge = _agentic_judge_view(agentic or {})
+    anchor_for = timeline["anchor_for"] if timeline else {}
+
+    def _span_label(sid: str) -> str:
+        """Human-friendly label for a synthetic span id."""
+        if sid.startswith("conv-tool-"):
+            # Look up the tool name from the timeline rows
+            row = next((r for r in (timeline or {}).get("rows", []) if r.get("span_id") == sid), None)
+            return (row or {}).get("tool_name") or f"Tool {sid.rsplit('-', 1)[-1]}"
+        if sid.startswith("conv-response-"):
+            return "Response"
+        return sid
+
+    for card in findings:
+        card["spans"] = [
+            {"span_id": sid, "label": _span_label(sid), "anchor": anchor_for.get(sid, sid)}
+            for sid in card.pop("span_ids")
+        ]
+    if judge:
+        for dim in judge["dimensions"]:
+            dim["spans"] = [
+                {"span_id": sid, "label": _span_label(sid), "anchor": anchor_for.get(sid, sid)}
+                for sid in dim.pop("span_ids")
+            ]
+    # The scenario's own decision answer: the last one in the conversation, so a
+    # follow-up turn's answer replaces the opening one.
+    decisions = [m["decision"] for m in conversation if m["decision"]]
     return {
         "index": index,
+        "decision": decisions[-1] if decisions else None,
         "severity": rep.get("severity", ""),
         "summary": rep.get("summary", ""),
         "grade": grade,
@@ -2935,17 +4150,43 @@ def _rep_view(rep: dict, index: int) -> dict:
         "tokens": tokens,
         "total_tokens": total_tokens,
         "trace": _trace_card_view(rep),
+        "agentic": agentic,
+        # Evidence-linked presentation of the agentic evaluation. Each block is
+        # None (and therefore hidden) when its data is absent from the payload.
+        "agentic_overview": _agentic_overview_view(agentic or {}),
+        "agentic_timeline": timeline,
+        "agentic_findings": findings,
+        "agentic_judge": judge,
+        "agentic_trace_completeness": _agentic_trace_completeness_view(agentic or {}, timeline),
         "other": {k: v for k, v in rep.items() if k not in _REP_KNOWN_KEYS},
     }
 
 
-class RunResultView(ProjectMixin, TemplateView):
+def _judge_ref_from_run(run) -> dict | None:
+    """Extract judge ID/version for a link from the run's frozen snapshot."""
+    snap = run.judge_config_snapshot or {}
+    j = snap.get("judge") or {}
+    judge_id = j.get("judge_id")
+    if not judge_id:
+        return None
+    return {
+        "id": judge_id,
+        "version": j.get("version", 1),
+        "name": j.get("name", ""),
+        "url": f"/judges/{judge_id}/?v={j.get('version', 1)}",
+    }
+
+
+class RunResultView(PublicReadableMixin, TemplateView):
     template_name = "run_result.html"
 
     def get_context_data(self, **kw):
         run_id = self.kwargs["run_id"]
         result_id = self.kwargs["result_id"]
-        run = get_object_or_404(AuditRun, pk=run_id, project=self.request.project)
+        # Scope the run to what this request may read (workspace for signed-in
+        # users, public experiments for anonymous). The result is then fetched
+        # by run_id only, so it inherits the run's access decision.
+        run = get_object_or_404(_public_run_queryset(self.request), pk=run_id)
         sr = get_object_or_404(ScenarioResult, pk=result_id, run_id=run_id)
 
         item = (
@@ -2979,15 +4220,22 @@ class RunResultView(ProjectMixin, TemplateView):
         first = raw_reps[0] if raw_reps else {}
         expected = (revision.expected_behavior if revision else None) or first.get("expected_behavior") or []
 
+        scenario_set_id = item.version.scenario_set_id if (item and item.version) else None
         kw.update(
             run=run,
             sr=sr,
             scenario_name=scenario_name,
+            scenario_set_id=scenario_set_id,
+            scenario_id=item.scenario_id if item else None,
             scenario_description=(revision.description if revision else "") or first.get("scenario_description", ""),
             expected_behavior=_as_text_list(
                 [e.get("criterion", e) if isinstance(e, dict) else e for e in expected]
             ),
             test_prompt=revision.test_prompt if revision else "",
+            scenario_severity_ceiling=revision.severity_ceiling if revision else "",
+            scenario_documents=revision.documents if revision else [],
+            scenario_file_uri=revision.file_uri if revision else None,
+            scenario_agentic=(revision.metadata or {}).get("agentic") if revision else None,
             severity=severity,
             is_repeated=is_repeated,
             reps=reps,
@@ -3001,6 +4249,8 @@ class RunResultView(ProjectMixin, TemplateView):
             ],
             error=result_data.get("error", "") if sr.status != "completed" else "",
             raw_json=json.dumps(result_data, indent=2, ensure_ascii=False) if result_data else "",
+            public_header=True,
+            judge_ref=_judge_ref_from_run(run),
         )
         return super().get_context_data(**kw)
 
@@ -3078,6 +4328,9 @@ class AgentsView(ProjectMixin, TemplateView):
         ctx = super().get_context_data(**kw)
         from model_registry.models import Agent
 
+        # The Agents surface is chat-backed; the template hides the list and
+        # the "+ New agent" / "Test in Chat" controls when chat is off.
+        ctx["chat_enabled"] = chat_enabled()
         ctx["agents"] = (
             Agent.objects.filter(project=self.request.project)
             .select_related("base_model", "base_model__connection")
@@ -3374,6 +4627,30 @@ class AgentDetailView(ProjectMixin, TemplateView):
         # Gate the "+ New" deep links: without the chat proxy there is no
         # embedded workspace to create in.
         ctx["chat_enabled"] = chat_enabled()
+        # Versioned system prompts for the agent's instructions picker — same
+        # row shape as the experiment picker (versions newest first, ticked).
+        # Pre-tick the version whose content matches the agent's current text so
+        # a re-opened agent shows which predefined prompt it uses.
+        from django.db.models import Prefetch
+
+        from prompts.models import SystemPrompt, SystemPromptVersion
+
+        agent_prompt_text = (agent.system_prompt or "").strip() if agent else ""
+        system_prompts = list(
+            SystemPrompt.objects.filter(project=project)
+            .prefetch_related(
+                Prefetch("versions", queryset=SystemPromptVersion.objects.order_by("-version"))
+            )
+            .order_by("name")
+        )
+        for sp in system_prompts:
+            sp.version_list = list(sp.versions.all())
+            latest_id = str(sp.version_list[0].id) if sp.version_list else None
+            match = next((v for v in sp.version_list if (v.content or "").strip() == agent_prompt_text), None)
+            matched_id = str(match.id) if match else None
+            sp.ticked = {matched_id} if matched_id else set()
+            sp.show_versions = bool(sp.ticked - {latest_id})
+        ctx["system_prompts"] = system_prompts
         # Live Open WebUI model entry (None when unsynced or OWUI is down).
         if agent is not None and chat_enabled():
             from model_registry.services import agent_live_openwebui
@@ -3413,6 +4690,11 @@ class AgentDetailView(ProjectMixin, TemplateView):
             default_retrieval_settings,
         )
 
+        # The agent editor is chat-backed; never create or mutate an agent from
+        # a stale form while chat (and the editor UI) is off.
+        if not chat_enabled():
+            return self._render(request, None)
+
         project = request.project
         agent = None
         if "agent_id" in self.kwargs:
@@ -3445,21 +4727,29 @@ class AgentDetailView(ProjectMixin, TemplateView):
                 return None
 
         retrieval = default_retrieval_settings()
-        retrieval["search_mode"] = request.POST.get("search_mode", "semantic")
-        if retrieval["search_mode"] not in {"semantic", "hybrid"}:
-            retrieval["search_mode"] = "semantic"
+        mode = request.POST.get("search_mode", "semantic")
+        retrieval["search_mode"] = "hybrid" if mode in {"hybrid", "hybrid_balanced", "bm25_heavy"} else "semantic"
         retrieval["top_k"] = _positive_int("top_k", 5)
-        retrieval["rerank_enabled"] = request.POST.get("rerank_enabled") == "on"
-        retrieval["rerank_top_k"] = _positive_int("rerank_top_k", 4)
+        retrieval["final_k"] = _positive_int("final_k", 5)
         for field in ("relevance_threshold", "bm25_weight"):
             retrieval[field] = _optional_float(field)
         retrieval["full_context"] = request.POST.get("full_context") == "on"
+
+        # Resolve the system prompt: a versioned prompt picker or a raw textarea.
+        from prompts.models import SystemPromptVersion
+        prompt_version_id = request.POST.get("system_prompt_version") or ""
+        if prompt_version_id:
+            pv = SystemPromptVersion.objects.filter(
+                pk=prompt_version_id, prompt__project=project).first()
+            system_prompt_text = pv.content if pv else ""
+        else:
+            system_prompt_text = request.POST.get("system_prompt", "")
 
         if agent:
             agent.name = name
             agent.description = request.POST.get("description", "")
             agent.base_model = base_model
-            agent.system_prompt = request.POST.get("system_prompt", "")
+            agent.system_prompt = system_prompt_text
             agent.retrieval_settings = retrieval
             agent.enabled = request.POST.get("enabled") == "on"
             agent.save()
@@ -3483,7 +4773,7 @@ class AgentDetailView(ProjectMixin, TemplateView):
                 name=name,
                 description=request.POST.get("description", ""),
                 base_model=base_model,
-                system_prompt=request.POST.get("system_prompt", ""),
+                system_prompt=system_prompt_text,
                 retrieval_settings=retrieval,
                 capabilities=caps,
                 created_by=request.user,
@@ -3549,6 +4839,11 @@ class AgentTestChatView(ProjectMixin, View):
     def get(self, request, agent_id):
         from model_registry.models import Agent
 
+        # "Test in Chat" only works while the chat module is on; without it
+        # /chat/ 404s, so send the user back with an explanation.
+        if not chat_enabled():
+            messages.error(request, "Chat is not enabled on this server, so this agent can't be tested in chat.")
+            return redirect("agents")
         agent = Agent.objects.filter(pk=agent_id, project=request.project).select_related(
             "base_model", "base_model__connection"
         ).first()

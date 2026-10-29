@@ -96,6 +96,44 @@ class AuditRunFreezeTests(TestCase):
         assert detail_payload["target_config_snapshot"]["model_id"] == "target-model"
         assert detail_payload["simpleaudit_version"] == "0.1.0"
 
+    def test_remote_metadata_is_frozen_in_target_snapshot(self):
+        from unittest import mock
+
+        discovery = {
+            "status": "available", "source": "models.retrieve",
+            "captured_at": "2026-10-28T08:00:00+00:00",
+            "metadata": {
+                "version": "2.1", "prompts": {"retrieval": {
+                    "content": "Retrieve for {query}", "version": "5",
+                }},
+            },
+        }
+        with mock.patch(
+            "audits.services.resolve_engine_provenance",
+            return_value=mock.Mock(version="0.1.13", commit="abc", source="metadata"),
+        ), mock.patch("audits.services.discover_target_metadata", return_value=discovery) as fetch:
+            response = self.client.post(
+                f"/api/projects/{self.project.id}/audit-runs/create/",
+                {
+                    "name": "Target metadata run",
+                    "scenario_set_version_id": self.version.id,
+                    "target_model_id": self.target.id,
+                    "auditor_model_id": self.auditor.id,
+                    "judge_model_id": self.judge.id,
+                    "judge_version_id": judge_for(self.judge).id,
+                },
+                format="json",
+            )
+        assert response.status_code == 201, response.content
+        fetch.assert_called_once()
+        run = AuditRun.objects.get(pk=response.json()["id"])
+        self.assertEqual(run.target_config_snapshot["remote_metadata"], discovery["metadata"])
+        self.assertEqual(run.target_config_snapshot["metadata_discovery"]["source"], "models.retrieve")
+        # Historical displays use the frozen payload, even if the target changes.
+        from audits.target_metadata import frozen_target_metadata
+        self.assertEqual(frozen_target_metadata(run)["prompts.retrieval.version"], "5")
+        self.assertEqual(frozen_target_metadata(run)["prompts.retrieval.content"], "Retrieve for {query}")
+
     def test_create_audit_run_allows_missing_commit_for_registry_install(self):
         from unittest import mock
 

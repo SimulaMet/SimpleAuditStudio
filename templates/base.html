@@ -13,11 +13,11 @@
   <title>{% block title %}SimpleAudit Studio{% endblock %}</title>
   {% block head %}{% endblock %}
   {% load static %}
-  {# SEO head: description, canonical, OG, Twitter, JSON-LD. App pages default to noindex. #}
-  {% include "seo/head.html" with seo_title=page_title seo_description=page_description seo_robots=page_robots|default:"noindex,nofollow" seo_jsonld=page_jsonld og_image_url=og_image_url %}
+  <!-- SEO head: description, canonical, OG, Twitter, JSON-LD. App pages default to noindex. -->
+  {% include "seo/head.html" with seo_title=page_title seo_description=page_description seo_robots=page_robots|default:"noindex,nofollow" seo_canonical=page_canonical seo_jsonld=page_jsonld og_image_url=og_image_url og_image_width=og_image_width og_image_height=og_image_height og_image_alt=og_image_alt %}
   <link rel="icon" type="image/svg+xml" sizes="32x32" href="{% static 'favicon-32x32.svg' %}">
   <link rel="icon" type="image/svg+xml" sizes="16x16" href="{% static 'favicon-16x16.svg' %}">
-  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.tailwindcss.com/3.4.17"></script>
   <script>
     tailwind.config = {
       theme: {
@@ -62,6 +62,24 @@
       #sidebar { position: fixed; inset: 0 auto 0 0; z-index: 50; width: min(16rem, 85vw); transform: translateX(-100%); box-shadow: none; }
       html.sidebar-open #sidebar { transform: none; box-shadow: 0 0 40px rgb(0 0 0 / .5); }
       html.sidebar-open body { overflow: hidden; }
+    }
+    /* ── Agentic timeline focus mode ─────────────────────────────────── */
+    /* The "Focus" button on a trajectory timeline pushes the app chrome aside
+       so the timeline owns the viewport (wide panel). Only applied while the
+       flag is set, so it never affects other pages or print output. */
+    @media (min-width: 768px) {
+      html.agentic-focus-mode #sidebar { display: none; }
+      html.agentic-focus-mode header { display: none !important; }
+      html.agentic-focus-mode main { padding-left: 0 !important; padding-right: 0 !important; }
+    }
+    /* Overflow guards for the agentic result blocks at every width: long span
+       ids, tool arguments and JSON wrap or scroll inside their card instead of
+       widening the page (no horizontal scroll at 390px or 1280px+). */
+    .agentic-timeline { overflow-x: visible; }
+    .agentic-tl-card summary { min-width: 0; }
+    .agentic-finding-card code, .agentic-span-link span { max-width: 100%; }
+    @media (max-width: 639.98px) {
+      .agentic-tl-row { gap: .5rem; }
     }
   </style>
 {% include "partials/ui_js.html" %}
@@ -108,7 +126,10 @@
         {% block header_actions %}{% endblock %}
       </div>
     </header>
-    <main class="relative flex-1 overflow-y-auto px-4 pt-4 pb-0 md:px-6 md:pt-6 md:pb-0 flex flex-col min-h-full">
+    <!-- No min-h-full here: in a fixed-height flex column it pins main's
+         min-height to the scrollport size, which shrinks the scrollable
+         overflow and leaves the footer below the reachable scroll range. -->
+    <main class="relative flex-1 overflow-y-auto px-4 pt-4 pb-0 md:px-6 md:pt-6 md:pb-0 flex flex-col">
       <div class="flex-1">
       {% if messages %}
       <div class="mb-4 space-y-2">
@@ -127,10 +148,21 @@
   </div>
 </div>
 {% else %}
-<div class="min-h-screen flex flex-col bg-gray-950">
-  <div class="flex-1 flex items-center justify-center p-6">
-    {% block auth_content %}{% endblock %}
-  </div>
+<div class="flex min-h-screen flex-col bg-gray-950">
+  {% if public_header %}
+  <header class="h-12 shrink-0 flex items-center justify-between gap-2 px-3 border-b border-gray-800 bg-surface-raised z-10">
+    <a href="/" class="flex items-center gap-2 min-w-0" title="SimpleAudit Studio">
+      <img src="{% static 'logo.svg' %}?v=3" alt="SimpleAudit" class="h-5 w-5 object-contain rounded shrink-0">
+      <span class="text-sm font-semibold text-gray-200 truncate">SimpleAudit Studio</span>
+    </a>
+    <a href="{% url 'login' %}" class="shrink-0 inline-flex items-center h-8 px-3 rounded-lg bg-accent text-white text-xs font-medium hover:bg-accent-hover transition-colors">Sign in</a>
+  </header>
+  {% endif %}
+  {% if public_header %}
+  <div class="flex-1 overflow-y-auto"><div class="min-h-full w-full px-2 pt-4 pb-0 md:px-4">{% block public_content %}{% endblock %}</div></div>
+  {% else %}
+  <div class="flex-1 overflow-y-auto flex flex-col"><div class="flex-1 flex items-center justify-center p-6">{% block auth_content %}{% endblock %}</div></div>
+  {% endif %}
   {% include "partials/footer.html" with footer_class="py-3 px-4 md:px-6" %}
 </div>
 {% endif %}

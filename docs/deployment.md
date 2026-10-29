@@ -41,7 +41,7 @@ folder to back up your work.
 
 The same root `Dockerfile` also powers the hosted
 [Hugging Face Space demo](https://sushantgautam-simpleaudit-studio.hf.space)
-(demo login `studio` / `admin123`; override the secrets in the Space's
+(demo login `studio` / `localdevpass123`; override the secrets in the Space's
 settings). The Space is disposable — its data is lost on restart.
 
 ## 2. Docker — one container
@@ -62,7 +62,7 @@ docker run -d -p 8000:7860 -v sa-data:/data --name simpleaudit-studio simpleaudi
 - All data (database, job queue, chat) lives in the `sa-data` volume, so the
   container can be deleted and recreated without losing anything. Without the
   `-v`, data is lost when the container is removed.
-- Login is `studio` / `admin123`. For anything shared, add
+- Login is `studio` / `localdevpass123`. For anything shared, add
   `-e BOOTSTRAP_PASSWORD=<strong-password>` to the `docker run` line (it only
   takes effect on first start, while the admin is created).
 - Chat is on by default; add `-e SIMPLEAUDIT_CHAT=off` to run without it.
@@ -87,7 +87,10 @@ The full stack, each piece in its own container (`docker-compose.yml`):
 - `web` — the app at <http://localhost:8000> (gunicorn). On start it applies
   the database updates, creates the admin and workspace, and seeds scenario
   packs (`SEED_ON_BOOT=false` skips seeding; `SEED_DEMO_AUDITS=false` keeps
-  only the demo runs).
+  only the demo runs). Gunicorn is configured in `gunicorn.conf.py` with
+  threaded workers; each open live audit-run event stream holds one thread, so
+  `GUNICORN_WORKERS` × `GUNICORN_THREADS` (default 2 × 16) caps concurrent
+  viewers plus regular requests. Tune via those env vars.
 - `open-webui`, `chat-proxy` — the chat assistant at `/chat/` (on by
   default, below).
 - `mock-model` — optional profile `mock`; a fake model API for testing.
@@ -169,8 +172,13 @@ override them when you deliberately need to.
 | `SIMPLEAUDIT_LOCAL_SQLITE` **internal** | `1` = local SQLite database at the repository's `dev.sqlite3`. Set automatically by the `dev` entry point and by the test suite. |
 | `SIMPLEAUDIT_SQLITE_PATH` | Override where the local dev SQLite file lives. Default: `<repo>/dev.sqlite3`. Relative paths resolve from the repo root; absolute paths are used as-is. Ignored unless `SIMPLEAUDIT_LOCAL_SQLITE=1`. |
 | `VISUALIZER_RESULTS_DIR` | Folder of JSON audit-result files shown by `/visualizer/`. Dev defaults to `./results`; the folder is created on demand. |
+| `VISUALIZER_MAX_INSPECTED_FILES` | Max JSON files to inspect per scan (default `5000`). When hit, the tree is returned with `truncated: true, reason: "file_limit"`. |
+| `VISUALIZER_SCAN_TIME_BUDGET_S` | Wall-clock time budget for the scan in seconds (default `5`). When hit, the tree is returned with `truncated: true, reason: "time_budget"`. |
+| `VISUALIZER_MAX_TREE_DEPTH` | Max directory depth to walk (default `8`). When hit, the tree is returned with `truncated: true, reason: "depth_limit"`. |
+| `VISUALIZER_MAX_FILE_SIZE_MB` | Max JSON file size in MB to parse (default `100`). Larger files are skipped. |
 | `SIMPLEAUDIT_MINIMAL` **internal** | `1` = single-process demo mode. Set by the CLI. |
 | `SIMPLEAUDIT_CHAT` | Chat mode: `embedded` / `docker`, or `off` (and `disabled`, `false`, `no`, `0`, unset). On by default in every mode (`embedded` in the single-process modes, `docker` in compose — set in `.env`). Turn off with this var or the `--disable-chat` flag; the flag beats the env value (flag > env > mode default). |
+| `SIMPLEAUDIT_CHAT_OTLP` | Export Open WebUI structural spans to Studio. Defaults to `true` in all modes (agent audits use the spans as trace evidence). Set `false` to opt out. Content capture remains independently opt-in. |
 | `SIMPLEAUDIT_DATA_DIR` | Where single-process mode keeps its data (default `~/.simpleaudit-studio`): the SQLite database and embedded Hatchet's PostgreSQL. |
 | `SIMPLEAUDIT_EMBEDDED_PG_DIR` | Override just embedded Hatchet's PostgreSQL directory (default `<data dir>/embedded-pg`). |
 | `HATCHET_SERVER_URL`, `HATCHET_GRPC_URL`, `HATCHET_API_KEY`, `HATCHET_TOKEN_FILE`, `HATCHET_TLS_STRATEGY` | External Hatchet connection (`compose` mode). |
@@ -178,7 +186,9 @@ override them when you deliberately need to.
 | `WORKER_POOL` | Worker label (`cpu` by default). |
 | `BOOTSTRAP_USERNAME`, `BOOTSTRAP_EMAIL`, `BOOTSTRAP_PASSWORD`, `BOOTSTRAP_PROJECT_NAME` | First admin user and workspace. |
 | `DEMO_MODE`, `DEMO_USERNAME`, `DEMO_PASSWORD` | Prefilled demo login and the HF iframe cookie/CSRF policy. |
+| `DEMO_BANNER_HTML` | Optional custom HTML for the demo-mode login banner. Empty = built-in banner. Trusted operator content only. |
 | `WORKOS_CLIENT_ID`, `WORKOS_API_KEY` | Optional passwordless email sign-in. |
+| `SIMPLEAUDIT_GRAVATAR` | `true` = show Gravatar avatars (the browser sends the MD5 hash of the user's email to gravatar.com). Default off: the user's initial is shown. |
 | `SENTRY_DSN`, `SENTRY_ENVIRONMENT` | Optional error tracking. |
 | `LOG_LEVEL`, `PORT` | Logging level; web port for the CLI. |
 | any name in a connection's `secret_reference` | Model API key read at execution time. |
@@ -190,6 +200,8 @@ override them when you deliberately need to.
 | `setup_local` | migrate + bootstrap + seed (local dev, one-shot). |
 | `bootstrap_platform` | Create the admin user and default workspace (idempotent). |
 | `seed_platform` | Import scenario packs and model connections, plus demo runs (`seed_demo_audits`) and the demo "Support Refund Assistant" agent (skip with `--skip-demo-agent`). |
+| `seed_agentic_scenarios` | Seed the dedicated Acme Agentic Safety scenario set. |
+| `seed_agentic_demo` | Preload completed synthetic results, traces, and a separate Agentic verdict rollup after the demo Agent sync; never runs an audit or calls a model. |
 | `dev` | Local dev stack (embedded, hot-reload, chat, one-time sign-in). `--disable-chat`, `--no-worker`, `--no-reload`, `--no-browser`. |
 | `dev_server` | Lower-level version of the same stack. Use `dev` instead. |
 | `mode` | Print the resolved run mode and its settings. |

@@ -4,7 +4,7 @@
 <div class="w-full max-w-md">
     {% include "partials/auth_header.html" %}
 
-    {# ── Primary: WorkOS email code (shown only when configured) ── #}
+    <!-- Primary: WorkOS email code (shown only when configured) -->
     {% if workos_enabled %}
     <style>
       @keyframes glow-pulse {
@@ -28,8 +28,11 @@
     </div>
     {% endif %}
 
-    {# ── Demo mode banner ── #}
+    <!-- Demo mode banner -->
     {% if demo_mode %}
+    {% if demo_banner_html %}
+    {{ demo_banner_html|safe }}
+    {% else %}
     <div class="mb-4 flex items-start gap-3 rounded-xl border border-accent/30 bg-accent/10 px-4 py-3">
       <svg class="mt-0.5 w-5 h-5 shrink-0 text-accent" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
       <div class="text-sm text-gray-300">
@@ -44,8 +47,9 @@
       </div>
     </div>
     {% endif %}
+    {% endif %}
 
-    {# ── Secondary: username/password (always available) ── #}
+    <!-- Secondary: username/password (always available) -->
     <form method="post" class="bg-surface-raised rounded-2xl border border-gray-800 p-8 space-y-5 shadow-xl">
       {% csrf_token %}
       <input type="hidden" name="next" value="{{ request.GET.next|default:'' }}">
@@ -70,8 +74,13 @@
       </button>
     </form>
 
+    {% if registration_enabled %}
     <p class="text-center text-sm text-gray-500 mt-5">
       No account? <a href="{% url 'register' %}" class="text-accent hover:underline">Register</a>
+    </p>
+    {% endif %}
+    <p class="text-center text-sm text-gray-500 mt-3">
+      Just browsing? <a href="{% url 'public_experiments' %}" class="text-accent hover:underline">See public experiments</a> — no sign-in needed.
     </p>
 </div>
 {% endblock %}

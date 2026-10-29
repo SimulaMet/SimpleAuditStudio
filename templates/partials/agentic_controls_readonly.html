@@ -1,0 +1,156 @@
+{% load json_filters %}
+<!-- Read-only summary of agentic controls — only shows fields that have values. -->
+<div class="text-xs space-y-2">
+  {% if agentic.tools.expected or agentic.tools.forbidden or agentic.retrieval.sources or agentic.trajectory.required_sequence or agentic.budgets.max_tool_calls or agentic.enforcement.mode %}
+  <div>
+    <p class="font-semibold text-gray-400 mb-1">Trace and tools</p>
+    <div class="space-y-0.5 pl-3 border-l border-gray-800">
+      {% if agentic.tools.expected %}
+      <div><span class="text-gray-500">Required tools:</span> <span class="text-gray-300">{{ agentic.tools.expected|tools_names }}</span></div>
+      {% endif %}
+      {% if agentic.tools.forbidden %}
+      <div><span class="text-gray-500">Forbidden tools:</span> <span class="text-gray-300">{{ agentic.tools.forbidden|join:", " }}</span></div>
+      {% endif %}
+      {% if agentic.retrieval.sources %}
+      <div><span class="text-gray-500">Required sources:</span> <span class="text-gray-300">{{ agentic.retrieval.sources|join:", " }}</span></div>
+      {% endif %}
+      {% if agentic.trajectory.required_sequence %}
+      <div><span class="text-gray-500">Required sequence:</span> <span class="text-gray-300">{{ agentic.trajectory.required_sequence|join:" → " }}</span></div>
+      {% endif %}
+      {% if agentic.budgets.max_tool_calls %}
+      <div><span class="text-gray-500">Max tool calls:</span> <span class="text-gray-300">{{ agentic.budgets.max_tool_calls }}</span></div>
+      {% endif %}
+      {% if agentic.enforcement.mode %}
+      <div><span class="text-gray-500">Enforcement mode:</span> <span class="text-gray-300">{{ agentic.enforcement.mode }}</span></div>
+      {% endif %}
+    </div>
+  </div>
+  {% endif %}
+
+  {% if agentic.retrieval.min_documents or agentic.retrieval.max_documents or agentic.rerank.required or agentic.rerank.min_calls or agentic.rerank.max_calls %}
+  <div>
+    <p class="font-semibold text-gray-400 mb-1">Retrieval and reranking</p>
+    <div class="space-y-0.5 pl-3 border-l border-gray-800">
+      {% if agentic.retrieval.min_documents %}
+      <div><span class="text-gray-500">Min retrieved documents:</span> <span class="text-gray-300">{{ agentic.retrieval.min_documents }}</span></div>
+      {% endif %}
+      {% if agentic.retrieval.max_documents %}
+      <div><span class="text-gray-500">Max retrieved documents:</span> <span class="text-gray-300">{{ agentic.retrieval.max_documents }}</span></div>
+      {% endif %}
+      {% if agentic.rerank.required %}
+      <div><span class="text-gray-500">Require reranking:</span> <span class="text-gray-300">yes</span></div>
+      {% endif %}
+      {% if agentic.rerank.min_calls %}
+      <div><span class="text-gray-500">Min rerank calls:</span> <span class="text-gray-300">{{ agentic.rerank.min_calls }}</span></div>
+      {% endif %}
+      {% if agentic.rerank.max_calls %}
+      <div><span class="text-gray-500">Max rerank calls:</span> <span class="text-gray-300">{{ agentic.rerank.max_calls }}</span></div>
+      {% endif %}
+    </div>
+  </div>
+  {% endif %}
+
+  {% if agentic.policy.read_only or agentic.policy.allowed_data_scopes or agentic.policy.forbidden_data_scopes or agentic.policy.forbidden_side_effects or agentic.policy.allowed_destinations or agentic.policy.allow_side_effects %}
+  <div>
+    <p class="font-semibold text-gray-400 mb-1">Policy</p>
+    <div class="space-y-0.5 pl-3 border-l border-gray-800">
+      {% if agentic.policy.read_only %}
+      <div><span class="text-gray-500">Read-only policy:</span> <span class="text-gray-300">on</span></div>
+      {% endif %}
+      {% if agentic.policy.allowed_data_scopes %}
+      <div><span class="text-gray-500">Allowed data scopes:</span> <span class="text-gray-300">{{ agentic.policy.allowed_data_scopes|join:", " }}</span></div>
+      {% endif %}
+      {% if agentic.policy.forbidden_data_scopes %}
+      <div><span class="text-gray-500">Forbidden data scopes:</span> <span class="text-gray-300">{{ agentic.policy.forbidden_data_scopes|join:", " }}</span></div>
+      {% endif %}
+      {% if agentic.policy.forbidden_side_effects %}
+      <div><span class="text-gray-500">Forbidden side effects:</span> <span class="text-gray-300">{{ agentic.policy.forbidden_side_effects|join:", " }}</span></div>
+      {% endif %}
+      {% if agentic.policy.allowed_destinations %}
+      <div><span class="text-gray-500">Allowed destinations:</span> <span class="text-gray-300">{{ agentic.policy.allowed_destinations|join:", " }}</span></div>
+      {% endif %}
+      {% if agentic.policy.allow_side_effects %}
+      <div><span class="text-gray-500">Allow side effects:</span> <span class="text-gray-300">on</span></div>
+      {% endif %}
+    </div>
+  </div>
+  {% endif %}
+
+  {% if agentic.guardrails.required or agentic.guardrails.must_pass or agentic.guardrails.before_actions or agentic.approvals.required_for or agentic.approvals.must_precede_execution %}
+  <div>
+    <p class="font-semibold text-gray-400 mb-1">Guardrails and approvals</p>
+    <div class="space-y-0.5 pl-3 border-l border-gray-800">
+      {% if agentic.guardrails.required %}
+      <div><span class="text-gray-500">Required guardrails:</span> <span class="text-gray-300">{{ agentic.guardrails.required|join:", " }}</span></div>
+      {% endif %}
+      {% if agentic.guardrails.must_pass %}
+      <div><span class="text-gray-500">Must-pass guardrails:</span> <span class="text-gray-300">{{ agentic.guardrails.must_pass|join:", " }}</span></div>
+      {% endif %}
+      {% if agentic.guardrails.before_actions %}
+      <div><span class="text-gray-500">Before actions:</span> <span class="text-gray-300 font-mono text-[11px]">{{ agentic.guardrails.before_actions|jsonify }}</span></div>
+      {% endif %}
+      {% if agentic.approvals.required_for %}
+      <div><span class="text-gray-500">Approvals required for:</span> <span class="text-gray-300">{{ agentic.approvals.required_for|join:", " }}</span></div>
+      {% endif %}
+      {% if agentic.approvals.must_precede_execution %}
+      <div><span class="text-gray-500">Approval must precede execution:</span> <span class="text-gray-300">yes</span></div>
+      {% endif %}
+    </div>
+  </div>
+  {% endif %}
+
+  {% if agentic.handoffs.allowed or agentic.handoffs.forbidden or agentic.handoffs.required or agentic.handoffs.max_handoffs or agentic.handoffs.max_depth or agentic.trajectory.max_steps or agentic.trajectory.max_retries_per_tool or agentic.trajectory.max_identical_consecutive_calls or agentic.budgets.max_errors or agentic.state.assertions %}
+  <div>
+    <p class="font-semibold text-gray-400 mb-1">Handoffs, state, errors, and retries</p>
+    <div class="space-y-0.5 pl-3 border-l border-gray-800">
+      {% if agentic.handoffs.allowed %}
+      <div><span class="text-gray-500">Allowed handoffs:</span> <span class="text-gray-300">{{ agentic.handoffs.allowed|join:", " }}</span></div>
+      {% endif %}
+      {% if agentic.handoffs.forbidden %}
+      <div><span class="text-gray-500">Forbidden handoffs:</span> <span class="text-gray-300">{{ agentic.handoffs.forbidden|join:", " }}</span></div>
+      {% endif %}
+      {% if agentic.handoffs.required %}
+      <div><span class="text-gray-500">Required handoffs:</span> <span class="text-gray-300">{{ agentic.handoffs.required|join:", " }}</span></div>
+      {% endif %}
+      {% if agentic.handoffs.max_handoffs %}
+      <div><span class="text-gray-500">Max handoffs:</span> <span class="text-gray-300">{{ agentic.handoffs.max_handoffs }}</span></div>
+      {% endif %}
+      {% if agentic.handoffs.max_depth %}
+      <div><span class="text-gray-500">Max handoff depth:</span> <span class="text-gray-300">{{ agentic.handoffs.max_depth }}</span></div>
+      {% endif %}
+      {% if agentic.trajectory.max_steps %}
+      <div><span class="text-gray-500">Max trajectory steps:</span> <span class="text-gray-300">{{ agentic.trajectory.max_steps }}</span></div>
+      {% endif %}
+      {% if agentic.trajectory.max_retries_per_tool %}
+      <div><span class="text-gray-500">Max retries per tool:</span> <span class="text-gray-300">{{ agentic.trajectory.max_retries_per_tool }}</span></div>
+      {% endif %}
+      {% if agentic.trajectory.max_identical_consecutive_calls %}
+      <div><span class="text-gray-500">Max identical consecutive calls:</span> <span class="text-gray-300">{{ agentic.trajectory.max_identical_consecutive_calls }}</span></div>
+      {% endif %}
+      {% if agentic.budgets.max_errors %}
+      <div><span class="text-gray-500">Max errors tolerated:</span> <span class="text-gray-300">{{ agentic.budgets.max_errors }}</span></div>
+      {% endif %}
+      {% if agentic.state.assertions %}
+      <div><span class="text-gray-500">State assertions:</span> <span class="text-gray-300 font-mono text-[11px]">{{ agentic.state.assertions|jsonify }}</span></div>
+      {% endif %}
+    </div>
+  </div>
+  {% endif %}
+
+  {% if agentic.trace.required or agentic.semantic_judge.enabled %}
+  <div>
+    <p class="font-semibold text-gray-400 mb-1">Evaluation</p>
+    <div class="space-y-0.5 pl-3 border-l border-gray-800">
+      {% if agentic.trace.required %}
+      <div><span class="text-gray-500">Trace required:</span> <span class="text-gray-300">yes{% if agentic.trace.content_capture %} ({{ agentic.trace.content_capture }} capture){% endif %}</span></div>
+      {% endif %}
+      {% if agentic.trace.missing_evidence %}
+      <div><span class="text-gray-500">Missing evidence →</span> <span class="text-gray-300">{{ agentic.trace.missing_evidence }}</span></div>
+      {% endif %}
+      {% if agentic.semantic_judge.enabled %}
+      <div><span class="text-gray-500">Semantic dimensions:</span> <span class="text-gray-300">{{ agentic.semantic_judge.criteria|join:", " }}</span></div>
+      {% endif %}
+    </div>
+  </div>
+  {% endif %}
+</div>

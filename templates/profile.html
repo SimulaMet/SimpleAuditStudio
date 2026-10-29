@@ -18,6 +18,7 @@
       <div class="w-16 h-16 rounded-full bg-accent/20 flex items-center justify-center text-xl font-bold text-accent">{{ profile_user.username|first|upper }}</div>
       {% endif %}
       <div class="text-sm">
+        {% if gravatar_enabled %}
         <p class="text-gray-400">
           {% if gravatar_url %}
           Your avatar comes from <a href="https://gravatar.com" target="_blank" rel="noopener" class="text-accent hover:underline">Gravatar</a>, matched to your email.
@@ -29,6 +30,7 @@
            class="inline-block mt-2 px-3 py-1.5 rounded-lg text-xs bg-surface-overlay border border-gray-700 text-gray-200 hover:border-accent/40 transition-colors">
           Update image on Gravatar ↗
         </a>
+        {% endif %}
       </div>
     </div>
   </div>

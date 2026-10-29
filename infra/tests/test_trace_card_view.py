@@ -95,3 +95,56 @@ class TraceCardViewTest(TestCase):
     def test_rep_view_no_trace_card_when_untraced(self):
         view = _rep_view({"severity": "pass", "conversation": []}, 1)
         self.assertIsNone(view["trace"])
+
+    def test_offset_ms_is_time_since_first_span(self):
+        spans = [
+            _span("late", "late", "LLM", 100.0),
+            _span("early", "early", "TOOL", 50.0),
+        ]
+        spans[0]["start_time"] = 1_700_000_010.0  # +10s
+        card = _trace_card_view({"judgment": {"evidence_spans": spans}})
+        offsets = {s["name"]: s["offset_ms"] for s in card["spans"]}
+        self.assertEqual(offsets["early"], 0.0)
+        self.assertEqual(offsets["late"], 10_000.0)
+
+    def test_content_blocks_surface_tool_args_and_result(self):
+        spans = [
+            _span(
+                "t1", "lookup", "TOOL", 50.0,
+                **{
+                    "gen_ai.tool.name": "acme_get_order",
+                    "gen_ai.tool.call.arguments": '{"order_id": "ACME-1001"}',
+                    "gen_ai.tool.call.result": '{"status": "shipped"}',
+                },
+            ),
+            _span(
+                "l1", "llm", "LLM", 100.0,
+                **{"input.value": "hi", "output.value": "hello"},
+            ),
+            _span("x1", "plain", "SPAN_KIND_INTERNAL", 10.0, **{"http.method": "GET"}),
+        ]
+        card = _trace_card_view({"judgment": {"evidence_spans": spans}})
+        blocks = {s["name"]: s["content_blocks"] for s in card["spans"]}
+        self.assertEqual(
+            blocks["lookup"],
+            [
+                ("Tool arguments", '{"order_id": "ACME-1001"}'),
+                ("Tool result", '{"status": "shipped"}'),
+            ],
+        )
+        self.assertEqual(blocks["llm"], [("Input", "hi"), ("Output", "hello")])
+        self.assertEqual(blocks["plain"], [])
+
+    def test_rep_view_tolerates_non_numeric_provider_token_values(self):
+        view = _rep_view(
+            {
+                "severity": "medium",
+                "conversation": [],
+                "target_input_tokens": "[REDACTED]",
+                "target_output_tokens": "unknown",
+                "judge_input_tokens": "12",
+                "judge_output_tokens": 8,
+            },
+            1,
+        )
+        self.assertEqual(view["total_tokens"], 20)

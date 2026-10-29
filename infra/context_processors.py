@@ -2,20 +2,31 @@
 
 import hashlib
 
+from django.conf import settings
 
-def gravatar_url(request):
-    """Expose the current user's Gravatar URL to templates.
 
-    The avatar is derived from the user's email (MD5 hash), so no storage or
-    upload is needed. Returns ``None`` for anonymous users or users without
-    an email, letting templates fall back to initials.
+def gravatar_for(user) -> str | None:
+    """The user's Gravatar URL, or ``None`` so templates fall back to initials.
+
+    The URL carries the MD5 hash of the user's email, and the browser sends it
+    to gravatar.com when it loads the image. Off unless ``SIMPLEAUDIT_GRAVATAR``
+    is set. Also ``None`` for anonymous users and users without an email.
     """
-    user = getattr(request, "user", None)
+    if not settings.SIMPLEAUDIT_GRAVATAR:
+        return None
     if user is None or not user.is_authenticated or not user.email:
-        return {"gravatar_url": None}
+        return None
     email = user.email.strip().lower()
     md5_hash = hashlib.md5(email.encode("utf-8")).hexdigest()
-    return {"gravatar_url": f"https://www.gravatar.com/avatar/{md5_hash}?d=identicon&s=128"}
+    return f"https://www.gravatar.com/avatar/{md5_hash}?d=identicon&s=128"
+
+
+def gravatar_url(request):
+    """Expose the current user's Gravatar URL (or ``None``) and the setting."""
+    return {
+        "gravatar_url": gravatar_for(getattr(request, "user", None)),
+        "gravatar_enabled": settings.SIMPLEAUDIT_GRAVATAR,
+    }
 
 
 def admin_status(request):
@@ -93,12 +104,16 @@ _NAV = (
     ("experiments", "Experiments", "⊞", ("/experiments/",), False, ()),
     ("monitors", "Monitors", "↻", ("/monitors/",), False, ()),
     ("scenarios", "Scenarios", "▤", ("/scenarios/",), False, ()),
+    # The Agents surface is chat-backed (agents sync to Open WebUI; knowledge /
+    # tools live in the Open WebUI workspace); it is skipped in nav() when the
+    # chat module is off.
     ("agents", "Agents", "🤖", ("/agents/",), False, (
         ("agents_knowledge", "Knowledge Bases", "📚"),
         ("agents_tools", "Tools", "🔧"),
     )),
     ("connections", "Connections", "⬡", ("/connections/",), False, ()),
     ("judges", "Judges", "⚖", ("/judges/",), False, ()),
+    ("prompts", "System Prompts", "¶", ("/prompts/",), False, ()),
     ("compare", "Compare", "⇄", ("/compare/",), False, ()),
     ("visualizer", "Visualizer", "◫", ("/visualizer/",), False, ()),
     ("health", "Health", "⚕", ("/health/",), True, ()),
@@ -117,9 +132,10 @@ def nav(request):
 
     admin = is_any_project_admin(user)
     path = request.path
+    chat_on = chat_enabled()
     # The wrapper page (model-picker bar + iframe of the embedded service at
     # /chat/) lives at /playground/.
-    entries = _NAV + ((("chat", "Playground", "💬", ("/playground/",), False, ()),) if chat_enabled() else ())
+    entries = _NAV + ((("chat", "Playground", "💬", ("/playground/",), False, ()),) if chat_on else ())
     items = [
         {
             "url": reverse(name),
@@ -132,7 +148,10 @@ def nav(request):
             ],
         }
         for name, label, icon, prefixes, admin_only, children in entries
-        if admin or not admin_only
+        if (admin or not admin_only)
+        # The Agents surface (and its Knowledge Bases / Tools children) is
+        # chat-backed; keep it out of the nav while chat is off.
+        and (name != "agents" or chat_on)
     ]
 
     def score(item):   # "/" only matches the home page itself
@@ -140,10 +159,20 @@ def nav(request):
 
     best = max(items, key=score, default=None)
     for item in items:
-        item["active"] = best is not None and item is best and score(best) > 0
+        # Children are top-level pages with their own URLs; mark each active
+        # when its URL matches exactly (e.g. /agents/knowledge/).
+        for child in item["children"]:
+            child["active"] = child["url"] == path
         # For sub-pages (children), expose the exact child label so the
         # breadcrumb can render "Agents / Knowledge" instead of just "Agents".
         item["active_child"] = next(
             (c["label"] for c in item["children"] if c["url"] == path), None
+        )
+        # Parent is active only when no child claims the current page —
+        # otherwise both would be highlighted simultaneously.
+        has_active_child = any(c["active"] for c in item["children"])
+        item["active"] = (
+            best is not None and item is best and score(best) > 0
+            and not has_active_child
         )
     return {"nav_items": items}

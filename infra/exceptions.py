@@ -1,4 +1,5 @@
 """API exception handling with stable error codes."""
+from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import IntegrityError
 from rest_framework import status
 from rest_framework.exceptions import APIException
@@ -22,6 +23,15 @@ def _stable_payload(code: str, message: str) -> dict:
 
 
 def api_exception_handler(exc, context):
+    # Django's core ValidationError (e.g. from validate_password) is not
+    # handled by DRF's default handler. Map it to a clean 400 response.
+    if isinstance(exc, DjangoValidationError):
+        messages = list(exc.messages)
+        message = " ".join(messages) if messages else str(exc)
+        return Response(
+            _stable_payload("invalid_password", message),
+            status=status.HTTP_400_BAD_REQUEST,
+        )
     # A unique-constraint violation (e.g. duplicate scenario key or endpoint
     # display name) is a client conflict, not a server fault. Map it to a
     # clean 409 instead of leaking a raw 500 with a stack trace.

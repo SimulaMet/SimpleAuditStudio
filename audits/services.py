@@ -10,6 +10,7 @@ from audits.models import AuditRun
 from infra.exceptions import StableAPIError
 from infra.simpleaudit_package import resolve_engine_provenance
 from model_registry.models import RegisteredModel
+from model_registry.remote_metadata import discover_target_metadata
 from scenarios.models import ScenarioSetVersion
 from scenarios.services import require_project_role
 
@@ -111,8 +112,11 @@ def frozen_agent(run: AuditRun) -> dict | None:
     snap = run.agent_config_snapshot
     if not snap:
         return None
+    agent_id = snap.get("agent_id")
+    detail_url = f"/agents/{agent_id}/" if str(agent_id or "").isdigit() else ""
     return {
-        "id": snap.get("agent_id"),
+        "id": agent_id,
+        "detail_url": detail_url,
         "name": snap.get("name", "—"),
         "base_model": snap.get("base_model", {}),
         "system_prompt": snap.get("system_prompt", ""),
@@ -136,6 +140,7 @@ def _generation_parameters(
     language_override: str | None = None,
     n_repetitions_override: int | None = None,
     gen_config_override: dict | None = None,
+    system_prompt_version=None,
 ) -> dict:
     params = {}
     # Raw JSON override provides the base (e.g. cloned generation config),
@@ -152,12 +157,19 @@ def _generation_parameters(
         params["language"] = language_override
     if n_repetitions_override is not None:
         params["n_repetitions"] = n_repetitions_override
+    # Provenance of a predefined prompt, so the manifest records *which* version
+    # was used (the text itself lives under "system_prompt").
+    if system_prompt_version is not None:
+        params["system_prompt_source"] = {
+            "prompt": system_prompt_version.prompt.name,
+            "version": system_prompt_version.version,
+        }
     return params
 
 
 def frozen_inputs(
     *,
-    target_model: RegisteredModel,
+    target_model: RegisteredModel | None,
     auditor_model: RegisteredModel,
     judge_model: RegisteredModel,
     judge,
@@ -165,6 +177,7 @@ def frozen_inputs(
     language_override: str | None = None,
     n_repetitions_override: int | None = None,
     gen_config_override: dict | None = None,
+    system_prompt_version=None,
 ) -> dict:
     """The snapshots a run freezes: the three endpoints, the judge and the
     generation settings. Shared by ``create_audit_run`` and script generation
@@ -180,6 +193,7 @@ def frozen_inputs(
             language_override=language_override,
             n_repetitions_override=n_repetitions_override,
             gen_config_override=gen_config_override,
+            system_prompt_version=system_prompt_version,
         ),
     }
 
@@ -199,6 +213,7 @@ def create_audit_run(
     language_override: str | None = None,
     n_repetitions_override: int | None = None,
     gen_config_override: dict | None = None,
+    system_prompt_version=None,
     trace_config: dict | None = None,
     monitor=None,
     experiment=None,
@@ -211,9 +226,8 @@ def create_audit_run(
 
     ``judge`` is a ``JudgeVersion`` (criteria, output format, probe prompt); ``judge_model`` grades with it.
 
-    When ``agent`` is provided, the run targets an auditable Agent (model +
-    knowledge + tools + retrieval). The agent's ``base_model`` must match
-    ``target_model``. The agent's full configuration is frozen in
+    When ``agent`` is provided, the run targets the Agent's Open WebUI wrapper;
+    its base model is only part of the frozen configuration. The agent's full configuration is frozen in
     ``agent_config_snapshot`` for reproducibility.
     """
     # Launching spends the workspace's API keys: viewers may not.
@@ -222,19 +236,22 @@ def create_audit_run(
         raise StableAPIError(detail="Scenario set version belongs to another project.", code="cross_project_input")
     if judge.judge.project_id != project.id:
         raise StableAPIError(detail="Judge belongs to another project.", code="cross_project_input")
-    for model in (target_model, auditor_model, judge_model):
-        if model.project_id != project.id or not model.enabled or not model.connection.enabled:
-            raise StableAPIError(detail="Model is unavailable in this project.", code="model_unavailable")
     if agent is not None:
         if agent.project_id != project.id:
             raise StableAPIError(detail="Agent belongs to another project.", code="cross_project_input")
         if not agent.enabled:
             raise StableAPIError(detail="Agent is disabled.", code="agent_disabled")
-        if agent.base_model_id != target_model.id:
-            raise StableAPIError(
-                detail="Agent's base model does not match the target model.",
-                code="agent_model_mismatch",
-            )
+        from model_registry.services import agent_target_model
+
+        try:
+            target_model = agent_target_model(agent)
+        except ValueError as exc:
+            raise StableAPIError(detail=str(exc), code="agent_not_synced") from exc
+    if target_model is None:
+        raise StableAPIError(detail="A target model is required.", code="target_model_required")
+    for model in (target_model, auditor_model, judge_model):
+        if model.project_id != project.id or not model.enabled or not model.connection.enabled:
+            raise StableAPIError(detail="Model is unavailable in this project.", code="model_unavailable")
     # Provenance is authoritative: it comes from the installed SimpleAudit
     # package metadata (version) and its PEP 610 direct_url commit (optional).
     # Callers cannot supply their own — that would let a manifest claim an engine
@@ -256,25 +273,64 @@ def create_audit_run(
     if trace_config is None:
         from model_registry.models import OTLPCredential
 
-        target_id = (
+        credential = (
             OTLPCredential.objects.filter(connection_id=target_model.connection_id, enabled=True)
-            .order_by("-created_at")
-            .values_list("target_id", flat=True)
-            .first()
+            .order_by("-created_at").first()
         )
-        trace_config = {"mode": "studio", "target_id": target_id or ""} if target_id else {}
+        if credential:
+            trace_config = {"mode": "studio", "target_id": credential.target_id}
+            # Preserve the legacy frozen shape for the default structural
+            # policy; only persist an explicit non-default capture choice.
+            if credential.capture_level != "structural":
+                trace_config["content_capture"] = credential.capture_level
+        else:
+            trace_config = {}
 
     now = timezone.now()
     agent_snapshot = None
     if agent is not None:
         server_rag = None
+        tool_invocation_names = {}
         try:
             from integrations.openwebui.client import OpenWebUIAdapter
 
-            server_rag = OpenWebUIAdapter.for_admin().safe_rag_settings()
+            adapter = OpenWebUIAdapter.for_admin()
         except Exception:  # noqa: BLE001 - a down chat service must not block freezing local inputs
-            logger.warning("Could not freeze Open WebUI RAG settings for agent %s", agent.id)
-        agent_snapshot = agent.config_snapshot(server_rag=server_rag)
+            adapter = None
+            logger.warning("Could not connect to Open WebUI while freezing agent %s", agent.id)
+        if adapter is not None:
+            try:
+                server_rag = adapter.safe_rag_settings()
+            except Exception:  # noqa: BLE001 - a down chat service must not block freezing local inputs
+                logger.warning("Could not freeze Open WebUI RAG settings for agent %s", agent.id)
+            try:
+                tool_invocation_names = adapter.tool_invocation_names(
+                    list(agent.tools.exclude(external_id="").values_list("external_id", flat=True))
+                )
+            except Exception:  # noqa: BLE001 - tool metadata is optional evidence
+                logger.warning("Could not freeze Open WebUI tool names for agent %s", agent.id)
+        agent_snapshot = agent.config_snapshot(
+            server_rag=server_rag, tool_invocation_names=tool_invocation_names
+        )
+    # Capture the target's declared metadata once, before execution. Retrieval
+    # failure never changes whether the audit can run. Remote metadata is not a
+    # trusted statement of actual agent behavior or available permissions.
+    discovery = discover_target_metadata(target_model, user=user)
+    inputs = frozen_inputs(
+        target_model=target_model, auditor_model=auditor_model, judge_model=judge_model, judge=judge,
+        max_turns_override=max_turns_override, language_override=language_override,
+        n_repetitions_override=n_repetitions_override, gen_config_override=gen_config_override,
+        system_prompt_version=system_prompt_version,
+    )
+    target_snapshot = inputs["target_config_snapshot"]
+    target_snapshot["metadata_discovery"] = {
+        "status": discovery["status"],
+        "source": discovery["source"],
+        "captured_at": discovery["captured_at"],
+    }
+    if discovery["metadata"] is not None:
+        target_snapshot["remote_metadata"] = discovery["metadata"]
+
     return AuditRun.objects.create(
         project=project,
         name=name.strip(),
@@ -285,11 +341,8 @@ def create_audit_run(
         auditor_model=auditor_model,
         judge_version=judge,
         judge_model=judge_model,
-        **frozen_inputs(
-            target_model=target_model, auditor_model=auditor_model, judge_model=judge_model, judge=judge,
-            max_turns_override=max_turns_override, language_override=language_override,
-            n_repetitions_override=n_repetitions_override, gen_config_override=gen_config_override,
-        ),
+        system_prompt_version=system_prompt_version,
+        **inputs,
         agent_config_snapshot=agent_snapshot,
         simpleaudit_version=resolved_version,
         git_commit=resolved_commit,
@@ -379,3 +432,78 @@ def cancel_run(run: AuditRun, user) -> bool:
     run.save(update_fields=["status", "finished_at"])
     append_event(run.pk, "_run", "run_cancelled", {"by": user.username})
     return True
+
+
+def build_simpleaudit_export(run: AuditRun) -> dict:
+    """Reassemble a run's durable scenario results into the canonical engine JSON.
+
+    The document is built through the engine's own ``AuditResults.to_dict()`` (via
+    :func:`infra.engine.build_audit_results_export`), so the summary block is
+    computed authoritatively by SimpleAudit core and the output loads back with
+    ``AuditResults.load``. This keeps Studio exports byte-compatible with
+    core-produced files without hand-mirroring the engine's scoring. Read-only: it
+    never mutates the run. An additive ``studio_provenance`` block records where
+    the export came from; consumers that ignore unknown keys are unaffected.
+    """
+    from audits.events import ScenarioResult
+    from infra import engine
+
+    # Join each durable result row to its frozen version item once (no N+1) so we
+    # can order by the scenario's stable position rather than insertion order.
+    items = {
+        str(vi.id): vi
+        for vi in run.scenario_set_version.items.select_related("scenario", "revision")
+    }
+    rows = list(ScenarioResult.objects.filter(run_id=run.id))
+
+    def _position(row) -> tuple:
+        item = items.get(str(row.version_item_id))
+        return (item.position if item is not None else 1 << 30, str(row.version_item_id))
+
+    rows.sort(key=_position)
+
+    engine_fields = engine.audit_result_fields()
+
+    payloads: list[dict] = []
+    extras: list[dict] = []  # Studio-only keys the engine drops, re-attached later
+    for row in rows:
+        item = items.get(str(row.version_item_id))
+        raw = row.result if isinstance(row.result, dict) else {}
+        # Drop Studio-internal underscore keys; the engine reconstructs the rest.
+        entry = {k: v for k, v in raw.items() if not k.startswith("_")}
+        if row.status == "failed" or "severity" not in entry:
+            entry.setdefault("severity", "ERROR")
+        # Guard fields the engine requires but a stored payload may omit. The
+        # scenario name comes from the frozen version item so failed rows (which
+        # carry no result body) still export with an identity.
+        entry.setdefault("scenario_name", item.scenario.title if item is not None else str(row.version_item_id))
+        entry.setdefault("scenario_description", "")
+        entry.setdefault("conversation", [])
+        entry.setdefault("issues_found", [])
+        entry.setdefault("positive_behaviors", [])
+        entry.setdefault("summary", entry.get("error", ""))
+        entry.setdefault("recommendations", [])
+        # Preserve non-engine keys (e.g. ``error``) that the engine would drop, so
+        # Studio-specific detail survives the round trip.
+        extras.append({k: v for k, v in entry.items() if k not in engine_fields})
+        payloads.append(entry)
+
+    timestamp = run.finished_at.isoformat() if run.finished_at else (
+        run.created_at.isoformat() if run.created_at else timezone.now().isoformat()
+    )
+    document = engine.build_audit_results_export(payloads, timestamp=timestamp)
+
+    # Re-attach Studio-only extras onto their matching result (same order).
+    for extra, result in zip(extras, document.get("results", [])):
+        for key, value in extra.items():
+            result.setdefault(key, value)
+
+    document["studio_provenance"] = {
+        "simpleaudit_version": run.simpleaudit_version,
+        "git_commit": run.git_commit,
+        "run_id": run.id,
+        "run_name": run.name,
+        "target_model": frozen_name(run, "target"),
+        "judge_model": frozen_name(run, "judge"),
+    }
+    return document

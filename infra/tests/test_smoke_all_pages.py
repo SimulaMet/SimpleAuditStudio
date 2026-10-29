@@ -113,7 +113,10 @@ class AllPagesSmokeTest(TestCase):
             "RAG_EMBEDDING_MODEL": "all-MiniLM-L6-v2",
             "openai_config": {"key": "secret"},
         }
-        with mock.patch("chat.api.ChatAPI.as_user", return_value=api):
+        with (
+            mock.patch("chat.api.ChatAPI.as_user", return_value=api),
+            mock.patch("chat.config.ENABLED", True),
+        ):
             resp = self.client.get("/admin-settings/?tab=knowledge")
         self.assertEqual(resp.status_code, 200)
         self.assertContains(resp, "all-MiniLM-L6-v2")
@@ -150,6 +153,31 @@ class AllPagesSmokeTest(TestCase):
         self.assertIn("Queued", html.split('id="run-state"', 1)[1][:200])
         # The SSE script updates it on terminal events.
         self.assertIn("updateRunState", html)
+
+    def test_repeated_live_panel_has_rep_event_contract(self):
+        """Repeated runs expose the durable rep events consumed by the SSE UI."""
+        from audits.models import AuditRun
+
+        active = AuditRunFactory(
+            project=self.project,
+            scenario_set_version=self.run.scenario_set_version,
+            target_model=self.run.target_model,
+            auditor_model=self.run.auditor_model,
+            judge_model=self.run.judge_model,
+            status=AuditRun.Status.TARGET_EXECUTION,
+            total_scenarios=1,
+            completed_scenarios=0,
+            generation_parameters_snapshot={"max_turns": 2, "n_repetitions": 3},
+        )
+        html = self.client.get(f"/runs/{active.id}/").content.decode()
+
+        self.assertIn('id="combo-bar"', html)
+        self.assertIn("const TOTAL_REPS = 3", html)
+        self.assertIn("handlers.scenario_rep_started", html)
+        # Rep completion is represented by the judge turn's transition to
+        # ``between``; the next durable rep_started event resets the panel.
+        self.assertIn("else next = { phase: 'between'", html)
+        self.assertIn("p.rep || 0", html)
 
     def test_audit_exports(self):
         self._ok(f"/runs/{self.run.id}/export/?format=json", "Export JSON")

@@ -47,11 +47,12 @@ def models_url(conn) -> str:
     return f"{base}/models"
 
 
-def fetch_remote_model_ids(conn, *, timeout: float = 10) -> list[str]:
-    """Model ids the connection's OpenAI-compatible ``/models`` endpoint lists, sorted.
+def _fetch_remote_model_list(conn, *, timeout: float = 10) -> list[dict]:
+    """The raw model list from the connection's ``/models`` endpoint.
 
-    Raises ``ValueError`` when the connection has no base URL or the reply isn't
-    a JSON model list, and ``httpx.HTTPError`` on network or HTTP failures.
+    Returns ``[{"id": ..., "description": ...}, ...]`` sorted by id. Raises
+    ``ValueError`` when the connection has no base URL or the reply isn't a
+    JSON model list, and ``httpx.HTTPError`` on network or HTTP failures.
     """
     if not (conn.base_url or "").strip():
         raise ValueError("This connection has no base URL.")
@@ -68,10 +69,112 @@ def fetch_remote_model_ids(conn, *, timeout: float = 10) -> list[str]:
             f"{models_url(conn)} didn't return a model list (the reply isn't JSON). "
             "Check the base URL: it usually ends in /v1."
         ) from exc
-    items = data.get("data", []) if isinstance(data, dict) else data if isinstance(data, list) else []
-    ids = {item if isinstance(item, str) else (item.get("id") or item.get("model") or "")
-           for item in items if isinstance(item, (str, dict))}
-    return sorted(i for i in ids if i)
+    items = (
+        data.get("data") if isinstance(data, dict) and "data" in data
+        else data.get("models") if isinstance(data, dict) and "models" in data
+        else data if isinstance(data, list)
+        else []
+    )
+    models = []
+    for item in items:
+        if isinstance(item, str):
+            models.append({"id": item, "description": ""})
+        elif isinstance(item, dict):
+            # OpenAI-compatible servers use "id"; TypeSafe's /v1/models uses "name".
+            mid = item.get("id") or item.get("model") or item.get("name") or ""
+            if mid:
+                models.append({"id": mid, "description": item.get("description") or ""})
+    return sorted(models, key=lambda m: m["id"])
+
+
+def fetch_remote_model_ids(conn, *, timeout: float = 10) -> list[str]:
+    """Model ids the connection's OpenAI-compatible ``/models`` endpoint lists, sorted."""
+    return [m["id"] for m in _fetch_remote_model_list(conn, timeout=timeout)]
+
+
+# ─── Decision-model detection ────────────────────────────────────────────────
+
+#: Model ids in Ollama's decision-model catalog (https://ollama.com/search?c=decision),
+#: matched by model name so that ``library/clef`` and ``clef`` both count.
+OLLAMA_LIBRARY_DECISION_MODELS = frozenset({"clef", "clef-flash", "laya", "nimble", "tev1"})
+
+#: The probe question for a decision-model check: two options, the minimum
+#: the System One endpoint accepts.
+_DECISION_PROBE_BODY = {
+    "state": "capability probe",
+    "questions": {
+        "probe": {"type": "choice", "instructions": "Pick one.", "criteria": {"yes": "Yes", "no": "No"}}
+    },
+}
+
+
+def probe_systemone_decision(base_url: str, model_id: str, *, api_key: str = "", timeout: float = 15) -> bool | None:
+    """Whether a model answers on the server's ``POST /v1/systemone`` (True/False).
+
+    The System One endpoint is a shared surface: Ollama (>= 0.35) and vLLM
+    both expose it at the API root, and every OpenAI-compatible server can
+    be probed the same way. ``None`` when it cannot be told: network errors,
+    a server not exposing the endpoint (404), or an unrecognised reply.
+
+    ``api_key`` is forwarded as a Bearer token for providers that require
+    authentication (e.g. TypeSafe); local servers ignore it.
+    """
+    base = (base_url or "").strip().rstrip("/")
+    url = f"{base.removesuffix('/v1')}/v1/systemone"
+    body = {**_DECISION_PROBE_BODY, "model": model_id}
+    headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+    try:
+        resp = httpx.post(url, json=body, headers=headers, timeout=timeout)
+    except httpx.HTTPError:
+        return None
+    if resp.status_code == 200:
+        return True
+    # 400 with Ollama's explicit message and 501 (vLLM's "no supported read
+    # strategy") are definitive "not a decision model" answers.
+    if resp.status_code == 501:
+        return False
+    if resp.status_code == 400 and "does not support decision" in (resp.text or ""):
+        return False
+    return None
+
+
+def _is_openrouter_decision_model(model_id: str) -> bool:
+    """Heuristic: OpenRouter's decision (System One) models, e.g. ``typesafe/jev-1.13``."""
+    return "typesafe/" in model_id or "jev" in model_id
+
+
+def detect_model_capabilities(conn, model_id: str, *, timeout: float = 10) -> dict:
+    """Best-effort capability flags for one model on a connection.
+
+    A model that cannot be classified simply carries no ``decision`` flag:
+    - Ollama and OpenAI-compatible servers (vLLM, …): one
+      ``POST /v1/systemone`` probe (a decision model answers the real
+      two-option question in milliseconds; anything else gets a fast 400/501
+      with no inference). Unknown Ollama library decision models are
+      recognised by name as a fallback.
+    - OpenRouter: a name match (``typesafe/…`` / ``jev…``); its
+      ``/v1/systemone`` endpoint is a paid proxy with no public model
+      listing, so probing would bill real inference.
+    """
+    caps: dict = {}
+    if conn.provider == "openrouter":
+        if _is_openrouter_decision_model(model_id):
+            caps["decision"] = True
+    else:
+        supports = probe_systemone_decision(conn.base_url, model_id, api_key=connection_api_key(conn), timeout=timeout)
+        if supports is not None:
+            caps["decision"] = bool(supports)
+        elif conn.provider == "ollama" and model_id.rsplit(":", 1)[0].rsplit("/", 1)[-1] in OLLAMA_LIBRARY_DECISION_MODELS:
+            caps["decision"] = True
+    return caps
+
+
+def fetch_remote_models(conn, *, timeout: float = 10) -> list[dict]:
+    """Models the connection offers, each with a ``capabilities`` dict (see detect_model_capabilities)."""
+    return [
+        {"id": m["id"], "description": m["description"], "capabilities": detect_model_capabilities(conn, m["id"], timeout=timeout)}
+        for m in _fetch_remote_model_list(conn, timeout=timeout)
+    ]
 
 
 def http_error_detail(exc: Exception) -> str:
@@ -277,15 +380,26 @@ def _ensure_agent_model_reference(agent, user) -> None:
 
     model = (
         RegisteredModel.objects.select_related("connection")
-        .filter(project=agent.project, model_id=agent.external_id)
+        .filter(project=agent.project, connection__name="Open WebUI Agents")
+        .order_by("id")
         .first()
     )
     if model is not None:
-        if model.display_name != agent.name or not model.enabled:
+        updated = []
+        if model.display_name != agent.name:
             model.display_name = agent.name
-            model.description = agent.description or "Synced Studio agent in OpenWebUI."
-            model.enabled = agent.enabled
-            model.save(update_fields=["display_name", "description", "enabled", "updated_at"])
+            updated.append("display_name")
+        if not model.enabled and agent.enabled:
+            model.enabled = True
+            updated.append("enabled")
+        # The managed reference's model_id must match the agent's external_id
+        # so that agent_target_model() can find it. Re-point when stale.
+        if (agent.external_id and model.model_id != agent.external_id
+                and model.connection.name == "Open WebUI Agents"):
+            model.model_id = agent.external_id
+            updated.append("model_id")
+        if updated:
+            model.save(update_fields=updated + ["updated_at"])
         return
 
     connection, _ = ModelConnection.objects.get_or_create(
@@ -308,6 +422,25 @@ def _ensure_agent_model_reference(agent, user) -> None:
         enabled=agent.enabled,
         created_by=user,
     )
+
+
+def agent_target_model(agent):
+    """Return the single RegisteredModel representing an Open WebUI Agent."""
+    if not agent.external_id:
+        raise ValueError("Agent is not synced to Open WebUI and has no external_id.")
+    from model_registry.models import RegisteredModel
+
+    model = (RegisteredModel.objects.select_related("connection")
+             .filter(project=agent.project, model_id=agent.external_id,
+                     connection__name="Open WebUI Agents").first())
+    if model is None:
+        _ensure_agent_model_reference(agent, agent.created_by)
+        model = (RegisteredModel.objects.select_related("connection")
+                 .filter(project=agent.project, model_id=agent.external_id,
+                         connection__name="Open WebUI Agents").first())
+    if model is None:
+        raise ValueError("Agent is not synced to the Open WebUI Agents model registry.")
+    return model
 
 
 def agent_live_openwebui(agent, user) -> dict | None:

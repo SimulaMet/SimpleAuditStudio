@@ -4,7 +4,7 @@
 <form method="post" id="review-form" class="max-w-5xl">
   {% csrf_token %}
   <input type="hidden" name="row_count" id="row-count" value="{{ row_count }}">
-  {# The original design, so "Back to design" restores every choice. #}
+  <!-- The original design, so "Back to design" restores every choice. -->
   {% for key, value in design_post %}<input type="hidden" name="design__{{ key }}" value="{{ value }}">{% endfor %}
 
   <div class="mb-4">

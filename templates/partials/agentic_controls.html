@@ -1,0 +1,329 @@
+{% load json_filters %}
+<!--
+  Structured agentic controls (authoring form).
+  Sparse by design: a section renders ONLY when it is active in the current
+  metadata, or the author expands its "Add constraint" row. Untouched sections
+  stay absent from the saved metadata — absence means "not checked", never a
+  silent default. The read-only preview below the form shows exactly what will
+  be saved; unknown fields round-trip untouched.
+-->
+<fieldset class="rounded-lg border border-gray-700 bg-surface-raised/40 p-3 space-y-3" data-agentic-controls>
+  <legend class="text-xs font-medium text-gray-300 mb-1">Structured agentic controls</legend>
+  <p class="text-[11px] text-gray-500">Only active constraints are shown. Use <strong>Add constraint</strong> to enable a category — an empty category is never saved. Absent = not checked; explicit false/zero/null stays an assertion. Hover any field for details.</p>
+
+  <!-- ---------------- Tools ---------------- -->
+  {% if agentic.tools.expected or agentic.tools.forbidden or agentic.tools.allowed %}
+  <div data-active-section="tools">
+    <p class="text-xs font-semibold text-gray-400 mb-2">Tools</p>
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-x-3 gap-y-2">
+      <div class="col-span-full">
+        <label class="block text-[11px] text-gray-400 mb-0.5">Required tools</label>
+        <input class="w-full px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-1 focus:ring-accent/50" name="agentic_tools_expected" value="{{ agentic.tools.expected|tools_names }}" placeholder="e.g. acme_get_order" title="Tools the agent MUST call for this scenario to pass. Comma-separated tool names (find them in Model Registry → your agent's tools). Each listed tool defaults to ≥1 call. For per-tool min/max calls or argument matching, use the JSON preview below. Empty = no specific tool required.">
+      </div>
+      <div class="col-span-full">
+        <label class="block text-[11px] text-gray-400 mb-0.5">Forbidden tools</label>
+        <input class="w-full px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-1 focus:ring-accent/50" name="agentic_tools_forbidden" value="{{ agentic.tools.forbidden|join:', ' }}" placeholder="e.g. acme_create_refund_request" title="Tools the agent must NEVER call — if it calls any of these, the run fails immediately. Comma-separated tool names from your agent's registry. Empty = no tools are forbidden.">
+      </div>
+      <div class="col-span-full">
+        <label class="block text-[11px] text-gray-400 mb-0.5">Allowed tools <span class="text-gray-600">(allow-list)</span></label>
+        <input class="w-full px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-1 focus:ring-accent/50" name="agentic_tools_allowed" value="{{ agentic.tools.allowed|join:', ' }}" placeholder="e.g. acme_get_order, query_knowledge_files" title="When non-empty, only these tools may be called; anything else fails. Leave empty to allow all (no allow-list). Note: Open WebUI runtime builtins (knowledge search, timestamps) must be included here when you use an allow-list.">
+      </div>
+    </div>
+  </div>
+  {% else %}
+  <details class="group">
+    <summary class="text-[11px] text-gray-500 cursor-pointer select-none hover:text-gray-400">+ Add constraint: Tools</summary>
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-x-3 gap-y-2 mt-2 pl-3 border-l border-gray-800">
+      <div class="col-span-full">
+        <label class="block text-[11px] text-gray-400 mb-0.5">Required tools</label>
+        <input class="w-full px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-1 focus:ring-accent/50" name="agentic_tools_expected" value="" placeholder="e.g. acme_get_order" title="Tools the agent MUST call. Comma-separated names. Each listed tool defaults to ≥1 call; argument matching via the JSON preview.">
+      </div>
+      <div class="col-span-full">
+        <label class="block text-[11px] text-gray-400 mb-0.5">Forbidden tools</label>
+        <input class="w-full px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-1 focus:ring-accent/50" name="agentic_tools_forbidden" value="" placeholder="e.g. acme_create_refund_request" title="Tools the agent must NEVER call. Comma-separated names.">
+      </div>
+      <div class="col-span-full">
+        <label class="block text-[11px] text-gray-400 mb-0.5">Allowed tools <span class="text-gray-600">(allow-list)</span></label>
+        <input class="w-full px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-1 focus:ring-accent/50" name="agentic_tools_allowed" value="" placeholder="leave empty to allow all" title="When non-empty, only these tools may be called. Include OWUI runtime builtins if needed.">
+      </div>
+    </div>
+  </details>
+  {% endif %}
+
+  <!-- ---------------- Retrieval & reranking ---------------- -->
+  {% if agentic.retrieval.sources or agentic.retrieval.required or agentic.retrieval.min_documents or agentic.retrieval.max_documents or agentic.rerank.required or agentic.rerank.min_calls or agentic.rerank.max_calls %}
+  <div data-active-section="retrieval">
+    <p class="text-xs font-semibold text-gray-400 mb-2">Retrieval and reranking</p>
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-x-3 gap-y-2">
+      <div class="col-span-full">
+        <label class="block text-[11px] text-gray-400 mb-0.5">Required sources</label>
+        <input class="w-full px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-1 focus:ring-accent/50" name="agentic_sources" value="{{ agentic.retrieval.sources|join:', ' }}" placeholder="e.g. Acme Retail Policy" title="Named retrieval sources (knowledge bases / document collections) the agent MUST query. Find source names in your agent's RAG/retrieval config. Entering ≥1 source auto-enables retrieval.required. Empty = no specific source required.">
+      </div>
+      <div>
+        <label class="block text-[11px] text-gray-400 mb-0.5">Min retrieved documents</label>
+        <input class="w-full px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-1 focus:ring-accent/50" type="number" min="0" name="agentic_retrieval_min_documents" value="{{ agentic.retrieval.min_documents|default_if_none:'' }}" placeholder="e.g. 1" title="Fewer retrieved documents than this fails the retrieval check. Empty = no minimum.">
+      </div>
+      <div>
+        <label class="block text-[11px] text-gray-400 mb-0.5">Max retrieved documents</label>
+        <input class="w-full px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-1 focus:ring-accent/50" type="number" min="0" name="agentic_retrieval_max_documents" value="{{ agentic.retrieval.max_documents|default_if_none:'' }}" placeholder="e.g. 10" title="More retrieved documents than this fails the check (guards against over-fetching). Empty = no maximum.">
+      </div>
+      <div>
+        <label class="flex items-center gap-2 text-[11px] text-gray-400 cursor-pointer select-none" title="Require a reranking step in the trajectory. Off = not required."><input type="hidden" name="agentic_rerank_required" value="0"><input type="checkbox" class="h-3.5 w-3.5 shrink-0 rounded border-gray-600 bg-surface-overlay accent-accent" name="agentic_rerank_required" value="1" {% if agentic.rerank.required %}checked{% endif %}> Require reranking</label>
+      </div>
+      <div>
+        <label class="block text-[11px] text-gray-400 mb-0.5">Min rerank calls</label>
+        <input class="w-full px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-1 focus:ring-accent/50" type="number" min="0" name="agentic_rerank_min_calls" value="{{ agentic.rerank.min_calls|default_if_none:'' }}" placeholder="e.g. 1" title="Minimum number of rerank calls expected. Empty = no minimum.">
+      </div>
+      <div>
+        <label class="block text-[11px] text-gray-400 mb-0.5">Max rerank calls</label>
+        <input class="w-full px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-1 focus:ring-accent/50" type="number" min="0" name="agentic_rerank_max_calls" value="{{ agentic.rerank.max_calls|default_if_none:'' }}" placeholder="e.g. 2" title="More rerank calls than this fails the check. Empty = no maximum.">
+      </div>
+    </div>
+  </div>
+  {% else %}
+  <details class="group">
+    <summary class="text-[11px] text-gray-500 cursor-pointer select-none hover:text-gray-400">+ Add constraint: Retrieval &amp; reranking</summary>
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-x-3 gap-y-2 mt-2 pl-3 border-l border-gray-800">
+      <div class="col-span-full">
+        <label class="block text-[11px] text-gray-400 mb-0.5">Required sources</label>
+        <input class="w-full px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-1 focus:ring-accent/50" name="agentic_sources" value="" placeholder="e.g. Acme Retail Policy" title="Knowledge base / collection names the agent MUST query. Entering ≥1 source auto-enables retrieval.required.">
+      </div>
+      <div>
+        <label class="block text-[11px] text-gray-400 mb-0.5">Min retrieved documents</label>
+        <input class="w-full px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-1 focus:ring-accent/50" type="number" min="0" name="agentic_retrieval_min_documents" value="" placeholder="empty = none" title="Fewer retrieved documents than this fails.">
+      </div>
+      <div>
+        <label class="block text-[11px] text-gray-400 mb-0.5">Max retrieved documents</label>
+        <input class="w-full px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-1 focus:ring-accent/50" type="number" min="0" name="agentic_retrieval_max_documents" value="" placeholder="empty = unlimited" title="More retrieved documents than this fails.">
+      </div>
+    </div>
+  </details>
+  {% endif %}
+
+  <!-- ---------------- Policy ---------------- -->
+  {% if agentic.policy.read_only or agentic.policy.allowed_data_scopes or agentic.policy.forbidden_data_scopes or agentic.policy.forbidden_side_effects or agentic.policy.allowed_destinations or agentic.policy.allow_side_effects %}
+  <div data-active-section="policy">
+    <p class="text-xs font-semibold text-gray-400 mb-2">Policy</p>
+    <div class="space-y-2">
+      <label class="flex items-center gap-2 text-[11px] text-gray-400 cursor-pointer select-none" title="Constrain the agent to read-only operations. On = no writes/mutations allowed; any write fails the run. Off = writes permitted (subject to other policy fields)."><input type="hidden" name="agentic_policy_read_only" value="0"><input type="checkbox" class="h-3.5 w-3.5 shrink-0 rounded border-gray-600 bg-surface-overlay accent-accent" name="agentic_policy_read_only" value="1" {% if agentic.policy.read_only %}checked{% endif %}> <span>Read-only policy <span class="text-gray-600">(no mutations allowed)</span></span></label>
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-x-3 gap-y-2">
+        <div class="col-span-full">
+          <label class="block text-[11px] text-gray-400 mb-0.5">Allowed data scopes</label>
+          <input class="w-full px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-1 focus:ring-accent/50" name="agentic_policy_allowed_data_scopes" value="{{ agentic.policy.allowed_data_scopes|join:', ' }}" placeholder="e.g. customer:CUST-001, orders:owned-by:CUST-001" title="Data scopes the agent IS ALLOWED to access. Free-form names that match your data classification. Comma-separated. Empty = no allow-list.">
+        </div>
+        <div class="col-span-full">
+          <label class="block text-[11px] text-gray-400 mb-0.5">Forbidden data scopes</label>
+          <input class="w-full px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-1 focus:ring-accent/50" name="agentic_policy_forbidden_data_scopes" value="{{ agentic.policy.forbidden_data_scopes|join:', ' }}" placeholder="e.g. pii, financials" title="Data scopes the agent must NEVER access. Same naming as allowed_data_scopes. Comma-separated. Empty = none forbidden.">
+        </div>
+        <div class="col-span-full">
+          <label class="block text-[11px] text-gray-400 mb-0.5">Forbidden side effects</label>
+          <input class="w-full px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-1 focus:ring-accent/50" name="agentic_policy_forbidden_side_effects" value="{{ agentic.policy.forbidden_side_effects|join:', ' }}" placeholder="e.g. refund, charge_card" title="Side-effect actions the agent must NOT perform. Free-form action names. Comma-separated. Empty = none forbidden.">
+        </div>
+        <div class="col-span-full">
+          <label class="block text-[11px] text-gray-400 mb-0.5">Allowed destinations</label>
+          <input class="w-full px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-1 focus:ring-accent/50" name="agentic_policy_allowed_destinations" value="{{ agentic.policy.allowed_destinations|join:', ' }}" placeholder="e.g. internal-api, email-support" title="Destinations where outputs MAY be sent. If set, output elsewhere fails. Comma-separated. Empty = unrestricted.">
+        </div>
+        <label class="flex items-center gap-2 text-[11px] text-gray-400 cursor-pointer select-none" title="Permit the agent to perform side-effect actions. Off = side effects disallowed. Independent of the read-only toggle."><input type="hidden" name="agentic_policy_allow_side_effects" value="0"><input type="checkbox" class="h-3.5 w-3.5 shrink-0 rounded border-gray-600 bg-surface-overlay accent-accent" name="agentic_policy_allow_side_effects" value="1" {% if agentic.policy.allow_side_effects %}checked{% endif %}> <span>Allow side effects</span></label>
+      </div>
+    </div>
+  </div>
+  {% else %}
+  <details class="group">
+    <summary class="text-[11px] text-gray-500 cursor-pointer select-none hover:text-gray-400">+ Add constraint: Policy</summary>
+    <div class="space-y-2 mt-2 pl-3 border-l border-gray-800">
+      <label class="flex items-center gap-2 text-[11px] text-gray-400 cursor-pointer select-none" title="On = no writes/mutations allowed; any write fails the run."><input type="hidden" name="agentic_policy_read_only" value="0"><input type="checkbox" class="h-3.5 w-3.5 shrink-0 rounded border-gray-600 bg-surface-overlay accent-accent" name="agentic_policy_read_only" value="1"> <span>Read-only policy</span></label>
+      <div>
+        <label class="block text-[11px] text-gray-400 mb-0.5">Allowed data scopes</label>
+        <input class="w-full px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-1 focus:ring-accent/50" name="agentic_policy_allowed_data_scopes" value="" placeholder="empty = no allow-list" title="Data scopes the agent may access. Comma-separated.">
+      </div>
+      <div>
+        <label class="block text-[11px] text-gray-400 mb-0.5">Forbidden data scopes</label>
+        <input class="w-full px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-1 focus:ring-accent/50" name="agentic_policy_forbidden_data_scopes" value="" placeholder="empty = none forbidden" title="Data scopes the agent must never access. Comma-separated.">
+      </div>
+    </div>
+  </details>
+  {% endif %}
+
+  <!-- ---------------- Guardrails & approvals ---------------- -->
+  {% if agentic.guardrails.required or agentic.guardrails.must_pass or agentic.guardrails.before_actions or agentic.approvals.required_for or agentic.approvals.must_precede_execution %}
+  <div data-active-section="guardrails">
+    <p class="text-xs font-semibold text-gray-400 mb-2">Guardrails and approvals</p>
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-x-3 gap-y-2">
+      <div class="col-span-full">
+        <label class="block text-[11px] text-gray-400 mb-0.5">Actions requiring approval</label>
+        <input class="w-full px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-1 focus:ring-accent/50" name="agentic_approvals_required_for" value="{{ agentic.approvals.required_for|join:', ' }}" placeholder="e.g. acme_create_refund_request" title="Actions that require explicit human approval before the agent may execute them. Comma-separated. Empty = no actions require approval.">
+      </div>
+      <label class="flex items-center gap-2 text-[11px] text-gray-400 cursor-pointer select-none" title="Require that approval is granted BEFORE the action executes. On = action blocked until approved."><input type="hidden" name="agentic_approvals_must_precede_execution" value="0"><input type="checkbox" class="h-3.5 w-3.5 shrink-0 rounded border-gray-600 bg-surface-overlay accent-accent" name="agentic_approvals_must_precede_execution" value="1" {% if agentic.approvals.must_precede_execution %}checked{% endif %}> <span>Approval must precede execution</span></label>
+      <div class="col-span-full">
+        <label class="block text-[11px] text-gray-400 mb-0.5">Required guardrails <span class="text-gray-600">(must appear in trace)</span></label>
+        <input class="w-full px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-1 focus:ring-accent/50" name="agentic_guardrails_required" value="{{ agentic.guardrails.required|join:', ' }}" placeholder="e.g. privacy, grounding" title="Guardrail checks that MUST appear in the agent's trace (presence check only). Comma-separated. Empty = none required.">
+      </div>
+      <div class="col-span-full">
+        <label class="block text-[11px] text-gray-400 mb-0.5">Guardrails that must pass</label>
+        <input class="w-full px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-1 focus:ring-accent/50" name="agentic_guardrails_must_pass" value="{{ agentic.guardrails.must_pass|join:', ' }}" placeholder="e.g. privacy, toxicity_filter" title="Guardrails that must PASS — a failure fails the run. Comma-separated. Empty = none enforced.">
+      </div>
+      <div class="col-span-full">
+        <label class="block text-[11px] text-gray-400 mb-0.5">Guardrails before specific actions <span class="text-gray-600">(JSON)</span></label>
+        <textarea class="w-full px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs font-mono focus:outline-none focus:ring-1 focus:ring-accent/50" name="agentic_guardrails_before_actions" rows="2" placeholder='[{"guardrail":"privacy","action":"refund"}]' title='JSON array of {guardrail, action} pairs that must be satisfied BEFORE that action runs.'>{% if agentic.guardrails.before_actions %}{{ agentic.guardrails.before_actions|jsonify_compact }}{% else %}[]{% endif %}</textarea>
+      </div>
+    </div>
+  </div>
+  {% else %}
+  <details class="group">
+    <summary class="text-[11px] text-gray-500 cursor-pointer select-none hover:text-gray-400">+ Add constraint: Guardrails &amp; approvals</summary>
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-x-3 gap-y-2 mt-2 pl-3 border-l border-gray-800">
+      <div class="col-span-full">
+        <label class="block text-[11px] text-gray-400 mb-0.5">Actions requiring approval</label>
+        <input class="w-full px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-1 focus:ring-accent/50" name="agentic_approvals_required_for" value="" placeholder="e.g. acme_create_refund_request" title="Actions needing human approval before execution. Comma-separated.">
+      </div>
+      <label class="flex items-center gap-2 text-[11px] text-gray-400 cursor-pointer select-none" title="On = action blocked until approved."><input type="hidden" name="agentic_approvals_must_precede_execution" value="0"><input type="checkbox" class="h-3.5 w-3.5 shrink-0 rounded border-gray-600 bg-surface-overlay accent-accent" name="agentic_approvals_must_precede_execution" value="1"> <span>Approval must precede execution</span></label>
+      <div class="col-span-full">
+        <label class="block text-[11px] text-gray-400 mb-0.5">Required guardrails</label>
+        <input class="w-full px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-1 focus:ring-accent/50" name="agentic_guardrails_required" value="" placeholder="e.g. privacy" title="Guardrails that must appear in the trace. Comma-separated.">
+      </div>
+    </div>
+  </details>
+  {% endif %}
+
+  <!-- ---------------- Handoffs ---------------- -->
+  {% if agentic.handoffs.allowed or agentic.handoffs.forbidden or agentic.handoffs.required or agentic.handoffs.max_handoffs or agentic.handoffs.max_depth %}
+  <div data-active-section="handoffs">
+    <p class="text-xs font-semibold text-gray-400 mb-2">Handoffs</p>
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-x-3 gap-y-2">
+      <div class="col-span-full">
+        <label class="block text-[11px] text-gray-400 mb-0.5">Required handoffs <span class="text-gray-600">(must delegate to these)</span></label>
+        <input class="w-full px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-1 focus:ring-accent/50" name="agentic_handoffs_required" value="{{ agentic.handoffs.required|join:', ' }}" placeholder="e.g. Returns Specialist" title="Handoffs that MUST occur for the scenario to pass. Agent names from your Multi-Agent config. Comma-separated. Empty = no handoff required.">
+      </div>
+      <div class="col-span-full">
+        <label class="block text-[11px] text-gray-400 mb-0.5">Allowed handoffs</label>
+        <input class="w-full px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-1 focus:ring-accent/50" name="agentic_handoffs_allowed" value="{{ agentic.handoffs.allowed|join:', ' }}" placeholder="e.g. support_agent, human_operator" title="Agents this agent MAY delegate to. Empty = no allow-list.">
+      </div>
+      <div class="col-span-full">
+        <label class="block text-[11px] text-gray-400 mb-0.5">Forbidden handoffs</label>
+        <input class="w-full px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-1 focus:ring-accent/50" name="agentic_handoffs_forbidden" value="{{ agentic.handoffs.forbidden|join:', ' }}" placeholder="e.g. billing_bot" title="Agents this agent must NEVER delegate to. Empty = none forbidden.">
+      </div>
+      <div>
+        <label class="block text-[11px] text-gray-400 mb-0.5">Max handoffs</label>
+        <input class="w-full px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-1 focus:ring-accent/50" type="number" min="0" name="agentic_handoffs_max_handoffs" value="{{ agentic.handoffs.max_handoffs|default_if_none:'' }}" placeholder="empty = unlimited" title="Maximum total handoffs allowed. Empty = unlimited.">
+      </div>
+      <div>
+        <label class="block text-[11px] text-gray-400 mb-0.5">Max handoff depth</label>
+        <input class="w-full px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-1 focus:ring-accent/50" type="number" min="0" name="agentic_handoffs_max_depth" value="{{ agentic.handoffs.max_depth|default_if_none:'' }}" placeholder="empty = unlimited" title="Maximum nested handoff depth (A→B→C is depth 2). Empty = unlimited.">
+      </div>
+    </div>
+  </div>
+  {% else %}
+  <details class="group">
+    <summary class="text-[11px] text-gray-500 cursor-pointer select-none hover:text-gray-400">+ Add constraint: Handoffs</summary>
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-x-3 gap-y-2 mt-2 pl-3 border-l border-gray-800">
+      <div class="col-span-full">
+        <label class="block text-[11px] text-gray-400 mb-0.5">Required handoffs</label>
+        <input class="w-full px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-1 focus:ring-accent/50" name="agentic_handoffs_required" value="" placeholder="e.g. Returns Specialist" title="Handoffs that must occur. Agent names. Comma-separated.">
+      </div>
+      <div>
+        <label class="block text-[11px] text-gray-400 mb-0.5">Max handoffs</label>
+        <input class="w-full px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-1 focus:ring-accent/50" type="number" min="0" name="agentic_handoffs_max_handoffs" value="" placeholder="empty = unlimited" title="Maximum total handoffs.">
+      </div>
+    </div>
+  </details>
+  {% endif %}
+
+  <!-- ---------------- Trajectory & budgets (advanced) ---------------- -->
+  {% if agentic.trajectory.required_sequence or agentic.trajectory.max_steps or agentic.trajectory.max_retries_per_tool or agentic.trajectory.max_identical_consecutive_calls or agentic.budgets.max_tool_calls or agentic.budgets.max_errors or agentic.state.assertions %}
+  <div data-active-section="trajectory">
+    <p class="text-xs font-semibold text-gray-400 mb-2">Trajectory, budgets &amp; state</p>
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-x-3 gap-y-2">
+      <div class="col-span-full">
+        <label class="block text-[11px] text-gray-400 mb-0.5">Required sequence</label>
+        <input class="w-full px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-1 focus:ring-accent/50" name="agentic_sequence" value="{{ agentic.trajectory.required_sequence|join:', ' }}" placeholder="e.g. retrieval, tool_call, answer" title="Ordered step types the trajectory MUST contain (subsequence, not necessarily consecutive). Valid values: retrieval, tool_call, answer, rerank, handoff, approval. Empty = no ordering constraint.">
+      </div>
+      <div>
+        <label class="block text-[11px] text-gray-400 mb-0.5">Max tool calls</label>
+        <input class="w-full px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-1 focus:ring-accent/50" type="number" min="0" name="agentic_max_tool_calls" value="{{ agentic.budgets.max_tool_calls|default_if_none:'' }}" placeholder="empty = unlimited" title="Maximum total tool calls before the budget is exceeded. Empty = unlimited.">
+      </div>
+      <div>
+        <label class="block text-[11px] text-gray-400 mb-0.5">Max errors tolerated</label>
+        <input class="w-full px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-1 focus:ring-accent/50" type="number" min="0" name="agentic_budgets_max_errors" value="{{ agentic.budgets.max_errors|default_if_none:'' }}" placeholder="empty = unlimited" title="Maximum tolerated errors before the run fails. Empty = unlimited.">
+      </div>
+      <div>
+        <label class="block text-[11px] text-gray-400 mb-0.5">Max trajectory steps</label>
+        <input class="w-full px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-1 focus:ring-accent/50" type="number" min="0" name="agentic_trajectory_max_steps" value="{{ agentic.trajectory.max_steps|default_if_none:'' }}" placeholder="empty = unlimited" title="Maximum total trajectory steps. Empty = unlimited.">
+      </div>
+      <div>
+        <label class="block text-[11px] text-gray-400 mb-0.5">Max retries per tool</label>
+        <input class="w-full px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-1 focus:ring-accent/50" type="number" min="0" name="agentic_trajectory_max_retries_per_tool" value="{{ agentic.trajectory.max_retries_per_tool|default_if_none:'' }}" placeholder="empty = schema default" title="Maximum retries of the same tool call. Empty = schema default.">
+      </div>
+      <div>
+        <label class="block text-[11px] text-gray-400 mb-0.5">Max identical consecutive calls</label>
+        <input class="w-full px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-1 focus:ring-accent/50" type="number" min="0" name="agentic_trajectory_max_identical_consecutive_calls" value="{{ agentic.trajectory.max_identical_consecutive_calls|default_if_none:'' }}" placeholder="empty = schema default" title="Maximum identical consecutive tool calls (loop detection). Empty = schema default.">
+      </div>
+      <div class="col-span-full">
+        <label class="block text-[11px] text-gray-400 mb-0.5">State assertions <span class="text-gray-600">(JSON, checked after run)</span></label>
+        <textarea class="w-full px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs font-mono focus:outline-none focus:ring-1 focus:ring-accent/50" name="agentic_state_assertions" rows="2" placeholder='[{"type":"equals","key":"status","value":"done"}]' title='JSON array of final-state assertions. Types: equals, contains, not_empty, exists. Empty list = no state checks.'>{% if agentic.state.assertions %}{{ agentic.state.assertions|jsonify_compact }}{% else %}[]{% endif %}</textarea>
+      </div>
+    </div>
+  </div>
+  {% else %}
+  <details class="group">
+    <summary class="text-[11px] text-gray-500 cursor-pointer select-none hover:text-gray-400">+ Add constraint: Trajectory, budgets &amp; state</summary>
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-x-3 gap-y-2 mt-2 pl-3 border-l border-gray-800">
+      <div>
+        <label class="block text-[11px] text-gray-400 mb-0.5">Max tool calls</label>
+        <input class="w-full px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-1 focus:ring-accent/50" type="number" min="0" name="agentic_max_tool_calls" value="" placeholder="empty = unlimited" title="Maximum total tool calls.">
+      </div>
+      <div>
+        <label class="block text-[11px] text-gray-400 mb-0.5">Max errors tolerated</label>
+        <input class="w-full px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-1 focus:ring-accent/50" type="number" min="0" name="agentic_budgets_max_errors" value="" placeholder="empty = unlimited" title="Maximum tolerated errors.">
+      </div>
+      <div class="col-span-full">
+        <label class="block text-[11px] text-gray-400 mb-0.5">Required sequence</label>
+        <input class="w-full px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-1 focus:ring-accent/50" name="agentic_sequence" value="" placeholder="e.g. retrieval, tool_call, answer" title="Ordered step types that must appear (subsequence).">
+      </div>
+    </div>
+  </details>
+  {% endif %}
+
+  <!-- ---------------- Semantic judge (advanced) ---------------- -->
+  {% if agentic.semantic_judge.enabled or agentic.semantic_judge.criteria %}
+  <div data-active-section="semantic_judge">
+    <p class="text-xs font-semibold text-gray-400 mb-2">Semantic judge</p>
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-x-3 gap-y-2">
+      <div>
+        <label class="flex items-center gap-2 text-[11px] text-gray-400 cursor-pointer select-none" title="Enable the LLM semantic judge for this scenario. Disable to rely on deterministic checks only."><input type="hidden" name="agentic_semantic_judge_enabled" value="0"><input type="checkbox" class="h-3.5 w-3.5 shrink-0 rounded border-gray-600 bg-surface-overlay accent-accent" name="agentic_semantic_judge_enabled" value="1" {% if agentic.semantic_judge.enabled %}checked{% endif %}> Enable semantic judge</label>
+      </div>
+      <div class="col-span-full">
+        <label class="block text-[11px] text-gray-400 mb-0.5">Criteria</label>
+        <input class="w-full px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-1 focus:ring-accent/50" name="agentic_semantic_judge_criteria" value="{{ agentic.semantic_judge.criteria|join:', ' }}" placeholder="task_completion, tool_selection, tool_result_handling, grounding, process_safety, efficiency" title="Which dimensions the semantic judge evaluates. Comma-separated from the canonical criteria list.">
+      </div>
+    </div>
+  </div>
+  {% else %}
+  <details class="group">
+    <summary class="text-[11px] text-gray-500 cursor-pointer select-none hover:text-gray-400">+ Add constraint: Semantic judge</summary>
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-x-3 gap-y-2 mt-2 pl-3 border-l border-gray-800">
+      <div>
+        <label class="flex items-center gap-2 text-[11px] text-gray-400 cursor-pointer select-none" title="Enable the LLM semantic judge."><input type="hidden" name="agentic_semantic_judge_enabled" value="0"><input type="checkbox" class="h-3.5 w-3.5 shrink-0 rounded border-gray-600 bg-surface-overlay accent-accent" name="agentic_semantic_judge_enabled" value="1"> Enable semantic judge</label>
+      </div>
+      <div class="col-span-full">
+        <label class="block text-[11px] text-gray-400 mb-0.5">Criteria</label>
+        <input class="w-full px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-1 focus:ring-accent/50" name="agentic_semantic_judge_criteria" value="" placeholder="grounding, task_completion" title="Dimensions evaluated by the semantic judge.">
+      </div>
+    </div>
+  </details>
+  {% endif %}
+
+  <!-- ---------------- Enforcement (always present — how violations count) ---------------- -->
+  <div data-active-section="enforcement">
+    <p class="text-xs font-semibold text-gray-400 mb-2">Enforcement</p>
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-x-3 gap-y-2">
+      <div>
+        <label class="block text-[11px] text-gray-400 mb-0.5">Mode</label>
+        <select class="w-full px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-1 focus:ring-accent/50" name="agentic_enforcement_mode" title="How violations are treated. Advisory = record findings but let the run finish; Gating = fail the run when a check is violated. 'Keep' leaves the existing mode unchanged.">
+          <option value="">Keep enforcement mode</option>
+          <option value="advisory" {% if agentic.enforcement.mode == 'advisory' %}selected{% endif %}>Advisory</option>
+          <option value="gating" {% if agentic.enforcement.mode == 'gating' %}selected{% endif %}>Gating</option>
+        </select>
+      </div>
+    </div>
+  </div>
+</fieldset>
