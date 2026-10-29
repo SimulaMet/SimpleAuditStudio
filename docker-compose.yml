@@ -194,6 +194,10 @@ services:
       WEBUI_AUTH_TRUSTED_NAME_HEADER: X-Studio-Name
       WEBUI_AUTH_TRUSTED_ROLE_HEADER: X-Studio-Role
       ENABLE_SIGNUP: "false"
+      # Retrieval defaults Studio always wants (hybrid search, cached queries, KB exec).
+      ENABLE_RAG_HYBRID_SEARCH: ${ENABLE_RAG_HYBRID_SEARCH:-true}
+      ENABLE_QUERIES_CACHE: ${ENABLE_QUERIES_CACHE:-true}
+      ENABLE_KB_EXEC: ${ENABLE_KB_EXEC:-true}
       # Studio pins the Open WebUI build; hide its "new version" banner by default.
       ENABLE_VERSION_UPDATE_CHECK: ${ENABLE_VERSION_UPDATE_CHECK:-false}
       # Nothing in this stack serves Ollama; Open WebUI polls it otherwise.

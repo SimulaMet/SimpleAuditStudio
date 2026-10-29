@@ -214,23 +214,27 @@
             <option value="semantic" {% if retrieval_settings.search_mode == 'semantic' %}selected{% endif %}>Semantic</option>
             <option value="hybrid" {% if retrieval_settings.search_mode == 'hybrid' %}selected{% endif %}>Hybrid (semantic + BM25)</option>
           </select>
+        <p class="text-[11px] text-gray-500 mt-1">Semantic: vector similarity only. Hybrid: adds BM25 keyword search to vector search.</p>
         </label>
         <label class="block text-xs text-gray-400">Top K
           <input type="number" min="1" name="top_k" value="{{ retrieval_settings.top_k }}" class="mt-1 w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm text-gray-100">
+        <p class="text-[11px] text-gray-500 mt-1">Results considered per query. Default: 5.</p>
         </label>
-        <label class="block text-xs text-gray-400">Rerank top K
-          <input type="number" min="1" name="rerank_top_k" value="{{ retrieval_settings.rerank_top_k }}" class="mt-1 w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm text-gray-100">
+        <label class="block text-xs text-gray-400">Final K
+          <input type="number" min="1" name="final_k" value="{{ retrieval_settings.final_k }}" class="mt-1 w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm text-gray-100">
+        <p class="text-[11px] text-gray-500 mt-1">Keeps at most this many results after search, when lower than Top K.</p>
         </label>
         <label class="block text-xs text-gray-400">Relevance threshold
           <input type="number" step="0.01" min="0" max="1" name="relevance_threshold" value="{{ retrieval_settings.relevance_threshold|default:'' }}" class="mt-1 w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm text-gray-100">
+        <p class="text-[11px] text-gray-500 mt-1">Minimum relevance score. It applies to reranked results; Studio has no reranker, so it may have no effect.</p>
         </label>
         <label class="block text-xs text-gray-400">BM25 weight
           <input type="number" step="0.01" min="0" max="1" name="bm25_weight" value="{{ retrieval_settings.bm25_weight|default:'' }}" class="mt-1 w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm text-gray-100">
+        <p class="text-[11px] text-gray-500 mt-1">Hybrid mode only. 0 = vector only, 1 = BM25 only, values in between blend the two.</p>
         </label>
       </div>
       <div class="grid grid-cols-1 md:grid-cols-2 gap-2 text-sm text-gray-300">
-        <label class="flex items-center gap-2"><input type="checkbox" name="rerank_enabled" {% if retrieval_settings.rerank_enabled %}checked{% endif %} class="rounded border-gray-600 bg-surface-overlay text-accent"> Enable reranking</label>
-        <label class="flex items-center gap-2"><input type="checkbox" name="full_context" {% if retrieval_settings.full_context %}checked{% endif %} class="rounded border-gray-600 bg-surface-overlay text-accent"> Full context mode</label>
+        <label class="flex items-center gap-2"><input type="checkbox" name="full_context" {% if retrieval_settings.full_context %}checked{% endif %} class="rounded border-gray-600 bg-surface-overlay text-accent"> Full context mode<span class="block w-full text-[11px] text-gray-500">Sends the whole attached file to the model instead of matching chunks. Recommended for one small or medium document (under about 20K tokens) with a large-context model.</span></label>
       </div>
     </fieldset>
 

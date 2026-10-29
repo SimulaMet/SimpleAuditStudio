@@ -276,9 +276,8 @@ def default_retrieval_settings() -> dict:
     return {
         "search_mode": "semantic",
         "top_k": 5,
-        "rerank_enabled": False,
-        "rerank_top_k": 4,
-        "relevance_threshold": None,
+        "final_k": 5,
+        "relevance_threshold": 0.0,
         "bm25_weight": None,
         "full_context": False,
     }

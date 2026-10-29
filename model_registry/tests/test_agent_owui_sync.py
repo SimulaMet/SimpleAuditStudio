@@ -140,7 +140,7 @@ class AgentSyncTest(_SyncBase):
 
     def test_pushes_agent_retrieval_settings_as_studio_metadata(self):
         api = self._mock_chat()
-        settings = {"search_mode": "hybrid", "top_k": 9, "rerank_enabled": True, "full_context": True}
+        settings = {"search_mode": "hybrid", "top_k": 9, "full_context": True}
         agent = AgentFactory(project=self.project, retrieval_settings=settings)
 
         resp = self._api(f"/api/agents/{agent.id}/", "put", {
@@ -152,7 +152,7 @@ class AgentSyncTest(_SyncBase):
         self.assertEqual(resp.status_code, 200)
         pushed = api.create_workspace_model.call_args.kwargs["metadata"]
         self.assertEqual(pushed["simpleaudit"]["retrieval"]["top_k"], 9)
-        self.assertTrue(pushed["simpleaudit"]["retrieval"]["rerank_enabled"])
+        self.assertNotIn("rerank_enabled", pushed["simpleaudit"]["retrieval"])
         # Open WebUI forwards ``params`` to the upstream provider. Retrieval
         # controls belong in the Studio metadata, not provider request args.
         self.assertEqual(api.create_workspace_model.call_args.kwargs["params"], {})

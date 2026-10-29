@@ -776,6 +776,11 @@ def _spawn(home: Path, studio_port: int | None = None) -> subprocess.Popen:
         # Nothing here serves Ollama, and Open WebUI polls it on every page load
         # (a 500 per poll in the console) and shows an empty section in settings.
         "ENABLE_OLLAMA_API": "false",
+        # Retrieval defaults Studio always wants: hybrid search (BM25 + vector), cached
+        # retrieval queries, and filesystem-style knowledge exec. Env-overridable.
+        "ENABLE_RAG_HYBRID_SEARCH": os.environ.get("ENABLE_RAG_HYBRID_SEARCH", "true"),
+        "ENABLE_QUERIES_CACHE": os.environ.get("ENABLE_QUERIES_CACHE", "true"),
+        "ENABLE_KB_EXEC": os.environ.get("ENABLE_KB_EXEC", "true"),
         # Studio pins the Open WebUI build, so its "new version available"
         # banner is noise. Operators can still opt back in with the env var.
         "ENABLE_VERSION_UPDATE_CHECK": os.environ.get("ENABLE_VERSION_UPDATE_CHECK", "false"),

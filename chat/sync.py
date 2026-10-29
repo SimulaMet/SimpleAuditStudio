@@ -52,7 +52,7 @@ def connections_to_push() -> list[dict]:
 def push_now(payloads: list[dict] | None = None) -> dict[str, int]:
     """Push connections (all of them by default). Raises ChatAPIError on refusal.
 
-    Also installs/updates the bundled tracing function (``ensure_tracing_function``);
+    Also installs/updates the bundled chat functions (``ensure_rag_overrides_function``);
     that part never raises — connection sync stays the only failure path here.
     """
     api = ChatAPI.as_user(_admin())
@@ -61,7 +61,7 @@ def push_now(payloads: list[dict] | None = None) -> dict[str, int]:
     # Studio never serves Ollama; leaving it on costs a failing request per page
     # load and an empty section in Open WebUI's settings.
     api.disable_ollama()
-    ensure_tracing_function(api)
+    ensure_rag_overrides_function(api)
     _reconcile_model_ids(api, pushed)
     from chat.access_sync import reconcile_safely
 
@@ -154,97 +154,81 @@ def _admin():
     return user
 
 
-# --- tracing function (auto-installed on every push) ------------------------
-
-#: The bundled Open WebUI filter that taps every chat turn to the pipelines
-#: service for Langfuse tracing. Kept in sync with this file, so code changes
-#: are re-pushed automatically on the next startup/signal push.
-TRACING_FUNCTION_ID = "studio_langfuse_capture"
-TRACING_FUNCTION_FILE = os.path.join(
-    os.path.dirname(__file__), "openwebui_functions", "studio_langfuse_capture.py"
+#: Per-model retrieval settings (search mode, top K, final K, threshold, BM25
+#: weight, full context) applied to every chat with files attached.
+RAG_OVERRIDES_FUNCTION_ID = "studio_rag_overrides"
+RAG_OVERRIDES_FUNCTION_FILE = os.path.join(
+    os.path.dirname(__file__), "openwebui_functions", "studio_rag_overrides.py"
 )
 
 
-def _bind_tracing_filter_to_models(api: ChatAPI, function_id: str) -> None:
-    """Ensure every workspace model has the tracing filter in its ``meta.filterIds``.
+def _install_function(api: ChatAPI, function_id: str, path: str, label: str) -> tuple[str | None, str]:
+    """Create or update one bundled function file. Returns ``(id, report line)``.
 
-    Open WebUI v0.11+ resolves filter functions per-model via the
-    ``info.meta.filterIds`` field (not ``meta.functions``). Without this
-    binding the filter is loaded but never invoked for any chat.
-    Best-effort: failures are logged and swallowed.
+    Never raises: a missing file, a chat that is down, or an odd API shape
+    yields ``(None, report)`` so callers can keep going.
     """
     try:
-        resp = api.request("GET", "/api/v1/models")
-        models = resp.get("data", []) if isinstance(resp, dict) else []
-        for m in models:
-            mid = m.get("id", "")
-            if not mid:
-                continue
-            meta = m.get("meta") or {}
-            filter_ids = list(meta.get("filterIds") or [])
-            if function_id in filter_ids:
-                continue
-            filter_ids.append(function_id)
-            meta["filterIds"] = filter_ids
-            payload = {
-                "id": mid,
-                "name": m.get("name", mid),
-                "params": m.get("params") or {},
-                "meta": meta,
-            }
-            try:
-                api.request("POST", "/api/v1/models/model/update", json=payload)
-            except ChatAPIError as exc:
-                # System-owned models (arena, mock) may reject updates; skip them.
-                logger.debug("Tracing filter bind skipped %s: %s", mid, exc)
-    except Exception:
-        logger.debug("Tracing filter model-bind pass failed", exc_info=True)
-
-
-def ensure_tracing_function(api: ChatAPI | None = None) -> str:
-    """Install or update the tracing function in Open WebUI. Returns a report line.
-
-    Also binds the filter to every workspace model via ``meta.filterIds`` so
-    that Open WebUI actually invokes it during chat completion.
-
-    Best-effort: any failure is logged and reported, never raised — tracing is
-    additive and must not block connection sync. Idempotent; content is only
-    pushed when it actually changed.
-    """
-    api = api or ChatAPI.as_user(_admin())
-    try:
-        with open(TRACING_FUNCTION_FILE, encoding="utf-8") as fh:
+        with open(path, encoding="utf-8") as fh:
             content = fh.read()
     except OSError as exc:
-        return f"Tracing function unavailable ({exc})"
+        return None, f"{label} unavailable ({exc})"
 
-    report: str | None = None
-    function_id: str | None = None
     try:
         functions = api.list_functions()
-        existing = next((f for f in functions if f.get("id") == TRACING_FUNCTION_ID), None)
+        existing = next((f for f in functions if f.get("id") == function_id), None)
         if existing is None:
-            created = api.create_function(TRACING_FUNCTION_ID, content)
-            function_id = created.get("id", TRACING_FUNCTION_ID)
-            report = f"Tracing function installed ({function_id})."
-        else:
-            function_id = existing["id"]
-            if (existing.get("content") or "") != content:
-                api.update_function_content(function_id, TRACING_FUNCTION_ID, content)
-                report = "Tracing function updated."
-            else:
-                report = "Tracing function up to date."
+            created = api.create_function(function_id, content, function_id=function_id)
+            return created.get("id", function_id), f"{label} installed ({function_id})."
+        if (existing.get("content") or "") != content:
+            api.update_function_content(function_id, function_id, content)
+            return function_id, f"{label} updated."
+        return function_id, f"{label} up to date."
     except ChatAPIError as exc:
-        logger.info("Tracing function sync skipped: %s", exc)
-        return f"Tracing function not synced: {exc}"
+        logger.info("%s sync skipped: %s", label, exc)
+        return None, f"{label} not synced: {exc}"
     except Exception:
-        # Tracing is additive; anything unexpected (odd API shape, chat down)
-        # must never break connection sync or startup.
-        logger.info("Tracing function sync skipped", exc_info=True)
-        return "Tracing function sync skipped (see logs)."
+        # Bundled functions are additive; anything unexpected (odd API shape, chat
+        # down) must never break connection sync or startup.
+        logger.info("%s sync skipped", label, exc_info=True)
+        return None, f"{label} sync skipped (see logs)."
 
-    # Bind the filter to every workspace model so OWUI actually invokes it.
-    if function_id:
-        _bind_tracing_filter_to_models(api, function_id)
 
-    return report  # type: ignore[return-value]
+def ensure_chat_functions() -> list[str]:
+    """Install or update every bundled Open WebUI function. Returns report lines.
+
+    Called at worker start, so a Studio upgrade that changes a bundled function
+    reaches Open WebUI on the next deploy without re-running the seed. Best-effort.
+    """
+    if not config.ENABLED:
+        return []
+    try:
+        api = ChatAPI.as_user(_admin())
+    except Exception as exc:  # noqa: BLE001 - startup must not fail on chat
+        return [f"Chat functions not synced: {exc}"]
+    return [ensure_rag_overrides_function(api)]
+
+
+def ensure_rag_overrides_function(api: ChatAPI | None = None) -> str:
+    """Install the RAG overrides filter and keep it active and global. Returns a report line.
+
+    Global means every model runs it, including models Studio never saw, so the
+    retrieval settings apply everywhere and do not depend on per-model binding.
+    Best-effort, like the other bundled-function installs.
+    """
+    api = api or ChatAPI.as_user(_admin())
+    function_id, report = _install_function(
+        api, RAG_OVERRIDES_FUNCTION_ID, RAG_OVERRIDES_FUNCTION_FILE, "RAG overrides filter"
+    )
+    if function_id is None:
+        return report
+    try:
+        fn = api.get_function(function_id)
+        if not fn.get("is_active"):
+            api.request("POST", f"/api/v1/functions/id/{function_id}/toggle")
+        if not fn.get("is_global"):
+            api.request("POST", f"/api/v1/functions/id/{function_id}/toggle/global")
+    except Exception:
+        logger.info("RAG overrides filter activation skipped", exc_info=True)
+        return "RAG overrides filter installed, but not activated (see logs)."
+    return report

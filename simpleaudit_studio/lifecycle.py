@@ -355,7 +355,7 @@ def _port_free(port: int) -> bool:
 
 
 def _requested_ports(public: int) -> dict:
-    return {"public": public, "internal": public + 1, "chat": public + 80, "pipelines": public + 1099}
+    return {"public": public, "internal": public + 1, "chat": public + 80}
 
 
 def _claimed_by_others(instance: Instance) -> tuple[set[int], set[str]]:
@@ -427,7 +427,6 @@ def start(instance: Instance, *, requested_port: int = 8000, explicit_port: bool
             "SIMPLEAUDIT_CHAT_INTERNAL_PORT": str(ports["internal"]),
             "SIMPLEAUDIT_CHAT_UPSTREAM": f"http://127.0.0.1:{ports['chat']}/chat",
             "SIMPLEAUDIT_BROWSER_PORT": str(ports["public"]),
-            "SIMPLEAUDIT_PIPELINES_PORT": str(ports["pipelines"]),
         })
         if instance.mode == "dev":
             os.environ["SIMPLEAUDIT_SQLITE_PATH"] = str(instance.db)

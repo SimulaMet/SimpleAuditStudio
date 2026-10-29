@@ -4727,12 +4727,10 @@ class AgentDetailView(ProjectMixin, TemplateView):
                 return None
 
         retrieval = default_retrieval_settings()
-        retrieval["search_mode"] = request.POST.get("search_mode", "semantic")
-        if retrieval["search_mode"] not in {"semantic", "hybrid"}:
-            retrieval["search_mode"] = "semantic"
+        mode = request.POST.get("search_mode", "semantic")
+        retrieval["search_mode"] = "hybrid" if mode in {"hybrid", "hybrid_balanced", "bm25_heavy"} else "semantic"
         retrieval["top_k"] = _positive_int("top_k", 5)
-        retrieval["rerank_enabled"] = request.POST.get("rerank_enabled") == "on"
-        retrieval["rerank_top_k"] = _positive_int("rerank_top_k", 4)
+        retrieval["final_k"] = _positive_int("final_k", 5)
         for field in ("relevance_threshold", "bm25_weight"):
             retrieval[field] = _optional_float(field)
         retrieval["full_context"] = request.POST.get("full_context") == "on"

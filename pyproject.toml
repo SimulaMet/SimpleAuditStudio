@@ -30,11 +30,6 @@ dependencies = [
     "opentelemetry-proto>=1.45.0",
     "caddyserver>=2.11.7",
     "watchfiles>=1.1.0",
-    # Chat tracing: the Pipelines filter service (chat/pipelines_service.py)
-    # forwards Open WebUI chat turns to Langfuse when SIMPLEAUDIT_PIPELINES is on.
-    "fastapi>=0.111,<1",
-    "uvicorn[standard]>=0.22",
-    "langfuse>=3.0.0",
 ]
 
 # package = false: Studio is run, not installed as a wheel (hatchling rejects

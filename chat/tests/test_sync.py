@@ -3,6 +3,7 @@
 Run:
     SIMPLEAUDIT_LOCAL_SQLITE=1 uv run manage.py test chat.tests.test_sync
 """
+import pathlib
 import time
 from unittest import mock
 from unittest.mock import patch
@@ -226,3 +227,47 @@ class PushNowTests(TestCase):
         with self.assertRaises(ChatAPIError) as caught:
             sync.push_now()
         self.assertIn("No superuser", str(caught.exception))
+
+
+class RagOverridesFunctionTests(TestCase):
+    def _api(self, existing: dict | None):
+        api = mock.MagicMock()
+        api.list_functions.return_value = [existing] if existing else []
+        api.get_function.return_value = existing or {}
+        return api
+
+    def test_missing_function_is_installed_then_activated_and_made_global(self):
+        api = self._api(None)
+        api.create_function.return_value = {"id": sync.RAG_OVERRIDES_FUNCTION_ID}
+        report = sync.ensure_rag_overrides_function(api)
+        api.create_function.assert_called_once()
+        self.assertEqual(api.create_function.call_args.kwargs["function_id"], sync.RAG_OVERRIDES_FUNCTION_ID)
+        api.request.assert_any_call("POST", f"/api/v1/functions/id/{sync.RAG_OVERRIDES_FUNCTION_ID}/toggle")
+        api.request.assert_any_call("POST", f"/api/v1/functions/id/{sync.RAG_OVERRIDES_FUNCTION_ID}/toggle/global")
+        self.assertIn("installed", report)
+
+    def test_current_active_global_function_is_left_alone(self):
+        existing = {
+            "id": sync.RAG_OVERRIDES_FUNCTION_ID,
+            "content": pathlib.Path(sync.RAG_OVERRIDES_FUNCTION_FILE).read_text(encoding="utf-8"),
+            "is_active": True,
+            "is_global": True,
+        }
+        api = self._api(existing)
+        report = sync.ensure_rag_overrides_function(api)
+        api.create_function.assert_not_called()
+        api.update_function_content.assert_not_called()
+        api.request.assert_not_called()
+        self.assertIn("up to date", report)
+
+    def test_a_chat_that_is_down_does_not_raise(self):
+        api = mock.MagicMock()
+        api.list_functions.side_effect = ChatAPIError("chat is down")
+        report = sync.ensure_rag_overrides_function(api)
+        self.assertIn("not synced", report)
+
+
+class EnsureChatFunctionsTests(TestCase):
+    def test_chat_off_installs_nothing(self):
+        with patch.object(sync.config, "ENABLED", False):
+            self.assertEqual(sync.ensure_chat_functions(), [])

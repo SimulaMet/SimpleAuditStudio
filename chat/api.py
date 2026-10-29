@@ -271,10 +271,10 @@ class ChatAPI:
             json={"id": function_id, "name": name, "content": content, "meta": {}},
         )
 
-    def create_function(self, name: str, content: str, function_id: str | None = None) -> dict[str, Any]:
-        """Create a function; ``id`` is Open WebUI's slug for it."""
+    def create_function(self, name: str, content: str, function_id: str) -> dict[str, Any]:
+        """Create a function; ``function_id`` is Open WebUI's slug for it."""
         payload = {
-            "id": function_id or "studio_langfuse_capture",
+            "id": function_id,
             "name": name,
             "content": content,
             "meta": {},
