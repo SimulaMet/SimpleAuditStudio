@@ -381,15 +381,9 @@ def _sync_chat_models() -> str:
     Signals keep it in step afterwards (chat/signals.py); this is the first one,
     for a chat that has just started or was off while connections changed.
     """
-    from chat.api import ChatAPIError
-    from chat.sync import push_now
+    from chat.sync import startup_sync
 
-    try:
-        result = push_now()
-    except ChatAPIError as exc:
-        return f"Models not synced to chat: {exc}"
-    kept = f", kept {result['kept']} added in chat" if result["kept"] else ""
-    return f"Synced {result['pushed']} model connection(s) to chat{kept}."
+    return " ".join(startup_sync())
 
 
 def _backfill_demo_chat() -> str:

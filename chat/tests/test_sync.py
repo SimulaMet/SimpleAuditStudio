@@ -267,7 +267,44 @@ class RagOverridesFunctionTests(TestCase):
         self.assertIn("not synced", report)
 
 
-class EnsureChatFunctionsTests(TestCase):
-    def test_chat_off_installs_nothing(self):
-        with patch.object(sync.config, "ENABLED", False):
-            self.assertEqual(sync.ensure_chat_functions(), [])
+class StartupSyncTests(TestCase):
+    def test_chat_off_does_nothing(self):
+        with patch.object(sync.config, "ENABLED", False), patch.object(sync, "push_now") as push:
+            self.assertEqual(sync.startup_sync(), [])
+        push.assert_not_called()
+
+    def test_chat_down_is_reported_not_raised(self):
+        with patch.object(sync.config, "ENABLED", True), patch.object(
+            sync, "push_now", side_effect=ChatAPIError("chat is down")
+        ):
+            self.assertEqual(sync.startup_sync(), ["Chat not synced at startup: chat is down"])
+
+
+class AgentOtlpCredentialTests(TestCase):
+    def setUp(self):
+        from infra.tests.factories import ProjectFactory, UserFactory
+        from model_registry.models import ModelConnection
+
+        self.admin = UserFactory(username="chat-admin", is_superuser=True)
+        self.project = ProjectFactory()
+        self.connection = ModelConnection.objects.create(
+            project=self.project, name="Open WebUI Agents", provider="openai",
+            base_url="http://open-webui/chat/api", enabled=True,
+        )
+
+    def test_chat_tracing_off_creates_nothing(self):
+        from model_registry.models import OTLPCredential
+
+        with patch.object(sync.config, "OTLP_ENABLED", False):
+            self.assertEqual(sync.ensure_agent_otlp_credentials(), 0)
+        self.assertFalse(OTLPCredential.objects.exists())
+
+    def test_creates_one_open_credential_and_is_idempotent(self):
+        from model_registry.models import OTLPCredential
+
+        with patch.object(sync.config, "OTLP_ENABLED", True), patch.object(sync.config, "ENABLED", True):
+            self.assertEqual(sync.ensure_agent_otlp_credentials(), 1)
+            self.assertEqual(sync.ensure_agent_otlp_credentials(), 0)
+        cred = OTLPCredential.objects.get(connection=self.connection)
+        self.assertEqual(cred.auth_mode, OTLPCredential.AuthMode.NONE)
+        self.assertTrue(cred.enabled)

@@ -384,6 +384,15 @@ integration consumers. The bundled filter `chat/openwebui_functions/studio_rag_o
 applies those per-agent retrieval settings (search mode, top K, final K, relevance
 threshold, BM25 weight, full context) to chats with attached files. Models without
 them use Open WebUI's global RAG settings.
+
+**Startup sync.** Studio pushes its whole chat state to Open WebUI at startup:
+connections, the bundled functions (the RAG overrides filter), OTLP credentials
+and every agent. It runs when the worker starts, when the compose web container
+boots (`python manage.py sync_chat_startup`), and when `manage.py dev` or `spin`
+starts. Connection saves also push on their own, and
+`python manage.py sync_chat_models` pushes connections on demand. A Studio upgrade
+that changes a bundled file reaches Open WebUI on the next start.
+
 Agent edit pages show a safe live projection of those global settings for
 context. When an audit targets an agent, the same projection is frozen into
 the run's `agent_config_snapshot`; it contains no provider credentials.

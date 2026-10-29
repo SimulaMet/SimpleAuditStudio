@@ -62,6 +62,7 @@ def push_now(payloads: list[dict] | None = None) -> dict[str, int]:
     # load and an empty section in Open WebUI's settings.
     api.disable_ollama()
     ensure_rag_overrides_function(api)
+    ensure_agent_otlp_credentials()
     _reconcile_model_ids(api, pushed)
     from chat.access_sync import reconcile_safely
 
@@ -162,6 +163,33 @@ RAG_OVERRIDES_FUNCTION_FILE = os.path.join(
 )
 
 
+def ensure_agent_otlp_credentials() -> int:
+    """Give each workspace's Open WebUI Agents connection an open OTLP credential.
+
+    Agent runs show the trace checkbox only when their connection has an enabled
+    OTLP credential, and Open WebUI exports its spans to Studio unauthenticated, so
+    a ``none`` credential is the right default here. Only runs when chat tracing is
+    on. Idempotent; returns how many credentials it created. Never raises.
+    """
+    if not (config.ENABLED and config.OTLP_ENABLED):
+        return 0
+    from model_registry.models import ModelConnection, OTLPCredential
+    from model_registry.otlp_services import create_credential
+
+    created = 0
+    try:
+        user = _admin()
+        connections = ModelConnection.objects.filter(name="Open WebUI Agents", enabled=True)
+        for conn in connections.select_related("project"):
+            if OTLPCredential.objects.filter(project=conn.project, connection=conn, enabled=True).exists():
+                continue
+            create_credential(project=conn.project, connection=conn, auth_mode="none", user=user)
+            created += 1
+    except Exception:
+        logger.info("Agent OTLP credential sync skipped", exc_info=True)
+    return created
+
+
 def _install_function(api: ChatAPI, function_id: str, path: str, label: str) -> tuple[str | None, str]:
     """Create or update one bundled function file. Returns ``(id, report line)``.
 
@@ -194,19 +222,36 @@ def _install_function(api: ChatAPI, function_id: str, path: str, label: str) -> 
         return None, f"{label} sync skipped (see logs)."
 
 
-def ensure_chat_functions() -> list[str]:
-    """Install or update every bundled Open WebUI function. Returns report lines.
+def sync_all_agents() -> int:
+    """Push every agent to Open WebUI. Returns how many were created or updated."""
+    from model_registry.models import Agent
+    from model_registry.services import sync_agent_to_openwebui
 
-    Called at worker start, so a Studio upgrade that changes a bundled function
-    reaches Open WebUI on the next deploy without re-running the seed. Best-effort.
+    user = _admin()
+    synced = 0
+    for agent in Agent.objects.select_related("project", "created_by"):
+        if sync_agent_to_openwebui(agent, user) != "skipped":
+            synced += 1
+    return synced
+
+
+def startup_sync() -> list[str]:
+    """The whole chat sync, run at startup. Returns report lines.
+
+    ``push_now`` covers connections, the bundled functions and the agent OTLP
+    credentials; this adds every agent. Best-effort: a chat that is down or still
+    starting is reported and skipped, never raised, so the process still starts.
     """
     if not config.ENABLED:
         return []
     try:
-        api = ChatAPI.as_user(_admin())
-    except Exception as exc:  # noqa: BLE001 - startup must not fail on chat
-        return [f"Chat functions not synced: {exc}"]
-    return [ensure_rag_overrides_function(api)]
+        result = push_now()
+        reports = [f"Synced {result['pushed']} model connection(s) to chat."]
+        reports.append(f"Synced {sync_all_agents()} agent(s) to chat.")
+    except Exception as exc:
+        logger.info("Startup chat sync skipped", exc_info=True)
+        return [f"Chat not synced at startup: {exc}"]
+    return reports
 
 
 def ensure_rag_overrides_function(api: ChatAPI | None = None) -> str:

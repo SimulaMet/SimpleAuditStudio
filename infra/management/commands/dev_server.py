@@ -70,16 +70,9 @@ def _sync_chat_models() -> str:
     keys, deleted connections), and a chat pinned to a connection whose key was
     not pushed answers "Not authenticated" until the next connection save.
     """
-    from chat.api import ChatAPIError
-    from chat.sync import push_now
+    from chat.sync import startup_sync
 
-    try:
-        result = push_now()
-    except ChatAPIError as exc:
-        return f"Models not synced to chat: {exc}"
-    kept = f", kept {result['kept']} added in chat" if result["kept"] else ""
-    message = f"Synced {result['pushed']} model connection(s) to chat{kept}."
-    return message
+    return " ".join(startup_sync())
 
 
 def _backfill_demo_chat() -> str:

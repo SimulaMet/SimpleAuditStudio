@@ -28,11 +28,11 @@ class Command(BaseCommand):
         self.stdout.write(self.style.NOTICE(f"Starting SimpleAudit worker (pool={options['pool']})..."))
         self.stdout.write(self.style.NOTICE(f"Hatchet server: {settings.HATCHET_SERVER_URL}"))
 
-        from chat.sync import ensure_chat_functions
+        from chat.sync import startup_sync
         from infra.worker import start_worker
 
-        # Bundled Open WebUI functions follow the code: refresh them on every worker start.
-        for line in ensure_chat_functions():
+        # Whole chat sync on every worker start: connections, functions, agents.
+        for line in startup_sync():
             self.stdout.write(self.style.NOTICE(line))
 
         try:
