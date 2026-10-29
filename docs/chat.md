@@ -233,6 +233,7 @@ unset: the iframe loads the same-origin `/chat/`.
 | `ENABLE_QUERIES_CACHE` | `true`                 | cache retrieval queries; on by default |
 | `ENABLE_KB_EXEC` | `true`                       | filesystem-style knowledge exec for agentic RAG; on by default |
 | `ENABLE_VERSION_UPDATE_CHECK` | `false`                | Open WebUI's "new version available" banner; off by default because Studio pins the build. Set `true` to show it |
+| `WEBUI_SECRET_KEY` | required, no default | Open WebUI's secret; encrypts stored provider keys. Keep it stable: a new value makes stored keys unreadable |
 
 ## Exporting Open WebUI's spans to Studio (OTLP)
 

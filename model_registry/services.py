@@ -32,12 +32,25 @@ PROVIDER_PRESETS = [
 
 
 def connection_api_key(conn) -> str:
-    """The connection's API key: the stored key first, else the env var it names."""
+    """The connection's API key: the stored key, else the env var it names.
+
+    A connection to Studio's own Open WebUI has neither: it uses the service
+    account's admin token, signed in fresh through the trusted headers.
+    """
     direct = (conn.api_key_direct or "").strip()
     if direct:
         return direct
     ref = (conn.secret_reference or "").strip()
-    return os.environ.get(ref, "") if ref else ""
+    if ref:
+        return os.environ.get(ref, "")
+    from chat import config as chat
+
+    base = (conn.base_url or "").strip().rstrip("/")
+    if chat.ENABLED and base.startswith(chat.UPSTREAM.rstrip("/")):
+        from chat.api import service_token
+
+        return service_token() or ""
+    return ""
 
 
 def models_url(conn) -> str:

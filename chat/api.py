@@ -45,6 +45,25 @@ class ChatAPIError(RuntimeError):
     """Open WebUI refused or could not be reached."""
 
 
+def service_token() -> str | None:
+    """A token for Studio's service account (admin), from the trusted-header sign-in.
+
+    Open WebUI takes the role from the trusted headers on each sign-in, so the
+    account is admin here by design: the runner calls models and agents as admin.
+    None when the chat is unreachable; callers treat that as "no key".
+    """
+    identity = {
+        chat.EMAIL_HEADER: chat.SERVICE_EMAIL,
+        chat.NAME_HEADER: chat.SERVICE_NAME,
+        chat.ROLE_HEADER: "admin",
+    }
+    try:
+        return (ChatAPI(identity).sign_in() or {}).get("token") or None
+    except Exception:
+        logger.info("Service sign-in to Open WebUI failed", exc_info=True)
+        return None
+
+
 class ChatAPI:
     """An Open WebUI session for one Studio user.
 
