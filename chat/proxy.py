@@ -712,12 +712,17 @@ def _locate_owui_interpreter(home: Path) -> str:
 
 
 def _secret_key(home: Path) -> str:
-    """Open WebUI's signing key — generated once, persisted.
+    """Open WebUI's signing key: the shared ``WEBUI_SECRET_KEY`` if set, else one generated once and persisted.
 
-    A direct uvicorn launch has no `serve` to persist the key, and a fresh
-    random key on every start would sign every session out; the file plays
-    the role ``.webui_secret_key`` serves for `open-webui serve`.
+    A shared key (set in `.env` for `manage.py dev`, or exported for `spin`) lets
+    several installs read the same stored provider keys. Without it, a direct
+    uvicorn launch has no `serve` to persist the key, and a fresh random key on
+    every start would sign every session out; the file plays the role
+    ``.webui_secret_key`` serves for `open-webui serve`.
     """
+    shared = os.environ.get("WEBUI_SECRET_KEY", "").strip()
+    if shared:
+        return shared
     key_file = home / "webui_secret_key"
     try:
         if key_file.exists():

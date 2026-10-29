@@ -95,6 +95,11 @@ EMBED_ADMIN_FLAG_TTL = int(os.environ.get("SIMPLEAUDIT_CHAT_EMBED_ADMIN_TTL", "3
 EMAIL_HEADER = "X-Studio-Email"
 NAME_HEADER = "X-Studio-Name"
 ROLE_HEADER = "X-Studio-Role"
+
+#: Studio's own Open WebUI account: the runner signs in as it (admin, via the
+#: trusted headers) to call agents and models on anyone's behalf. Not a secret.
+SERVICE_EMAIL = os.environ.get("SIMPLEAUDIT_CHAT_SERVICE_EMAIL", "studio-audit@studio.local")
+SERVICE_NAME = "Studio audit"
 #: Every header the proxy injects — it must strip all of them off the incoming
 #: request before adding its own, or a client could forge them.
 TRUSTED_HEADERS = (EMAIL_HEADER, NAME_HEADER, ROLE_HEADER)

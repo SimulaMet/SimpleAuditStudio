@@ -96,6 +96,8 @@ services:
       dockerfile: deploy/compose/Dockerfile
     env_file: .env
     environment:
+      # The agent connection's key is signed in against Open WebUI's internal address.
+      SIMPLEAUDIT_CHAT_UPSTREAM: http://open-webui:8080/chat
       POSTGRES_HOST: postgres
       HATCHET_SERVER_URL: http://hatchet-server:8888
       HATCHET_GRPC_URL: hatchet-server:7077
@@ -194,6 +196,9 @@ services:
       WEBUI_AUTH_TRUSTED_NAME_HEADER: X-Studio-Name
       WEBUI_AUTH_TRUSTED_ROLE_HEADER: X-Studio-Role
       ENABLE_SIGNUP: "false"
+      # Required. Open WebUI encrypts stored provider keys with this secret; if it
+      # changes (for example, a generated one lost on recreate) those keys stop working.
+      WEBUI_SECRET_KEY: ${WEBUI_SECRET_KEY:?set WEBUI_SECRET_KEY in .env (e.g. openssl rand -hex 32)}
       # Retrieval defaults Studio always wants (hybrid search, cached queries, KB exec).
       ENABLE_RAG_HYBRID_SEARCH: ${ENABLE_RAG_HYBRID_SEARCH:-true}
       ENABLE_QUERIES_CACHE: ${ENABLE_QUERIES_CACHE:-true}
@@ -208,14 +213,14 @@ services:
       # HOST/PORT and launches uvicorn itself.
       HOST: "0.0.0.0"
       PORT: ${SIMPLEAUDIT_CHAT_UPSTREAM_PORT:-8080}
-      # Optional: export Open WebUI's spans to Studio's OTLP listener. Off by
-      # default — set SIMPLEAUDIT_CHAT_OTLP=true to enable. Open WebUI passes
+      # Export Open WebUI's spans to Studio's OTLP listener. On by default —
+      # set SIMPLEAUDIT_CHAT_OTLP=false to opt out. Open WebUI passes
       # OTEL_EXPORTER_OTLP_ENDPOINT to its HTTP exporter as-is, so this must be
       # the full Studio ingestion URL. Exports
       # unauthenticated by default (matches an enabled "none" credential); for a
       # basic/bearer credential set OTEL_BASIC_AUTH_USERNAME / OTEL_BASIC_AUTH_PASSWORD.
-      ENABLE_OTEL: ${SIMPLEAUDIT_CHAT_OTLP:-false}
-      ENABLE_OTEL_TRACES: ${SIMPLEAUDIT_CHAT_OTLP:-false}
+      ENABLE_OTEL: ${SIMPLEAUDIT_CHAT_OTLP:-true}
+      ENABLE_OTEL_TRACES: ${SIMPLEAUDIT_CHAT_OTLP:-true}
       OTEL_OTLP_SPAN_EXPORTER: "http"
       OTEL_EXPORTER_OTLP_ENDPOINT: ${SIMPLEAUDIT_CHAT_OTLP_ENDPOINT:-http://web:8000/otlp/v1/traces}
       OTEL_SERVICE_NAME: ${SIMPLEAUDIT_CHAT_OTLP_SERVICE_NAME:-open-webui}
