@@ -106,7 +106,7 @@ if (typeof base === 'undefined') {
     // weight in every Studio surface: the button goes in the embed and on
     // the top-level workspace pages, and the modal is hidden if it is
     // opened (the Private/Public state itself stays).
-    for (const b of document.querySelectorAll('main#main-content button')) {
+    for (const b of document.querySelectorAll('main button')) {
       if ((b.textContent || '').trim() === 'Access' &&
           b.style.display !== 'none') {
         b.style.display = 'none';
@@ -126,7 +126,7 @@ if (typeof base === 'undefined') {
     // card shown in empty workspace states: pure branding, no function here.
     // Find the promo link, then climb to the smallest ancestor that also
     // holds the credit text — that is the card — and hide it.
-    var link = document.querySelector('main#main-content a[href*="openwebui.com"]');
+    var link = document.querySelector('main a[href*="openwebui.com"]');
     if (!link) {
       return;
     }
@@ -193,7 +193,7 @@ if (typeof base === 'undefined') {
     var attempts = 0;
     var poll = setInterval(function () {
       attempts += 1;
-      var btns = document.querySelectorAll('main#main-content nav button');
+      var btns = document.querySelectorAll('main nav button');
       for (var i = 0; i < btns.length; i++) {
         if (btns[i].textContent.trim() === 'Create') {
           clearInterval(poll);
