@@ -14,11 +14,17 @@ Two kinds of endpoints live here:
 """
 from __future__ import annotations
 
+import atexit
 import base64
 import gzip
 import json
+import logging
+import threading
 
+from django.conf import settings
+from django.db import close_old_connections
 from django.http import JsonResponse
+from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
@@ -37,6 +43,7 @@ from model_registry.models import ModelConnection, OTLPCredential, OtlpSpan
 # consumable by ``select_spans``. (A persistent backend can replace this
 # without changing the endpoint contract.)
 _SPAN_STORE: dict[str, SpanStore] = {}
+IN_MEMORY_SPAN_CAP = 20_000  # per target; the DB holds the durable copy
 
 
 def _store_for_target(target_id: str) -> SpanStore:
@@ -74,9 +81,14 @@ def get_spans_for_trace_db(target_id: str, trace_id: str) -> list[dict]:
     while a *separate* Hatchet worker runs the audit. The DB row is what lets
     the worker read what the target exported, so this is the source the studio
     trace mode's provider actually fetches from in production.
+
+    The read is also the claim: asking for a trace keeps its spans (held ones
+    are promoted) and later arrivals for it are stored without a hold.
     """
     if not trace_id:
         return []
+    flush_pending(target_id)
+    otlp.claim_traces(target_id, {trace_id})
     rows = OtlpSpan.objects.filter(target_id=target_id, trace_id=trace_id).order_by("start_time", "span_id")
     return [
         {
@@ -94,34 +106,151 @@ def get_spans_for_trace_db(target_id: str, trace_id: str) -> list[dict]:
     ]
 
 
-def _persist_spans(target_id: str, raw_spans: list[dict], capture_level: str = "structural") -> None:
-    """Idempotently persist normalized spans to the DB for cross-process reads.
+# Write-behind buffer. Ingest adds rows here; a one-shot timer writes everything
+# buffered in one bulk upsert per target, so DB writes scale with time, not with
+# export requests. Reads in this process flush first, so they see their own writes.
+# Spans in the buffer are not visible to other processes until flushed (at most
+# ``OTLP_SPAN_FLUSH_INTERVAL_S`` later) and are lost if the process dies first.
+_PENDING: dict[tuple[str, str, str], OtlpSpan] = {}
+_PENDING_LOCK = threading.Lock()
+_flush_timer: threading.Timer | None = None
+MAX_PENDING_SPANS = 50_000
 
-    A persistence failure must never fail the OTLP export (the target's exporter
-    would retry and flood); we log and keep the in-memory copy authoritative.
+
+def _flush_interval() -> float:
+    return float(getattr(settings, "OTLP_SPAN_FLUSH_INTERVAL_S", 1.0))
+
+
+def buffer_has_room(incoming: int) -> bool:
+    """Whether ``incoming`` more spans fit in the write buffer right now.
+
+    The receiver checks this before accepting an export: a full buffer answers
+    429 so the exporter retries, instead of acknowledging spans we then drop.
+    """
+    if _flush_interval() <= 0:
+        return True
+    with _PENDING_LOCK:
+        return len(_PENDING) + incoming <= MAX_PENDING_SPANS
+
+
+def _buffer_spans(rows: list[OtlpSpan]) -> None:
+    interval = _flush_interval()
+    if interval <= 0:
+        _write_rows(rows)
+        return
+    global _flush_timer
+    with _PENDING_LOCK:
+        for row in rows:
+            _PENDING[(row.target_id, row.trace_id, row.span_id)] = row
+        overflow = len(_PENDING) - MAX_PENDING_SPANS
+        for key in list(_PENDING)[:max(overflow, 0)]:
+            del _PENDING[key]
+        if overflow > 0:
+            logging.getLogger(__name__).warning("OTLP span buffer full: dropped %d oldest spans", overflow)
+        if _flush_timer is None:
+            _flush_timer = threading.Timer(interval, _timer_flush)
+            _flush_timer.daemon = True
+            _flush_timer.start()
+
+
+def flush_pending(target_id: str | None = None) -> None:
+    """Write buffered spans (all targets, or one) to the DB now."""
+    with _PENDING_LOCK:
+        keys = [k for k in _PENDING if target_id is None or k[0] == target_id]
+        batch = [_PENDING.pop(k) for k in keys]
+    if not batch:
+        return
+    try:
+        _write_rows(batch)
+    except Exception:
+        logging.getLogger(__name__).exception("OTLP span flush failed; will retry")
+        with _PENDING_LOCK:
+            for row in batch:
+                _PENDING.setdefault((row.target_id, row.trace_id, row.span_id), row)
+
+
+def _timer_flush() -> None:
+    global _flush_timer
+    try:
+        close_old_connections()
+        flush_pending()
+    finally:
+        with _PENDING_LOCK:
+            _flush_timer = None
+            retry = bool(_PENDING)
+        if retry:
+            _buffer_spans([])  # re-arm the timer for the rows that failed
+        close_old_connections()
+
+
+atexit.register(flush_pending)
+
+
+def _write_rows(rows: list[OtlpSpan]) -> None:
+    """Upsert buffered rows. Held or kept is decided per trace at write time."""
+    by_target: dict[str, list[OtlpSpan]] = {}
+    for row in rows:
+        by_target.setdefault(row.target_id, []).append(row)
+    hold_until = timezone.now() + otlp.SPAN_HOLD_TTL
+    for target_id, group in by_target.items():
+        trace_ids = {row.trace_id for row in group}
+        claimed = otlp.claimed_trace_ids(target_id, trace_ids)
+        for row in group:
+            row.held_until = None if row.trace_id in claimed else hold_until
+        # held_until is not in update_fields: a conflicting row keeps the state it
+        # already has, so a promoted (claimed) span is never re-held by a repeat.
+        OtlpSpan.objects.bulk_create(
+            group,
+            batch_size=500,
+            update_conflicts=True,
+            unique_fields=["target_id", "trace_id", "span_id"],
+            update_fields=["name", "kind", "parent_span_id", "start_time", "end_time", "status", "attributes"],
+        )
+        # A claim may land between the check above and the insert: promote again.
+        otlp.promote_claimed_spans(target_id, trace_ids)
+
+
+def _persist_spans(target_id: str, raw_spans: list[dict], capture_level: str = "structural") -> None:
+    """Normalize an export and queue its spans for the write-behind buffer.
+
+    Rows are upserted later, in bulk, by ``flush_pending`` (keyed on target,
+    trace and span id). Queueing never fails the OTLP export.
     """
     from audits.agentic.privacy import sanitize_span
 
+    rows: dict[tuple[str, str, str], OtlpSpan] = {}
     for raw in raw_spans:
         raw = sanitize_span(raw, capture_level)
         span = normalize_span(raw)
         span_id = span.get("span_id") or ""
-        if not span_id:
+        trace_id = span.get("trace_id") or ""
+        # Without a trace id no run can ever claim the span: nothing to keep.
+        if not span_id or not trace_id:
             continue
-        OtlpSpan.objects.update_or_create(
+        # A request may repeat a span: keep the last copy, as an upsert would.
+        rows[(target_id, trace_id, span_id)] = OtlpSpan(
             target_id=target_id,
-            trace_id=span.get("trace_id") or "",
+            trace_id=trace_id,
             span_id=span_id,
-            defaults={
-                "name": (span.get("name") or "span")[:500],
-                "kind": (span.get("kind") or "CHAIN")[:50],
-                "parent_span_id": span.get("parent_span_id"),
-                "start_time": span.get("start_time"),
-                "end_time": span.get("end_time"),
-                "status": (span.get("status") or "OK")[:20],
-                "attributes": span.get("attributes") or {},
-            },
+            name=(span.get("name") or "span")[:500],
+            kind=(span.get("kind") or "CHAIN")[:50],
+            parent_span_id=span.get("parent_span_id"),
+            start_time=span.get("start_time"),
+            end_time=span.get("end_time"),
+            status=(span.get("status") or "OK")[:20],
+            attributes=span.get("attributes") or {},
         )
+    _buffer_spans(list(rows.values()))
+
+
+def _trim_store(target_id: str) -> None:
+    """Keep the in-memory bucket to its newest ``IN_MEMORY_SPAN_CAP`` spans."""
+    store = _SPAN_STORE.get(target_id)
+    if store is None or len(store) <= IN_MEMORY_SPAN_CAP:
+        return
+    kept = SpanStore()
+    kept.add_many(store.all()[-IN_MEMORY_SPAN_CAP:])
+    _SPAN_STORE[target_id] = kept
 
 
 def clear_target_spans(target_id: str) -> None:
@@ -262,6 +391,13 @@ def otlp_traces(request):
         # Store only the spans the audit reads (tool, LLM, retrieval, ...);
         # transport and framework spans are most of an export and are dropped here.
         raw_spans = select_auditable_spans(raw_spans)
+        if not buffer_has_room(len(raw_spans)):
+            # Nothing from this export is kept: the exporter retries the whole batch.
+            return JsonResponse(
+                {"error": {"code": "busy", "message": "Span buffer full; retry later."}},
+                status=429,
+                headers={"Retry-After": "1"},
+            )
         for span in raw_spans:
             attrs = span.get("attributes")
             if attrs is None:
@@ -271,8 +407,10 @@ def otlp_traces(request):
 
         captured_spans = apply_content_capture_level(raw_spans, cred.capture_level)
         _store_for_target(cred.target_id).add_many(captured_spans)
+        _trim_store(cred.target_id)
         try:
             _persist_spans(cred.target_id, captured_spans, cred.capture_level)
+            otlp.maybe_prune_spans()
         except Exception:
             import logging
 

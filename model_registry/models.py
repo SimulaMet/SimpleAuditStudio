@@ -135,6 +135,9 @@ class OtlpSpan(models.Model):
     end_time = models.FloatField(null=True, blank=True)
     status = models.CharField(max_length=20, default="OK")
     attributes = models.JSONField(default=dict, blank=True)
+    # Null once the trace is claimed (a run asked for it): kept. Set while
+    # unclaimed: a short hold, pruned at this time if nobody claims the trace.
+    held_until = models.DateTimeField(null=True, blank=True, db_index=True)
     received_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -148,6 +151,25 @@ class OtlpSpan(models.Model):
 
     def __str__(self) -> str:
         return f"OtlpSpan({self.target_id}/{self.trace_id}/{self.span_id} {self.name})"
+
+
+class OtlpTraceClaim(models.Model):
+    """A trace id a run asked the listener for. Its spans are kept, not held.
+
+    Written per turn, when the run records the turn's trace id, and again when
+    it fetches its evidence (``get_spans_for_trace_db``). Spans that arrived
+    earlier are promoted; later ones are stored directly.
+    """
+
+    target_id = models.CharField(max_length=250)
+    trace_id = models.CharField(max_length=64)
+    claimed_at = models.DateTimeField(db_index=True)
+
+    class Meta:
+        db_table = "core_otlp_trace_claim"
+        constraints = [
+            models.UniqueConstraint(fields=["target_id", "trace_id"], name="unique_claim_per_target_trace"),
+        ]
 
 
 class OTLPCredential(models.Model):

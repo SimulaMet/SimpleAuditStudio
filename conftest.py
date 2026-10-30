@@ -7,6 +7,14 @@ unchanged by pytest-django. The environment the settings module needs is set in
 slow"`` works the same way ``manage.py test --exclude-tag slow`` does.
 """
 
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _synchronous_otlp_span_writes(settings):
+    """Write OTLP spans at once: a background flush timer must not outlive a test."""
+    settings.OTLP_SPAN_FLUSH_INTERVAL_S = 0
+
 
 def pytest_collection_modifyitems(items):
     """Copy Django ``@tag`` values onto pytest items as markers.

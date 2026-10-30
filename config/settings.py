@@ -204,6 +204,10 @@ AUTH_USER_MODEL = "accounts.User"
 # Distinct from DEMO_MODE (HF Spaces) — this is purely local dev convenience.
 MINIMAL_CONFIG = os.environ.get("SIMPLEAUDIT_MINIMAL", "").strip() == "1"
 
+# Seconds OTLP spans wait in the receiver's write-behind buffer before one bulk
+# DB write. 0 writes each export at once (the test suite uses 0).
+OTLP_SPAN_FLUSH_INTERVAL_S = 1.0
+
 # SQLite is shared by the web server and worker threads: WAL lets reads run
 # during writes, IMMEDIATE takes the write lock up front (no upgrade deadlocks),
 # and the timeout waits for a busy lock instead of failing.

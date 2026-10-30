@@ -17,9 +17,13 @@ creation so the user can copy it into the target's environment.
 from __future__ import annotations
 
 import secrets
+import time
 from dataclasses import dataclass
+from datetime import timedelta
 
 from django.db import transaction
+from django.db.models import Exists, OuterRef
+from django.utils import timezone
 
 # The credential primitive (salted-hash + constant-time verify + header
 # parsing + secret generation) lives in the core so the library and Studio
@@ -34,7 +38,18 @@ from simpleaudit.tracing.auth import (
     verify_secret,
 )
 
-from model_registry.models import OTLPCredential
+from model_registry.models import OTLPCredential, OtlpSpan, OtlpTraceClaim
+
+# Span retention. A run claims each turn's trace id as the turn records it, so a
+# held span only waits for its turn's claim (seconds, plus the turn's own length).
+# Unclaimed traces (no run asked for them) are pruned after ``SPAN_HOLD_TTL``.
+# Claimed traces are kept for ``CLAIMED_SPAN_RETENTION``.
+SPAN_HOLD_TTL = timedelta(minutes=10)
+SPAN_HOLD_CAP = 20_000  # held (unclaimed) spans kept per target, newest first
+CLAIMED_SPAN_RETENTION = timedelta(days=30)
+PRUNE_INTERVAL_S = 60.0
+
+_last_prune = 0.0
 
 
 def _make_target_id(connection) -> str:
@@ -202,3 +217,81 @@ def otlp_open_env_vars(*, endpoint: str) -> list[tuple[str, str]]:
         ("OTEL_EXPORTER_OTLP_ENDPOINT", endpoint),
         ("OTEL_EXPORTER_OTLP_PROTOCOL", "http/json"),
     ]
+
+
+# ─── Span retention (claimed vs held) ───────────────────────────────────────
+
+
+def claimed_trace_ids(target_id: str, trace_ids: set[str]) -> set[str]:
+    """The subset of ``trace_ids`` a run has claimed for ``target_id``."""
+    if not trace_ids:
+        return set()
+    return set(
+        OtlpTraceClaim.objects.filter(target_id=target_id, trace_id__in=trace_ids).values_list(
+            "trace_id", flat=True
+        )
+    )
+
+
+def promote_claimed_spans(target_id: str, trace_ids: set[str]) -> None:
+    """Keep held spans of claimed traces (clear ``held_until``)."""
+    claimed = claimed_trace_ids(target_id, trace_ids)
+    if claimed:
+        OtlpSpan.objects.filter(target_id=target_id, trace_id__in=claimed, held_until__isnull=False).update(
+            held_until=None
+        )
+
+
+def claim_traces(target_id: str, trace_ids: set[str]) -> None:
+    """Record that a run wants these traces: promote what arrived, keep the rest."""
+    trace_ids = {t for t in trace_ids if t}
+    if not trace_ids:
+        return
+    with transaction.atomic():
+        now = timezone.now()
+        OtlpTraceClaim.objects.bulk_create(
+            [OtlpTraceClaim(target_id=target_id, trace_id=t, claimed_at=now) for t in trace_ids],
+            ignore_conflicts=True,
+        )
+        promote_claimed_spans(target_id, trace_ids)
+
+
+def prune_spans(now=None) -> None:
+    """Drop expired holds, cap held spans per target, and drop stale kept spans.
+
+    Kept spans of a trace are removed once its claim is older than
+    ``CLAIMED_SPAN_RETENTION`` and nothing newer claims it; spans with no claim
+    at all (legacy rows, traces never claimed) age out the same way.
+    """
+    now = now or timezone.now()
+    cutoff = now - CLAIMED_SPAN_RETENTION
+
+    OtlpSpan.objects.filter(held_until__lt=now).delete()
+
+    held = OtlpSpan.objects.filter(held_until__isnull=False)
+    for target_id in held.values_list("target_id", flat=True).distinct():
+        overflow = list(
+            OtlpSpan.objects.filter(target_id=target_id, held_until__isnull=False)
+            .order_by("-received_at", "-id")
+            .values_list("id", flat=True)[SPAN_HOLD_CAP:]
+        )
+        for start in range(0, len(overflow), 500):
+            OtlpSpan.objects.filter(id__in=overflow[start : start + 500]).delete()
+
+    fresh_claim = OtlpTraceClaim.objects.filter(
+        target_id=OuterRef("target_id"), trace_id=OuterRef("trace_id"), claimed_at__gte=cutoff
+    )
+    OtlpSpan.objects.filter(
+        held_until__isnull=True, received_at__lt=cutoff
+    ).filter(~Exists(fresh_claim)).delete()
+
+    OtlpTraceClaim.objects.filter(claimed_at__lt=cutoff).delete()
+
+
+def maybe_prune_spans() -> None:
+    """Run ``prune_spans`` at most once per ``PRUNE_INTERVAL_S`` per process."""
+    global _last_prune
+    if time.monotonic() - _last_prune < PRUNE_INTERVAL_S:
+        return
+    _last_prune = time.monotonic()
+    prune_spans()
