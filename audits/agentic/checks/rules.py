@@ -232,6 +232,7 @@ _EVALUATORS = {
 
 def rule_checks(trajectory: AgentTrajectory, rules: list[dict]) -> list[CheckResult]:
     """One check per rule. Rules must already pass validate_rules."""
+    from ..rule_engine import compile_preset, evaluate_check, evaluate_preset
     from ..rules import normalize_rules
 
     out = []
@@ -240,5 +241,10 @@ def rule_checks(trajectory: AgentTrajectory, rules: list[dict]) -> list[CheckRes
         if not trajectory.steps:
             out.append(result(f"rule.{index}.{rule_type}", "rules", "INCONCLUSIVE", "No trace evidence captured."))
             continue
-        out.append(_EVALUATORS[rule_type](index, rule, trajectory))
+        if rule_type == "check":
+            out.append(evaluate_check(index, rule, trajectory))
+        elif compile_preset(rule) is not None:
+            out.append(evaluate_preset(index, rule, trajectory))
+        else:
+            out.append(_EVALUATORS[rule_type](index, rule, trajectory))
     return out

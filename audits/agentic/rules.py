@@ -122,6 +122,12 @@ def validate_rules(rules: Any) -> list[RuleError]:
             errors.append(RuleError(index, "", "each rule must be an object"))
             continue
         rule_type = rule.get("type")
+        if rule_type == "check":
+            from .rule_engine import validate_check
+
+            for problem in validate_check(rule):
+                errors.append(RuleError(index, "check", problem))
+            continue
         if rule_type not in RULE_TYPES:
             errors.append(RuleError(index, str(rule_type), f"unknown rule type {rule_type!r}"))
             continue
@@ -160,11 +166,16 @@ RULE_LABELS = {
     "retrieval": "Must retrieve from knowledge",
     "errors": "Limit error steps",
     "retries": "Limit retries after a failure",
+    "check": "Custom check",
 }
 
 
 def describe_rule(rule: dict) -> str:
     """One readable line for a rule: its label and the values it was given."""
+    if rule.get("type") == "check":
+        from .rule_engine import describe_check
+
+        return describe_check(rule)
     label = RULE_LABELS.get(rule.get("type", ""), str(rule.get("type", "rule")))
     parts = []
     for key, value in rule.items():
