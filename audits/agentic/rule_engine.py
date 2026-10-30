@@ -243,7 +243,7 @@ def evaluate_check(index: int, rule: dict, trajectory: AgentTrajectory, label: s
     if rule.get("check") not in CHECKS:
         return result(check_id, "rules", "INCONCLUSIVE", unsupported_text(rule))
     if not trajectory.steps:
-        return result(check_id, "rules", "INCONCLUSIVE", "No trace evidence captured.")
+        return result(check_id, "rules", "INCONCLUSIVE", "Trace was on, but the target exported no OTLP spans.")
     select = rule["select"]
     kind = select["kind"]
     conditions = select.get("where", [])

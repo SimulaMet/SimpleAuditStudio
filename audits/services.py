@@ -215,6 +215,7 @@ def create_audit_run(
     gen_config_override: dict | None = None,
     system_prompt_version=None,
     trace_config: dict | None = None,
+    trace_requested: bool = False,
     monitor=None,
     experiment=None,
     agent=None,
@@ -283,6 +284,10 @@ def create_audit_run(
             # policy; only persist an explicit non-default capture choice.
             if credential.capture_level != "structural":
                 trace_config["content_capture"] = credential.capture_level
+        elif trace_requested:
+            # The trace box is ticked but nothing can be exported (no OTLP credential):
+            # the run is traced, captures no spans, and the agentic audit reports that.
+            trace_config = {"mode": "studio"}
         else:
             trace_config = {}
 

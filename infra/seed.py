@@ -423,6 +423,7 @@ def _push_to_openwebui(api, log, agent=None) -> dict:
     import hashlib
     from pathlib import Path
 
+    from accounts.services import get_site_setting, set_site_setting
     from chat.api import ChatAPIError
 
     log(f"Pushing demo knowledge base to Open WebUI ({api.base_url}).")
@@ -478,6 +479,19 @@ def _push_to_openwebui(api, log, agent=None) -> dict:
         content = path.read_bytes()
         digest = hashlib.sha256(content).hexdigest()
         linked_id = linked_files.get(filename)
+        # This Open WebUI build does not list the KB's files, so the last push is
+        # recorded here: same bytes in the same KB means nothing to upload. Every
+        # upload makes OWUI re-index, so re-uploading on each start is what loops.
+        record_key = f"owui_demo_doc:{filename}"
+        recorded = get_site_setting(record_key) or {}
+        if kb_id and recorded.get("sha256") == digest and recorded.get("kb_id") == kb_id:
+            log(f"  • doc unchanged since last push, skipping upload: {filename}")
+            assets.append({
+                "asset": f"doc:{filename}",
+                "external_id": recorded.get("file_id") or "",
+                "verified": True,
+            })
+            continue
         # An already-linked file with matching bytes is verified without an
         # upload attempt (OWUI rejects duplicate content with HTTP 400, which
         # would otherwise mark the asset unverified on every re-run).
@@ -492,6 +506,7 @@ def _push_to_openwebui(api, log, agent=None) -> dict:
             file_id = file_row.get("id") if isinstance(file_row, dict) else None
             if file_id and kb_id:
                 api.add_file_to_knowledge_base(kb_id, file_id)
+                set_site_setting(record_key, {"sha256": digest, "kb_id": kb_id, "file_id": file_id})
                 log(f"  • uploaded + linked {filename}")
                 assets.append(
                     {"asset": f"doc:{filename}", "external_id": file_id, "verified": True}
@@ -512,6 +527,8 @@ def _push_to_openwebui(api, log, agent=None) -> dict:
                 # null), so name-level read-back is unavailable — record the
                 # verification level honestly.
                 log(f"  • doc content present in OWUI store (duplicate rejected); per-file listing unavailable in this build: {filename}")
+                if kb_id:
+                    set_site_setting(record_key, {"sha256": digest, "kb_id": kb_id, "file_id": linked_id})
                 assets.append(
                     {"asset": f"doc:{filename}", "external_id": linked_id or "", "verified": True}
                 )

@@ -1451,6 +1451,7 @@ class NewExperimentView(ProjectMixin, TemplateView):
                         system_prompt_version=run_spec.get("system_prompt_version"),
                         agent=run_spec.get("agent"),
                         trace_config={} if run_spec.get("target_trace") is False else None,
+                        trace_requested=run_spec.get("target_trace") is True,
                         experiment=experiment,
                     )
                 if repeat:
@@ -2823,6 +2824,9 @@ class OTLPCredentialCreateView(ProjectMixin, View):
         auth_mode = (post.get("auth_mode") or "basic").strip().lower()
         if auth_mode not in ("none", "basic", "bearer"):
             return JsonResponse({"ok": False, "error": "auth_mode must be 'none', 'basic', or 'bearer'."}, status=400)
+        if auth_mode == "none":
+            # No-auth OTLP is set up by Studio for its own agents, never picked by a user.
+            return JsonResponse({"ok": False, "error": "Use basic or bearer authentication."}, status=400)
         try:
             new_cred = otlp.create_credential(project=request.project, connection=conn, auth_mode=auth_mode, user=request.user)
         except ValueError as e:

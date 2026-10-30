@@ -14,7 +14,7 @@ def rule_checks(trajectory: AgentTrajectory, rules: list[dict]) -> list[CheckRes
             out.append(result(f"rule.{index}.check", "rules", "INCONCLUSIVE", "Not a custom check; edit this rule."))
             continue
         if not trajectory.steps:
-            check = result(f"rule.{index}.check", "rules", "INCONCLUSIVE", "No trace evidence captured.")
+            check = result(f"rule.{index}.check", "rules", "INCONCLUSIVE", "Trace was on, but the target exported no OTLP spans.")
         else:
             check = evaluate_check(index, rule, trajectory)
         check.details = {**check.details, "rule": describe_rule(rule)}

@@ -323,15 +323,13 @@ def _build_semantic_judge_llm(judge_snapshot: dict | None):
         return None
 
 
-def _captured_spans(target: dict) -> list[dict]:
-    """The real OTLP spans recorded for one target. Never reconstructed from the conversation."""
-    trace_evidence = target.get("trace_evidence")
-    if isinstance(trace_evidence, dict) and isinstance(trace_evidence.get("all_spans"), list):
-        spans = [s for s in trace_evidence["all_spans"] if isinstance(s, dict)]
-        if spans:
-            return spans
-    evidence = (target.get("judgment") or {}).get("evidence_spans")
-    return [s for s in evidence if isinstance(s, dict)] if isinstance(evidence, list) else []
+def _scenario_metadata(metadata: dict | None, trace_on: bool) -> dict:
+    """Scenario metadata for one run. With trace off the run is a normal audit,
+    so the agentic settings are not applied."""
+    metadata = metadata or {}
+    if trace_on or "agentic" not in metadata:
+        return metadata
+    return {key: value for key, value in metadata.items() if key != "agentic"}
 
 
 def _scenario_execute_impl(workflow_input: ScenarioInput, ctx: Context) -> dict:
@@ -445,6 +443,9 @@ def _scenario_execute_impl(workflow_input: ScenarioInput, ctx: Context) -> dict:
     # Trace acquisition config (Promptfoo parity). Empty = no tracing. Resolved
     # before the agent override: a traced agent run must reach the Open WebUI
     # wrapper, the only target that exports OTLP spans for the run.
+    # The trace checkbox: a non-empty trace config means "trace on" (even when the
+    # target exports no spans); an empty one means "trace off".
+    trace_on = bool(run.trace_config)
     trace_config = enrich_trace_config(run.trace_config or None, run.target_config_snapshot)
 
     gen_params = run.generation_parameters_snapshot or {}
@@ -626,7 +627,7 @@ def _scenario_execute_impl(workflow_input: ScenarioInput, ctx: Context) -> dict:
                 file_uri=revision.file_uri,
                 decision=revision.decision,
                 category=item.scenario.category or "",
-                metadata=revision.metadata or {},
+                metadata=_scenario_metadata(revision.metadata, trace_on),
                 trace_config=trace_config,
             )
             # Use aggregated severity for the run-level counter
@@ -647,7 +648,7 @@ def _scenario_execute_impl(workflow_input: ScenarioInput, ctx: Context) -> dict:
                 file_uri=revision.file_uri,
                 decision=revision.decision,
                 category=item.scenario.category or "",
-                metadata=revision.metadata or {},
+                metadata=_scenario_metadata(revision.metadata, trace_on),
                 trace_config=trace_config,
             )
             severity = result_payload.get("severity", "")
@@ -694,7 +695,7 @@ def _scenario_execute_impl(workflow_input: ScenarioInput, ctx: Context) -> dict:
     # Here we only fill in the deferred semantic dimensions (needs LLM) and
     # recompute the agentic status for UI display. For non-traced agentic
     # scenarios (no spans available in the resolver), we do the full eval.
-    if trace_config or (revision.metadata or {}).get("agentic"):
+    if trace_on and (revision.metadata or {}).get("agentic"):
         _agentic_trace_cfg = (revision.metadata or {}).get("agentic", {}).get("trace") or {}
         if isinstance(_agentic_trace_cfg.get("content_capture"), str):
             trace_config = {**(trace_config or {}), "content_capture": _agentic_trace_cfg["content_capture"]}
@@ -708,10 +709,6 @@ def _scenario_execute_impl(workflow_input: ScenarioInput, ctx: Context) -> dict:
             reps = result_payload.get("reps") if isinstance(result_payload, dict) else None
             targets = reps if isinstance(reps, list) else [result_payload]
             for target in targets:
-                # An agentic audit needs captured spans. Without any, this target is a
-                # normal audit: no agentic lane, no timeline, no reconstructed trajectory.
-                if not _captured_spans(target):
-                    continue
                 # If the engine's resolver already produced an evaluation
                 # (deterministic checks ran pre-judge), augment it with
                 # semantic dimensions. Otherwise, do the full evaluation.
@@ -747,7 +744,7 @@ def _scenario_execute_impl(workflow_input: ScenarioInput, ctx: Context) -> dict:
                         "complete": complete,
                         "span_count": len(trajectory.steps),
                         "captured_kinds": sorted({step.kind for step in trajectory.steps}),
-                        "missing_reason": None if complete else "No trace spans were captured.",
+                        "missing_reason": None if complete else "Trace was on, but the target exported no OTLP spans.",
                     }
                     if not complete:
                         evaluation.update(compute_overall_verdict({
@@ -776,7 +773,7 @@ def _scenario_execute_impl(workflow_input: ScenarioInput, ctx: Context) -> dict:
                             "rationale": "No trace evidence available for semantic evaluation.",
                             "dimensions": {},
                         }
-                        evaluation["verdict"] = {"status": "INCONCLUSIVE", "reason": "No trace captured"}
+                        evaluation["verdict"] = {"status": "INCONCLUSIVE", "reason": "Trace was on, but the target exported no OTLP spans."}
                     else:
                         _fr = (target.get("judgment") or {}).get("final_response", "")
                         if not _fr:
