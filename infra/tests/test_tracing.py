@@ -420,6 +420,15 @@ class RunScenarioTracingWiringTest(TestCase):
                   "start_time": 1.0, "end_time": 1.0}]
         self.assertEqual(_drop_connection_noise(spans), spans)
 
+    def test_chain_workflow_spans_are_not_evidence(self):
+        from infra.engine import _drop_connection_noise
+
+        spans = [
+            {"span_id": "chain", "name": "workflow", "kind": "CHAIN", "start_time": 1.0, "end_time": 9.0},
+            {"span_id": "llm", "name": "chat", "kind": "LLM", "start_time": 1.1, "end_time": 5.0},
+        ]
+        self.assertEqual([s["span_id"] for s in _drop_connection_noise(spans)], ["llm"])
+
 
 class StudioTraceProviderTest(TestCase):
     """StudioTraceProvider reads the run's spans from the listener's persisted

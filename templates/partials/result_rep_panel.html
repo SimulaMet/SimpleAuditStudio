@@ -77,18 +77,28 @@ whole result of a single-rep run. Context: rep (see infra.ui._rep_view).
               </div>
               {% endif %}
               {% if f.spans %}
-              <div class="flex flex-wrap gap-1">
-                {% for sp in f.spans %}
+              <div class="flex flex-wrap items-center gap-1">
+                {% for sp in f.spans|slice:":3" %}
                 <a href="#trace-span-{{ rep.index }}-{{ sp.anchor }}" class="agentic-span-link inline-flex items-center gap-1 max-w-full rounded bg-surface-overlay/70 border border-gray-800 px-1.5 py-0.5 text-[10px] text-violet-300 hover:text-violet-200" title="{{ sp.span_id }}">
                   <span aria-hidden="true">⌖</span><span class="truncate">{{ sp.label|default:sp.span_id }}</span>
                 </a>
                 {% endfor %}
+                {% if f.spans|length > 3 %}<span class="text-[10px] text-gray-500">+{{ f.spans|length|add:"-3" }} more</span>{% endif %}
               </div>
               {% endif %}
             </div>
           </summary>
           <div class="mt-2 space-y-1.5 border-t border-gray-800/60 pt-2">
             {% if f.reason %}<p class="text-[11px] text-gray-400 break-words">{{ f.reason }}</p>{% endif %}
+            {% if f.spans|length > 3 %}
+            <div class="flex flex-wrap gap-1">
+              {% for sp in f.spans|slice:"3:" %}
+              <a href="#trace-span-{{ rep.index }}-{{ sp.anchor }}" class="agentic-span-link inline-flex items-center gap-1 max-w-full rounded bg-surface-overlay/70 border border-gray-800 px-1.5 py-0.5 text-[10px] text-violet-300 hover:text-violet-200" title="{{ sp.span_id }}">
+                <span aria-hidden="true">⌖</span><span class="truncate">{{ sp.label|default:sp.span_id }}</span>
+              </a>
+              {% endfor %}
+            </div>
+            {% endif %}
           </div>
           <span class="hidden" data-agentic-check-evidence="{{ f.evidence_span_ids|join:' ' }}"></span>
         </details>

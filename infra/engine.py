@@ -860,8 +860,9 @@ def _collect_evidence_spans(
 
 
 def _drop_connection_noise(spans: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Drop connection-level spans (connect / DNS / TLS / sub-ms GETs) that
-    carry no judging signal.
+    """Drop spans that carry no judging signal: connection-level spans (connect /
+    DNS / TLS / sub-ms GETs) and CHAIN workflow wrappers, which record orchestration
+    rather than a model call or a tool call.
 
     Plain OTel auto-instrumentation (e.g. an OpenWebUI deployment) exports
     hundreds of these around each request; keeping them would drown the real
@@ -871,6 +872,8 @@ def _drop_connection_noise(spans: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """
     def _noise(s: dict[str, Any]) -> bool:
         name = (s.get("name") or "").lower()
+        if (s.get("kind") or "").upper() == "CHAIN":
+            return True
         if name in {"connect", "dns lookup", "tls handshake"}:
             return True
         start, end = s.get("start_time"), s.get("end_time")
