@@ -25,7 +25,7 @@ KINDS = ("tool", "retrieval_document", "answer", "any", "action")
 CHECKS = ("count", "exists", "none", "all", "distinct", "in_order", "before", "max_group", "max_run")
 ORDERING = ("in_order", "before", "max_group", "max_run")
 ACTION_KINDS = {"tool", "retrieval", "approval", "handoff", "rerank", "guardrail"}
-TEXT_OPS = ("equals", "not_equals", "one_of", "contains")
+TEXT_OPS = ("equals", "not_equals", "one_of", "not_one_of", "contains")
 NUMBER_OPS = ("equals", "at_least", "at_most", "between")
 EXPECT_OPS = ("equals", "at_least", "at_most", "between")
 
@@ -230,6 +230,8 @@ def _compare(value: Any, op: str, expected: Any) -> bool:
         return not (value == expected or str(value) == str(expected))
     if op == "one_of":
         return str(value) in [str(item) for item in expected]
+    if op == "not_one_of":
+        return str(value) not in [str(item) for item in expected]
     if op == "contains":
         return str(expected) in str(value)
     try:

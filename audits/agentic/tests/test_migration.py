@@ -46,8 +46,8 @@ def test_unmapped_settings_stay_in_place():
         "semantic_judge": {"enabled": True, "criteria": ["grounding"]},
     }
     rules, rest = split_legacy(agentic)
-    assert [r["type"] for r in rules] == ["tool_called"]
-    assert rest["tools"] == {"allowed": ["lookup"]}
+    assert [r["type"] for r in rules] == ["tool_called", "check"]
+    assert "tools" not in rest  # allowed tools now live in a rule
     assert rest["policy"] == {"read_only": True, "allowed_data_scopes": ["x"]}
     assert rest["approvals"] and rest["semantic_judge"]
 
