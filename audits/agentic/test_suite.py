@@ -1,7 +1,6 @@
 """Small provider-neutral contract tests for the agentic evaluator (T25)."""
 
 from audits.agentic.checks.base import result
-from audits.agentic.matchers import match_arguments
 from audits.agentic.trajectory import normalize
 
 
@@ -24,16 +23,6 @@ def test_check_result_schema():
     assert check.id == "tools.lookup"
     assert check.status == "PASS"
     assert check.evidence_span_ids == ["span-1"]
-
-
-def test_matcher_all_types():
-    assert match_arguments({"x": 2}, {"match": "exact", "value": {"x": 2}})
-    assert match_arguments({"x": 2, "y": 3}, {"match": "subset", "value": {"x": 2}})
-    assert match_arguments("ABC", {"match": "case_insensitive", "value": "abc"})
-    assert match_arguments(5, {"match": "numeric_range", "value": {"min": 1, "max": 5}})
-    assert match_arguments("https://example.test/a", {
-        "match": "normalized_uri", "value": "https://example.test/a",
-    })
 
 
 def test_otel_integration():

@@ -195,8 +195,8 @@ def test_complete_trace_keeps_existing_verdict_behavior(patched_worker):
     # the pre-existing deterministic FAIL verdict must be unchanged.
     workflow_metadata = {
         "agentic": {
-            "schema_version": 1,
-            "tools": {"expected": [{"name": "acme_get_order", "arguments": {"order_id": "ACME-1001"}}]},
+            "schema_version": 2,
+            "rules": [{'type': 'check', 'select': {'kind': 'tool', 'where': [{'field': 'tool.name', 'op': 'equals', 'value': 'acme_get_order'}, {'field': 'tool.argument.order_id', 'op': 'equals', 'value': 'ACME-1001'}]}, 'check': 'count', 'expect': {'op': 'at_least', 'value': 1}}],
         }
     }
     patched_worker["revision_metadata"] = workflow_metadata
@@ -216,7 +216,7 @@ def test_complete_trace_keeps_existing_verdict_behavior(patched_worker):
     tc = evaluation["trace_completeness"]
     assert tc["complete"] is True
     assert tc["span_count"] == 1
-    assert evaluation["status"] == "FAIL"
+    assert evaluation["status"] == "FAIL", evaluation.get("reason")
     assert evaluation["verdict"]["reason"] == "Deterministic check failed"
 
 

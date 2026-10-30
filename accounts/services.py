@@ -56,13 +56,13 @@ def bootstrap_admin_and_default_project(
         username=username,
         defaults={"email": email, "is_staff": True, "is_superuser": True},
     )
-    # Always ensure the admin password matches the configured value. This makes
-    # the bootstrap idempotent across container restarts where the Postgres data
-    # volume persists (e.g. HF Spaces with non-ephemeral storage). Without this,
-    # a pre-existing admin user created with a different password would never be
-    # corrected, breaking login on subsequent starts.
-    user.set_password(password)
-    user.save(update_fields=["password"])
+    # Make sure the admin password matches the configured value. Only write it when
+    # it differs: Django ties sessions to the password hash, so re-hashing on every
+    # container start would sign every user out. A pre-existing admin created with a
+    # different password is still corrected on the next start.
+    if created or not user.check_password(password):
+        user.set_password(password)
+        user.save(update_fields=["password"])
     if not user.is_active:
         user.is_active = True
         user.save(update_fields=["is_active"])

@@ -130,7 +130,7 @@ def _semantic_metadata(criteria=("tool_result_handling", "grounding")) -> dict:
         "schema_version": 2,
         "trace": {"required": True, "content_capture": "structural", "missing_evidence": "inconclusive"},
         "enforcement": {"mode": "gating"},
-        "tools": {"expected": [{"name": "acme_get_order", "min_calls": 1}]},
+        "rules": [{'type': 'check', 'select': {'kind': 'tool', 'where': [{'field': 'tool.name', 'op': 'equals', 'value': 'acme_get_order'}]}, 'check': 'count', 'expect': {'op': 'at_least', 'value': 1}}],
         "semantic_judge": {"enabled": True, "criteria": list(criteria)},
     }}
 

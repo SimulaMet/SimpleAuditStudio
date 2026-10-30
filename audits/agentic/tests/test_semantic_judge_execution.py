@@ -4,6 +4,7 @@ import json
 from audits.agentic.evaluate import evaluate
 from audits.agentic.orchestrator import orchestrate_agentic_audit
 from audits.agentic.schema import AgentTrajectory, TrajectoryStep
+from audits.agentic.semantic_judge import build_evidence_packet
 
 
 def _trajectory() -> AgentTrajectory:
@@ -11,10 +12,13 @@ def _trajectory() -> AgentTrajectory:
         TrajectoryStep("s1", "agent", "acme-agent"),
         TrajectoryStep(
             "t1", "tool", "query_knowledge_files", tool_name="query_knowledge_files",
-            arguments={"query": "refund policy"}, result="Refunds within 30 days.",
-            source_refs=["kb-acme"],
+            arguments={"query": "refund policy"},
+            result=[{"source": "kb-acme", "passage": "Refunds within 30 days."}],
         ),
-        TrajectoryStep("r1", "retrieval", "retrieval", source_refs=["kb-acme"]),
+        TrajectoryStep(
+            "r1", "retrieval", "retrieval",
+            attributes={"gen_ai.retrieval.documents": [{"source": "kb-acme", "passage": "Refunds within 30 days."}]},
+        ),
     ])
 
 
@@ -100,7 +104,7 @@ def test_evidence_packet_contains_observed_facts_only():
     packet = build_evidence_packet(_trajectory(), task="Do it", expectations=["use kb"])
     assert packet["task"] == "Do it"
     assert packet["tool_steps"][0]["name"] == "query_knowledge_files"
-    assert "Refunds within 30 days." in packet["tool_steps"][0]["result_excerpt"]
+    assert "Refunds within 30 days." in packet["tool_steps"][0]["result"]
     assert packet["retrieval_source_ids"] == ["kb-acme"]
     assert set(packet["span_ids"]) == {"s1", "t1", "r1"}
 
@@ -119,3 +123,17 @@ def test_legacy_evaluate_interface_wires_llm():
     assert len(calls) == 1
     assert result["status"] == "PASS"
     assert result["semantic_judgement"]["status"] == "PASS"
+
+
+def test_packet_keeps_every_retrieved_source_and_drops_noise():
+    from audits.agentic.trajectory import normalize
+
+    docs = [{"source": f"doc{i}.md", "passage": "x" * 1000, "score": None} for i in range(5)]
+    spans = [{"span_id": "t1", "name": "execute_tool acme_search_knowledge", "attributes": {
+        "gen_ai.operation.name": "execute_tool", "gen_ai.tool.name": "acme_search_knowledge",
+        "gen_ai.tool.call.arguments": '{"query": "refund"}', "gen_ai.tool.call.result": json.dumps(docs)}}]
+    packet = build_evidence_packet(normalize(spans), task="", expectations=[], final_response="")
+    assert packet["retrieval_source_ids"] == [f"doc{i}.md" for i in range(5)]
+    result = packet["tool_steps"][0]["result"]
+    assert "score" not in result
+    assert len(result) <= 1700
