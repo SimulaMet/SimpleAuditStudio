@@ -29,7 +29,7 @@ The "Focus" button toggles a wide mode that pushes the app chrome aside.
           <span class="shrink-0 px-1.5 py-0.5 rounded bg-surface-overlay/60 border border-gray-800 text-[10px] uppercase tracking-wide {{ s.tone }}" title="{{ s.kind }}">{{ s.label|default:s.kind|default:"STEP" }}</span>
           <span class="min-w-0 truncate text-sm text-gray-200" title="{{ s.name }}">{{ s.name }}</span>
           {% if s.redundant_reason %}<span class="shrink-0 px-1.5 py-0.5 rounded bg-amber-950 border border-amber-800/60 text-[10px] uppercase tracking-wide text-amber-300" title="{{ s.redundant_reason }}">redundant</span>{% endif %}
-          {% if s.tool_name %}<span class="min-w-0 truncate text-xs text-gray-500" title="{{ s.tool_name }}">· {{ s.tool_name }}</span>{% endif %}
+          {% if s.arguments %}<span class="min-w-0 truncate text-xs font-mono text-gray-400" title="{{ s.arguments }}">{{ s.arguments }}</span>{% endif %}
           {% if s.kb_sources %}
           <span class="min-w-0 text-xs text-emerald-300/90" title="Knowledge sources observed on this retrieval step">📚 {{ s.kb_sources|join:", " }}</span>
           {% endif %}

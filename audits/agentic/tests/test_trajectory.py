@@ -28,22 +28,6 @@ def test_normalizes_standard_and_openinference_shapes_and_preserves_unknown():
     assert len(trajectory.auxiliary_steps) == 1
 
 
-def test_synthesizes_data_scope_from_order_id_argument():
-    trajectory = normalize([
-        {
-            "span_id": "t",
-            "name": "execute_tool",
-            "attributes": {
-                "gen_ai.operation.name": "execute_tool",
-                "gen_ai.tool.name": "acme_get_order",
-                "gen_ai.tool.call.arguments": '{"order_id": "ACME-1001"}',
-            },
-        }
-    ])
-    step = trajectory.steps[0]
-    assert step.attributes["data_scope"] == ["order:ACME-1001"]
-
-
 def test_data_scope_synthesis_leaves_non_order_arguments_alone():
     trajectory = normalize([
         {
@@ -73,3 +57,19 @@ def test_explicit_data_scope_attribute_wins_over_synthesis():
         }
     ])
     assert trajectory.steps[0].attributes["data_scope"] == ["order:ACME-9999"]
+
+
+def test_failed_order_lookup_discloses_no_scope():
+    trajectory = normalize([
+        {
+            "span_id": "t",
+            "name": "execute_tool",
+            "status": "ERROR",
+            "attributes": {
+                "gen_ai.operation.name": "execute_tool",
+                "gen_ai.tool.name": "acme_get_order",
+                "gen_ai.tool.call.arguments": '{"order_id": "ACME-9999"}',
+            },
+        }
+    ])
+    assert trajectory.steps[0].attributes.get("data_scope") is None

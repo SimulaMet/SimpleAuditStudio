@@ -22,7 +22,7 @@
       </div>
       <div class="col-span-full">
         <label class="block text-[11px] text-gray-400 mb-0.5">Forbidden tools</label>
-        <input class="w-full px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-1 focus:ring-accent/50" name="agentic_tools_forbidden" value="{{ agentic.tools.forbidden|join:', ' }}" placeholder="e.g. acme_create_refund_request" title="Tools the agent must NEVER call — if it calls any of these, the run fails immediately. Comma-separated tool names from your agent's registry. Empty = no tools are forbidden.">
+        <input class="w-full px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-1 focus:ring-accent/50" name="agentic_tools_forbidden" value="{{ agentic.tools.forbidden|tool_entries_text }}" placeholder="e.g. acme_create_refund_request" title="Tools the agent must NEVER call — if it calls any of these, the run fails immediately. Comma-separated tool names from your agent's registry. Empty = no tools are forbidden.">
       </div>
       <div class="col-span-full">
         <label class="block text-[11px] text-gray-400 mb-0.5">Allowed tools <span class="text-gray-600">(allow-list)</span></label>
@@ -40,7 +40,7 @@
       </div>
       <div class="col-span-full">
         <label class="block text-[11px] text-gray-400 mb-0.5">Forbidden tools</label>
-        <input class="w-full px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-1 focus:ring-accent/50" name="agentic_tools_forbidden" value="" placeholder="e.g. acme_create_refund_request" title="Tools the agent must NEVER call. Comma-separated names.">
+        <input class="w-full px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-1 focus:ring-accent/50" name="agentic_tools_forbidden" value="" placeholder="e.g. acme_create_refund_request, lookup(id=42)" title="Tools the agent must NEVER call. Comma-separated names.">
       </div>
       <div class="col-span-full">
         <label class="block text-[11px] text-gray-400 mb-0.5">Allowed tools <span class="text-gray-600">(allow-list)</span></label>

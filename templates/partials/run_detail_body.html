@@ -658,7 +658,10 @@ function openScriptModal() {
         const resp = await fetch('{% url "run_results_fragment" run.id %}', { credentials: 'same-origin' });
         if (!resp.ok) return;
         const el = document.getElementById('results-section');
-        if (el) el.outerHTML = await resp.text();
+        if (el) {
+          el.outerHTML = await resp.text();
+          if (window.applyAgenticFilter) window.applyAgenticFilter();
+        }
       } catch (e) { /* network hiccup: the next event retries */ }
     }, 800);
   }
@@ -920,7 +923,7 @@ function openScriptModal() {
       Agentic checks: {{ agentic.passed }} pass · {{ agentic.failed }} fail · {{ agentic.inconclusive }} inconclusive ({{ agentic.total }} scenarios) — deterministic trajectory checks across the run.
     </p>
     <div class="flex h-1.5 rounded-full overflow-hidden bg-surface-overlay" role="img" aria-label="Agentic verdict split across scenarios">
-      {% for seg in agentic_split %}<div style="width: {{ seg.pct }}%" class="{% if seg.status == 'PASS' %}bg-emerald-500/80{% elif seg.status == 'FAIL' %}bg-red-500/80{% else %}bg-amber-500/80{% endif %}" title="{{ seg.count }} {{ seg.status }}"></div>{% endfor %}
+      {% for seg in agentic_split %}<button type="button" data-agentic-filter="{{ seg.status }}" aria-pressed="false" style="width: {{ seg.pct }}%" class="h-full cursor-pointer transition-opacity hover:opacity-100 opacity-80 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400 {% if seg.status == 'PASS' %}bg-emerald-500{% elif seg.status == 'FAIL' %}bg-red-500{% else %}bg-amber-500{% endif %}" title="Show {{ seg.count }} agentic {{ seg.status|lower }} scenario{{ seg.count|pluralize }}"></button>{% endfor %}
     </div>
     <p class="mt-2 text-[11px] text-gray-500">Open a scenario result below for the full-width trajectory timeline, evidence-linked check results and judge rationale.</p>
   </div>
@@ -929,3 +932,37 @@ function openScriptModal() {
 
 <!-- Results (refreshed live, see refreshResults) -->
 {% include "partials/run_results.html" %}
+<script>
+// Agentic bar filter: clicking a segment shows only scenarios with that verdict.
+// Lives outside the live-run block so it also works for finished runs. The live
+// refresh re-renders the results list, so it calls window.applyAgenticFilter after a swap.
+(function() {
+  let agenticFilter = null;
+  window.applyAgenticFilter = function() {
+    const rows = document.querySelectorAll('#results-section [data-agentic-status]');
+    let shown = 0;
+    rows.forEach(row => {
+      const match = !agenticFilter || row.dataset.agenticStatus === agenticFilter;
+      row.classList.toggle('hidden', !match);
+      if (match) shown++;
+    });
+    document.querySelectorAll('[data-agentic-filter]').forEach(btn => {
+      btn.setAttribute('aria-pressed', String(btn.dataset.agenticFilter === agenticFilter));
+    });
+    const note = document.getElementById('agentic-filter-note');
+    if (note) {
+      note.textContent = agenticFilter
+        ? `Showing ${shown} of ${rows.length} · ${agenticFilter.toLowerCase()} (click the bar segment again to clear)`
+        : '';
+    }
+  };
+  document.addEventListener('click', e => {
+    const btn = e.target.closest('[data-agentic-filter]');
+    if (!btn) return;
+    const status = btn.dataset.agenticFilter;
+    agenticFilter = agenticFilter === status ? null : status;
+    window.applyAgenticFilter();
+  });
+  window.applyAgenticFilter();
+})();
+</script>

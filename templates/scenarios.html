@@ -635,6 +635,32 @@ function buildAgenticMetadata(form, baseMetadata) {
   const metadata = baseMetadata && typeof baseMetadata === 'object' ? baseMetadata : {};
   const agentic = metadata.agentic && typeof metadata.agentic === 'object' ? metadata.agentic : {schema_version: 2};
   const csv = (name) => (form.querySelector(`[name="${name}"]`)?.value || '').split(',').map(v => v.trim()).filter(Boolean);
+  // Forbidden tools: "name" or "name(arg=value, ...)", same rules as the server parser.
+  const toolEntries = (name) => {
+    const text = form.querySelector(`[name="${name}"]`)?.value || '';
+    const parts = [];
+    let depth = 0, current = '';
+    for (const ch of text) {
+      if (ch === '(') depth++;
+      if (ch === ')') depth--;
+      if (ch === ',' && depth === 0) { parts.push(current); current = ''; } else { current += ch; }
+    }
+    parts.push(current);
+    return parts.map(part => part.trim()).filter(Boolean).map(part => {
+      const match = part.match(/^([A-Za-z0-9_.:-]+)\s*(?:\((.*)\))?$/s);
+      if (!match) throw new Error(`Invalid forbidden tool entry: ${part}`);
+      if (!match[2] || !match[2].trim()) return match[1];
+      const args = {};
+      match[2].split(',').forEach(pair => {
+        const i = pair.indexOf('=');
+        if (i < 0) throw new Error(`Argument must be key=value in ${part}`);
+        let value = pair.slice(i + 1).trim();
+        try { value = JSON.parse(value); } catch (_) { /* plain string */ }
+        args[pair.slice(0, i).trim()] = value;
+      });
+      return { name: match[1], arguments: args };
+    });
+  };
   const number = (name) => {
     const value = form.querySelector(`[name="${name}"]`)?.value.trim();
     return value === undefined || value === '' ? null : Number(value);
@@ -650,7 +676,7 @@ function buildAgenticMetadata(form, baseMetadata) {
   const isEmpty = (v) => v === null || v === undefined || v === '' || v === false || (Array.isArray(v) && v.length === 0);
   const planned = [
     ['tools', 'expected', csv('agentic_tools_expected').map((name) => ({ name, min_calls: 1, max_calls: null }))],
-    ['tools', 'forbidden', csv('agentic_tools_forbidden')],
+    ['tools', 'forbidden', toolEntries('agentic_tools_forbidden')],
     ['tools', 'allowed', csv('agentic_tools_allowed')],
     ['retrieval', 'sources', csv('agentic_sources')],
     ['retrieval', 'min_documents', number('agentic_retrieval_min_documents')],

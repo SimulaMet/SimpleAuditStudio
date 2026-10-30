@@ -49,3 +49,11 @@ def tools_names(value):
         else:
             names.append(str(item))
     return ",".join(n for n in names if n)
+
+
+@register.filter
+def tool_entries_text(value):
+    """Forbidden tool entries (names or name+arguments objects) as builder text."""
+    from audits.agentic.tool_entries import format_tool_entries
+
+    return format_tool_entries(value)

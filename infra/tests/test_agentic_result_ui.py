@@ -311,3 +311,4 @@ class AgenticResultPageRenderTests(TestCase):
         self.assertIsNone(view["agentic_judge"])
         self.assertEqual(view["agentic_trace_completeness"]["span_count"], 3)
         self.assertIn("TOOL", view["agentic_trace_completeness"]["captured_kinds"])
+

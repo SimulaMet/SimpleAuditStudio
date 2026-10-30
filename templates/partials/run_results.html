@@ -5,6 +5,7 @@ re-fetched from run_results_fragment while the run is live.
 <div id="results-section" class="bg-surface-raised rounded-xl border border-gray-800 p-4">
   <div class="flex items-center justify-between mb-3">
     <h2 class="text-sm font-semibold text-gray-300">Results ({{ results|length }})</h2>
+    <p id="agentic-filter-note" class="text-xs text-violet-300 ml-3 flex-1"></p>
     {% if results %}
     <a href="{% url 'run_export' run.id %}?format=json" class="px-2.5 py-1 rounded-lg bg-surface-overlay text-gray-400 text-xs font-medium hover:text-gray-200 transition-colors">Export</a>
     {% endif %}
@@ -12,7 +13,7 @@ re-fetched from run_results_fragment while the run is live.
   {% if results %}
   <div class="space-y-2 max-h-96 overflow-y-auto">
     {% for r in results %}
-    <div class="px-3 py-2.5 rounded-lg bg-surface-overlay/50 flex items-center justify-between group">
+    <div data-agentic-status="{{ r.agentic_status }}" class="px-3 py-2.5 rounded-lg bg-surface-overlay/50 flex items-center justify-between group">
       <a href="{% url 'run_result' run.id r.result_id %}" class="flex-1 min-w-0 group-hover:text-accent transition-colors">
         <span class="text-sm text-gray-200 block truncate">{{ r.scenario_name }}</span>
         {% if r.summary %}<p class="text-xs text-gray-500 mt-1 line-clamp-2">{{ r.summary }}</p>{% endif %}
@@ -21,7 +22,13 @@ re-fetched from run_results_fragment while the run is live.
         {% if r.agreement_rate is not None %}
         <span class="text-[10px] text-gray-500" title="{{ r.n_reps }} repetitions:{% for sev, n in r.severity_distribution.items %} {{ sev }} ×{{ n }}{% endfor %}">{{ r.n_reps }}× · {{ r.agreement_rate|floatformat:0 }}% agree</span>
         {% endif %}
+        {% if r.agentic_status %}
+        <span title="{{ r.agentic_tooltip }}" class="inline-flex items-center p-0.5 rounded-full ring-2 {% if r.agentic_status == 'PASS' %}ring-emerald-600/70{% elif r.agentic_status == 'FAIL' %}ring-red-600/70{% else %}ring-amber-600/70{% endif %}">
+          {% include "partials/severity_badge.html" with sev=r.severity %}
+        </span>
+        {% else %}
         {% include "partials/severity_badge.html" with sev=r.severity %}
+        {% endif %}
       </span>
     </div>
     {% endfor %}

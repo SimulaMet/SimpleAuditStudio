@@ -366,8 +366,10 @@ if not (DEBUG or MINIMAL_CONFIG or DEMO_MODE or _TESTING):
     SECURE_HSTS_SECONDS = 60 * 60 * 24 * 365  # 1 year
     SECURE_HSTS_INCLUDE_SUBDOMAINS = True
     SECURE_HSTS_PRELOAD = True
-    SESSION_COOKIE_SECURE = True
-    CSRF_COOKIE_SECURE = True
+    # Secure cookies need HTTPS. Local replicas served over plain http://127.0.0.1
+    # can opt out explicitly; the default stays Secure.
+    SESSION_COOKIE_SECURE = env_bool("SIMPLEAUDIT_SECURE_COOKIES", True)
+    CSRF_COOKIE_SECURE = SESSION_COOKIE_SECURE
     SECURE_CONTENT_TYPE_NOSNIFF = True
 
 # Operational settings used by health checks and bootstrap commands.

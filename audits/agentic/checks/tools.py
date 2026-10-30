@@ -36,6 +36,27 @@ def _arguments_match(observed: Any, expected: Any) -> bool:
     return observed == expected
 
 
+def _forbidden_calls(calls: list, entries: list) -> list[str]:
+    """Calls matching a forbidden entry.
+
+    An entry is a tool name (any call of that tool is forbidden), or an object
+    {"name": ..., "arguments": {...}} that forbids only calls whose arguments
+    match the given values (subset match, same rule as expected arguments).
+    """
+    observed: list[str] = []
+    for entry in entries:
+        if isinstance(entry, str):
+            observed += [step.name for step in calls if step.name == entry]
+        elif isinstance(entry, dict) and entry.get("name"):
+            wanted = entry.get("arguments") or {}
+            for step in calls:
+                if step.name != entry["name"]:
+                    continue
+                if not wanted or _arguments_match(_tool_arguments(step), wanted):
+                    observed.append(f"{step.name} {json.dumps(wanted, ensure_ascii=False)}" if wanted else step.name)
+    return sorted(set(observed))
+
+
 def tool_selection(trajectory: AgentTrajectory, expected: dict) -> list[CheckResult]:
     """Check tool calls against expected requirements."""
     calls = [s for s in trajectory.primary_steps if s.kind == "tool"]
@@ -101,16 +122,16 @@ def tool_selection(trajectory: AgentTrajectory, expected: dict) -> list[CheckRes
                 )
             )
 
-    forbidden = set(expected.get("forbidden", []))
-    if forbidden:
-        bad = forbidden.intersection({s.name for s in calls})
+    forbidden_entries = expected.get("forbidden", [])
+    if forbidden_entries:
+        bad = _forbidden_calls(calls, forbidden_entries)
         out.append(
             result(
                 "tool.forbidden",
                 "tool",
                 "FAIL" if bad else "PASS",
-                "Forbidden tool called." if bad else "No forbidden tools called.",
-                observed=sorted(bad),
+                "Forbidden tool call observed." if bad else "No forbidden tool calls observed.",
+                observed=bad,
             )
         )
 

@@ -151,7 +151,7 @@ def tool_permissions(trajectory: AgentTrajectory, snapshot: dict) -> list[CheckR
 
 _KNOWLEDGE_RETRIEVAL_TOOLS = {
     "search_knowledge_files", "query_knowledge_files", "grep_knowledge_files",
-    "acme_search_knowledge", "search_knowledge",
+    "search_knowledge",
 }
 _SOURCE_FIELDS = {
     "source", "source_name", "knowledge_base", "knowledge_base_id", "knowledge_id",

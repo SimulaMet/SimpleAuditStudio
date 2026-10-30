@@ -23,6 +23,7 @@ from django.views.generic import DetailView, TemplateView, View
 
 from accounts import workos_auth
 from accounts.models import User
+from audits.agentic.tool_entries import parse_tool_entries
 from audits.comparison import compare_runs
 from audits.events import ScenarioResult
 from audits.models import AuditRun
@@ -204,7 +205,7 @@ def _merge_structured_agentic_fields(metadata: dict, post) -> dict:
     # explicit-false checkbox sentinels that must survive as assertions.
     planned = [
         ("tools", "expected", [{"name": name, "min_calls": 1, "max_calls": None} for name in csv("agentic_tools_expected")], False),
-        ("tools", "forbidden", csv("agentic_tools_forbidden"), False),
+        ("tools", "forbidden", parse_tool_entries(post.get("agentic_tools_forbidden", "")), False),
         ("tools", "allowed", csv("agentic_tools_allowed"), False),
         ("retrieval", "sources", csv("agentic_sources"), False),
         ("retrieval", "min_documents", number("agentic_retrieval_min_documents"), False),
@@ -2369,7 +2370,7 @@ class ScenarioCreateView(ProjectMixin, View):
             try:
                 metadata = _merge_structured_agentic_fields({}, request.POST)
             except (ValueError, json.JSONDecodeError):
-                messages.error(request, "Structured agentic controls must contain valid numbers and JSON.")
+                messages.error(request, "Structured agentic controls must contain valid numbers, JSON, and forbidden tool entries (name or name(arg=value)).")
                 return _scenario_redirect(request.POST.get("set_id", "").strip() or None)
         file_uri_raw = request.POST.get("file_uri", "").strip()
         file_uri = file_uri_raw or None
@@ -2449,7 +2450,7 @@ class ScenarioEditView(ProjectMixin, View):
                 try:
                     metadata = _merge_structured_agentic_fields(prior_metadata, request.POST)
                 except (ValueError, json.JSONDecodeError):
-                    messages.error(request, "Structured agentic controls must contain valid numbers and JSON.")
+                    messages.error(request, "Structured agentic controls must contain valid numbers, JSON, and forbidden tool entries (name or name(arg=value)).")
                     return _scenario_redirect(set_id or None)
             rev = update_scenario_content(
                 scenario=scenario, user=request.user, description=desc,
@@ -3163,6 +3164,8 @@ def _result_rows(run: AuditRun, items: dict | None = None) -> list[dict]:
             "agreement_rate": agreement,
             "severity_distribution": sev_dist,
             "n_reps": n_reps if (n_reps > 1 and "reps" in r) else None,
+            "agentic_status": (r.get("agentic_evaluation") or {}).get("status", ""),
+            "agentic_tooltip": f"Agentic: {(r.get('agentic_evaluation') or {}).get('status', '').lower()}\nJudge: {severity}",
         })
     return results
 
@@ -3582,6 +3585,17 @@ def _document_source_names(value) -> list[str]:
     return [str(d["source"]) for d in value if isinstance(d, dict) and d.get("source")]
 
 
+def _arguments_preview(value) -> str:
+    """Short one-line tool arguments for the timeline header (compact JSON when parseable)."""
+    if not value:
+        return ""
+    try:
+        value = json.dumps(json.loads(value), ensure_ascii=False)
+    except (TypeError, ValueError):
+        value = str(value)
+    return value if len(value) <= 120 else value[:117] + "…"
+
+
 def _agentic_span_view(span: dict) -> dict | None:
     """One evidence span as a timeline row (chronological ordering key included)."""
     if not isinstance(span, dict) or not span.get("span_id"):
@@ -3605,8 +3619,9 @@ def _agentic_span_view(span: dict) -> dict | None:
         "tone": tone,
         "name": span.get("name") or tool_name or "step",
         "tool_name": tool_name,
+        "arguments": _arguments_preview(attrs.get("gen_ai.tool.call.arguments")),
         "redundant_reason": str(attrs.get("redundant_reason") or ""),
-        "kb_sources": [str(s) for s in kb_sources],
+        "kb_sources": list(dict.fromkeys(str(s) for s in kb_sources)),
         "started_at": start,
         "duration_ms": round(_trace_span_duration_ms(span), 1),
         "content_blocks": _trace_span_content_blocks(span),

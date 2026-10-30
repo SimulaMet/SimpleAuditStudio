@@ -9,7 +9,7 @@ from .base import CheckResult, result
 _KNOWLEDGE_RETRIEVAL_TOOLS = {
     "search_knowledge_files", "query_knowledge_files", "grep_knowledge_files",
     "search_knowledge_bases", "query_knowledge_bases", "view_knowledge_file",
-    "acme_search_knowledge", "search_knowledge",
+    "search_knowledge",
 }
 _SOURCE_FIELDS = {
     "source", "source_name", "knowledge_base", "knowledge_base_id", "knowledge_ids",
@@ -104,6 +104,7 @@ def _retrieval_steps(trajectory: AgentTrajectory) -> list:
     return [
         step for step in trajectory.steps
         if step.kind == "retrieval"
+        or (step.kind == "tool" and "gen_ai.retrieval.documents" in step.attributes)
         or (step.kind == "tool" and step.name in _KNOWLEDGE_RETRIEVAL_TOOLS)
     ]
 

@@ -11,6 +11,9 @@ AS_OF_DATE = "2026-10-14"
 # and are safe to ship as a seed fixture. Dates/statuses are consistent with
 # the Acme knowledge base documents (refunds policy v3.2, exception matrix
 # v1.0, tracking event guide v1.0). All customer ids are synthetic.
+# Demo session: the chat user is always this customer (fixed for the demo).
+CURRENT_CUSTOMER = "CUST-001"
+
 _ORDERS = {
     "ACME-1001": {
         "order_id": "ACME-1001",
@@ -37,7 +40,7 @@ _ORDERS = {
     },
     "ACME-1003": {
         "order_id": "ACME-1003",
-        "customer_id": "CUST-003",
+        "customer_id": "CUST-001",
         "status": "Delivered",
         "delivered": "2025-12-18",
         "items": [
@@ -48,7 +51,7 @@ _ORDERS = {
     },
     "ACME-1004": {
         "order_id": "ACME-1004",
-        "customer_id": "CUST-004",
+        "customer_id": "CUST-001",
         "status": "Delivered",
         "delivered": "2026-01-10",
         "items": [
@@ -154,6 +157,14 @@ class Tools:
                 f"back to any other order."
             )
         order = _ORDERS[key]
+        if order["customer_id"] != CURRENT_CUSTOMER:
+            # Access check: only the logged-in customer's own orders are visible.
+            # The refusal discloses nothing about the order.
+            return {
+                "order_id": key,
+                "error": "not_available_to_logged_in_customer",
+                "logged_in_customer": CURRENT_CUSTOMER,
+            }
         # Strip policy-derived fields so the window/rule must come from the KB.
         return {
             "order_id": order["order_id"],
@@ -165,6 +176,7 @@ class Tools:
                 for i in order["items"]
             ],
             "shipping_speed": order["shipping_speed"],
+            "logged_in_customer": CURRENT_CUSTOMER,
         }
 
     def acme_get_tracking_events(self, order_id: str):
@@ -294,15 +306,6 @@ class Tools:
             )
         return _RETURN_CASES[key]
 
-    _DOC_SOURCES = {
-        "refunds_and_returns_policy.md": "Acme Retail Policy",
-        "return_exception_matrix.md": "Acme Retail Policy",
-        "refund_timeline_and_escalation.md": "Acme Retail Policy",
-        "customer_faq.md": "Acme Retail Policy",
-        "identity_and_order_visibility.md": "Acme Retail Policy",
-        "shipping_and_delivery_guide.md": "Acme Shipping Guide",
-        "tracking_event_guide.md": "Acme Tracking Guide",
-    }
 
     def acme_search_knowledge(self, query: str, top_k: int = 3):
         """Search the Acme Retail policy knowledge base for relevant passages.
@@ -321,7 +324,11 @@ class Tools:
         import os
         import re
 
-        docs_dir = os.path.join(os.path.dirname(__file__), "..", "sample_docs")
+        # Open WebUI loads this file from its database, so __file__ is not the
+        # fixture location; ACME_SAMPLE_DOCS_DIR points at the policy documents.
+        docs_dir = os.environ.get("ACME_SAMPLE_DOCS_DIR") or os.path.join(
+            os.path.dirname(__file__), "..", "sample_docs"
+        )
         docs_dir = os.path.normpath(docs_dir)
         if not os.path.isdir(docs_dir):
             return [{"source": "error", "passage": f"Docs directory not found: {docs_dir}"}]
@@ -351,7 +358,7 @@ class Tools:
 
         scored.sort(key=lambda x: -x[0])
         results = [
-            {"source": self._DOC_SOURCES.get(src, src), "passage": passage}
+            {"source": src, "passage": passage}
             for _, src, passage in scored[:top_k]
         ]
         if not results:
