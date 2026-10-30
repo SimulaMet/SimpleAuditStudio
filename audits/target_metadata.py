@@ -33,8 +33,21 @@ def frozen_target_metadata(run) -> dict[str, str]:
     return flattened_metadata(snapshot.get("remote_metadata"))
 
 
+#: Flags that are noise on the run page when off. Stored in full; only hidden on display.
+_HIDE_WHEN_OFF_KEYS = {"background_image_url"}
+_HIDE_WHEN_OFF_PREFIXES = ("builtinTools.", "capabilities.")
+_OFF_VALUES = {"false", "null", "", "0"}
+
+
+def _hidden_when_off(key: str, value: str) -> bool:
+    if key not in _HIDE_WHEN_OFF_KEYS and not key.startswith(_HIDE_WHEN_OFF_PREFIXES):
+        return False
+    return value in _OFF_VALUES
+
+
 def metadata_rows(run) -> list[dict]:
     return [
         {"key": key, "value": value, "long": len(value) > 160}
         for key, value in frozen_target_metadata(run).items()
+        if not _hidden_when_off(key, value)
     ]

@@ -1,14 +1,7 @@
-"""One rule engine: custom checks and presets compiled into it.
-
-The compiled presets must give the same verdict as the original evaluators,
-on the same traces. Retrieval counts documents now, so it is tested separately.
-"""
+"""One rule engine: custom checks (count, exists, none, all, distinct) over trace units."""
 import json
 
-import pytest
-
-from audits.agentic.checks.rules import _EVALUATORS
-from audits.agentic.rule_engine import evaluate_check, evaluate_preset, validate_check
+from audits.agentic.rule_engine import evaluate_check, validate_check
 from audits.agentic.trajectory import normalize
 
 
@@ -42,42 +35,6 @@ TRACES = {
     "seq_reversed": [_tool("lookup", '{"id": "A"}'), _tool("search")],
     "repeat_same": [_tool("lookup", '{"id": "A"}'), _tool("lookup", '{"id": "A"}')],
 }
-
-PRESETS = [
-    {"type": "tool_called", "tool": "lookup", "min": 1},
-    {"type": "tool_called", "tool": "lookup", "max": 1},
-    {"type": "tool_called", "tool": "lookup", "arguments": {"id": "A"}, "min": 1},
-    {"type": "tool_not_called", "tool": "lookup"},
-    {"type": "tool_not_called", "tool": "lookup", "arguments": {"id": "A"}},
-    {"type": "budget", "max": 1},
-    {"type": "budget", "max": 2, "tool": "lookup"},
-    {"type": "errors", "max": 0},
-    {"type": "errors", "max": 1},
-    {"type": "forbidden_values", "values": ["SECRET-42"]},
-    {"type": "sequence", "steps": ["search", "lookup"]},
-    {"type": "sequence", "steps": ["search", "lookup"], "mode": "in_order_exact"},
-    {"type": "precedes", "first": "search", "then": "lookup"},
-    {"type": "precedes", "first": "lookup", "then": "search"},
-    {"type": "repeated_calls", "max_identical": 1},
-    {"type": "repeated_calls", "max_identical": 2},
-]
-
-
-@pytest.mark.parametrize("rule", PRESETS, ids=lambda r: f"{r['type']}-{sorted(r.items())[1:]}"[:80])
-@pytest.mark.parametrize("trace", list(TRACES))
-def test_compiled_preset_matches_its_original_verdict(rule, trace):
-    trajectory = normalize(TRACES[trace])
-    original = _EVALUATORS[rule["type"]](0, rule, trajectory)
-    compiled = evaluate_preset(0, rule, trajectory)
-    # Deliberate change: a forbidden-value check with no final answer is
-    # INCONCLUSIVE (missing evidence), not PASS.
-    no_answer = not any(s.kind == "inference" for s in trajectory.primary_steps)
-    if rule["type"] == "forbidden_values" and no_answer:
-        expected = "FAIL" if original.status == "FAIL" else "INCONCLUSIVE"
-        assert compiled.status == expected, (trace, original.summary, compiled.summary)
-        return
-    assert compiled.status == original.status, (rule, trace, original.summary, compiled.summary)
-
 
 def test_custom_count_check_reads_as_expected():
     rule = {"type": "check", "select": {"kind": "tool", "where": [{"field": "tool.name", "op": "equals", "value": "lookup"}]},
@@ -128,3 +85,17 @@ def test_no_tool_calls_is_a_real_zero_not_missing_evidence():
             "check": "none"}
     trajectory = normalize([_answer("I cannot do that.")])
     assert evaluate_check(0, rule, trajectory).status == "PASS"
+
+
+def test_error_type_on_a_trace_without_errors_is_a_real_no_match_not_missing_evidence():
+    rule = {"type": "check", "select": {"kind": "any", "where": [
+        {"field": "span.error", "op": "equals", "value": True},
+        {"field": "span.error_type", "op": "equals", "value": "ValueError"}]}, "check": "exists"}
+    result = evaluate_check(0, rule, normalize([_tool("lookup"), _answer("ok")]))
+    assert result.status == "FAIL"
+
+
+def test_all_check_with_nothing_to_check_is_inconclusive_not_pass():
+    rule = {"type": "check", "select": {"kind": "tool", "where": [
+        {"field": "tool.name", "op": "equals", "value": "lookup"}]}, "check": "all"}
+    assert evaluate_check(0, rule, normalize([_answer("no tools")])).status == "INCONCLUSIVE"

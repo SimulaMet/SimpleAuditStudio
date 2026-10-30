@@ -25,7 +25,6 @@ class TrajectoryStep:
     tool_call_id: str | None = None
     arguments: Any = None
     result: Any = None
-    source_refs: list[str] = field(default_factory=list)
     handoff_to: str | None = None
     guardrail_decision: str | None = None
     approval_decision: str | None = None

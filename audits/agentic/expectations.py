@@ -1,30 +1,16 @@
-"""Versioned, strict validation for agentic scenario metadata."""
+"""Strict validation for agentic scenario metadata: the sections the form owns."""
 from dataclasses import dataclass
 from typing import Any
 
-_KEYS = {
-    "schema_version", "trace", "goal", "tools", "retrieval", "rerank", "policy",
-    "budgets", "trajectory", "handoffs", "guardrails", "approvals", "state",
-    "semantic_judge", "enforcement", "rules",
-}
+_KEYS = {"schema_version", "trace", "goal", "semantic_judge", "enforcement", "rules"}
 
 
 @dataclass(frozen=True)
 class AgenticExpectations:
     schema_version: int
-    tools: dict[str, Any]
-    retrieval: dict[str, Any]
-    rerank: dict[str, Any]
-    policy: dict[str, Any]
-    budgets: dict[str, Any]
-    trajectory: dict[str, Any]
     enforcement: dict[str, Any]
     trace: dict[str, Any] | None = None
     goal: dict[str, Any] | None = None
-    handoffs: dict[str, Any] | None = None
-    guardrails: dict[str, Any] | None = None
-    approvals: dict[str, Any] | None = None
-    state: dict[str, Any] | None = None
     semantic_judge: dict[str, Any] | None = None
     rules: list[dict[str, Any]] | None = None
 
@@ -40,13 +26,19 @@ def validate_agentic_metadata(metadata: dict | None) -> AgenticExpectations | No
         raise ValueError(f"Unknown metadata.agentic keys: {', '.join(sorted(unknown))}")
     if agentic.get("schema_version") not in (1, 2):
         raise ValueError("metadata.agentic.schema_version must be 1 or 2")
-    if agentic.get("rules"):
+    rules = agentic.get("rules") or []
+    if rules:
         from .rules import validate_rules
 
-        problems = validate_rules(agentic["rules"])
+        problems = validate_rules(rules)
         if problems:
             raise ValueError("Invalid metadata.agentic.rules: " + "; ".join(
                 f"rule {p.index + 1}: {p.message}" for p in problems))
-    values = {key: agentic.get(key, {}) for key in AgenticExpectations.__dataclass_fields__ if key != "rules"}
-    values["rules"] = agentic.get("rules", [])
-    return AgenticExpectations(**values)
+    return AgenticExpectations(
+        schema_version=agentic["schema_version"],
+        enforcement=agentic.get("enforcement", {}),
+        trace=agentic.get("trace"),
+        goal=agentic.get("goal"),
+        semantic_judge=agentic.get("semantic_judge"),
+        rules=rules,
+    )

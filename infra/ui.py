@@ -23,9 +23,7 @@ from django.views.generic import DetailView, TemplateView, View
 
 from accounts import workos_auth
 from accounts.models import User
-from audits.agentic.migration import has_legacy, split_legacy
-from audits.agentic.rules import describe_rule, validate_rules
-from audits.agentic.tool_entries import parse_tool_entries
+from audits.agentic.rules import validate_rules
 from audits.comparison import compare_runs
 from audits.events import ScenarioResult
 from audits.models import AuditRun
@@ -153,151 +151,20 @@ def _int(value, default: int = 0) -> int:
 # Form fields that carry an explicit off/false value (checkbox pairs with a
 # hidden "0" sentinel). These stay written even when unchecked so an explicit
 # false remains an assertion after save.
-_EXPLICIT_FALSE_FIELDS = {
-    "agentic_rerank_required",
-    "agentic_policy_read_only",
-    "agentic_policy_allow_side_effects",
-    "agentic_approvals_must_precede_execution",
-    "agentic_semantic_judge_enabled",
-}
 
-
-def has_legacy_or_rules(agentic: dict) -> bool:
-    return bool(agentic.get("rules")) or has_legacy(agentic)
 
 
 def _merge_structured_agentic_fields(metadata: dict, post) -> dict:
-    """Merge authoring controls into agentic metadata without dropping extensions.
+    """Merge the authoring form into agentic metadata.
 
-    Sparse semantics: a section is only created when at least one of its form
-    fields carries a non-empty value (or an explicit false from a checkbox
-    pair). Untouched sections are removed again rather than being filled with
-    dormant defaults, so absence stays "not checked". Fields whose empty form
-    value maps to ``None``/empty list drop out of the saved section entirely;
-    unknown top-level and per-section fields round-trip untouched.
+    The form owns three things: the rules (``agentic_rules_json``), the semantic
+    judge, and the enforcement mode. Every other key in the stored metadata is kept
+    as it is.
     """
-    has_control = any(
-        key.startswith("agentic_") and key != "agentic_scenario"
-        and (key in _EXPLICIT_FALSE_FIELDS or str(post.get(key, "")).strip() != "")
-        for key in post
-    )
-    # A cleared rule editor must still remove rules saved earlier.
-    clears_rules = "agentic_rules_json" in post and has_legacy_or_rules(metadata.get("agentic") or {})
-    if not has_control and not clears_rules:
+    if not any(key.startswith("agentic_") and key != "agentic_scenario" for key in post):
         return metadata
     agentic = dict(metadata.get("agentic") or {})
     agentic.setdefault("schema_version", 2)
-    if "agentic_rules_json" in post:
-        # The rule editor owns the settings it converts; the posted rules replace them.
-        agentic = split_legacy(agentic)[1]
-
-    def csv(name):
-        return [value.strip() for value in post.get(name, "").split(",") if value.strip()]
-
-    def number(name):
-        value = post.get(name)
-        if value in (None, ""):
-            return None
-        return int(value)
-
-    def boolean(name):
-        return post.get(name) == "1"
-
-    def json_value(name):
-        value = post.get(name, "").strip()
-        if not value:
-            return []
-        parsed = json.loads(value)
-        if not isinstance(parsed, list):
-            raise TypeError(f"Field '{name}' must be a JSON array, got {type(parsed).__name__}")
-        return parsed
-
-    # (section, key, value, include_when_empty) — include_when_empty marks the
-    # explicit-false checkbox sentinels that must survive as assertions.
-    planned = [
-        ("tools", "expected", [{"name": name, "min_calls": 1, "max_calls": None} for name in csv("agentic_tools_expected")], False),
-        ("tools", "forbidden", parse_tool_entries(post.get("agentic_tools_forbidden", "")), False),
-        ("tools", "allowed", csv("agentic_tools_allowed"), False),
-        ("retrieval", "sources", csv("agentic_sources"), False),
-        ("retrieval", "min_documents", number("agentic_retrieval_min_documents"), False),
-        ("retrieval", "max_documents", number("agentic_retrieval_max_documents"), False),
-        ("rerank", "required", boolean("agentic_rerank_required"), True),
-        ("rerank", "min_calls", number("agentic_rerank_min_calls"), False),
-        ("rerank", "max_calls", number("agentic_rerank_max_calls"), False),
-        ("policy", "read_only", boolean("agentic_policy_read_only"), True),
-        ("policy", "allowed_data_scopes", csv("agentic_policy_allowed_data_scopes"), False),
-        ("policy", "forbidden_data_scopes", csv("agentic_policy_forbidden_data_scopes"), False),
-        ("policy", "forbidden_side_effects", csv("agentic_policy_forbidden_side_effects"), False),
-        ("policy", "allowed_destinations", csv("agentic_policy_allowed_destinations"), False),
-        ("policy", "allow_side_effects", boolean("agentic_policy_allow_side_effects"), True),
-        ("guardrails", "required", csv("agentic_guardrails_required"), False),
-        ("guardrails", "must_pass", csv("agentic_guardrails_must_pass"), False),
-        ("guardrails", "before_actions", json_value("agentic_guardrails_before_actions"), False),
-        ("approvals", "required_for", csv("agentic_approvals_required_for"), False),
-        ("approvals", "must_precede_execution", boolean("agentic_approvals_must_precede_execution"), True),
-        ("handoffs", "allowed", csv("agentic_handoffs_allowed"), False),
-        ("handoffs", "forbidden", csv("agentic_handoffs_forbidden"), False),
-        ("handoffs", "required", csv("agentic_handoffs_required"), False),
-        ("handoffs", "max_handoffs", number("agentic_handoffs_max_handoffs"), False),
-        ("handoffs", "max_depth", number("agentic_handoffs_max_depth"), False),
-        ("trajectory", "required_sequence", csv("agentic_sequence"), False),
-        ("trajectory", "max_steps", number("agentic_trajectory_max_steps"), False),
-        ("trajectory", "max_retries_per_tool", number("agentic_trajectory_max_retries_per_tool"), False),
-        ("trajectory", "max_identical_consecutive_calls", number("agentic_trajectory_max_identical_consecutive_calls"), False),
-        ("budgets", "max_tool_calls", number("agentic_max_tool_calls"), False),
-        ("budgets", "max_errors", number("agentic_budgets_max_errors"), False),
-        ("state", "assertions", json_value("agentic_state_assertions"), False),
-        ("semantic_judge", "enabled", boolean("agentic_semantic_judge_enabled"), True),
-        ("semantic_judge", "criteria", csv("agentic_semantic_judge_criteria"), False),
-    ]
-
-    # Sections the form owns: rebuilt from scratch so stale values from a
-    # previous revision do not leak through once their fields are cleared.
-    owned_sections = {section for section, _, _, _ in planned}
-    for section in sorted(owned_sections & set(agentic)):
-        del agentic[section]
-
-    for section, key, value, include_when_empty in planned:
-        empty = value in (None, [], "", False)
-        if empty and not include_when_empty:
-            continue
-        current = dict(agentic.get(section) or {})
-        if empty and value is False:
-            current[key] = False
-        elif value is None:
-            current.pop(key, None)
-        else:
-            current[key] = value
-        agentic[section] = current
-
-    # retrieval.required follows the sources field: present only when the
-    # author entered at least one source.
-    if "agentic_sources" in post:
-        sources = csv("agentic_sources")
-        retrieval = dict(agentic.get("retrieval") or {})
-        if sources:
-            retrieval["required"] = True
-        else:
-            retrieval.pop("required", None)
-        if retrieval:
-            agentic["retrieval"] = retrieval
-
-    # semantic_judge.enabled=True is implied when criteria were entered.
-    if "agentic_semantic_judge_criteria" in post and csv("agentic_semantic_judge_criteria"):
-        semantic = dict(agentic.get("semantic_judge") or {})
-        semantic["enabled"] = True
-        agentic["semantic_judge"] = semantic
-
-    mode = post.get("agentic_enforcement_mode", "")
-    if mode:
-        current = dict(agentic.get("enforcement") or {})
-        current["mode"] = mode
-        agentic["enforcement"] = current
-
-    # Drop sections left empty by this merge (e.g. cleared all tools fields).
-    for section in owned_sections:
-        if agentic.get(section) in ({}, None):
-            agentic.pop(section, None)
 
     if "agentic_rules_json" in post:
         raw_rules = str(post.get("agentic_rules_json") or "").strip()
@@ -312,6 +179,19 @@ def _merge_structured_agentic_fields(metadata: dict, post) -> dict:
         else:
             agentic.pop("rules", None)
 
+    criteria = [v.strip() for v in str(post.get("agentic_semantic_judge_criteria") or "").split(",") if v.strip()]
+    enabled = post.get("agentic_semantic_judge_enabled") == "1"
+    if enabled or criteria:
+        agentic["semantic_judge"] = {"enabled": enabled, "criteria": criteria}
+    else:
+        agentic.pop("semantic_judge", None)
+
+    mode = str(post.get("agentic_enforcement_mode") or "").strip()
+    if mode:
+        agentic["enforcement"] = {**(agentic.get("enforcement") or {}), "mode": mode}
+
+    if not metadata.get("agentic") and set(agentic) <= {"schema_version"}:
+        return metadata
     result = dict(metadata)
     result["agentic"] = agentic
     return result
@@ -3146,13 +3026,6 @@ class CompareView(ProjectMixin, TemplateView):
 
 # ─── Audit Detail ────────────────────────────────────────────────────────────
 
-def _scenario_rule_sentences(revision) -> list[str]:
-    """The scenario's structured rules as readable sentences, for the result page."""
-    metadata = (getattr(revision, "metadata", None) or {}) if revision else {}
-    rules = ((metadata.get("agentic") or {}).get("rules")) or []
-    return [describe_rule(rule) for rule in rules if isinstance(rule, dict)]
-
-
 def _result_rows(run: AuditRun, items: dict | None = None) -> list[dict]:
     """Rows for the audit detail Results list (handles n_repetitions > 1)."""
     set_id = run.scenario_set_version.scenario_set_id
@@ -3580,6 +3453,11 @@ _AGENTIC_SEVERITY_RANK = {"critical": 0, "high": 1, "medium": 2, "low": 3}
 #: ...then by status (FAIL > INCONCLUSIVE > ERROR > PASS).
 _AGENTIC_STATUS_RANK = {"fail": 0, "inconclusive": 1, "error": 2, "pass": 3}
 #: Span kinds rendered as their own timeline row style (everything else is generic).
+#: Readable reference prefix per span kind: LLM-1, TOOL-2, RETRIEVAL-1 ...
+_AGENTIC_REF_PREFIX = {"LLM": "LLM", "TOOL": "TOOL", "RETRIEVER": "RETRIEVAL", "AGENT": "AGENT",
+                       "GUARDRAIL": "GUARDRAIL", "EVALUATOR": "EVAL", "CHAIN": "STEP"}
+#: The model call that writes the answer (not one that only decides a tool call).
+_RESPONSE_ICON = "💬"
 _AGENTIC_SPAN_KIND_ICONS = {
     "LLM": ("🧠", "text-sky-300"),
     "RETRIEVER": ("📚", "text-emerald-300"),
@@ -3911,6 +3789,19 @@ def _agentic_timeline_view(rep: dict) -> dict | None:
         rows.append(row)
     if not rows:
         return None
+    # Readable references in execution order (LLM-1, TOOL-1 ...); the id stays the anchor.
+    counts: dict[str, int] = {}
+    label_for: dict[str, str] = {}
+    for row in rows:
+        kind = str(row.get("kind") or "").upper()
+        prefix = _AGENTIC_REF_PREFIX.get(kind, kind or "STEP")
+        counts[prefix] = counts.get(prefix, 0) + 1
+        row["label"] = f"{prefix}-{counts[prefix]}"
+        label_for.setdefault(row["span_id"], row["label"])
+    # The last model call, after every tool call, is the one that writes the answer.
+    model_rows = [row for row in rows if str(row.get("kind") or "").upper() == "LLM"]
+    if model_rows:
+        model_rows[-1].update(icon=_RESPONSE_ICON, response=True)
     anchor_for: dict[str, str] = {}
     for row in rows:
         anchor_for.setdefault(row["span_id"], row["anchor"])
@@ -3920,8 +3811,12 @@ def _agentic_timeline_view(rep: dict) -> dict | None:
         "total": len(rows),
         "captured": max(len(all_spans), len(rows)),
         "anchor_for": anchor_for,
+        "label_for": label_for,
         "spans_json": json.dumps(raw_spans, indent=2, ensure_ascii=False, default=str),
     }
+
+
+_CHECK_TITLES = {"trace.present": "Trace evidence present"}
 
 
 def _agentic_findings_view(evaluation: dict) -> list[dict]:
@@ -3938,8 +3833,11 @@ def _agentic_findings_view(evaluation: dict) -> list[dict]:
         span_ids = check.get("evidence_span_ids") or []
         if not isinstance(span_ids, list):
             span_ids = [span_ids]
+        details = check.get("details") if isinstance(check.get("details"), dict) else {}
+        check_id = str(check.get("id") or "check")
         cards.append({
-            "id": str(check.get("id") or "check"),
+            "id": check_id,
+            "title": details.get("rule") or _CHECK_TITLES.get(check_id, check_id),
             "category": str(check.get("category") or ""),
             "status": status,
             "severity": severity,
@@ -4209,14 +4107,15 @@ def _rep_view(rep: dict, index: int) -> dict:
     )
     grade = _judge_grade(rep.get("judgment"))
     agentic = rep.get("agentic_evaluation") if isinstance(rep.get("agentic_evaluation"), dict) else None
+    timeline = _agentic_timeline_view(rep)
+    label_for = timeline["label_for"] if timeline else {}
     if agentic and isinstance(agentic.get("checks"), list):
         # Each check's evidence ids come with display labels; the ids stay the link anchors.
         agentic = {**agentic, "checks": [
-            {**c, "evidence_spans": [{"id": str(sid), "label": _span_label(str(sid))} for sid in (c.get("evidence_span_ids") or [])]}
+            {**c, "evidence_spans": [{"id": str(sid), "label": label_for.get(str(sid), _span_label(str(sid)))} for sid in (c.get("evidence_span_ids") or [])]}
             if isinstance(c, dict) else c
             for c in agentic["checks"]
         ]}
-    timeline = _agentic_timeline_view(rep)
     # Finding cards and judge dimensions cite span ids; resolve each to its
     # unique DOM anchor so a jump link lands on the correct row even when span
     # ids repeat.
@@ -4226,14 +4125,14 @@ def _rep_view(rep: dict, index: int) -> dict:
 
     for card in findings:
         card["spans"] = [
-            {"span_id": sid, "label": _span_label(sid), "anchor": anchor_for.get(sid, sid)}
-            for sid in card.pop("span_ids")
+            {"span_id": sid, "label": label_for.get(sid, _span_label(sid)), "anchor": anchor_for.get(sid, sid)}
+            for sid in dict.fromkeys(card.pop("span_ids"))
         ]
     if judge:
         for dim in judge["dimensions"]:
             dim["spans"] = [
-                {"span_id": sid, "label": _span_label(sid), "anchor": anchor_for.get(sid, sid)}
-                for sid in dim.pop("span_ids")
+                {"span_id": sid, "label": label_for.get(sid, _span_label(sid)), "anchor": anchor_for.get(sid, sid)}
+                for sid in dict.fromkeys(dim.pop("span_ids"))
             ]
     # The scenario's own decision answer: the last one in the conversation, so a
     # follow-up turn's answer replaces the opening one.
@@ -4337,7 +4236,6 @@ class RunResultView(PublicReadableMixin, TemplateView):
                 [e.get("criterion", e) if isinstance(e, dict) else e for e in expected]
             ),
             test_prompt=revision.test_prompt if revision else "",
-            scenario_rules=_scenario_rule_sentences(revision),
             scenario_severity_ceiling=revision.severity_ceiling if revision else "",
             scenario_documents=revision.documents if revision else [],
             scenario_file_uri=revision.file_uri if revision else None,

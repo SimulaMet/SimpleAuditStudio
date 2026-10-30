@@ -1,110 +1,100 @@
-"""Structured rule model: fixed rule types, validation messages, defaults."""
+"""Agentic rules: every rule is one count, exists, none, all or distinct check."""
 import pytest
 
-from audits.agentic.rules import RULE_TYPES, normalize_rules, validate_rules
+from audits.agentic.rules import STARTERS, check_label, describe_rule, validate_rules
 
 
 def _messages(rules):
     return [(e.index, e.message) for e in validate_rules(rules)]
 
 
-def test_valid_rules_of_every_type_pass():
+def _error_check(**overrides):
+    rule = {"type": "check", "select": {"kind": "any", "where": [
+        {"field": "span.error", "op": "equals", "value": True}]}, "check": "count",
+        "expect": {"op": "at_most", "value": 0}}
+    rule.update(overrides)
+    return rule
+
+
+def test_valid_checks_pass():
     rules = [
-        {"type": "tool_called", "tool": "lookup", "arguments": {"id": "A"}, "min": 1},
-        {"type": "tool_not_called", "tool": "send_email", "arguments": {"to": "x"}},
-        {"type": "sequence", "steps": ["retrieval", "lookup"], "mode": "in_order_exact"},
-        {"type": "precedes", "first": "approve", "then": "refund"},
-        {"type": "budget", "max": 3, "tool": "lookup"},
-        {"type": "repeated_calls", "max_identical": 1},
-        {"type": "forbidden_values", "values": ["SECRET-42"], "scope": ["answer"]},
-        {"type": "grounded_value", "tool": "lookup", "field": "status"},
-        {"type": "retrieval", "min_documents": 1, "sources": ["policy.md"]},
-        {"type": "errors", "max": 1},
-        {"type": "retries", "tool": "lookup", "max_retries": 1, "same_arguments": True},
+        {'type': 'check', 'select': {'kind': 'tool', 'where': [{'field': 'tool.name', 'op': 'equals', 'value': 'lookup'}, {'field': 'tool.argument.id', 'op': 'equals', 'value': 'A'}]}, 'check': 'count', 'expect': {'op': 'at_least', 'value': 1}},
+        {'type': 'check', 'select': {'kind': 'tool', 'where': [{'field': 'tool.name', 'op': 'equals', 'value': 'send_email'}]}, 'check': 'none'},
+        {'type': 'check', 'select': {'kind': 'answer', 'where': [{'field': 'answer.text', 'op': 'contains', 'value': 'SECRET-42'}]}, 'check': 'none'},
+        {'type': 'check', 'select': {'kind': 'retrieval_document', 'where': [{'field': 'retrieval.source', 'op': 'equals', 'value': 'policy.md'}]}, 'check': 'exists'},
+        {'type': 'check', 'select': {'kind': 'tool', 'where': []}, 'check': 'all', 'expect': {'op': 'at_least', 'value': 1}},
+        {'type': 'check', 'select': {'kind': 'tool', 'where': []}, 'check': 'distinct', 'field': 'tool.arguments', 'expect': {'op': 'at_most', 'value': 2}},
+        _error_check(expect={"op": "between", "value": [0, 1]}),
     ]
-    assert {r["type"] for r in rules} == set(RULE_TYPES)
     assert validate_rules(rules) == []
 
 
-def test_unknown_rule_type_is_reported():
-    assert _messages([{"type": "vibe_check"}]) == [(0, "unknown rule type 'vibe_check'")]
+def test_presets_are_not_rules_any_more():
+    assert _messages([{"type": "vibe_check"}]) == [(0, "rules must be custom checks")]
+    assert _messages([{"type": "tool_called", "tool": "lookup"}]) == [(0, "rules must be custom checks")]
 
 
-def test_missing_required_field_is_reported():
-    assert _messages([{"type": "tool_called"}]) == [(0, "'tool' is required")]
+def test_removed_check_kinds_are_rejected():
+    assert _messages([{"type": "check", "check": "in_order", "steps": []}]) == [
+        (0, "unknown field(s): steps"), (0, "'check' must be one of count, exists, none, all, distinct")]
 
 
 def test_wrong_value_type_is_reported():
-    assert _messages([{"type": "budget", "max": "3"}]) == [(0, "'max' has an invalid value")]
+    assert _messages([_error_check(expect={"op": "at_most", "value": "3"})]) == [
+        (0, "'expect' needs a count of 0 or more")]
 
 
 def test_negative_count_is_rejected():
-    assert _messages([{"type": "errors", "max": -1}]) == [(0, "'max' has an invalid value")]
+    assert _messages([_error_check(expect={"op": "at_most", "value": -1})]) == [
+        (0, "'expect' needs a count of 0 or more")]
 
 
 def test_unknown_field_is_reported():
-    assert _messages([{"type": "errors", "max": 0, "colour": "red"}]) == [(0, "unknown field(s): colour")]
+    assert _messages([_error_check(colour="red")]) == [(0, "unknown field(s): colour")]
 
 
-def test_min_larger_than_max_is_reported():
-    assert _messages([{"type": "tool_called", "tool": "t", "min": 3, "max": 1}]) == [
-        (0, "'min' is larger than 'max'")
-    ]
-
-
-def test_sequence_mode_must_be_known():
-    assert _messages([{"type": "sequence", "steps": ["a"], "mode": "random"}]) == [
-        (0, "'mode' has an invalid value")
-    ]
-
-
-def test_forbidden_values_scope_must_be_known():
-    assert _messages([{"type": "forbidden_values", "values": ["x"], "scope": ["logs"]}]) == [
-        (0, "'scope' has an invalid value")
-    ]
-
-
-def test_rules_must_be_a_list_of_objects():
-    assert validate_rules({"type": "errors"})[0].message == "rules must be a list"
-    assert _messages(["errors"]) == [(0, "each rule must be an object")]
+def test_between_must_be_low_first():
+    assert _messages([_error_check(expect={"op": "between", "value": [3, 1]})]) == [
+        (0, "'between' needs two counts, low first")]
 
 
 def test_errors_carry_the_rule_index():
-    rules = [{"type": "errors", "max": 0}, {"type": "budget"}]
-    assert _messages(rules) == [(1, "'max' is required")]
+    assert _messages([_error_check(), {"type": "budget"}]) == [(1, "rules must be custom checks")]
 
 
-def test_normalize_fills_defaults():
-    out = normalize_rules([
-        {"type": "sequence", "steps": ["a", "b"]},
-        {"type": "forbidden_values", "values": ["x"]},
-        {"type": "retries", "tool": "t", "max_retries": 1},
-    ])
-    assert out[0]["mode"] == "in_order_others_allowed"
-    assert out[1]["scope"] == ["arguments", "results", "answer"]
-    assert out[2]["same_arguments"] is True
-
-
-@pytest.mark.parametrize("rule", [
-    {"type": "tool_called", "tool": "acme_get_order", "arguments": {"order_id": "ACME-1001"}, "min": 1},
-    {"type": "grounded_value", "tool": "acme_get_order", "field": "delivered"},
-    {"type": "retries", "tool": "acme_get_tracking_events", "max_retries": 1},
-])
-def test_scenario_style_rules_validate(rule):
-    assert validate_rules([rule]) == []
+def test_rules_must_be_a_list_of_objects():
+    assert validate_rules({"type": "check"})[0].message == "rules must be a list"
+    assert _messages(["check"]) == [(0, "each rule must be an object")]
 
 
 def test_describe_rule_reads_as_a_sentence():
-    from audits.agentic.rules import describe_rule
+    assert describe_rule({"type": "check", "select": {"kind": "tool", "where": [
+        {"field": "tool.name", "op": "equals", "value": "acme_get_order"},
+        {"field": "tool.argument.order_id", "op": "equals", "value": "ACME-1002"}]},
+        "check": "count", "expect": {"op": "at_least", "value": 1}}) == (
+        "acme_get_order(order_id='ACME-1002') must be called at least once")
+    assert describe_rule(_error_check()) == "No error steps"
+    assert describe_rule(_error_check(expect={"op": "at_most", "value": 1})) == "At most 1 error step"
+    assert describe_rule({"type": "check", "select": {"kind": "retrieval_document", "where": []}, "check": "count",
+                          "expect": {"op": "at_least", "value": 1}}) == "At least 1 retrieved document"
 
-    assert describe_rule({"type": "tool_called", "tool": "lookup", "arguments": {"id": "A"}, "min": 1}) == (
-        "Tool must be called (tool: lookup; arguments: id='A'; min: 1)")
-    assert describe_rule({"type": "errors", "max": 0}) == "Limit error steps (max: 0)"
-    assert describe_rule({"type": "retrieval"}) == "Must retrieve from knowledge"
+
+def test_describe_named_source_and_error_type_read_as_sentences():
+    error = {"field": "span.error", "op": "equals", "value": True}
+    error_type = {"field": "span.error_type", "op": "equals", "value": "ValueError"}
+    assert describe_rule({"type": "check", "check": "exists", "select": {"kind": "any", "where": [error, error_type]}}) == (
+        "At least one error where error type is ValueError occurs")
+    assert describe_rule({"type": "check", "check": "exists", "select": {"kind": "retrieval_document", "where": [
+        {"field": "retrieval.source", "op": "equals", "value": "customer_faq.md"}]}}) == (
+        "At least one retrieved document where source is customer_faq.md occurs")
 
 
 def test_check_label_names_rule_checks_and_leaves_others_alone():
-    from audits.agentic.rules import check_label
-
-    assert check_label("rule.0.tool_called") == "Rule 1 · Tool must be called"
+    assert check_label("rule.0.check") == "Rule 1 · Custom check"
     assert check_label("trace.present") == "trace.present"
+
+
+@pytest.mark.parametrize("starter", STARTERS, ids=lambda s: s["label"])
+def test_every_starter_is_valid_custom_checks(starter):
+    assert starter["rules"]
+    assert validate_rules(starter["rules"]) == []

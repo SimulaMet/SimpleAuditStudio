@@ -109,7 +109,6 @@ def _create_revision(*, scenario: Scenario, user, description: str, expected_beh
                      severity_ceiling: str = "", documents=None, file_uri=None, decision=None,
                      metadata: dict) -> ScenarioRevision:
     from audits.agentic.expectations import validate_agentic_metadata
-
     validate_agentic_metadata(metadata)
     if decision:
         _validate_decision_block(decision)

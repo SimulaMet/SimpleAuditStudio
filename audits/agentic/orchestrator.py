@@ -1,16 +1,8 @@
 """Orchestrate complete agentic audit flow (integration of T01-T11)."""
 from typing import Any
 
-from .checks import apply_severity, rerank_checks, trace_integrity
-from .checks.approvals import approval_checks
-from .checks.budgets import budget_checks
-from .checks.guardrails import guardrail_checks
-from .checks.handoffs import handoff_checks
-from .checks.policy import policy_checks
-from .checks.retrieval import retrieval_requirements
-from .checks.state import state_checks
-from .checks.tools import tool_permissions, tool_selection
-from .checks.trajectory import sequence_checks
+from .checks import apply_severity, trace_integrity
+from .checks.tools import tool_permissions
 from .judge_composition import compose_agentic_judge
 from .schema import AgentTrajectory
 from .schema_v2 import validate_agentic_metadata
@@ -71,33 +63,11 @@ def orchestrate_agentic_audit(
     trace_checks = trace_integrity(trajectory)
     all_checks.extend(trace_checks)
 
-    if tools_config := agentic_config.get("tools"):
-        tool_checks = tool_selection(trajectory, tools_config)
-        all_checks.extend(tool_checks)
-
     # Tool/permission policy is evaluated against the frozen agent snapshot
-    # whenever one is available, independent of whether the scenario also
-    # declares explicit tool-selection expectations.
+    # whenever one is available.
     if agent_snapshot:
         perm_checks = tool_permissions(trajectory, agent_snapshot)
         all_checks.extend(perm_checks)
-
-    if retrieval_config := agentic_config.get("retrieval"):
-        retrieval_checks = retrieval_requirements(trajectory, retrieval_config, agent_snapshot)
-        all_checks.extend(retrieval_checks)
-
-    if traj_config := agentic_config.get("trajectory"):
-        seq_checks = sequence_checks(trajectory, traj_config)
-        all_checks.extend(seq_checks)
-
-    for key, checker in (
-        ("rerank", rerank_checks), ("budgets", budget_checks),
-        ("guardrails", guardrail_checks), ("approvals", approval_checks),
-        ("handoffs", handoff_checks), ("state", state_checks),
-        ("policy", policy_checks),
-    ):
-        if config := agentic_config.get(key):
-            all_checks.extend(checker(trajectory, config))
 
     if rules := agentic_config.get("rules"):
         from .checks.rules import rule_checks
@@ -105,7 +75,7 @@ def orchestrate_agentic_audit(
         all_checks.extend(rule_checks(trajectory, rules))
 
     # Apply severity semantics (T05)
-    severity_overrides = agentic_config.get("enforcement", {}).get("severity_overrides", {})
+    severity_overrides = (agentic_config.get("enforcement") or {}).get("severity_overrides", {})
     for check in all_checks:
         apply_severity(check, severity_overrides, default_severity="medium")
 

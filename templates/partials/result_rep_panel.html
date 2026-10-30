@@ -53,34 +53,42 @@ whole result of a single-rep run. Context: rep (see infra.ui._rep_view).
       {% endif %}
       {% if rep.agentic_findings %}
       <p class="text-[11px] text-gray-500 mb-2">Chips jump to the evidence step</p>
+      <style>
+        /* Collapsed verdict cards: fixed height; the content stays visible and fades only at the bottom edge. */
+        .agentic-finding-card { height: 6rem; overflow: hidden; }
+        .agentic-finding-card:not([open]) { -webkit-mask-image: linear-gradient(to bottom, black 70%, transparent 100%); mask-image: linear-gradient(to bottom, black 70%, transparent 100%); }
+        .agentic-finding-card[open] { height: auto; overflow: visible; }
+      </style>
       <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-2.5">
         {% for f in rep.agentic_findings %}
         <details class="agentic-finding-card min-w-0 rounded-lg border px-3 py-2.5 {% if f.status == 'FAIL' or f.status == 'ERROR' %}border-red-900/50 bg-red-950/20{% elif f.status == 'INCONCLUSIVE' %}border-amber-900/50 bg-amber-950/10{% else %}border-gray-800 bg-surface-overlay/30{% endif %}" data-severity="{{ f.severity }}" data-status="{{ f.status }}">
           <summary class="cursor-pointer select-none list-none [&::-webkit-details-marker]:hidden">
-            <div class="flex items-center gap-2 min-w-0">
+            <div class="flex flex-wrap items-start gap-2 min-w-0">
               <span class="shrink-0 px-1.5 py-0.5 rounded text-[10px] font-semibold {% if f.status == 'PASS' %}bg-emerald-900/40 text-emerald-300{% elif f.status == 'INCONCLUSIVE' %}bg-amber-900/40 text-amber-300{% else %}bg-red-900/40 text-red-300{% endif %}">{{ f.status }}</span>
               {% if f.severity %}<span class="shrink-0 px-1.5 py-0.5 rounded text-[10px] uppercase tracking-wide {% if f.severity == 'critical' %}bg-red-950 text-red-300{% elif f.severity == 'high' %}bg-orange-950 text-orange-300{% elif f.severity == 'medium' %}bg-amber-950 text-amber-300{% else %}bg-gray-800 text-gray-400{% endif %}">{{ f.severity }}</span>{% endif %}
-              <code class="min-w-0 truncate text-[11px] text-gray-400" title="{{ f.id }}">{{ f.id|check_label }}</code>
+              <span class="min-w-0 flex-1 text-xs text-gray-200 break-words" title="{{ f.id }}">{{ f.title }}</span>
             </div>
             <p class="mt-1 text-xs text-gray-300 break-words">{% if f.summary %}{{ f.summary }}{% else %}—{% endif %}</p>
+            <div class="mt-1.5 space-y-1.5">
+              {% if f.expected or f.observed %}
+              <div class="text-[11px] text-gray-500">
+                {% if f.expected %}<p><span class="font-semibold text-gray-400">Expected:</span> {{ f.expected }}</p>{% endif %}
+                {% if f.observed %}<p><span class="font-semibold text-gray-400">Observed:</span> {{ f.observed }}</p>{% endif %}
+              </div>
+              {% endif %}
+              {% if f.spans %}
+              <div class="flex flex-wrap gap-1">
+                {% for sp in f.spans %}
+                <a href="#trace-span-{{ rep.index }}-{{ sp.anchor }}" class="agentic-span-link inline-flex items-center gap-1 max-w-full rounded bg-surface-overlay/70 border border-gray-800 px-1.5 py-0.5 text-[10px] text-violet-300 hover:text-violet-200" title="{{ sp.span_id }}">
+                  <span aria-hidden="true">⌖</span><span class="truncate">{{ sp.label|default:sp.span_id }}</span>
+                </a>
+                {% endfor %}
+              </div>
+              {% endif %}
+            </div>
           </summary>
           <div class="mt-2 space-y-1.5 border-t border-gray-800/60 pt-2">
             {% if f.reason %}<p class="text-[11px] text-gray-400 break-words">{{ f.reason }}</p>{% endif %}
-            {% if f.expected or f.observed %}
-            <div class="text-[11px] text-gray-500">
-              {% if f.expected %}<p><span class="font-semibold text-gray-400">Expected:</span> {{ f.expected }}</p>{% endif %}
-              {% if f.observed %}<p><span class="font-semibold text-gray-400">Observed:</span> {{ f.observed }}</p>{% endif %}
-            </div>
-            {% endif %}
-            {% if f.spans %}
-            <div class="flex flex-wrap gap-1">
-              {% for sp in f.spans %}
-              <a href="#trace-span-{{ rep.index }}-{{ sp.anchor }}" class="agentic-span-link inline-flex items-center gap-1 max-w-full rounded bg-surface-overlay/70 border border-gray-800 px-1.5 py-0.5 text-[10px] text-violet-300 hover:text-violet-200" title="{{ sp.span_id }}">
-                <span aria-hidden="true">⌖</span><span class="truncate">{{ sp.label|default:sp.span_id }}</span>
-              </a>
-              {% endfor %}
-            </div>
-            {% endif %}
           </div>
           <span class="hidden" data-agentic-check-evidence="{{ f.evidence_span_ids|join:' ' }}"></span>
         </details>
@@ -89,21 +97,6 @@ whole result of a single-rep run. Context: rep (see infra.ui._rep_view).
       {% endif %}
     </div>
     {% endif %}
-    <div class="space-y-1.5">
-      {% for check in rep.agentic.checks %}
-      {% if check.expected or check.observed or check.evidence_span_ids %}
-      <details class="rounded bg-surface-overlay/50 px-3 py-2">
-        <summary class="cursor-pointer text-xs text-gray-300">        <span class="mr-2 {% if check.status == 'PASS' %}text-emerald-400{% elif check.status == 'INCONCLUSIVE' %}text-amber-400{% else %}text-red-400{% endif %}">{{ check.status }}</span>{{ check.id|check_label }} — {{ check.summary }}</summary>
-        {% if check.expected or check.observed %}<div class="mt-2 text-[11px] text-gray-500">Expected: {{ check.expected|default:'—' }} · Observed: {{ check.observed|default:'—' }}</div>{% endif %}
-        {% if check.evidence_span_ids %}<div class="mt-1 text-[11px] text-gray-500">Evidence spans:
-          {% for sp in check.evidence_spans %}<a class="text-violet-300 hover:text-violet-200 underline" href="#trace-span-{{ rep.index }}-{{ sp.id }}">{{ sp.label }}</a>{% if not forloop.last %}, {% endif %}{% endfor %}
-        </div>{% endif %}
-      </details>
-      {% else %}
-      <div class="rounded bg-surface-overlay/50 px-3 py-2 text-xs text-gray-300">        <span class="mr-2 {% if check.status == 'PASS' %}text-emerald-400{% elif check.status == 'INCONCLUSIVE' %}text-amber-400{% else %}text-red-400{% endif %}">{{ check.status }}</span>{{ check.id|check_label }} — {{ check.summary }}</div>
-      {% endif %}
-      {% endfor %}
-
     {% if rep.agentic_judge %}
     <div class="border-t border-gray-800/70 mt-3 pt-3">
       {% include "partials/agentic_judge.html" %}
@@ -142,7 +135,7 @@ whole result of a single-rep run. Context: rep (see infra.ui._rep_view).
   </div>
   {% endif %}
 
-  {% if rep.has_grade %}
+  {% if rep.has_grade and not rep.agentic_overview and not rep.agentic_findings %}
   
   <div class="bg-surface-raised rounded-xl border border-gray-800 p-4">
     <div class="flex flex-wrap items-center gap-3 mb-2">

@@ -1,39 +1,37 @@
 """One rule engine: select trace units, then check them.
 
-A custom rule reads as one sentence:
+A rule reads as one sentence:
   look at <kind> units where <conditions>, check <count | exists | none | all | distinct>,
   expect <comparison>.
 
 Units are read only from the trace: tool calls (name, arguments, result, error),
-retrieval documents (source, text), the final answer, and any step. Presets
-compile into this form, so there is one evaluator. Missing evidence is
-INCONCLUSIVE.
+retrieval documents (source, text), the final answer, and any step. Missing evidence
+is INCONCLUSIVE. Rules are ANDed: each one is checked on its own.
 """
 from __future__ import annotations
 
 import json
-from collections import Counter
 from typing import Any
 
+from .checks.answer import final_answer
 from .checks.base import CheckResult, result
-from .checks.policy import _final_answer as final_answer
 from .checks.retrieval import _retrieval_steps as retrieval_steps
 from .checks.tools import _tool_arguments as tool_arguments
 from .schema import AgentTrajectory
 
-KINDS = ("tool", "retrieval_document", "answer", "any", "action")
-CHECKS = ("count", "exists", "none", "all", "distinct", "in_order", "before", "max_group", "max_run")
-ORDERING = ("in_order", "before", "max_group", "max_run")
-ACTION_KINDS = {"tool", "retrieval", "approval", "handoff", "rerank", "guardrail"}
+KINDS = ("tool", "retrieval_document", "answer", "any")
+CHECKS = ("count", "exists", "none", "all", "distinct")
 TEXT_OPS = ("equals", "not_equals", "one_of", "not_one_of", "contains")
 NUMBER_OPS = ("equals", "at_least", "at_most", "between")
 EXPECT_OPS = ("equals", "at_least", "at_most", "between")
+_RULE_KEYS = {"type", "check", "select", "expect", "field"}
 
 # Field name -> (kinds it applies to, operator family). Dynamic names are matched by prefix.
 _FIXED_FIELDS = {
     "span.kind": (("any",), "text"),
     "span.name": (("any",), "text"),
     "span.error": (("any", "tool"), "bool"),
+    "span.error_type": (("any", "tool"), "text"),
     "tool.name": (("tool",), "text"),
     "tool.arguments": (("tool",), "text"),
     "tool.result": (("tool",), "text"),
@@ -67,36 +65,6 @@ def _field_spec(field: str) -> tuple[tuple[str, ...], str] | None:
     return None
 
 
-def _validate_ordering(rule: dict) -> list[str]:
-    problems: list[str] = []
-    check = rule["check"]
-    if check == "in_order":
-        steps = rule.get("steps")
-        if not isinstance(steps, list) or not steps or not all(isinstance(s, list) and s for s in steps):
-            problems.append("'in_order' needs a list of steps, each with at least one condition")
-        for step in steps or []:
-            problems += [p for c in (step if isinstance(step, list) else []) for p in _condition_problems(c)]
-        if rule.get("mode", "in_order_others_allowed") not in ("in_order_others_allowed", "in_order_exact"):
-            problems.append("'mode' must be in order, others allowed, or in order exactly")
-    if check == "before":
-        for key in ("first", "then"):
-            conditions = rule.get(key)
-            if not isinstance(conditions, list) or not conditions:
-                problems.append(f"'before' needs '{key}' with at least one condition")
-            problems += [p for c in (conditions if isinstance(conditions, list) else []) for p in _condition_problems(c)]
-    if check in ("max_group", "max_run"):
-        group_by = rule.get("group_by")
-        if not isinstance(group_by, list) or not group_by:
-            problems.append(f"'{check}' needs 'group_by' with at least one field")
-        for field in group_by or []:
-            if _field_spec(field) is None:
-                problems.append(f"unknown field '{field}'")
-        expect = rule.get("expect")
-        if not isinstance(expect, dict) or expect.get("op") not in EXPECT_OPS:
-            problems.append("'expect' needs an operator: equals, at least, at most, or between")
-    return problems
-
-
 def _condition_problems(condition: Any) -> list[str]:
     if not isinstance(condition, dict) or "field" not in condition or "op" not in condition:
         return ["each condition needs a field and an operator"]
@@ -105,11 +73,29 @@ def _condition_problems(condition: Any) -> list[str]:
     return []
 
 
+def _count_ok(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
+def _expect_problems(expect: Any) -> list[str]:
+    if not isinstance(expect, dict) or expect.get("op") not in EXPECT_OPS:
+        return ["'expect' needs an operator: equals, at least, at most, or between"]
+    value = expect.get("value")
+    if expect["op"] == "between":
+        ok = isinstance(value, list) and len(value) == 2 and all(_count_ok(v) for v in value) and value[0] <= value[1]
+        return [] if ok else ["'between' needs two counts, low first"]
+    return [] if _count_ok(value) else ["'expect' needs a count of 0 or more"]
+
+
 def validate_check(rule: dict) -> list[str]:
-    """Problems with a custom check rule, in plain words."""
-    if rule.get("check") in ORDERING:
-        return _validate_ordering(rule)
+    """Problems with a rule, in plain words."""
     problems: list[str] = []
+    unknown = set(rule) - _RULE_KEYS
+    if unknown:
+        problems.append(f"unknown field(s): {', '.join(sorted(unknown))}")
+    check = rule.get("check")
+    if check not in CHECKS:
+        return problems + [f"'check' must be one of {', '.join(CHECKS)}"]
     select = rule.get("select")
     if not isinstance(select, dict) or select.get("kind") not in KINDS:
         problems.append(f"'select.kind' must be one of {', '.join(KINDS)}")
@@ -135,15 +121,8 @@ def validate_check(rule: dict) -> list[str]:
             allowed = tuple(dict.fromkeys(TEXT_OPS + NUMBER_OPS))
         if condition["op"] not in allowed:
             problems.append(f"condition {index + 1}: operator '{condition['op']}' does not fit '{condition['field']}'")
-    check = rule.get("check")
-    if check not in CHECKS:
-        problems.append(f"'check' must be one of {', '.join(CHECKS)}")
     if check in ("count", "distinct"):
-        expect = rule.get("expect")
-        if not isinstance(expect, dict) or expect.get("op") not in EXPECT_OPS:
-            problems.append("'expect' needs an operator: equals, at least, at most, or between")
-        elif expect["op"] == "between" and not (isinstance(expect.get("value"), list) and len(expect["value"]) == 2):
-            problems.append("'between' needs two values")
+        problems += _expect_problems(rule.get("expect"))
     if check == "distinct" and not rule.get("field"):
         problems.append("'distinct' needs a field to count")
     if rule.get("field") and _field_spec(rule["field"]) is None:
@@ -155,8 +134,6 @@ def _units(kind: str, trajectory: AgentTrajectory) -> list[tuple[Any, str]]:
     """(unit, span_id) pairs for a kind. A unit is a step, a document dict, or the answer text."""
     if kind == "tool":
         return [(s, s.span_id) for s in trajectory.steps if s.kind == "tool"]
-    if kind == "action":
-        return [(s, s.span_id) for s in trajectory.primary_steps if s.kind in ACTION_KINDS]
     if kind == "retrieval_document":
         out = []
         for step in retrieval_steps(trajectory):
@@ -192,6 +169,8 @@ def _value(kind: str, unit: Any, field: str) -> Any:
         return step.name
     if field in ("span.error", "tool.error"):
         return step.is_error()
+    if field == "span.error_type":
+        return step.attributes.get("error.type")
     if kind == "tool" or step.kind == "tool":
         if field == "tool.name":
             return step.name
@@ -214,6 +193,9 @@ def _value(kind: str, unit: Any, field: str) -> Any:
 
 def _captured(kind: str, unit: Any, field: str) -> bool:
     """Whether the trace recorded the source of a field, even if the key is absent."""
+    if field == "span.error_type" and hasattr(unit, "is_error") and not unit.is_error():
+        # An error type exists only on failed steps: a step that did not fail has none to record.
+        return True
     if field.startswith("tool.argument") or field == "tool.arguments":
         return kind == "tool" and tool_arguments(unit) is not None
     if field.startswith("tool.result") or field == "tool.result":
@@ -256,18 +238,18 @@ def _expect(n: int, expect: dict) -> bool:
 
 
 def evaluate_check(index: int, rule: dict, trajectory: AgentTrajectory, label: str | None = None) -> CheckResult:
-    """One custom check rule as one check result."""
+    """One rule as one check result."""
     check_id = label or f"rule.{index}.check"
     if not trajectory.steps:
         return result(check_id, "rules", "INCONCLUSIVE", "No trace evidence captured.")
-    if rule.get("check") in ORDERING:
-        return _evaluate_ordering(check_id, rule, trajectory)
     select = rule["select"]
     kind = select["kind"]
     conditions = select.get("where", [])
     units = _units(kind, trajectory)
     if not units and kind == "answer":
         return result(check_id, "rules", "INCONCLUSIVE", "The trace has no final answer to check.")
+    if not units and rule["check"] == "all":
+        return result(check_id, "rules", "INCONCLUSIVE", f"No {kind} units to check, so 'all' cannot be shown.")
     for condition in conditions:
         if units and not any(_captured(kind, unit, condition["field"]) for unit, _ in units):
             return result(check_id, "rules", "INCONCLUSIVE",
@@ -305,160 +287,162 @@ def _expect_text(expect: dict) -> str:
     return f"{names[expect['op']]} {value}"
 
 
-def _cond(field: str, op: str, value: Any) -> dict:
-    return {"field": field, "op": op, "value": value}
+_FIELD_NAMES = {
+    "span.kind": "span kind", "span.name": "span name", "span.error": "error",
+    "span.error_type": "error type", "tool.name": "tool name", "tool.arguments": "arguments",
+    "tool.result": "result", "tool.error": "tool error", "retrieval.source": "source",
+    "retrieval.text": "retrieved text", "answer.text": "answer text",
+}
+_KIND_NAMES = {"tool": "tool call", "retrieval_document": "retrieved document", "answer": "answer", "any": "step"}
+_OP_WORDS = {"equals": "is", "not_equals": "is not", "one_of": "is one of", "not_one_of": "is not one of",
+             "contains": "contains", "at_least": "is at least", "at_most": "is at most", "between": "is between"}
+_EXPECT_WORDS = {"equals": "Exactly", "at_least": "At least", "at_most": "At most", "between": "Between"}
 
 
-def compile_preset(rule: dict) -> list[dict] | None:
-    """A preset rule as custom check rules, or None when it stays on its own evaluator
-    (ordering presets: sequence, precedes, retries, grounded value, repeated calls)."""
-    kind = rule.get("type")
-    if kind == "tool_called":
-        conditions = [_cond("tool.name", "equals", rule["tool"])]
-        conditions += [_cond(f"tool.argument.{k}", "equals", v) for k, v in (rule.get("arguments") or {}).items()]
-        low = rule.get("min", 0 if "max" in rule else 1)
-        high = rule.get("max")
-        if high is None:
-            expect = {"op": "at_least", "value": low}
-        elif low == 0:
-            expect = {"op": "at_most", "value": high}
-        else:
-            expect = {"op": "between", "value": [low, high]}
-        return [{"type": "check", "select": {"kind": "tool", "where": conditions}, "check": "count", "expect": expect}]
-    if kind == "tool_not_called":
-        conditions = [_cond("tool.name", "equals", rule["tool"])]
-        conditions += [_cond(f"tool.argument.{k}", "equals", v) for k, v in (rule.get("arguments") or {}).items()]
-        return [{"type": "check", "select": {"kind": "tool", "where": conditions}, "check": "none"}]
-    if kind == "budget":
-        conditions = [_cond("tool.name", "equals", rule["tool"])] if rule.get("tool") else []
-        return [{"type": "check", "select": {"kind": "tool", "where": conditions}, "check": "count",
-                 "expect": {"op": "at_most", "value": rule["max"]}}]
-    if kind == "errors":
-        return [{"type": "check", "select": {"kind": "any", "where": [_cond("span.error", "equals", True)]},
-                 "check": "count", "expect": {"op": "at_most", "value": rule["max"]}}]
-    if kind == "forbidden_values":
-        scopes = rule.get("scope") or ["arguments", "results", "answer"]
-        compiled = []
-        for value in rule["values"]:
-            if "arguments" in scopes:
-                compiled.append({"type": "check", "select": {"kind": "tool", "where": [_cond("tool.arguments", "contains", value)]}, "check": "none"})
-            if "results" in scopes:
-                compiled.append({"type": "check", "select": {"kind": "tool", "where": [_cond("tool.result", "contains", value)]}, "check": "none"})
-            if "answer" in scopes:
-                compiled.append({"type": "check", "select": {"kind": "answer", "where": [_cond("answer.text", "contains", value)]}, "check": "none"})
-        return compiled
-    if kind == "sequence" and rule.get("mode", "in_order_others_allowed") in ("in_order_others_allowed", "in_order_exact"):
-        return [{"type": "check", "check": "in_order", "steps": [_label_conditions(s) for s in rule["steps"]],
-                 "mode": rule.get("mode", "in_order_others_allowed")}]
-    if kind == "precedes":
-        return [{"type": "check", "check": "before", "first": _label_conditions(rule["first"]),
-                 "then": _label_conditions(rule["then"])}]
-    if kind == "repeated_calls":
-        return [{"type": "check", "check": "max_group", "select": {"kind": "tool", "where": []},
-                 "group_by": ["tool.name", "tool.arguments"], "expect": {"op": "at_most", "value": rule["max_identical"]}}]
-    if kind == "retrieval":
-        compiled = [{"type": "check", "select": {"kind": "retrieval_document", "where": []}, "check": "count",
-                     "expect": {"op": "at_least", "value": rule.get("min_documents", 1)}}]
-        for source in rule.get("sources", []):
-            compiled.append({"type": "check", "select": {"kind": "retrieval_document", "where": [_cond("retrieval.source", "equals", source)]}, "check": "exists"})
-        return compiled
-    return None
+def _field_name(field: str) -> str:
+    if field.startswith("tool.argument."):
+        return f"argument {field[len('tool.argument.'):]}"
+    if field.startswith("tool.result."):
+        return f"result {field[len('tool.result.'):]}"
+    return _FIELD_NAMES.get(field, field)
 
 
-def evaluate_preset(index: int, rule: dict, trajectory: AgentTrajectory) -> CheckResult | None:
-    """A compiled preset as ONE check (same id as before), worst status wins."""
-    compiled = compile_preset(rule)
-    if compiled is None:
-        return None
-    check_id = f"rule.{index}.{rule['type']}"
-    parts = [evaluate_check(index, c, trajectory, check_id) for c in compiled]
-    statuses = [p.status for p in parts]
-    status = "FAIL" if "FAIL" in statuses else "INCONCLUSIVE" if "INCONCLUSIVE" in statuses else "PASS"
-    summary = " ".join(dict.fromkeys(p.summary for p in parts))
-    evidence = [s for p in parts for s in (p.evidence_span_ids or [])]
-    return result(check_id, "rules", status, summary, evidence_span_ids=evidence)
+def _condition_text(condition: dict) -> str:
+    field, op, value = condition["field"], condition["op"], condition.get("value")
+    if field in ("span.error", "tool.error") and op == "equals" and value is True:
+        return "is an error"
+    if isinstance(value, bool):
+        value = "yes" if value else "no"
+    elif isinstance(value, list):
+        value = ", ".join(str(v) for v in value)
+    return f"{_field_name(field)} {_OP_WORDS[op]} {value}"
+
+
+def _conditions_text(where: list[dict]) -> str:
+    return " and ".join(_condition_text(c) for c in where)
+
+
+def _scope_text(select: dict) -> str:
+    kind = _KIND_NAMES.get(select.get("kind"), select.get("kind") or "step")
+    where = list(select.get("where", []))
+    errors = [c for c in where if c["field"] == "span.error" and c["op"] == "equals" and c.get("value") is True]
+    if errors:
+        where = [c for c in where if c not in errors]
+        kind = "error" if kind == "step" else f"error {kind}"
+    return f"{kind} where {_conditions_text(where)}" if where else kind
+
+
+def _expect_phrase(expect: dict) -> str:
+    value = expect.get("value")
+    if expect["op"] == "between":
+        return f"Between {value[0]} and {value[1]}"
+    return f"{_EXPECT_WORDS[expect['op']]} {value}"
+
+
+def _is_tool_name(condition: dict) -> bool:
+    return condition["field"] == "tool.name" and condition["op"] == "equals"
+
+
+def _tool_call_sentence(check: str, rule: dict, where: list[dict]) -> str:
+    """'name(arg=value) must be called at least 2 times' for tool-name counts."""
+    name = where[0]["value"]
+    args = [c for c in where[1:] if c["field"].startswith("tool.argument.") and c["op"] == "equals"]
+    if len(args) != len(where) - 1:
+        return f"{_expect_phrase(rule['expect'])} tool call where {_conditions_text(where)}"
+    target = name
+    if args:
+        target += "(" + ", ".join(f"{c['field'][len('tool.argument.'):]}={c['value']!r}" for c in args) + ")"
+    if check == "none":
+        return f"{target} must not be called"
+    expect = rule["expect"]
+    value = expect.get("value")
+    if expect["op"] in ("equals", "at_most") and value == 0:
+        return f"{target} must not be called"
+    if expect["op"] == "between":
+        return f"{target} must be called {value[0]} to {value[1]} times"
+    if expect["op"] == "equals" and value == 1:
+        return f"{target} must be called exactly once"
+    if expect["op"] == "at_least" and value == 1:
+        return f"{target} must be called at least once"
+    word = {"equals": "exactly", "at_least": "at least", "at_most": "at most"}[expect["op"]]
+    return f"{target} must be called {word} {value} times"
 
 
 def describe_check(rule: dict) -> str:
-    """The custom rule as one sentence."""
+    """The rule as one readable sentence."""
+    check = rule.get("check")
+    if check not in CHECKS:
+        return f"Removed check '{check}' (no longer supported)"
     select = rule.get("select", {})
-    where = " and ".join(f"{c['field']} {c['op']} {c.get('value', '')}".strip() for c in select.get("where", []))
-    scope = f"{select.get('kind', '?')} units" + (f" where {where}" if where else "")
-    if rule.get("check") == "none":
-        return f"No {scope}"
-    if rule.get("check") == "exists":
-        return f"At least one {scope}"
-    if rule.get("check") == "all":
-        return f"All {scope}"
-    if rule.get("check") == "distinct":
-        return f"Distinct {rule.get('field')} among {scope}: {_expect_text(rule['expect'])}"
-    return f"Count of {scope}: {_expect_text(rule['expect'])}"
-
-
-def _evaluate_ordering(check_id: str, rule: dict, trajectory: AgentTrajectory) -> CheckResult:
-    check = rule["check"]
-    units = _units("action", trajectory)
-    if check == "in_order":
-        steps = rule["steps"]
-        exact = rule.get("mode") == "in_order_exact"
-        position, matched = 0, []
-        for unit, span in units:
-            if position < len(steps) and _matches("action", unit, steps[position]):
-                matched.append(span)
-                position += 1
-        if exact:
-            ok = position == len(steps) and len(units) == len(steps)
-        else:
-            ok = position == len(steps)
-        labels = [_label(u) for u, _ in units]
-        summary = f"Actions were {' > '.join(labels) or 'none'}; expected {'exactly ' if exact else ''}in order: {len(steps)} step(s)."
-        return result(check_id, "rules", "PASS" if ok else "FAIL", summary, observed=labels,
-                      evidence_span_ids=[s for s in matched if s])
-    if check == "before":
-        first = [i for i, (u, _) in enumerate(units) if _matches("action", u, rule["first"])]
-        then = [i for i, (u, _) in enumerate(units) if _matches("action", u, rule["then"])]
-        ok = not then or (bool(first) and min(first) < min(then))
-        return result(check_id, "rules", "PASS" if ok else "FAIL",
-                      "The first step comes before the second." if ok else "The second step occurred without an earlier first step.",
-                      observed=[_label(u) for u, _ in units])
-    kind = rule.get("select", {}).get("kind", "tool")
-    group_by = rule["group_by"]
-    selected = [(u, s) for u, s in _units(kind, trajectory) if _matches(kind, u, rule.get("select", {}).get("where", []))]
-    if not selected:
-        return result(check_id, "rules", "PASS", f"No {kind} units to group.")
-    keys = [tuple(str(_value(kind, u, f)) for f in group_by) for u, _ in selected]
-    if check == "max_group":
-        counts = Counter(keys)
-        worst = max(counts.values())
-        ok = _expect(worst, rule["expect"])
-        return result(check_id, "rules", "PASS" if ok else "FAIL",
-                      f"Most identical repeats: {worst}; expected {_expect_text(rule['expect'])}.", observed=worst)
-    longest = run = 0
-    previous = None
-    for key in keys:
-        run = run + 1 if key == previous else 1
-        longest = max(longest, run)
-        previous = key
-    ok = _expect(longest, rule["expect"])
-    return result(check_id, "rules", "PASS" if ok else "FAIL",
-                  f"Longest run of identical calls in a row: {longest}; expected {_expect_text(rule['expect'])}.",
-                  observed=longest)
-
-
-def _label(unit_step) -> str:
-    return unit_step.name if unit_step.kind == "tool" else unit_step.kind
-
-
-def _label_conditions(label: str) -> list[dict]:
-    """A step label: a tool name, or a span kind such as retrieval."""
-    if label in ACTION_KINDS and label != "tool":
-        return [_cond("span.kind", "equals", label)]
-    return [_cond("tool.name", "equals", label)]
+    where = select.get("where", [])
+    if check in ("count", "none") and select.get("kind") == "tool" and where and _is_tool_name(where[0]):
+        return _tool_call_sentence(check, rule, where)
+    if check in ("count", "none") and select.get("kind") == "any" and where == [
+            {"field": "span.error", "op": "equals", "value": True}]:
+        if check == "none" or rule["expect"]["op"] == "at_most" and rule["expect"]["value"] == 0:
+            return "No error steps"
+        return f"{_expect_phrase(rule['expect'])} error step{'s' if rule['expect']['value'] != 1 else ''}"
+    scope = _scope_text(select)
+    if check == "none":
+        return f"No {scope} occurs"
+    if check == "exists":
+        return f"At least one {scope} occurs"
+    if check == "all":
+        return f"Every {scope} must match"
+    if check == "distinct":
+        return f"{_expect_phrase(rule['expect'])} distinct {_field_name(rule.get('field', ''))} among {scope}"
+    return f"{_expect_phrase(rule['expect'])} {scope}"
 
 
 def field_catalog() -> list[dict]:
-    """Fields a custom check can read, with the units they apply to and their type."""
+    """Fields a rule can read, with the units they apply to and their type."""
     fixed = [{"name": name, "kinds": list(kinds), "family": family} for name, (kinds, family) in _FIXED_FIELDS.items()]
     dynamic = [{"name": prefix, "kinds": list(kinds), "family": family, "needs_key": True}
                for prefix, (kinds, family) in _DYNAMIC_PREFIXES.items()]
     return fixed + dynamic
+
+
+_CODE_OPS = {"equals": "==", "not_equals": "!=", "one_of": "in", "not_one_of": "not in",
+             "contains": "contains", "at_least": ">=", "at_most": "<="}
+
+
+def _code_value(value: Any) -> str:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (list, tuple)):
+        return "[" + ", ".join(_code_value(v) for v in value) + "]"
+    if isinstance(value, (int, float)):
+        return str(value)
+    return json.dumps(str(value), ensure_ascii=False)
+
+
+def _code_condition(condition: dict) -> str:
+    op, value = condition["op"], condition.get("value")
+    if op == "between":
+        return f"{condition['field']} between {_code_value(value[0])} and {_code_value(value[1])}"
+    return f"{condition['field']} {_CODE_OPS[op]} {_code_value(value)}"
+
+
+def _code_expect(expect: dict) -> str:
+    value = expect.get("value")
+    if expect["op"] == "between":
+        return f"between {_code_value(value[0])} and {_code_value(value[1])}"
+    return f"{_CODE_OPS.get(expect['op'], expect['op'])} {_code_value(value)}"
+
+
+def _code_conditions(conditions: list[dict]) -> str:
+    return " and ".join(_code_condition(c) for c in conditions) or "true"
+
+
+def check_code(rule: dict) -> str:
+    """A rule as read-only code. Presentation only: it is not parsed back."""
+    check = rule.get("check")
+    if check not in CHECKS:
+        return f"removed check '{check}'"
+    select = rule["select"]
+    where = f" where {_code_conditions(select['where'])}" if select.get("where") else ""
+    if check == "distinct":
+        return f"distinct {rule.get('field')} of {select['kind']}{where} count {_code_expect(rule['expect'])}"
+    if check == "count":
+        return f"count {select['kind']}{where} {_code_expect(rule['expect'])}"
+    return f"{check} {select['kind']}{where}"

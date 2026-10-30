@@ -30,41 +30,10 @@ def get_item(d, key):
 
 
 @register.filter
-def tools_names(value):
-    """Render a list of tool specs as comma-separated names.
-
-    ``tools.expected`` items may be plain strings or rich dicts like
-    ``{"name": ..., "min_calls": ..., "max_calls": ..., "arguments": ...}``.
-    This extracts just the name so it can round-trip through a text input;
-    per-tool call bounds and argument matching are authored via the read-only
-    JSON preview (or import), not this field. Returns "" for empty/None.
-    """
-    if not value:
-        return ""
-    names = []
-    for item in value:
-        if isinstance(item, dict):
-            name = item.get("name")
-            names.append(str(name) if name else "")
-        else:
-            names.append(str(item))
-    return ",".join(n for n in names if n)
-
-
-@register.filter
-def tool_entries_text(value):
-    """Forbidden tool entries (names or name+arguments objects) as builder text."""
-    from audits.agentic.tool_entries import format_tool_entries
-
-    return format_tool_entries(value)
-
-
-@register.filter
 def editor_rules_json(agentic):
-    """Rules for the rule editor: saved rules, then legacy settings converted to rules."""
-    from audits.agentic.migration import editor_rules
-
-    rules = editor_rules(agentic if isinstance(agentic, dict) else {})
+    """Rules for the rule editor, as JSON."""
+    rules = (agentic or {}).get("rules") if isinstance(agentic, dict) else None
+    rules = rules or []
     return json.dumps(rules, ensure_ascii=False) if rules else ""
 
 
@@ -77,11 +46,35 @@ def rule_sentence(rule):
 
 
 @register.filter
+def rule_code(rule):
+    """A stored rule as read-only code, in its primitive (custom check) form."""
+    from audits.agentic.rule_engine import check_code
+
+    return check_code(rule) if isinstance(rule, dict) else ""
+
+
+@register.filter
+def rule_starters(_value=None):
+    """Editor starter templates, as JSON: a label and the rules it adds."""
+    from audits.agentic.rules import STARTERS
+
+    return json.dumps(STARTERS, ensure_ascii=False).replace("<", "\\u003c")
+
+
+@register.filter
 def check_label(check_id):
     """A check id as a readable name ('Rule 1 · Tool must be called' for rule checks)."""
     from audits.agentic.rules import check_label as label
 
     return label(str(check_id))
+
+
+@register.filter
+def judge_dimensions(_value=None):
+    """The semantic judge's canonical dimensions: name and description each."""
+    from audits.agentic.semantic_judge import create_semantic_judge_dimensions
+
+    return [{"name": d["name"], "description": d.get("description", "")} for d in create_semantic_judge_dimensions()]
 
 
 @register.filter

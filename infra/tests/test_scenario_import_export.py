@@ -42,7 +42,7 @@ class ScenarioImportExportTest(APITestCase):
         self.assertEqual(alpha["metadata"], {})
 
     def test_agentic_metadata_round_trips_losslessly(self):
-        metadata = {"agentic": {"schema_version": 1, "tools": {"forbidden": ["delete"]}}}
+        metadata = {"agentic": {"schema_version": 2, "rules": [{'type': 'check', 'select': {'kind': 'tool', 'where': [{'field': 'tool.name', 'op': 'equals', 'value': 'delete'}]}, 'check': 'none'}]}}
         resp = self.client.post(
             f"/api/projects/{self.pid}/scenarios/create/",
             {"key": "agentic", "title": "Agentic", "description": "d", "expected_behavior": ["x"], "metadata": metadata},

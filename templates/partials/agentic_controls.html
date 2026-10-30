@@ -1,51 +1,20 @@
 {% load json_filters %}
 <!--
-  Structured agentic controls (authoring form).
-  Sparse by design: a section renders ONLY when it is active in the current
-  metadata, or the author expands its "Add constraint" row. Untouched sections
-  stay absent from the saved metadata — absence means "not checked", never a
-  silent default. The read-only preview below the form shows exactly what will
-  be saved; unknown fields round-trip untouched.
+  Agentic controls (authoring form): Rules first, then Enforcement, which holds the
+  semantic judge switch and its criteria. Criteria come from the judge's canonical
+  dimensions, so the placeholder and hover text always match what the judge accepts.
 -->
 <fieldset class="rounded-lg border border-gray-700 bg-surface-raised/40 p-3 space-y-3" data-agentic-controls>
-  <legend class="text-xs font-medium text-gray-300 mb-1">Judge and enforcement</legend>
-  <p class="text-[11px] text-gray-500">Judge and enforcement. Trace checks are set under Rules above.</p>
+  <legend class="text-xs font-medium text-gray-300 mb-1">Agentic checks</legend>
 
-  <!-- ---------------- Semantic judge (advanced) ---------------- -->
-  {% if agentic.semantic_judge.enabled or agentic.semantic_judge.criteria %}
-  <div data-active-section="semantic_judge">
-    <p class="text-xs font-semibold text-gray-400 mb-2">Semantic judge</p>
-    <div class="grid grid-cols-1 md:grid-cols-2 gap-x-3 gap-y-2">
-      <div>
-        <label class="flex items-center gap-2 text-[11px] text-gray-400 cursor-pointer select-none" title="Enable the LLM semantic judge for this scenario. Disable to rely on deterministic checks only."><input type="hidden" name="agentic_semantic_judge_enabled" value="0"><input type="checkbox" class="h-3.5 w-3.5 shrink-0 rounded border-gray-600 bg-surface-overlay accent-accent" name="agentic_semantic_judge_enabled" value="1" {% if agentic.semantic_judge.enabled %}checked{% endif %}> Enable semantic judge</label>
-      </div>
-      <div class="col-span-full">
-        <label class="block text-[11px] text-gray-400 mb-0.5">Criteria</label>
-        <input class="w-full px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-1 focus:ring-accent/50" name="agentic_semantic_judge_criteria" value="{{ agentic.semantic_judge.criteria|join:', ' }}" placeholder="task_completion, tool_selection, tool_result_handling, grounding, process_safety, efficiency" title="Which dimensions the semantic judge evaluates. Comma-separated from the canonical criteria list.">
-      </div>
-    </div>
-  </div>
-  {% else %}
-  <details class="group">
-    <summary class="text-[11px] text-gray-500 cursor-pointer select-none hover:text-gray-400">+ Set up semantic judge</summary>
-    <div class="grid grid-cols-1 md:grid-cols-2 gap-x-3 gap-y-2 mt-2 pl-3 border-l border-gray-800">
-      <div>
-        <label class="flex items-center gap-2 text-[11px] text-gray-400 cursor-pointer select-none" title="Enable the LLM semantic judge."><input type="hidden" name="agentic_semantic_judge_enabled" value="0"><input type="checkbox" class="h-3.5 w-3.5 shrink-0 rounded border-gray-600 bg-surface-overlay accent-accent" name="agentic_semantic_judge_enabled" value="1"> Enable semantic judge</label>
-      </div>
-      <div class="col-span-full">
-        <label class="block text-[11px] text-gray-400 mb-0.5">Criteria</label>
-        <input class="w-full px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-1 focus:ring-accent/50" name="agentic_semantic_judge_criteria" value="" placeholder="grounding, task_completion" title="Dimensions evaluated by the semantic judge.">
-      </div>
-    </div>
-  </details>
-  {% endif %}
+  {% include "partials/agentic_rules_editor.html" with agentic=agentic %}
 
-  <!-- ---------------- Enforcement (always present — how violations count) ---------------- -->
-  <div data-active-section="enforcement">
-    <p class="text-xs font-semibold text-gray-400 mb-2">Enforcement</p>
-    <div class="grid grid-cols-1 md:grid-cols-2 gap-x-3 gap-y-2">
+  {% with dims=""|judge_dimensions %}
+  <div data-active-section="enforcement" class="space-y-2">
+    <p class="text-xs font-semibold text-gray-400">Enforcement</p>
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-x-4 gap-y-1">
       <div>
-        <label class="block text-[11px] text-gray-400 mb-0.5">Mode</label>
+        <label class="block text-[11px] text-gray-500 mb-1">Mode</label>
         <select class="w-full px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-1 focus:ring-accent/50" name="agentic_enforcement_mode" title="How violations are treated. Advisory = record findings but let the run finish; Gating = fail the run when a check is violated. 'Keep' leaves the existing mode unchanged.">
           <option value="">Keep enforcement mode</option>
           <option value="advisory" {% if agentic.enforcement.mode == 'advisory' %}selected{% endif %}>Advisory</option>
@@ -53,6 +22,16 @@
         </select>
       </div>
     </div>
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-x-4 gap-y-1">
+      <p class="text-[11px] text-gray-500">Semantic judge</p>
+      <p class="text-[11px] text-gray-500">Criteria</p>
+      <label class="flex items-center gap-2 h-8 text-xs text-gray-300 cursor-pointer select-none" title="Enable the LLM semantic judge for this scenario. Disable to rely on deterministic checks only.">
+        <input type="hidden" name="agentic_semantic_judge_enabled" value="0">
+        <input type="checkbox" class="h-3.5 w-3.5 shrink-0 rounded border-gray-600 bg-surface-overlay accent-accent" name="agentic_semantic_judge_enabled" value="1" {% if agentic.semantic_judge.enabled %}checked{% endif %}>
+        Enable semantic judge
+      </label>
+      <input class="w-full h-8 px-2 rounded bg-surface-overlay border border-gray-700 text-xs text-gray-200 focus:outline-none focus:ring-1 focus:ring-accent/50" name="agentic_semantic_judge_criteria" value="{{ agentic.semantic_judge.criteria|join:', ' }}" placeholder="{% for d in dims %}{{ d.name }}{% if not forloop.last %}, {% endif %}{% endfor %}" title="{% for d in dims %}{{ d.name }}: {{ d.description }}&#10;{% endfor %}">
+    </div>
   </div>
-  {% include "partials/agentic_rules_editor.html" with agentic=agentic %}
+  {% endwith %}
 </fieldset>
