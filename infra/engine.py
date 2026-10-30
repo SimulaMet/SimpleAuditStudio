@@ -1017,12 +1017,10 @@ def run_scenario(
                     from audits.agentic.verdict_policy import compute_overall_verdict
 
                     all_spans = (evidence or {}).get("all_spans") or []
-                    conv = list(execution.conversation) if hasattr(execution, "conversation") else []
-                    # When no real OTLP spans exist, fall back to the
-                    # conversation-derived trajectory (parses [TOOL_CALL]
-                    # markers). This lets the judge evaluate actual agent
-                    # behaviour even when the target doesn't export traces.
-                    trajectory = normalize(all_spans, conversation=conv or None)
+                    if not all_spans:
+                        # No captured spans: this is a normal audit, not an agentic one.
+                        return selected
+                    trajectory = normalize(all_spans)
                     expectations = validate_agentic_metadata(metadata or {})
 
                     evaluation = evaluate_agentic(
@@ -1030,17 +1028,11 @@ def run_scenario(
                         llm=None, task=test_prompt or "",
                     )
                     complete = bool(trajectory.steps)
-                    derived_from_conv = not all_spans and complete
                     evaluation["trace_completeness"] = {
                         "complete": complete,
-                        "derived_from_conversation": derived_from_conv,
                         "span_count": len(trajectory.steps),
                         "captured_kinds": sorted({step.kind for step in trajectory.steps}),
-                        "missing_reason": (
-                            "Derived from conversation markers (no OTLP spans captured)."
-                            if derived_from_conv
-                            else (None if complete else "No trace spans were captured.")
-                        ),
+                        "missing_reason": None if complete else "No trace spans were captured.",
                     }
                     if not complete:
                         evaluation.update(compute_overall_verdict({
@@ -1327,8 +1319,9 @@ def run_scenario_repeated(
                 from audits.agentic.verdict_policy import compute_overall_verdict
 
                 all_spans = (evidence or {}).get("all_spans") or []
-                conv = list(execution.conversation) if hasattr(execution, "conversation") else []
-                trajectory = normalize(all_spans, conversation=conv or None)
+                if not all_spans:
+                    return selected
+                trajectory = normalize(all_spans)
                 expectations = validate_agentic_metadata(metadata or {})
                 evaluation = evaluate_agentic(
                     trajectory, expectations, None,

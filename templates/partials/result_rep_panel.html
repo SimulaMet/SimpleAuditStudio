@@ -14,9 +14,7 @@ whole result of a single-rep run. Context: rep (see infra.ui._rep_view).
       {% if rep.agentic_trace_completeness %}
       {% with tc=rep.agentic_trace_completeness %}
       <span class="ml-auto min-w-0 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-gray-500">
-        {% if tc.derived_from_conversation %}
-        <span class="text-gray-400">No trace (derived from conversation){% if tc.span_count is not None %} · {{ tc.span_count }} turn{{ tc.span_count|pluralize }}{% endif %}</span>
-        {% elif tc.complete %}
+        {% if tc.complete %}
         <span class="text-emerald-300/90">Trace complete{% if tc.captured_kinds %} · {{ tc.captured_kinds|join:", " }}{% endif %}{% if tc.span_count is not None %} · {{ tc.span_count }} span{{ tc.span_count|pluralize }}{% endif %}</span>
         {% else %}
         <span class="text-amber-300/90">Trace incomplete{% if tc.missing_reason %} — {{ tc.missing_reason|truncatechars:80 }}{% endif %}</span>

@@ -35,8 +35,8 @@ The "Focus" button toggles a wide mode that pushes the app chrome aside.
           <span class="min-w-0 text-xs text-emerald-300/90" title="Knowledge sources observed on this retrieval step">📚 {{ s.kb_sources|join:", " }}</span>
           {% endif %}
           <span class="ml-auto shrink-0 flex items-center gap-2 text-[11px] text-gray-500 tabular-nums">
-            {% if s.offset_ms is not None %}<span title="ms after the first captured step">+{{ s.offset_ms }} ms</span>{% endif %}
-            {% if s.duration_ms > 0 %}<span>{{ s.duration_ms }} ms</span>{% endif %}
+            {% if s.duration_ms > 0 %}<span title="Duration of this step">({{ s.duration_ms }} ms)</span>{% endif %}
+            {% if s.offset_ms is not None %}<span title="Time since the first captured step">{{ s.offset_ms }} ms</span>{% endif %}
           </span>
         </summary>
         <div class="space-y-2 border-t border-gray-800/70 px-3 py-2.5">

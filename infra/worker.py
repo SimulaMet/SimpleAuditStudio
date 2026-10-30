@@ -323,6 +323,17 @@ def _build_semantic_judge_llm(judge_snapshot: dict | None):
         return None
 
 
+def _captured_spans(target: dict) -> list[dict]:
+    """The real OTLP spans recorded for one target. Never reconstructed from the conversation."""
+    trace_evidence = target.get("trace_evidence")
+    if isinstance(trace_evidence, dict) and isinstance(trace_evidence.get("all_spans"), list):
+        spans = [s for s in trace_evidence["all_spans"] if isinstance(s, dict)]
+        if spans:
+            return spans
+    evidence = (target.get("judgment") or {}).get("evidence_spans")
+    return [s for s in evidence if isinstance(s, dict)] if isinstance(evidence, list) else []
+
+
 def _scenario_execute_impl(workflow_input: ScenarioInput, ctx: Context) -> dict:
     """Execute one scenario for an audit run.
 
@@ -697,6 +708,10 @@ def _scenario_execute_impl(workflow_input: ScenarioInput, ctx: Context) -> dict:
             reps = result_payload.get("reps") if isinstance(result_payload, dict) else None
             targets = reps if isinstance(reps, list) else [result_payload]
             for target in targets:
+                # An agentic audit needs captured spans. Without any, this target is a
+                # normal audit: no agentic lane, no timeline, no reconstructed trajectory.
+                if not _captured_spans(target):
+                    continue
                 # If the engine's resolver already produced an evaluation
                 # (deterministic checks ran pre-judge), augment it with
                 # semantic dimensions. Otherwise, do the full evaluation.
@@ -721,25 +736,18 @@ def _scenario_execute_impl(workflow_input: ScenarioInput, ctx: Context) -> dict:
                             all_spans = [s for s in fallback if isinstance(s, dict)]
 
                     from audits.agentic.evaluate import evaluate as evaluate_agentic
-                    conv = target.get("conversation") or []
-                    trajectory = normalize(all_spans, conversation=conv or None)
+                    trajectory = normalize(all_spans)
                     expectations = validate_agentic_metadata(revision.metadata or {})
                     evaluation = evaluate_agentic(
                         trajectory, expectations, run.agent_config_snapshot,
                         llm=None, task=revision.test_prompt or "",
                     )
                     complete = bool(trajectory.steps)
-                    derived_from_conv = not all_spans and complete
                     evaluation["trace_completeness"] = {
                         "complete": complete,
-                        "derived_from_conversation": derived_from_conv,
                         "span_count": len(trajectory.steps),
                         "captured_kinds": sorted({step.kind for step in trajectory.steps}),
-                        "missing_reason": (
-                            "Derived from conversation markers (no OTLP spans captured)."
-                            if derived_from_conv
-                            else (None if complete else "No trace spans were captured.")
-                        ),
+                        "missing_reason": None if complete else "No trace spans were captured.",
                     }
                     if not complete:
                         evaluation.update(compute_overall_verdict({
@@ -761,8 +769,7 @@ def _scenario_execute_impl(workflow_input: ScenarioInput, ctx: Context) -> dict:
                         fallback = (target.get("judgment") or {}).get("evidence_spans")
                         if isinstance(fallback, list):
                             all_spans = [s for s in fallback if isinstance(s, dict)]
-                    conv = target.get("conversation") or []
-                    trajectory = normalize(all_spans, conversation=conv or None)
+                    trajectory = normalize(all_spans)
                     if not trajectory.steps:
                         evaluation["semantic_judgement"] = {
                             "status": "INCONCLUSIVE",

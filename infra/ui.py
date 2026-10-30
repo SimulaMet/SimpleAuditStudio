@@ -3473,12 +3473,6 @@ def _span_label(sid: str) -> str:
 
     Display only: the id itself stays the link anchor, so these links keep working.
     """
-    if sid.startswith("conv-tool-result-"):
-        return f"tool-result-{sid.rsplit('-', 1)[-1]}"
-    if sid.startswith("conv-tool-"):
-        return f"tool-{sid.rsplit('-', 1)[-1]}"
-    if sid.startswith("conv-response-"):
-        return "response"
     return sid
 
 
@@ -3569,192 +3563,20 @@ def _duplicate_inference_flags(spans: list[dict]) -> dict[int, str]:
     return flags
 
 
-def _synthetic_tool_spans(conv: list[dict]) -> list[dict]:
-    """Minimal TOOL/INFERENCE span rows derived from conversation tool markers.
-
-    Used both as the whole-timeline fallback (no OTLP at all) and — when OTLP
-    spans exist but carry no tool/retriever steps — as a merge so the
-    trajectory still shows what the agent actually did with tools and KB.
-    """
-    import re as _re
-
-    synthetic = []
-    idx = 0
-    # Streaming format: [TOOL_CALL name()]{"json"} — args after the ]
-    # Non-streaming format: [TOOL_CALL name({"json"})] — args inside ()
-    pat_stream = _re.compile(r"\[TOOL_CALL\s+(\w+)\(\)\]\s*(\{.*?\})?")
-    pat_nonstream = _re.compile(r"\[TOOL_CALL\s+(\w+)\(([^)]+)\)\]")
-    pat_result = _re.compile(r"\[TOOL_RESULT\s+(\w+)\](.*?)(?=\[TOOL_|$)", _re.DOTALL)
-    # Collect results per tool name (in order of appearance)
-    result_queue: dict[str, list[str]] = {}
-    for msg in conv:
-        content = (msg or {}).get("content", "") or ""
-        for rm in pat_result.finditer(content):
-            rname = rm.group(1)
-            rtext = rm.group(2).strip()
-            result_queue.setdefault(rname, []).append(rtext)
-    result_idx: dict[str, int] = {}
-    for msg in conv:
-        role = (msg or {}).get("role", "")
-        content = (msg or {}).get("content", "") or ""
-        if role != "assistant":
-            continue
-        found = list(pat_stream.finditer(content)) + list(pat_nonstream.finditer(content))
-        found.sort(key=lambda m: m.start())
-        for m in found:
-            name, args_raw = m.group(1), (m.group(2) or m.group(3) or "{}")
-            try:
-                args_preview = json.dumps(json.loads(args_raw))[:200]
-            except (json.JSONDecodeError, TypeError):
-                args_preview = args_raw[:200]
-            # Attach the next available result for this tool
-            ri = result_idx.get(name, 0)
-            result_text = None
-            if ri < len(result_queue.get(name, [])):
-                result_text = result_queue[name][ri]
-                result_idx[name] = ri + 1
-            attrs: dict = {
-                "tool_name": name,
-                "gen_ai.tool.call.arguments": args_preview,
-                "arguments": args_preview,
-            }
-            if result_text:
-                attrs["gen_ai.tool.call.result"] = result_text
-                attrs["tool.result"] = result_text
-                # Extract KB sources from retrieval-style results so the
-                # timeline row surfaces them like a real RETRIEVER span would.
-                # The result text may have trailing prose after the JSON.
-                stripped = result_text.strip()
-                if stripped.startswith(("[", "{")):
-                    # Find the matching closing bracket for the JSON portion.
-                    depth = 0
-                    end = 0
-                    for ci, ch in enumerate(stripped):
-                        if ch in "[{":
-                            depth += 1
-                        elif ch in "]}":
-                            depth -= 1
-                            if depth == 0:
-                                end = ci + 1
-                                break
-                    if end > 0:
-                        try:
-                            rdata = json.loads(stripped[:end])
-                            if isinstance(rdata, dict):
-                                src = rdata.get("source") or rdata.get("data_source")
-                                if src:
-                                    attrs["gen_ai.retrieval.documents"] = [{"source": x} for x in ([src] if isinstance(src, str) else list(src))]
-                            elif isinstance(rdata, list) and rdata and isinstance(rdata[0], dict):
-                                srcs = [d.get("source") for d in rdata if isinstance(d, dict) and d.get("source")]
-                                if srcs:
-                                    attrs["gen_ai.retrieval.documents"] = [{"source": x} for x in srcs]
-                        except (json.JSONDecodeError, TypeError):
-                            pass
-            synthetic.append({
-                "span_id": f"conv-tool-{idx}",
-                "name": f"tool_call:{name}",
-                "start_time": 0.0,
-                "duration": 0.0,
-                "kind": "tool",
-                "attributes": attrs,
-                "status": "ok",
-            })
-            idx += 1
-        # Add a response/inference step for the prose after tool markers,
-        # matching the trajectory's conv-response-N span IDs so evidence
-        # links from judge dimensions resolve correctly.
-        parts = _re.split(r"\n\s*\n", content, maxsplit=1)
-        prose = ""
-        if len(parts) > 1:
-            candidate = parts[1].strip()
-            if candidate and not candidate.startswith(("{", "[")):
-                prose = candidate
-        if not prose or len(prose) < 20:
-            no_markers = _re.sub(
-                r"\[(?:TOOL_CALL|TOOL_RESULT)\s+\w+(?:\([^)]*\))?\][^\n]*", "", content,
-            ).strip()
-            if no_markers and not no_markers.startswith(("{", "[")):
-                prose = no_markers
-        if prose and len(prose) > 20:
-            synthetic.append({
-                "span_id": f"conv-response-{idx}",
-                "name": "final_response",
-                "start_time": 0.0,
-                "duration": 0.0,
-                "kind": "inference",
-                "attributes": {"output.value": prose},
-                "status": "ok",
-            })
-            idx += 1
-    return synthetic
-
-
-def _merge_synthesized_tool_spans(raw_spans: list[dict], synthetic: list[dict]) -> list[dict]:
-    """Interleave conversation-derived tool/response steps into real OTLP spans.
-
-    Open WebUI exports only CHAIN + LLM spans; its server-side tool loop and
-    KB retrieval leave no TOOL/RETRIEVER spans. Without this merge the
-    trajectory timeline shows nothing but ``chat_completion`` even though the
-    agent demonstrably called tools (markers are in the conversation). Real
-    OTLP tool/retriever spans always win: synthesized rows are added only for
-    tool names the trace does not already cover, appended after the last timed
-    span (they carry no timestamps of their own).
-    """
-    covered: set[str] = set()
-    for s in raw_spans:
-        attrs = s.get("attributes") if isinstance(s.get("attributes"), dict) else {}
-        name = attrs.get("gen_ai.tool.name") or attrs.get("tool_name")
-        kind = str(s.get("kind") or "").upper()
-        if name and (kind in ("TOOL", "RETRIEVER") or kind == ""):
-            covered.add(str(name))
-    extra = [s for s in synthetic if s.get("kind") == "tool" and s.get("attributes", {}).get("tool_name") not in covered]
-    if not extra:
-        return list(raw_spans)
-    base_start = min(
-        (s.get("end_time") for s in raw_spans if isinstance(s.get("end_time"), (int, float))),
-        default=None,
-    )
-    merged = list(raw_spans)
-    for i, s in enumerate(extra):
-        row = dict(s)
-        # Offset each synthetic step after the previous one, past the last real
-        # span, so chronological ordering is stable and honest (approximate).
-        offset = (base_start or 0.0) + 0.05 * (i + 1)
-        row["start_time"] = offset
-        row["end_time"] = offset + 0.01
-        merged.append(row)
-    return merged
-
-
 def _agentic_timeline_view(rep: dict) -> dict | None:
     """Chronological full-width trajectory timeline for one rep's spans.
 
     Repeated span ids get unique DOM anchors: the first occurrence keeps the
     bare id, later ones gain ``-2``, ``-3``, … suffixes, and every finding
     jump link resolves through the same mapping so duplicates land correctly.
-    Returns ``None`` when the rep carries no spans (the block hides itself).
-
-    When no OTLP evidence spans exist but the conversation contains captured
-    tool-call markers, synthesizes minimal span rows so evidence links work.
-    When OTLP spans exist but none are tool/retriever steps (Open WebUI only
-    exports CHAIN + LLM), the conversation-derived tool steps are merged in so
-    the trajectory reflects what the agent actually did.
+    Returns ``None`` when the rep carries no captured spans (the block hides itself).
+    Rows are never reconstructed from the conversation.
     """
     raw_spans = ((rep.get("judgment") or {}).get("evidence_spans") or []) if isinstance(rep.get("judgment"), dict) else []
     raw_spans = [s for s in raw_spans if isinstance(s, dict)]
     if not raw_spans:
-        # Fallback: synthesize spans from conversation tool-call markers.
-        raw_spans = _synthetic_tool_spans(rep.get("conversation") or [])
-        if not raw_spans:
-            return None
-    elif any(
-        str(s.get("kind") or "").upper() in ("TOOL", "RETRIEVER") or "retriev" in str(s.get("name") or "").lower()
-        for s in raw_spans
-    ) is False:
-        # Real OTLP spans exist but carry no tool/retriever steps: OWUI's
-        # server-side tool loop leaves no such spans. Merge the
-        # conversation-derived steps in so the timeline is not all LLM.
-        raw_spans = _merge_synthesized_tool_spans(raw_spans, _synthetic_tool_spans(rep.get("conversation") or []))
+        # No captured spans: no trajectory to show.
+        return None
     for idx, reason in _duplicate_inference_flags(raw_spans).items():
         attrs = raw_spans[idx].get("attributes") if isinstance(raw_spans[idx].get("attributes"), dict) else {}
         raw_spans[idx]["attributes"] = {**attrs, "redundant_reason": reason}
@@ -3765,7 +3587,7 @@ def _agentic_timeline_view(rep: dict) -> dict | None:
     rows, seen = [], {}
     # When all spans share the same start_time (synthetic fallback), preserve
     # insertion order (chronological: tools → response) instead of sorting
-    # alphabetically by span_id which would put conv-response-N first.
+    # alphabetically by span_id.
     has_real_times = any(
         isinstance(s.get("start_time"), (int, float)) and s["start_time"] != 0.0
         for s in raw_spans
@@ -3943,7 +3765,6 @@ def _agentic_trace_completeness_view(evaluation: dict, timeline: dict | None) ->
     complete = bool(tc.get("complete")) if "complete" in tc else (bool(captured_kinds) or (span_count or 0) > 0)
     return {
         "complete": complete,
-        "derived_from_conversation": bool(tc.get("derived_from_conversation")),
         "span_count": span_count,
         "captured_kinds": [str(k) for k in captured_kinds],
         "missing_reason": str(missing_reason),

@@ -162,29 +162,16 @@ def test_evaluation_sees_all_captured_spans_not_just_selected_subset(patched_wor
     assert evaluation["status"] in ("PASS", "INCONCLUSIVE")
 
 
-def test_missing_trace_sets_completeness_flag_and_inconclusive(patched_worker):
-    """(b) No trace at all -> completeness flag set, verdict INCONCLUSIVE via
-    the missing_trace rule, never a silent PASS."""
+def test_missing_trace_is_a_normal_audit_not_an_agentic_one(patched_worker):
+    """No captured spans -> no agentic lane, no conversation reconstruction, no agentic verdict."""
     patched_worker["rep"] = _rep()
 
     result = _scenario_execute_impl(_workflow_input(), ctx=None)
 
     assert result["status"] == "completed"
     upserted = patched_worker["upserts"][0][1]["result"]
-    evaluation = upserted["agentic_evaluation"]
-    tc = evaluation["trace_completeness"]
-    assert tc["complete"] is False
-    assert tc["span_count"] == 0
-    assert tc["captured_kinds"] == []
-    assert tc["missing_reason"]
-    assert evaluation["status"] == "INCONCLUSIVE"
-    # The verdict policy's missing_trace rule explains the INCONCLUSIVE.
-    assert evaluation["verdict"]["reason"] in (
-        "Required trace missing", "Required check inconclusive",
-    )
-    assert any(
-        c["id"] == "trace.present" and c["status"] == "INCONCLUSIVE" for c in evaluation["checks"]
-    )
+    assert "agentic_evaluation" not in upserted
+
 
 
 def test_complete_trace_keeps_existing_verdict_behavior(patched_worker):
