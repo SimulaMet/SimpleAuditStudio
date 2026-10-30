@@ -99,6 +99,11 @@ def orchestrate_agentic_audit(
         if config := agentic_config.get(key):
             all_checks.extend(checker(trajectory, config))
 
+    if rules := agentic_config.get("rules"):
+        from .checks.rules import rule_checks
+
+        all_checks.extend(rule_checks(trajectory, rules))
+
     # Apply severity semantics (T05)
     severity_overrides = agentic_config.get("enforcement", {}).get("severity_overrides", {})
     for check in all_checks:

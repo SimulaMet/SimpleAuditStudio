@@ -19,7 +19,7 @@ from copy import deepcopy
 _TOP_LEVEL = {
     "schema_version", "trace", "goal", "tools", "retrieval", "trajectory",
     "handoffs", "guardrails", "approvals", "policy", "state", "budgets",
-    "semantic_judge", "enforcement", "rerank",
+    "semantic_judge", "enforcement", "rerank", "rules",
 }
 
 _SECTION_KEYS = {
@@ -254,6 +254,13 @@ def validate_agentic_metadata(metadata: dict) -> tuple[bool, list[str]]:
         for override_name, severity in enforcement["severity_overrides"].items():
             if severity not in _SEVERITIES:
                 errors.append(f"enforcement.severity_overrides.{override_name} must be one of {'/'.join(_SEVERITIES)}")
+
+    if "rules" in metadata:
+        from .rules import validate_rules
+
+        for problem in validate_rules(metadata["rules"]):
+            where = f"rules[{problem.index}]" if problem.index >= 0 else "rules"
+            errors.append(f"{where}: {problem.message}")
 
     return len(errors) == 0, errors
 
