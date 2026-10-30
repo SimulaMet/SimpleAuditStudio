@@ -146,3 +146,42 @@ def normalize_rules(rules: list[dict]) -> list[dict]:
             item.setdefault("same_arguments", True)
         out.append(item)
     return out
+
+
+RULE_LABELS = {
+    "tool_called": "Tool must be called",
+    "tool_not_called": "Tool must not be called",
+    "sequence": "Steps happen in a sequence",
+    "precedes": "One step must come before another",
+    "budget": "Limit tool calls",
+    "repeated_calls": "Limit identical repeated calls",
+    "forbidden_values": "Forbidden values must not appear",
+    "grounded_value": "Answer must state a tool value",
+    "retrieval": "Must retrieve from knowledge",
+    "errors": "Limit error steps",
+    "retries": "Limit retries after a failure",
+}
+
+
+def describe_rule(rule: dict) -> str:
+    """One readable line for a rule: its label and the values it was given."""
+    label = RULE_LABELS.get(rule.get("type", ""), str(rule.get("type", "rule")))
+    parts = []
+    for key, value in rule.items():
+        if key == "type" or value in (None, "", []):
+            continue
+        if key == "arguments":
+            parts.append("arguments: " + ", ".join(f"{k}={v!r}" for k, v in value.items()))
+        elif isinstance(value, list):
+            parts.append(f"{key}: {', '.join(str(v) for v in value)}")
+        else:
+            parts.append(f"{key}: {value}")
+    return f"{label} ({'; '.join(parts)})" if parts else label
+
+
+def check_label(check_id: str) -> str:
+    """Readable name for a check id; rule checks read as 'Rule N · label'."""
+    parts = check_id.split(".")
+    if len(parts) == 3 and parts[0] == "rule" and parts[1].isdigit():
+        return f"Rule {int(parts[1]) + 1} · {RULE_LABELS.get(parts[2], parts[2])}"
+    return check_id

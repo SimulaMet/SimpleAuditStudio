@@ -66,3 +66,19 @@ def editor_rules_json(agentic):
 
     rules = editor_rules(agentic if isinstance(agentic, dict) else {})
     return json.dumps(rules, ensure_ascii=False) if rules else ""
+
+
+@register.filter
+def rule_sentence(rule):
+    """A structured rule as one readable line."""
+    from audits.agentic.rules import describe_rule
+
+    return describe_rule(rule) if isinstance(rule, dict) else ""
+
+
+@register.filter
+def check_label(check_id):
+    """A check id as a readable name ('Rule 1 · Tool must be called' for rule checks)."""
+    from audits.agentic.rules import check_label as label
+
+    return label(str(check_id))

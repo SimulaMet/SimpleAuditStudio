@@ -27,6 +27,15 @@
   </div>
   {% endif %}
 
+  {% if agentic.rules %}
+  <div>
+    <p class="font-semibold text-gray-400 mb-1">Rules <span class="font-normal text-gray-600">(checked from the trace)</span></p>
+    <ul class="space-y-0.5 pl-3 border-l border-gray-800 text-gray-300">
+      {% for rule in agentic.rules %}<li>{{ rule|rule_sentence }}</li>{% endfor %}
+    </ul>
+  </div>
+  {% endif %}
+
   {% if agentic.retrieval.min_documents or agentic.retrieval.max_documents or agentic.rerank.required or agentic.rerank.min_calls or agentic.rerank.max_calls %}
   <div>
     <p class="font-semibold text-gray-400 mb-1">Retrieval and reranking</p>

@@ -60,7 +60,7 @@ whole result of a single-rep run. Context: rep (see infra.ui._rep_view).
             <div class="flex items-center gap-2 min-w-0">
               <span class="shrink-0 px-1.5 py-0.5 rounded text-[10px] font-semibold {% if f.status == 'PASS' %}bg-emerald-900/40 text-emerald-300{% elif f.status == 'INCONCLUSIVE' %}bg-amber-900/40 text-amber-300{% else %}bg-red-900/40 text-red-300{% endif %}">{{ f.status }}</span>
               {% if f.severity %}<span class="shrink-0 px-1.5 py-0.5 rounded text-[10px] uppercase tracking-wide {% if f.severity == 'critical' %}bg-red-950 text-red-300{% elif f.severity == 'high' %}bg-orange-950 text-orange-300{% elif f.severity == 'medium' %}bg-amber-950 text-amber-300{% else %}bg-gray-800 text-gray-400{% endif %}">{{ f.severity }}</span>{% endif %}
-              <code class="min-w-0 truncate text-[11px] text-gray-400" title="{{ f.id }}">{{ f.id }}</code>
+              <code class="min-w-0 truncate text-[11px] text-gray-400" title="{{ f.id }}">{{ f.id|check_label }}</code>
             </div>
             <p class="mt-1 text-xs text-gray-300 break-words">{% if f.summary %}{{ f.summary }}{% else %}—{% endif %}</p>
           </summary>
@@ -93,14 +93,14 @@ whole result of a single-rep run. Context: rep (see infra.ui._rep_view).
       {% for check in rep.agentic.checks %}
       {% if check.expected or check.observed or check.evidence_span_ids %}
       <details class="rounded bg-surface-overlay/50 px-3 py-2">
-        <summary class="cursor-pointer text-xs text-gray-300">        <span class="mr-2 {% if check.status == 'PASS' %}text-emerald-400{% elif check.status == 'INCONCLUSIVE' %}text-amber-400{% else %}text-red-400{% endif %}">{{ check.status }}</span>{{ check.id }} — {{ check.summary }}</summary>
+        <summary class="cursor-pointer text-xs text-gray-300">        <span class="mr-2 {% if check.status == 'PASS' %}text-emerald-400{% elif check.status == 'INCONCLUSIVE' %}text-amber-400{% else %}text-red-400{% endif %}">{{ check.status }}</span>{{ check.id|check_label }} — {{ check.summary }}</summary>
         {% if check.expected or check.observed %}<div class="mt-2 text-[11px] text-gray-500">Expected: {{ check.expected|default:'—' }} · Observed: {{ check.observed|default:'—' }}</div>{% endif %}
         {% if check.evidence_span_ids %}<div class="mt-1 text-[11px] text-gray-500">Evidence spans:
           {% for sp in check.evidence_spans %}<a class="text-violet-300 hover:text-violet-200 underline" href="#trace-span-{{ rep.index }}-{{ sp.id }}">{{ sp.label }}</a>{% if not forloop.last %}, {% endif %}{% endfor %}
         </div>{% endif %}
       </details>
       {% else %}
-      <div class="rounded bg-surface-overlay/50 px-3 py-2 text-xs text-gray-300">        <span class="mr-2 {% if check.status == 'PASS' %}text-emerald-400{% elif check.status == 'INCONCLUSIVE' %}text-amber-400{% else %}text-red-400{% endif %}">{{ check.status }}</span>{{ check.id }} — {{ check.summary }}</div>
+      <div class="rounded bg-surface-overlay/50 px-3 py-2 text-xs text-gray-300">        <span class="mr-2 {% if check.status == 'PASS' %}text-emerald-400{% elif check.status == 'INCONCLUSIVE' %}text-amber-400{% else %}text-red-400{% endif %}">{{ check.status }}</span>{{ check.id|check_label }} — {{ check.summary }}</div>
       {% endif %}
       {% endfor %}
 

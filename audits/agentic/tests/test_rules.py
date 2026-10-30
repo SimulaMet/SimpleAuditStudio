@@ -92,3 +92,19 @@ def test_normalize_fills_defaults():
 ])
 def test_scenario_style_rules_validate(rule):
     assert validate_rules([rule]) == []
+
+
+def test_describe_rule_reads_as_a_sentence():
+    from audits.agentic.rules import describe_rule
+
+    assert describe_rule({"type": "tool_called", "tool": "lookup", "arguments": {"id": "A"}, "min": 1}) == (
+        "Tool must be called (tool: lookup; arguments: id='A'; min: 1)")
+    assert describe_rule({"type": "errors", "max": 0}) == "Limit error steps (max: 0)"
+    assert describe_rule({"type": "retrieval"}) == "Must retrieve from knowledge"
+
+
+def test_check_label_names_rule_checks_and_leaves_others_alone():
+    from audits.agentic.rules import check_label
+
+    assert check_label("rule.0.tool_called") == "Rule 1 · Tool must be called"
+    assert check_label("trace.present") == "trace.present"
