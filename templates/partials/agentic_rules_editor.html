@@ -3,6 +3,7 @@
   Structured rules (checked from the trace). Each card is one rule; the stored
   JSON lives in agentic_rules_json and is shown only under "Edit as JSON".
 -->
+<script id="rule-field-catalog" type="application/json">{{ ""|rule_field_catalog|safe }}</script>
 <div class="space-y-2 pt-2 border-t border-gray-800" data-rules-editor>
   <div class="flex items-center justify-between gap-2">
     <p class="text-xs font-semibold text-gray-400">Rules <span class="font-normal text-gray-600">(checked from the trace)</span></p>
@@ -50,9 +51,26 @@
       ['min_documents', 'int', 'At least (documents)'], ['sources', 'list', 'Required sources, comma separated'] ] },
     errors: { label: 'Limit error steps', fields: [
       ['max', 'int', 'At most (errors)'] ] },
+    check: { label: 'Custom check', custom: true, fields: [] },
     retries: { label: 'Limit retries after a failure', fields: [
       ['tool', 'text', 'Tool name'], ['max_retries', 'int', 'At most (retries)'],
       ['same_arguments', 'bool', 'Retries must use the same arguments'] ] },
+  };
+
+  const CATALOG = JSON.parse(document.getElementById('rule-field-catalog')?.textContent || '[]');
+  const KIND_LABELS = { tool: 'Tool calls', retrieval_document: 'Retrieved documents', answer: 'Final answer', any: 'Any step', action: 'Actions in order' };
+  const CHECK_LABELS = { count: 'Count', exists: 'Exists', none: 'None', all: 'All', distinct: 'Distinct values', in_order: 'In order', before: 'Before', max_group: 'Largest identical group', max_run: 'Longest run in a row' };
+  const EXPECT_LABELS = { equals: 'exactly', at_least: 'at least', at_most: 'at most', between: 'between' };
+  const OP_LABELS = { equals: 'equals', not_equals: 'does not equal', one_of: 'is one of', contains: 'contains', at_least: 'at least', at_most: 'at most', between: 'between' };
+  const TEXT_OPS = ['equals', 'not_equals', 'one_of', 'contains'];
+  const NUMBER_OPS = ['equals', 'at_least', 'at_most', 'between'];
+  const fieldFor = (name) => CATALOG.find(f => f.name === name || (f.needs_key && name.startsWith(f.name)));
+  const opsFor = (name) => {
+    const f = fieldFor(name);
+    if (!f) return TEXT_OPS;
+    if (f.family === 'bool') return ['equals', 'not_equals'];
+    if (f.family === 'text') return TEXT_OPS;
+    return [...new Set([...TEXT_OPS, ...NUMBER_OPS])];
   };
 
   function parseArgs(text) {
@@ -68,6 +86,7 @@
   }
 
   function defaults(type) {
+    if (type === 'check') return { type, select: { kind: 'tool', where: [] }, check: 'count', expect: { op: 'at_least', value: 1 } };
     const rule = { type };
     TYPES[type].fields.forEach(([key, kind, , options]) => {
       if (kind === 'select') rule[key] = options[0][0];
@@ -78,6 +97,12 @@
   }
 
   function summary(rule) {
+    if (rule.type === 'check') {
+      const where = (rule.select?.where || []).map(c => `${c.field} ${OP_LABELS[c.op] || c.op} ${c.value ?? ''}`.trim()).join(' and ');
+      const scope = `${KIND_LABELS[rule.select?.kind] || 'Units'}${where ? ' where ' + where : ''}`;
+      const expect = rule.expect ? `${EXPECT_LABELS[rule.expect.op] || ''} ${Array.isArray(rule.expect.value) ? rule.expect.value.join(' and ') : rule.expect.value ?? ''}` : '';
+      return `Custom check: ${CHECK_LABELS[rule.check] || rule.check} of ${scope}${expect ? ', expect ' + expect.trim() : ''}`;
+    }
     const spec = TYPES[rule.type];
     const parts = spec.fields
       .filter(([key, kind]) => rule[key] !== undefined && rule[key] !== '' && !(Array.isArray(rule[key]) && !rule[key].length))
@@ -125,6 +150,66 @@
       if (rule[key] === undefined) delete rule[key];
     }
 
+    function renderCustom(card, fields, rule, index) {
+      const select = (value, options) => `<select class="w-full px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs text-gray-200">${options.map(([v, l]) => `<option value="${v}" ${v === value ? 'selected' : ''}>${l}</option>`).join('')}</select>`;
+      const kindOptions = Object.entries(KIND_LABELS).map(([v, l]) => [v, l]);
+      const checkOptions = Object.entries(CHECK_LABELS).filter(([v]) => !['in_order', 'before', 'max_group', 'max_run'].includes(v)).map(([v, l]) => [v, l]);
+      const expectOptions = Object.entries(EXPECT_LABELS).map(([v, l]) => [v, l]);
+      const datalist = `<datalist id="fields-${Math.random().toString(36).slice(2)}">${CATALOG.map(f => `<option value="${f.name}">`).join('')}</datalist>`;
+      fields.innerHTML = `
+        <label class="block text-[11px] text-gray-400">Look at<span data-k>${select(rule.select.kind, kindOptions)}</span></label>
+        <label class="block text-[11px] text-gray-400">Check<span data-c>${select(rule.check, checkOptions)}</span></label>
+        <div class="md:col-span-2 space-y-1" data-where></div>
+        <button type="button" data-add-cond class="justify-self-start text-[11px] text-gray-400 hover:text-gray-200 underline">+ Add condition</button>
+        <div class="grid grid-cols-2 gap-2 md:col-span-2" data-expect>
+          <label class="block text-[11px] text-gray-400">Expect<span data-eo>${select(rule.expect?.op || 'at_least', expectOptions)}</span></label>
+          <label class="block text-[11px] text-gray-400">Value<input data-ev class="w-full px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs text-gray-200" value="${Array.isArray(rule.expect?.value) ? rule.expect.value.join(',') : (rule.expect?.value ?? '')}" placeholder="a number, or two numbers for between"></label>
+        </div>
+        <label class="block text-[11px] text-gray-400 md:col-span-2" data-field-wrap>Field to count (distinct only)<input data-fd class="w-full px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs text-gray-200" list="${datalist.match(/id="([^"]+)"/)[1]}" value="${rule.field || ''}">${datalist}</label>`;
+      const where = fields.querySelector('[data-where]');
+      const drawWhere = () => {
+        where.innerHTML = '';
+        (rule.select.where || []).forEach((cond, i) => {
+          const row = document.createElement('div');
+          row.className = 'grid grid-cols-[1fr_auto_1fr_auto] gap-1 items-center';
+          row.innerHTML = `<input data-cf list="${fields.querySelector('datalist')?.id || ''}" value="${cond.field || ''}" placeholder="field, e.g. tool.name" class="px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs text-gray-200">
+            <select data-co class="px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs text-gray-200">${opsFor(cond.field || '').map(o => `<option value="${o}" ${o === cond.op ? 'selected' : ''}>${OP_LABELS[o]}</option>`).join('')}</select>
+            <input data-cv value="${cond.value ?? ''}" placeholder="value" class="px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs text-gray-200">
+            <button type="button" data-cremove class="text-[11px] text-gray-500 hover:text-red-300">Remove</button>`;
+          row.querySelector('[data-cremove]').addEventListener('click', () => { rule.select.where.splice(i, 1); drawWhere(); commitCustom(); });
+          where.appendChild(row);
+        });
+      };
+      const commitCustom = () => {
+        rule.select.kind = fields.querySelector('[data-k] select').value;
+        rule.check = fields.querySelector('[data-c] select').value;
+        rule.select.where = [...where.querySelectorAll(':scope > div')].map(row => {
+          const field = row.querySelector('[data-cf]').value.trim();
+          const op = row.querySelector('[data-co]').value;
+          const raw = row.querySelector('[data-cv]').value.trim();
+          const numeric = ['at_least', 'at_most', 'between'].includes(op) || (fieldFor(field)?.family === 'any' && !isNaN(Number(raw)) && raw !== '');
+          const value = op === 'one_of' ? raw.split(',').map(s => s.trim()).filter(Boolean)
+            : raw === 'true' ? true : raw === 'false' ? false : numeric && raw !== '' ? Number(raw) : raw;
+          return { field, op, value };
+        }).filter(c => c.field);
+        const expectOp = fields.querySelector('[data-eo] select').value;
+        const expectRaw = fields.querySelector('[data-ev]').value.trim();
+        rule.expect = { op: expectOp, value: expectOp === 'between' ? expectRaw.split(',').map(Number) : Number(expectRaw) };
+        const fd = fields.querySelector('[data-fd]').value.trim();
+        if (fd) rule.field = fd; else delete rule.field;
+        fields.querySelector('[data-field-wrap]').classList.toggle('hidden', rule.check !== 'distinct');
+        card.querySelector('[data-summary]').textContent = summary(rule);
+        sync();
+      };
+      fields.querySelector('[data-add-cond]').addEventListener('click', () => { rule.select.where.push({ field: '', op: 'equals', value: '' }); drawWhere(); commitCustom(); });
+      fields.addEventListener('input', commitCustom);
+      fields.addEventListener('change', commitCustom);
+      fields.querySelector('[data-field-wrap]').classList.toggle('hidden', rule.check !== 'distinct');
+      drawWhere();
+      card.querySelector('[data-summary]').textContent = summary(rule);
+      card.querySelector('[data-remove]').addEventListener('click', () => { rules.splice(index, 1); render(); sync(); });
+    }
+
     function render() {
       list.innerHTML = '';
       rules.forEach((rule, index) => {
@@ -137,6 +222,11 @@
           </div>
           <div class="grid grid-cols-1 md:grid-cols-2 gap-2" data-fields></div>`;
         const fields = card.querySelector('[data-fields]');
+        if (spec.custom) {
+          renderCustom(card, fields, rule, index);
+          list.appendChild(card);
+          return;
+        }
         spec.fields.forEach(([key, kind, placeholder, options]) => {
           const cell = document.createElement('label');
           cell.className = 'block text-[11px] text-gray-400';

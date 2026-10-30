@@ -57,3 +57,10 @@ def test_untouched_editor_on_legacy_scenario_saves_the_converted_rules():
     merged = _merge_structured_agentic_fields(prior, _post(agentic_rules_json=json.dumps(shown)))
     assert merged["agentic"]["rules"] == shown
     assert "budgets" not in merged["agentic"]
+
+
+def test_custom_check_built_in_the_editor_is_saved():
+    rule = {"type": "check", "select": {"kind": "tool", "where": [{"field": "tool.name", "op": "equals", "value": "lookup"}]},
+            "check": "count", "expect": {"op": "at_least", "value": 1}}
+    merged = _merge_structured_agentic_fields({}, _post(agentic_rules_json=json.dumps([rule])))
+    assert merged["agentic"]["rules"] == [rule]

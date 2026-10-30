@@ -452,3 +452,11 @@ def _label_conditions(label: str) -> list[dict]:
     if label in ACTION_KINDS and label != "tool":
         return [_cond("span.kind", "equals", label)]
     return [_cond("tool.name", "equals", label)]
+
+
+def field_catalog() -> list[dict]:
+    """Fields a custom check can read, with the units they apply to and their type."""
+    fixed = [{"name": name, "kinds": list(kinds), "family": family} for name, (kinds, family) in _FIXED_FIELDS.items()]
+    dynamic = [{"name": prefix, "kinds": list(kinds), "family": family, "needs_key": True}
+               for prefix, (kinds, family) in _DYNAMIC_PREFIXES.items()]
+    return fixed + dynamic

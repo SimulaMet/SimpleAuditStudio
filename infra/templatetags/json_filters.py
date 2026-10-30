@@ -82,3 +82,11 @@ def check_label(check_id):
     from audits.agentic.rules import check_label as label
 
     return label(str(check_id))
+
+
+@register.filter
+def rule_field_catalog(_value=None):
+    """The trace fields a custom check can read, for the rule editor's field picker."""
+    from audits.agentic.rule_engine import field_catalog
+
+    return json.dumps(field_catalog(), ensure_ascii=False)
