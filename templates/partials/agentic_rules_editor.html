@@ -15,7 +15,7 @@
   <div data-rules-list class="space-y-2"></div>
   <p data-rules-empty class="text-[11px] text-gray-600">No rules. A scenario with no rules is checked by its other settings only.</p>
   <div data-rules-advanced class="hidden">
-    <textarea name="agentic_rules_json" rows="8" spellcheck="false" class="w-full px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 font-mono text-[11px] focus:outline-none focus:ring-1 focus:ring-accent/50">{{ agentic.rules|jsonify_compact }}</textarea>
+    <textarea name="agentic_rules_json" rows="8" spellcheck="false" class="w-full px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 font-mono text-[11px] focus:outline-none focus:ring-1 focus:ring-accent/50">{{ agentic|editor_rules_json }}</textarea>
     <p data-rules-json-error class="text-[11px] text-red-300 hidden"></p>
   </div>
 </div>

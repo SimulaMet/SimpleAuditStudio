@@ -39,3 +39,21 @@ def test_cleared_editor_removes_rules_saved_earlier():
 def test_empty_editor_on_untouched_scenario_changes_nothing():
     untouched = {"name": "x"}
     assert _merge_structured_agentic_fields(untouched, _post(agentic_rules_json="")) == untouched
+
+
+def test_saving_takes_over_legacy_settings_that_were_converted():
+    prior = {"agentic": {"schema_version": 2, "budgets": {"max_tool_calls": 3}, "approvals": {"required_for": ["refund"]}}}
+    rules = [{"type": "budget", "max": 3}]
+    post = _post(agentic_rules_json=json.dumps(rules), agentic_approvals_required_for="refund")
+    merged = _merge_structured_agentic_fields(prior, post)
+    assert merged["agentic"]["rules"] == rules
+    assert "budgets" not in merged["agentic"]
+    assert merged["agentic"]["approvals"]["required_for"] == ["refund"]
+
+
+def test_untouched_editor_on_legacy_scenario_saves_the_converted_rules():
+    prior = {"agentic": {"schema_version": 2, "budgets": {"max_tool_calls": 3}}}
+    shown = [{"type": "budget", "max": 3}]
+    merged = _merge_structured_agentic_fields(prior, _post(agentic_rules_json=json.dumps(shown)))
+    assert merged["agentic"]["rules"] == shown
+    assert "budgets" not in merged["agentic"]

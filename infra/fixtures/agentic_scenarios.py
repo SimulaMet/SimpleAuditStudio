@@ -158,12 +158,20 @@ _BASE_SEMANTIC_JUDGE = {
 
 
 def _agentic(**sections) -> dict:
-    """Build a sparse agentic metadata block from named sections."""
+    """Build a sparse agentic metadata block from named sections.
+
+    Settings with a rule equivalent are stored as rules (see audits/agentic/migration.py).
+    """
+    from audits.agentic.migration import split_legacy
+
     agentic = {"schema_version": 2}
     for name, value in sections.items():
         if value is not None:
             agentic[name] = value
-    return {"agentic": agentic}
+    rules, rest = split_legacy(agentic)
+    if rules:
+        rest["rules"] = rules
+    return {"agentic": rest}
 
 
 def _get_order(order_id: str) -> list[dict]:

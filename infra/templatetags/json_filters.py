@@ -57,3 +57,12 @@ def tool_entries_text(value):
     from audits.agentic.tool_entries import format_tool_entries
 
     return format_tool_entries(value)
+
+
+@register.filter
+def editor_rules_json(agentic):
+    """Rules for the rule editor: saved rules, then legacy settings converted to rules."""
+    from audits.agentic.migration import editor_rules
+
+    rules = editor_rules(agentic if isinstance(agentic, dict) else {})
+    return json.dumps(rules, ensure_ascii=False) if rules else ""

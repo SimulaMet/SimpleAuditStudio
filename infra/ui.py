@@ -23,6 +23,7 @@ from django.views.generic import DetailView, TemplateView, View
 
 from accounts import workos_auth
 from accounts.models import User
+from audits.agentic.migration import has_legacy, split_legacy
 from audits.agentic.rules import validate_rules
 from audits.agentic.tool_entries import parse_tool_entries
 from audits.comparison import compare_runs
@@ -161,6 +162,10 @@ _EXPLICIT_FALSE_FIELDS = {
 }
 
 
+def has_legacy_or_rules(agentic: dict) -> bool:
+    return bool(agentic.get("rules")) or has_legacy(agentic)
+
+
 def _merge_structured_agentic_fields(metadata: dict, post) -> dict:
     """Merge authoring controls into agentic metadata without dropping extensions.
 
@@ -177,11 +182,14 @@ def _merge_structured_agentic_fields(metadata: dict, post) -> dict:
         for key in post
     )
     # A cleared rule editor must still remove rules saved earlier.
-    clears_rules = "agentic_rules_json" in post and bool((metadata.get("agentic") or {}).get("rules"))
+    clears_rules = "agentic_rules_json" in post and has_legacy_or_rules(metadata.get("agentic") or {})
     if not has_control and not clears_rules:
         return metadata
     agentic = dict(metadata.get("agentic") or {})
     agentic.setdefault("schema_version", 2)
+    if "agentic_rules_json" in post:
+        # The rule editor owns the settings it converts; the posted rules replace them.
+        agentic = split_legacy(agentic)[1]
 
     def csv(name):
         return [value.strip() for value in post.get(name, "").split(",") if value.strip()]
