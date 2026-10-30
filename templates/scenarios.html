@@ -144,6 +144,16 @@
                 </ul>
               </div>
               {% endif %}
+              {% if item.revision.metadata.agentic.rules %}
+              <div>
+                <span class="text-gray-500 font-medium">Rules <span class="font-normal text-gray-600">(checked from the trace)</span></span>
+                <ul class="mt-0.5 space-y-0.5 list-disc list-inside">
+                  {% for rule in item.revision.metadata.agentic.rules %}
+                  <li class="text-gray-300">{{ rule|rule_sentence }}</li>
+                  {% endfor %}
+                </ul>
+              </div>
+              {% endif %}
               {% if item.revision.test_prompt %}
               <div>
                 <span class="text-gray-500 font-medium">Test prompt</span>

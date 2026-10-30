@@ -35,6 +35,12 @@
       <ul class="space-y-1">{% for e in expected_behavior %}<li class="text-gray-300 flex gap-2"><span class="text-gray-500">•</span><span>{{ e }}</span></li>{% endfor %}</ul>
     </div>
     {% endif %}
+    {% if scenario_rules %}
+    <div>
+      <p class="text-xs text-gray-500 uppercase tracking-wide mb-1">Rules <span class="normal-case text-gray-600">(checked from the trace)</span></p>
+      <ul class="space-y-1">{% for rule in scenario_rules %}<li class="text-gray-300 flex gap-2"><span class="text-gray-500">•</span><span>{{ rule }}</span></li>{% endfor %}</ul>
+    </div>
+    {% endif %}
     {% if test_prompt %}
     <div>
       <p class="text-xs text-gray-500 uppercase tracking-wide mb-1">Test prompt</p>

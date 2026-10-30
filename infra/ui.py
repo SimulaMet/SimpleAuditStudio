@@ -24,7 +24,7 @@ from django.views.generic import DetailView, TemplateView, View
 from accounts import workos_auth
 from accounts.models import User
 from audits.agentic.migration import has_legacy, split_legacy
-from audits.agentic.rules import validate_rules
+from audits.agentic.rules import describe_rule, validate_rules
 from audits.agentic.tool_entries import parse_tool_entries
 from audits.comparison import compare_runs
 from audits.events import ScenarioResult
@@ -3146,6 +3146,13 @@ class CompareView(ProjectMixin, TemplateView):
 
 # ─── Audit Detail ────────────────────────────────────────────────────────────
 
+def _scenario_rule_sentences(revision) -> list[str]:
+    """The scenario's structured rules as readable sentences, for the result page."""
+    metadata = (getattr(revision, "metadata", None) or {}) if revision else {}
+    rules = ((metadata.get("agentic") or {}).get("rules")) or []
+    return [describe_rule(rule) for rule in rules if isinstance(rule, dict)]
+
+
 def _result_rows(run: AuditRun, items: dict | None = None) -> list[dict]:
     """Rows for the audit detail Results list (handles n_repetitions > 1)."""
     set_id = run.scenario_set_version.scenario_set_id
@@ -4330,6 +4337,7 @@ class RunResultView(PublicReadableMixin, TemplateView):
                 [e.get("criterion", e) if isinstance(e, dict) else e for e in expected]
             ),
             test_prompt=revision.test_prompt if revision else "",
+            scenario_rules=_scenario_rule_sentences(revision),
             scenario_severity_ceiling=revision.severity_ceiling if revision else "",
             scenario_documents=revision.documents if revision else [],
             scenario_file_uri=revision.file_uri if revision else None,
