@@ -6,7 +6,7 @@
 <div class="space-y-2 pt-2 border-t border-gray-800" data-rules-editor>
   <div class="flex items-center justify-between gap-2">
     <p class="text-xs font-semibold text-gray-400">Rules <span class="font-normal text-gray-600">(checked from the trace)</span></p>
-    <button type="button" data-rules-advanced-toggle class="text-[11px] text-gray-500 hover:text-gray-300 underline">Edit as JSON</button>
+    <button type="button" data-rules-advanced-toggle class="hidden text-[11px] text-gray-500 hover:text-gray-300 underline">Edit as JSON</button>
   </div>
   <div class="flex flex-wrap items-center gap-2">
     <select data-rules-picker class="px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-1 focus:ring-accent/50"></select>
@@ -181,6 +181,10 @@
     root.querySelector('[data-rules-advanced-toggle]').addEventListener('click', () => {
       advanced.classList.toggle('hidden');
     });
+    // Internal: the JSON view is only offered when the page is opened with ?advanced=1.
+    if (new URLSearchParams(window.location.search).get('advanced') === '1') {
+      root.querySelector('[data-rules-advanced-toggle]').classList.remove('hidden');
+    }
     store.addEventListener('input', () => {
       try {
         const parsed = store.value.trim() ? JSON.parse(store.value) : [];
