@@ -31,7 +31,7 @@ _OPENINFERENCE_KIND = {
 }
 
 _TOOL_NAME_KEYS = ("gen_ai.tool.name", "openwebui.tool.name", "tool.name")
-_RETRIEVAL_KEYS = ("openwebui.retrieval.data_source", "gen_ai.retrieval.documents")
+_RETRIEVAL_KEYS = ("gen_ai.retrieval.documents",)
 _EXPLICIT_KIND_KEYS = (
     "gen_ai.operation.name", "openinference.span.kind", "openwebui.span.kind",
 )

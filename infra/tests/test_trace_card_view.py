@@ -6,7 +6,7 @@ OpenInference-style spans (semantic kinds: LLM, RETRIEVER, ...) and plain OTel
 auto-instrumentation (raw SPAN_KIND_*, connect/GET noise around one long model
 call).
 """
-from django.test import TestCase
+from django.test import SimpleTestCase, TestCase
 
 from infra.ui import _rep_view, _trace_card_view
 
@@ -148,3 +148,31 @@ class TraceCardViewTest(TestCase):
             1,
         )
         self.assertEqual(view["total_tokens"], 20)
+
+
+class DuplicateInferenceTests(SimpleTestCase):
+    def _llm(self, span_id, trace, start, messages):
+        return {"span_id": span_id, "trace_id": trace, "kind": "LLM", "start_time": start,
+                "attributes": {"gen_ai.input.messages": messages}}
+
+    def test_identical_consecutive_model_calls_in_one_trace_are_flagged(self):
+        from infra.ui import _duplicate_inference_flags
+
+        spans = [self._llm("a", "t1", 1.0, "same"), self._llm("b", "t1", 2.0, "same")]
+        self.assertEqual(list(_duplicate_inference_flags(spans)), [1])
+
+    def test_different_input_or_different_trace_is_not_flagged(self):
+        from infra.ui import _duplicate_inference_flags
+
+        spans = [
+            self._llm("a", "t1", 1.0, "first"),
+            self._llm("b", "t1", 2.0, "second"),
+            self._llm("c", "t2", 3.0, "second"),
+        ]
+        self.assertEqual(_duplicate_inference_flags(spans), {})
+
+    def test_spans_without_input_are_ignored(self):
+        from infra.ui import _duplicate_inference_flags
+
+        spans = [self._llm("a", "t1", 1.0, ""), self._llm("b", "t1", 2.0, "")]
+        self.assertEqual(_duplicate_inference_flags(spans), {})

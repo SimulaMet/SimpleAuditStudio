@@ -41,7 +41,7 @@ def test_retrieval_source_resolves_frozen_knowledge_base_id():
     trajectory = AgentTrajectory([
         TrajectoryStep(
             "r2", "retrieval", "retrieval",
-            attributes={"openwebui.retrieval.data_source": ["kb-acme"]},
+            attributes={"gen_ai.retrieval.documents": [{"source": "kb-acme"}]},
         )
     ])
     result = evaluate(trajectory, expectations, {

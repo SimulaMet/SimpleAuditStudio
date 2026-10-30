@@ -174,7 +174,7 @@ def test_captured_source_identifier_matching_expected_entry_is_pass():
 
     trajectory = AgentTrajectory([
         step("r1", "tool", "query_knowledge_files", attributes={
-            "openwebui.retrieval.data_source": ["kb-acme"],
+            "gen_ai.retrieval.documents": [{"source": "kb-acme"}],
             "gen_ai.tool.call.result": '{"source": "kb-acme"}',
         }),
     ])
@@ -216,7 +216,7 @@ def test_observable_identifier_of_other_kb_is_fail_not_inconclusive():
     ]}
     trajectory = AgentTrajectory([
         step("r1", "tool", "query_knowledge_files", attributes={
-            "openwebui.retrieval.data_source": ["kb-other"],
+            "gen_ai.retrieval.documents": [{"source": "kb-other"}],
         }),
     ])
     results = retrieval_requirements(trajectory, {
@@ -235,7 +235,7 @@ def test_unresolvable_external_id_is_inconclusive_not_fail():
 
     trajectory = AgentTrajectory([
         step("r1", "tool", "query_knowledge_files", attributes={
-            "openwebui.retrieval.data_source": ["kb-other"],
+            "gen_ai.retrieval.documents": [{"source": "kb-other"}],
         }),
     ])
     results = retrieval_requirements(trajectory, {

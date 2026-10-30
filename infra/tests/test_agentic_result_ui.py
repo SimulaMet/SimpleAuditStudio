@@ -85,7 +85,7 @@ REAL_SPANS = [
         "397f73d050fb1b64", "query_knowledge_files", "RETRIEVER", 0.0,
         **{
             "gen_ai.tool.name": "query_knowledge_files",
-            "openwebui.retrieval.data_source": ["Acme Retail Policy"],
+            "gen_ai.retrieval.documents": [{"source": "Acme Retail Policy"}],
             "gen_ai.tool.call.arguments": '{"query": "refund policy"}',
         },
     ),

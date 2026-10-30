@@ -101,12 +101,12 @@ def _snapshot():
 
 
 def test_spoofed_data_source_name_without_identifier_is_inconclusive():
-    # The trace claims the allowed KB *name* via data_source but carries no
-    # observable identifier (snapshot external_id, list-knowledge file
-    # mapping). A spoofable display name must not be trusted on its own.
+    # A document claims a source name that is neither a KB in the snapshot nor an
+    # allowed scenario entry, and carries no observable identifier (snapshot
+    # external_id, list-knowledge file mapping). Such a name is not evidence.
     trajectory = AgentTrajectory([
         _step("r1", "retrieval", "query", attributes={
-            "openwebui.retrieval.data_source": ["Acme Retail Policy"],
+            "gen_ai.retrieval.documents": [{"source": "Some Other KB"}],
         }),
     ])
     statuses = _statuses(retrieval_requirements(
@@ -148,7 +148,7 @@ def test_resolvable_external_id_still_passes_after_spoof_fix():
     # Regression guard: a genuine observable identifier keeps working.
     trajectory = AgentTrajectory([
         _step("r1", "retrieval", "query", attributes={
-            "openwebui.retrieval.data_source": ["kb-acme"],
+            "gen_ai.retrieval.documents": [{"source": "kb-acme"}],
         }),
     ])
     statuses = _statuses(retrieval_requirements(

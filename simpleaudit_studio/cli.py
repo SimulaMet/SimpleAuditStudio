@@ -361,9 +361,6 @@ def start_chat(chat_proxy, internal_port: int):
             backfilled = _backfill_demo_chat()
             if backfilled:
                 print(f"   {backfilled}", flush=True)
-            agentic_demo = _backfill_agentic_demo()
-            if agentic_demo:
-                print(f"   {agentic_demo}", flush=True)
         elif process.poll() is not None:
             print(f"\n⚠️  Chat stopped (exit {process.returncode}). Studio is unaffected.")
             print(f"   What happened: {chat_proxy.log_path()}\n", flush=True)
@@ -415,28 +412,6 @@ def _backfill_demo_chat() -> str:
     except Exception as exc:  # noqa: BLE001 - runs in a startup thread; don't crash it
         print(f"   Demo chat backfill skipped: {exc}", flush=True)
         return ""
-
-
-def _backfill_agentic_demo() -> str:
-    """Preload the synthetic completed Agentic example after Agent sync."""
-    from io import StringIO
-
-    from django.contrib.auth import get_user_model
-    from django.core.management import call_command
-
-    from accounts.models import Project
-
-    user = get_user_model().objects.order_by("id").first()
-    project = Project.objects.order_by("id").first()
-    if user is None or project is None:
-        return ""
-    output = StringIO()
-    try:
-        call_command("seed_agentic_demo", project=project.id, stdout=output, verbosity=0)
-    except Exception as exc:  # noqa: BLE001 - startup demo data must not prevent Studio running
-        print(f"   Preloaded Agentic example not ready: {exc}", flush=True)
-        return ""
-    return output.getvalue().strip()
 
 
 def _ensure_ports_available(args) -> None:

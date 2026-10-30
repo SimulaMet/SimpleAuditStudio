@@ -45,6 +45,7 @@ def _source_values(value: Any) -> list[str]:
     return []
 
 
+
 def _captured_tool_result(step) -> Any:
     raw = step.attributes.get("gen_ai.tool.call.result")
     if isinstance(raw, (dict, list)):
@@ -133,7 +134,6 @@ def retrieval_requirements(
         captured_sources = []
         for step in steps:
             attrs = step.attributes
-            direct_sources.extend(_source_values(attrs.get("openwebui.retrieval.data_source")))
             args = _tool_arguments(step)
             if args:
                 direct_sources.extend(_source_values(args))

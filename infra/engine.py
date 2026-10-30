@@ -463,8 +463,28 @@ def auditor_kwargs(*, target: dict, auditor: dict, judge: dict, generation: dict
                     if owui_route.get("connection_id"):
                         try:
                             owui_conn = ModelConnection.objects.get(id=owui_route["connection_id"])
+                            # An agent runs as its Open WebUI agent model, so Open WebUI
+                            # applies the agent's own tools and knowledge (saved-chat
+                            # path). Other targets keep the base model's prefixed id.
+                            wrapper_model = str((target or {}).get("model_id") or "")
+                            route_model = (
+                                wrapper_model
+                                if wrapper_model.startswith("studio.agent-")
+                                else f"{base_conn.id}.{base_model_row.model_id}"
+                            )
+                            if route_model.startswith("studio.agent-"):
+                                # The agent's bundle is named on each run, so Open WebUI
+                                # runs its tools on the saved-chat path (see trace_target).
+                                from chat.api import agent_tool_ids
+
+                                gen_params = dict(target_cfg.get("gen_params") or {})
+                                gen_params["extra_body"] = {
+                                    **(gen_params.get("extra_body") or {}),
+                                    "tool_ids": agent_tool_ids(route_model),
+                                }
+                                target_cfg["gen_params"] = gen_params
                             target_cfg.update({
-                                "model": f"{base_conn.id}.{base_model_row.model_id}",
+                                "model": route_model,
                                 "base_url": owui_conn.base_url,
                                 # Placeholder; TraceContextModelTarget swaps it
                                 # for an OWUI session JWT on every turn.

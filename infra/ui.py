@@ -3570,6 +3570,18 @@ def _span_label(sid: str) -> str:
     return sid
 
 
+def _document_source_names(value) -> list[str]:
+    """Source names of a ``gen_ai.retrieval.documents`` value (a list, or its JSON text)."""
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except (json.JSONDecodeError, ValueError):
+            return []
+    if not isinstance(value, list):
+        return []
+    return [str(d["source"]) for d in value if isinstance(d, dict) and d.get("source")]
+
+
 def _agentic_span_view(span: dict) -> dict | None:
     """One evidence span as a timeline row (chronological ordering key included)."""
     if not isinstance(span, dict) or not span.get("span_id"):
@@ -3579,7 +3591,7 @@ def _agentic_span_view(span: dict) -> dict | None:
     icon, tone = _AGENTIC_SPAN_KIND_ICONS.get(kind, ("•", "text-gray-400"))
     tool_name = attrs.get("gen_ai.tool.name") or attrs.get("tool_name") or ""
     # KB retrieval rows surface the observed source ids/names from attributes.
-    kb_sources = attrs.get("openwebui.retrieval.data_source") or attrs.get("retrieval.source_ids") or []
+    kb_sources = _document_source_names(attrs.get("gen_ai.retrieval.documents")) or attrs.get("retrieval.source_ids") or []
     if isinstance(kb_sources, (str, int)):
         kb_sources = [kb_sources]
     elif not isinstance(kb_sources, list):
@@ -3593,6 +3605,7 @@ def _agentic_span_view(span: dict) -> dict | None:
         "tone": tone,
         "name": span.get("name") or tool_name or "step",
         "tool_name": tool_name,
+        "redundant_reason": str(attrs.get("redundant_reason") or ""),
         "kb_sources": [str(s) for s in kb_sources],
         "started_at": start,
         "duration_ms": round(_trace_span_duration_ms(span), 1),
@@ -3600,6 +3613,36 @@ def _agentic_span_view(span: dict) -> dict | None:
         "raw_json": json.dumps(span, indent=2, ensure_ascii=False, default=str),
         "is_retrieval": kind == "RETRIEVER" or bool(kb_sources) or "retriev" in str(tool_name).lower(),
     }
+
+
+def _duplicate_inference_flags(spans: list[dict]) -> dict[int, str]:
+    """Flag a model call whose input repeats the previous model call in the same trace.
+
+    Open WebUI can call the base model twice with byte-identical input on a turn with
+    no tool call (SushantGautam/open-webui#6). Works on the ordered span list: within
+    one trace, a ``chat``/LLM span with the same input as the previous LLM span is a
+    duplicate. Returns ``{index: reason}`` for the flagged spans.
+    """
+    import hashlib
+
+    flags: dict[int, str] = {}
+    last_input_by_trace: dict[str, str] = {}
+    order = sorted(
+        (i for i, sp in enumerate(spans) if str(sp.get("kind") or "").upper() == "LLM"),
+        key=lambda i: (spans[i].get("start_time") or 0, i),
+    )
+    for i in order:
+        sp = spans[i]
+        attrs = sp.get("attributes") if isinstance(sp.get("attributes"), dict) else {}
+        raw_input = attrs.get("gen_ai.input.messages")
+        if raw_input in (None, ""):
+            continue
+        digest = hashlib.sha256(str(raw_input).encode("utf-8")).hexdigest()
+        trace = str(sp.get("trace_id") or "")
+        if last_input_by_trace.get(trace) == digest:
+            flags[i] = "duplicate model call: same input as the previous model call in this trace (issue #6)"
+        last_input_by_trace[trace] = digest
+    return flags
 
 
 def _synthetic_tool_spans(conv: list[dict]) -> list[dict]:
@@ -3676,11 +3719,11 @@ def _synthetic_tool_spans(conv: list[dict]) -> list[dict]:
                             if isinstance(rdata, dict):
                                 src = rdata.get("source") or rdata.get("data_source")
                                 if src:
-                                    attrs["openwebui.retrieval.data_source"] = [src] if isinstance(src, str) else list(src)
+                                    attrs["gen_ai.retrieval.documents"] = [{"source": x} for x in ([src] if isinstance(src, str) else list(src))]
                             elif isinstance(rdata, list) and rdata and isinstance(rdata[0], dict):
                                 srcs = [d.get("source") for d in rdata if isinstance(d, dict) and d.get("source")]
                                 if srcs:
-                                    attrs["openwebui.retrieval.data_source"] = srcs
+                                    attrs["gen_ai.retrieval.documents"] = [{"source": x} for x in srcs]
                         except (json.JSONDecodeError, TypeError):
                             pass
             synthetic.append({
@@ -3788,6 +3831,9 @@ def _agentic_timeline_view(rep: dict) -> dict | None:
         # server-side tool loop leaves no such spans. Merge the
         # conversation-derived steps in so the timeline is not all LLM.
         raw_spans = _merge_synthesized_tool_spans(raw_spans, _synthetic_tool_spans(rep.get("conversation") or []))
+    for idx, reason in _duplicate_inference_flags(raw_spans).items():
+        attrs = raw_spans[idx].get("attributes") if isinstance(raw_spans[idx].get("attributes"), dict) else {}
+        raw_spans[idx]["attributes"] = {**attrs, "redundant_reason": reason}
     base_start = min(
         (s.get("start_time") for s in raw_spans if isinstance(s.get("start_time"), (int, float))),
         default=None,

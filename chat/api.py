@@ -591,3 +591,19 @@ def _knowledge_summary(item: dict[str, Any]) -> dict[str, Any]:
         "file_count": len(files) if isinstance(files, list) else item.get("file_count"),
         "updated_at": item.get("updated_at"),
     }
+
+
+def agent_tool_ids(model_id: str) -> list[str]:
+    """The tool ids attached to an Open WebUI model (the agent's bundle), as the chat expects.
+
+    Open WebUI runs a request's tools only when the request names them, so a run
+    sends this list. Empty when the model or the chat is unavailable.
+    """
+    from chat.sync import _admin  # lazy: chat.sync imports this module
+
+    try:
+        model = ChatAPI.as_user(_admin()).request("GET", f"/api/v1/models/model?id={model_id}") or {}
+    except Exception:
+        logger.info("Could not read the tool list for %s", model_id, exc_info=True)
+        return []
+    return [str(t) for t in ((model.get("meta") or {}).get("toolIds") or []) if t]

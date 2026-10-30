@@ -338,9 +338,9 @@ class Command(BaseCommand):
     @staticmethod
     def _acme_pack_is_valid() -> bool:
         from audits.agentic.schema_v2 import validate_agentic_metadata
-        from infra.management.commands.seed_agentic_scenarios import SCENARIOS
+        from infra.fixtures.agentic_scenarios import AGENTIC_SCENARIOS
 
-        return bool(SCENARIOS) and all(
+        return bool(AGENTIC_SCENARIOS) and all(
             validate_agentic_metadata(spec.get("metadata", {}).get("agentic", {}))[0]
-            for spec in SCENARIOS.values()
+            for spec in AGENTIC_SCENARIOS
         )

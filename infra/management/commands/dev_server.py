@@ -105,37 +105,6 @@ def _backfill_demo_chat() -> str:
         logger.info("Demo chat backfill skipped: %s", exc)
 
 
-def _seed_agentic_demo() -> str:
-    """Preload the completed Agentic demo run once its agent is synced to chat.
-
-    ``seed_agentic_demo`` needs the Support Refund Assistant's ``external_id``
-    (set by ``_backfill_demo_chat`` above), so it can only succeed after the
-    chat stack is ready. Idempotent: skips when the demo run already exists.
-    Never raises — a missing fixture or unmet precondition just logs and moves
-    on, so first-run never blocks on the agentic demo.
-    """
-    try:
-        from io import StringIO
-
-        from django.contrib.auth import get_user_model
-
-        from accounts.models import Project
-
-        user = get_user_model().objects.order_by("id").first()
-        project = Project.objects.order_by("id").first()
-        if user is None or project is None:
-            return ""
-        out = StringIO()
-        call_command("seed_agentic_demo", project=project.id, stdout=out)
-        return out.getvalue().strip()
-    except CommandError as exc:
-        logger.info("Agentic demo seed skipped: %s", exc)
-        return ""
-    except Exception as exc:  # noqa: BLE001 - runs in a startup thread; log, don't crash
-        logger.info("Agentic demo seed skipped: %s", exc)
-        return ""
-
-
 class Command(BaseCommand):
     help = "Run the local dev web server + Hatchet worker together."
 
@@ -446,9 +415,6 @@ class Command(BaseCommand):
                 backfilled = _backfill_demo_chat()
                 if backfilled:
                     print(f"   {backfilled}", flush=True)
-                agentic = _seed_agentic_demo()
-                if agentic:
-                    print(f"   {agentic}", flush=True)
             elif process.poll() is not None:
                 print(f"\n⚠️  Chat stopped (exit {process.returncode}). Studio is unaffected.", flush=True)
                 print(f"   What happened: {chat_proxy.log_path()}\n", flush=True)
