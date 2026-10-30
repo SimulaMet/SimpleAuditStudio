@@ -37,6 +37,10 @@ TRACES = {
     "leak_in_result": [_tool("lookup", {"x": "SECRET-42"})],
     "leak_in_answer": [_tool("lookup"), _answer("It is SECRET-42.")],
     "clean": [_tool("lookup", '{"id": "A"}', {"x": 1}), _answer("All good.")],
+    "seq_ok": [_tool("search"), _tool("lookup", '{"id": "A"}')],
+    "seq_extra": [_tool("search"), _tool("other"), _tool("lookup", '{"id": "A"}')],
+    "seq_reversed": [_tool("lookup", '{"id": "A"}'), _tool("search")],
+    "repeat_same": [_tool("lookup", '{"id": "A"}'), _tool("lookup", '{"id": "A"}')],
 }
 
 PRESETS = [
@@ -50,6 +54,12 @@ PRESETS = [
     {"type": "errors", "max": 0},
     {"type": "errors", "max": 1},
     {"type": "forbidden_values", "values": ["SECRET-42"]},
+    {"type": "sequence", "steps": ["search", "lookup"]},
+    {"type": "sequence", "steps": ["search", "lookup"], "mode": "in_order_exact"},
+    {"type": "precedes", "first": "search", "then": "lookup"},
+    {"type": "precedes", "first": "lookup", "then": "search"},
+    {"type": "repeated_calls", "max_identical": 1},
+    {"type": "repeated_calls", "max_identical": 2},
 ]
 
 
@@ -111,3 +121,10 @@ def test_validation_explains_problems_in_plain_words():
     assert any("operator 'contains' does not fit" in p for p in validate_check(
         {"select": {"kind": "tool", "where": [{"field": "span.error", "op": "contains", "value": "x"}]},
          "check": "none"}))
+
+
+def test_no_tool_calls_is_a_real_zero_not_missing_evidence():
+    rule = {"type": "check", "select": {"kind": "tool", "where": [{"field": "tool.name", "op": "equals", "value": "refund"}]},
+            "check": "none"}
+    trajectory = normalize([_answer("I cannot do that.")])
+    assert evaluate_check(0, rule, trajectory).status == "PASS"

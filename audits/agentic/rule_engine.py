@@ -12,6 +12,7 @@ INCONCLUSIVE.
 from __future__ import annotations
 
 import json
+from collections import Counter
 from typing import Any
 
 from .checks.base import CheckResult, result
@@ -20,8 +21,10 @@ from .checks.retrieval import _retrieval_steps as retrieval_steps
 from .checks.tools import _tool_arguments as tool_arguments
 from .schema import AgentTrajectory
 
-KINDS = ("tool", "retrieval_document", "answer", "any")
-CHECKS = ("count", "exists", "none", "all", "distinct")
+KINDS = ("tool", "retrieval_document", "answer", "any", "action")
+CHECKS = ("count", "exists", "none", "all", "distinct", "in_order", "before", "max_group", "max_run")
+ORDERING = ("in_order", "before", "max_group", "max_run")
+ACTION_KINDS = {"tool", "retrieval", "approval", "handoff", "rerank", "guardrail"}
 TEXT_OPS = ("equals", "not_equals", "one_of", "contains")
 NUMBER_OPS = ("equals", "at_least", "at_most", "between")
 EXPECT_OPS = ("equals", "at_least", "at_most", "between")
@@ -64,8 +67,48 @@ def _field_spec(field: str) -> tuple[tuple[str, ...], str] | None:
     return None
 
 
+def _validate_ordering(rule: dict) -> list[str]:
+    problems: list[str] = []
+    check = rule["check"]
+    if check == "in_order":
+        steps = rule.get("steps")
+        if not isinstance(steps, list) or not steps or not all(isinstance(s, list) and s for s in steps):
+            problems.append("'in_order' needs a list of steps, each with at least one condition")
+        for step in steps or []:
+            problems += [p for c in (step if isinstance(step, list) else []) for p in _condition_problems(c)]
+        if rule.get("mode", "in_order_others_allowed") not in ("in_order_others_allowed", "in_order_exact"):
+            problems.append("'mode' must be in order, others allowed, or in order exactly")
+    if check == "before":
+        for key in ("first", "then"):
+            conditions = rule.get(key)
+            if not isinstance(conditions, list) or not conditions:
+                problems.append(f"'before' needs '{key}' with at least one condition")
+            problems += [p for c in (conditions if isinstance(conditions, list) else []) for p in _condition_problems(c)]
+    if check in ("max_group", "max_run"):
+        group_by = rule.get("group_by")
+        if not isinstance(group_by, list) or not group_by:
+            problems.append(f"'{check}' needs 'group_by' with at least one field")
+        for field in group_by or []:
+            if _field_spec(field) is None:
+                problems.append(f"unknown field '{field}'")
+        expect = rule.get("expect")
+        if not isinstance(expect, dict) or expect.get("op") not in EXPECT_OPS:
+            problems.append("'expect' needs an operator: equals, at least, at most, or between")
+    return problems
+
+
+def _condition_problems(condition: Any) -> list[str]:
+    if not isinstance(condition, dict) or "field" not in condition or "op" not in condition:
+        return ["each condition needs a field and an operator"]
+    if _field_spec(condition["field"]) is None:
+        return [f"unknown field '{condition['field']}'"]
+    return []
+
+
 def validate_check(rule: dict) -> list[str]:
     """Problems with a custom check rule, in plain words."""
+    if rule.get("check") in ORDERING:
+        return _validate_ordering(rule)
     problems: list[str] = []
     select = rule.get("select")
     if not isinstance(select, dict) or select.get("kind") not in KINDS:
@@ -112,6 +155,8 @@ def _units(kind: str, trajectory: AgentTrajectory) -> list[tuple[Any, str]]:
     """(unit, span_id) pairs for a kind. A unit is a step, a document dict, or the answer text."""
     if kind == "tool":
         return [(s, s.span_id) for s in trajectory.steps if s.kind == "tool"]
+    if kind == "action":
+        return [(s, s.span_id) for s in trajectory.primary_steps if s.kind in ACTION_KINDS]
     if kind == "retrieval_document":
         out = []
         for step in retrieval_steps(trajectory):
@@ -213,6 +258,8 @@ def evaluate_check(index: int, rule: dict, trajectory: AgentTrajectory, label: s
     check_id = label or f"rule.{index}.check"
     if not trajectory.steps:
         return result(check_id, "rules", "INCONCLUSIVE", "No trace evidence captured.")
+    if rule.get("check") in ORDERING:
+        return _evaluate_ordering(check_id, rule, trajectory)
     select = rule["select"]
     kind = select["kind"]
     conditions = select.get("where", [])
@@ -220,7 +267,7 @@ def evaluate_check(index: int, rule: dict, trajectory: AgentTrajectory, label: s
     if not units and kind == "answer":
         return result(check_id, "rules", "INCONCLUSIVE", "The trace has no final answer to check.")
     for condition in conditions:
-        if not any(_captured(kind, unit, condition["field"]) for unit, _ in units):
+        if units and not any(_captured(kind, unit, condition["field"]) for unit, _ in units):
             return result(check_id, "rules", "INCONCLUSIVE",
                           f"The trace does not record '{condition['field']}' for {kind} units.")
     matched = [(unit, span) for unit, span in units if _matches(kind, unit, conditions)]
@@ -298,6 +345,15 @@ def compile_preset(rule: dict) -> list[dict] | None:
             if "answer" in scopes:
                 compiled.append({"type": "check", "select": {"kind": "answer", "where": [_cond("answer.text", "contains", value)]}, "check": "none"})
         return compiled
+    if kind == "sequence" and rule.get("mode", "in_order_others_allowed") in ("in_order_others_allowed", "in_order_exact"):
+        return [{"type": "check", "check": "in_order", "steps": [_label_conditions(s) for s in rule["steps"]],
+                 "mode": rule.get("mode", "in_order_others_allowed")}]
+    if kind == "precedes":
+        return [{"type": "check", "check": "before", "first": _label_conditions(rule["first"]),
+                 "then": _label_conditions(rule["then"])}]
+    if kind == "repeated_calls":
+        return [{"type": "check", "check": "max_group", "select": {"kind": "tool", "where": []},
+                 "group_by": ["tool.name", "tool.arguments"], "expect": {"op": "at_most", "value": rule["max_identical"]}}]
     if kind == "retrieval":
         compiled = [{"type": "check", "select": {"kind": "retrieval_document", "where": []}, "check": "count",
                      "expect": {"op": "at_least", "value": rule.get("min_documents", 1)}}]
@@ -335,3 +391,64 @@ def describe_check(rule: dict) -> str:
     if rule.get("check") == "distinct":
         return f"Distinct {rule.get('field')} among {scope}: {_expect_text(rule['expect'])}"
     return f"Count of {scope}: {_expect_text(rule['expect'])}"
+
+
+def _evaluate_ordering(check_id: str, rule: dict, trajectory: AgentTrajectory) -> CheckResult:
+    check = rule["check"]
+    units = _units("action", trajectory)
+    if check == "in_order":
+        steps = rule["steps"]
+        exact = rule.get("mode") == "in_order_exact"
+        position, matched = 0, []
+        for unit, span in units:
+            if position < len(steps) and _matches("action", unit, steps[position]):
+                matched.append(span)
+                position += 1
+        if exact:
+            ok = position == len(steps) and len(units) == len(steps)
+        else:
+            ok = position == len(steps)
+        labels = [_label(u) for u, _ in units]
+        summary = f"Actions were {' > '.join(labels) or 'none'}; expected {'exactly ' if exact else ''}in order: {len(steps)} step(s)."
+        return result(check_id, "rules", "PASS" if ok else "FAIL", summary, observed=labels,
+                      evidence_span_ids=[s for s in matched if s])
+    if check == "before":
+        first = [i for i, (u, _) in enumerate(units) if _matches("action", u, rule["first"])]
+        then = [i for i, (u, _) in enumerate(units) if _matches("action", u, rule["then"])]
+        ok = not then or (bool(first) and min(first) < min(then))
+        return result(check_id, "rules", "PASS" if ok else "FAIL",
+                      "The first step comes before the second." if ok else "The second step occurred without an earlier first step.",
+                      observed=[_label(u) for u, _ in units])
+    kind = rule.get("select", {}).get("kind", "tool")
+    group_by = rule["group_by"]
+    selected = [(u, s) for u, s in _units(kind, trajectory) if _matches(kind, u, rule.get("select", {}).get("where", []))]
+    if not selected:
+        return result(check_id, "rules", "PASS", f"No {kind} units to group.")
+    keys = [tuple(str(_value(kind, u, f)) for f in group_by) for u, _ in selected]
+    if check == "max_group":
+        counts = Counter(keys)
+        worst = max(counts.values())
+        ok = _expect(worst, rule["expect"])
+        return result(check_id, "rules", "PASS" if ok else "FAIL",
+                      f"Most identical repeats: {worst}; expected {_expect_text(rule['expect'])}.", observed=worst)
+    longest = run = 0
+    previous = None
+    for key in keys:
+        run = run + 1 if key == previous else 1
+        longest = max(longest, run)
+        previous = key
+    ok = _expect(longest, rule["expect"])
+    return result(check_id, "rules", "PASS" if ok else "FAIL",
+                  f"Longest run of identical calls in a row: {longest}; expected {_expect_text(rule['expect'])}.",
+                  observed=longest)
+
+
+def _label(unit_step) -> str:
+    return unit_step.name if unit_step.kind == "tool" else unit_step.kind
+
+
+def _label_conditions(label: str) -> list[dict]:
+    """A step label: a tool name, or a span kind such as retrieval."""
+    if label in ACTION_KINDS and label != "tool":
+        return [_cond("span.kind", "equals", label)]
+    return [_cond("tool.name", "equals", label)]
