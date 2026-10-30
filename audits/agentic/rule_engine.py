@@ -240,6 +240,8 @@ def _expect(n: int, expect: dict) -> bool:
 def evaluate_check(index: int, rule: dict, trajectory: AgentTrajectory, label: str | None = None) -> CheckResult:
     """One rule as one check result."""
     check_id = label or f"rule.{index}.check"
+    if rule.get("check") not in CHECKS:
+        return result(check_id, "rules", "INCONCLUSIVE", unsupported_text(rule))
     if not trajectory.steps:
         return result(check_id, "rules", "INCONCLUSIVE", "No trace evidence captured.")
     select = rule["select"]
@@ -368,11 +370,18 @@ def _tool_call_sentence(check: str, rule: dict, where: list[dict]) -> str:
     return f"{target} must be called {word} {value} times"
 
 
+def unsupported_text(rule: dict) -> str:
+    """The message for a rule the engine can no longer evaluate: what it was and what to do."""
+    legacy = rule.get("legacy") if isinstance(rule.get("legacy"), dict) else {}
+    name = legacy.get("type") or rule.get("check") or rule.get("type") or "rule"
+    return f"No longer supported ({name}): edit this rule to a count, exists or none check."
+
+
 def describe_check(rule: dict) -> str:
     """The rule as one readable sentence."""
     check = rule.get("check")
     if check not in CHECKS:
-        return f"Removed check '{check}' (no longer supported)"
+        return unsupported_text(rule)
     select = rule.get("select", {})
     where = select.get("where", [])
     if check in ("count", "none") and select.get("kind") == "tool" and where and _is_tool_name(where[0]):
@@ -438,7 +447,7 @@ def check_code(rule: dict) -> str:
     """A rule as read-only code. Presentation only: it is not parsed back."""
     check = rule.get("check")
     if check not in CHECKS:
-        return f"removed check '{check}'"
+        return unsupported_text(rule)
     select = rule["select"]
     where = f" where {_code_conditions(select['where'])}" if select.get("where") else ""
     if check == "distinct":

@@ -11,7 +11,8 @@ def rule_checks(trajectory: AgentTrajectory, rules: list[dict]) -> list[CheckRes
     out = []
     for index, rule in enumerate(rules):
         if rule.get("type") != "check":
-            raise ValueError(f"rule {index + 1} is not a custom check")
+            out.append(result(f"rule.{index}.check", "rules", "INCONCLUSIVE", "Not a custom check; edit this rule."))
+            continue
         if not trajectory.steps:
             check = result(f"rule.{index}.check", "rules", "INCONCLUSIVE", "No trace evidence captured.")
         else:

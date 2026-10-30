@@ -80,8 +80,10 @@ def validate_rules(rules: Any) -> list[RuleError]:
 
 def describe_rule(rule: dict) -> str:
     """One readable sentence for a rule."""
-    from .rule_engine import describe_check
+    from .rule_engine import describe_check, unsupported_text
 
+    if rule.get("type") != "check":
+        return unsupported_text({"legacy": rule})
     return describe_check(rule)
 
 
