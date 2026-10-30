@@ -1,0 +1,201 @@
+{% load json_filters %}
+<!--
+  Structured rules (checked from the trace). Each card is one rule; the stored
+  JSON lives in agentic_rules_json and is shown only under "Edit as JSON".
+-->
+<div class="space-y-2 pt-2 border-t border-gray-800" data-rules-editor>
+  <div class="flex items-center justify-between gap-2">
+    <p class="text-xs font-semibold text-gray-400">Rules <span class="font-normal text-gray-600">(checked from the trace)</span></p>
+    <button type="button" data-rules-advanced-toggle class="text-[11px] text-gray-500 hover:text-gray-300 underline">Edit as JSON</button>
+  </div>
+  <div class="flex flex-wrap items-center gap-2">
+    <select data-rules-picker class="px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-1 focus:ring-accent/50"></select>
+    <button type="button" data-rules-add class="px-2.5 py-1 rounded-lg bg-surface-overlay text-gray-300 text-xs hover:text-gray-100">+ Add rule</button>
+  </div>
+  <div data-rules-list class="space-y-2"></div>
+  <p data-rules-empty class="text-[11px] text-gray-600">No rules. A scenario with no rules is checked by its other settings only.</p>
+  <div data-rules-advanced class="hidden">
+    <textarea name="agentic_rules_json" rows="8" spellcheck="false" class="w-full px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 font-mono text-[11px] focus:outline-none focus:ring-1 focus:ring-accent/50">{{ agentic.rules|jsonify_compact }}</textarea>
+    <p data-rules-json-error class="text-[11px] text-red-300 hidden"></p>
+  </div>
+</div>
+<script>
+(function () {
+  const MODES = [
+    ['in_order_others_allowed', 'In this order, other steps allowed'],
+    ['in_order_exact', 'Exactly these, in this order'],
+    ['any_order_exact', 'Exactly these, any order'],
+    ['any_order_others_allowed', 'These must appear, any order'],
+  ];
+  const SCOPES = [['arguments', 'Tool arguments'], ['results', 'Tool results'], ['answer', 'Final answer']];
+  const TYPES = {
+    tool_called: { label: 'Tool must be called', fields: [
+      ['tool', 'text', 'Tool name'], ['arguments', 'args', 'Arguments (optional): order_id=ACME-1001'],
+      ['min', 'int', 'At least (times)'], ['max', 'int', 'At most (times)'] ] },
+    tool_not_called: { label: 'Tool must not be called', fields: [
+      ['tool', 'text', 'Tool name'], ['arguments', 'args', 'Arguments (optional)'] ] },
+    sequence: { label: 'Steps happen in a sequence', fields: [
+      ['steps', 'list', 'Steps, comma separated (tool names, retrieval, approval)'], ['mode', 'select', 'How strictly', MODES] ] },
+    precedes: { label: 'One step must come before another', fields: [
+      ['first', 'text', 'Step that comes first'], ['then', 'text', 'Step that comes after'] ] },
+    budget: { label: 'Limit tool calls', fields: [
+      ['max', 'int', 'At most (calls)'], ['tool', 'text', 'Only this tool (optional)'] ] },
+    repeated_calls: { label: 'Limit identical repeated calls', fields: [
+      ['max_identical', 'int', 'At most identical calls'] ] },
+    forbidden_values: { label: 'Forbidden values must not appear', fields: [
+      ['values', 'list', 'Values, comma separated'], ['scope', 'scope', 'Where to look', SCOPES] ] },
+    grounded_value: { label: 'Answer must state a tool value', fields: [
+      ['tool', 'text', 'Tool name'], ['field', 'text', 'Result field, e.g. delivered'] ] },
+    retrieval: { label: 'Must retrieve from knowledge', fields: [
+      ['min_documents', 'int', 'At least (documents)'], ['sources', 'list', 'Required sources, comma separated'] ] },
+    errors: { label: 'Limit error steps', fields: [
+      ['max', 'int', 'At most (errors)'] ] },
+    retries: { label: 'Limit retries after a failure', fields: [
+      ['tool', 'text', 'Tool name'], ['max_retries', 'int', 'At most (retries)'],
+      ['same_arguments', 'bool', 'Retries must use the same arguments'] ] },
+  };
+
+  function parseArgs(text) {
+    const out = {};
+    text.split(',').map(p => p.trim()).filter(Boolean).forEach(pair => {
+      const i = pair.indexOf('=');
+      if (i < 0) return;
+      let value = pair.slice(i + 1).trim();
+      try { value = JSON.parse(value); } catch (_) { /* plain string */ }
+      out[pair.slice(0, i).trim()] = value;
+    });
+    return out;
+  }
+
+  function defaults(type) {
+    const rule = { type };
+    TYPES[type].fields.forEach(([key, kind, , options]) => {
+      if (kind === 'select') rule[key] = options[0][0];
+      if (kind === 'scope') rule[key] = options.map(o => o[0]);
+      if (kind === 'bool') rule[key] = true;
+    });
+    return rule;
+  }
+
+  function summary(rule) {
+    const spec = TYPES[rule.type];
+    const parts = spec.fields
+      .filter(([key, kind]) => rule[key] !== undefined && rule[key] !== '' && !(Array.isArray(rule[key]) && !rule[key].length))
+      .map(([key, kind]) => kind === 'args'
+        ? Object.entries(rule[key]).map(([k, v]) => `${k}=${JSON.stringify(v)}`).join(', ')
+        : `${key}: ${Array.isArray(rule[key]) ? rule[key].join(', ') : rule[key]}`);
+    return `${spec.label}${parts.length ? ' (' + parts.join('; ') + ')' : ''}`;
+  }
+
+  function init(root) {
+    if (root.dataset.rulesReady) return;
+    root.dataset.rulesReady = '1';
+    const store = root.querySelector('textarea[name="agentic_rules_json"]');
+    const list = root.querySelector('[data-rules-list]');
+    const picker = root.querySelector('[data-rules-picker]');
+    const emptyNote = root.querySelector('[data-rules-empty]');
+    const advanced = root.querySelector('[data-rules-advanced]');
+    const jsonError = root.querySelector('[data-rules-json-error]');
+    let rules = [];
+    try { rules = JSON.parse(store.value || '[]'); } catch (_) { rules = []; }
+    if (!Array.isArray(rules)) rules = [];
+
+    Object.keys(TYPES).forEach(type => {
+      const option = document.createElement('option');
+      option.value = type;
+      option.textContent = TYPES[type].label;
+      picker.appendChild(option);
+    });
+
+    function sync() {
+      store.value = rules.length ? JSON.stringify(rules) : '';
+      emptyNote.classList.toggle('hidden', rules.length > 0);
+    }
+
+    function readField(rule, [key, kind], wrap) {
+      const el = wrap.querySelector(`[data-field="${key}"]`);
+      if (!el) return;
+      if (kind === 'text') rule[key] = el.value.trim() || undefined;
+      if (kind === 'int') rule[key] = el.value.trim() === '' ? undefined : Number(el.value);
+      if (kind === 'list') { const items = el.value.split(',').map(s => s.trim()).filter(Boolean); rule[key] = items.length ? items : undefined; }
+      if (kind === 'args') { const args = parseArgs(el.value); rule[key] = Object.keys(args).length ? args : undefined; }
+      if (kind === 'select') rule[key] = el.value;
+      if (kind === 'bool') rule[key] = el.checked;
+      if (kind === 'scope') rule[key] = [...wrap.querySelectorAll(`[data-field="${key}"]:checked`)].map(c => c.value);
+      if (rule[key] === undefined) delete rule[key];
+    }
+
+    function render() {
+      list.innerHTML = '';
+      rules.forEach((rule, index) => {
+        const spec = TYPES[rule.type];
+        const card = document.createElement('div');
+        card.className = 'rounded-lg border border-gray-800 bg-surface-overlay/40 p-2.5 space-y-2';
+        card.innerHTML = `<div class="flex items-start justify-between gap-2">
+            <p data-summary class="text-xs text-gray-200 break-words min-w-0"></p>
+            <button type="button" data-remove class="text-[11px] text-gray-500 hover:text-red-300 shrink-0">Remove</button>
+          </div>
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-2" data-fields></div>`;
+        const fields = card.querySelector('[data-fields]');
+        spec.fields.forEach(([key, kind, placeholder, options]) => {
+          const cell = document.createElement('label');
+          cell.className = 'block text-[11px] text-gray-400';
+          if (kind === 'bool' || kind === 'scope') cell.className += ' md:col-span-2';
+          const inputClass = 'w-full px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs text-gray-200 focus:outline-none focus:ring-1 focus:ring-accent/50';
+          if (kind === 'select') {
+            cell.innerHTML = `${placeholder}<select data-field="${key}" class="${inputClass} mt-0.5">${options.map(([v, l]) => `<option value="${v}" ${rule[key] === v ? 'selected' : ''}>${l}</option>`).join('')}</select>`;
+          } else if (kind === 'bool') {
+            cell.innerHTML = `<span class="flex items-center gap-2"><input type="checkbox" data-field="${key}" ${rule[key] ? 'checked' : ''}> ${placeholder}</span>`;
+          } else if (kind === 'scope') {
+            cell.innerHTML = `<span class="block mb-0.5">${placeholder}</span>` + options.map(([v, l]) => `<label class="mr-3 text-gray-300"><input type="checkbox" data-field="${key}" value="${v}" ${(rule[key] || []).includes(v) ? 'checked' : ''}> ${l}</label>`).join('');
+          } else {
+            const value = kind === 'args' ? Object.entries(rule[key] || {}).map(([k, v]) => `${k}=${JSON.stringify(v)}`).join(', ')
+              : kind === 'list' ? (rule[key] || []).join(', ')
+              : (rule[key] ?? '');
+            cell.innerHTML = `${placeholder}<input data-field="${key}" value="${String(value).replace(/"/g, '&quot;')}" class="${inputClass} mt-0.5" ${kind === 'int' ? 'type="number" min="0"' : ''}>`;
+          }
+          fields.appendChild(cell);
+        });
+        card.querySelector('[data-summary]').textContent = summary(rule);
+        const update = () => {
+          spec.fields.forEach(field => readField(rule, field, card));
+          card.querySelector('[data-summary]').textContent = summary(rule);
+          sync();
+        };
+        card.addEventListener('input', update);
+        card.addEventListener('change', update);
+        card.querySelector('[data-remove]').addEventListener('click', () => {
+          rules.splice(index, 1);
+          render();
+          sync();
+        });
+        list.appendChild(card);
+      });
+      sync();
+    }
+
+    root.querySelector('[data-rules-add]').addEventListener('click', () => {
+      rules.push(defaults(picker.value));
+      render();
+    });
+    root.querySelector('[data-rules-advanced-toggle]').addEventListener('click', () => {
+      advanced.classList.toggle('hidden');
+    });
+    store.addEventListener('input', () => {
+      try {
+        const parsed = store.value.trim() ? JSON.parse(store.value) : [];
+        if (!Array.isArray(parsed)) throw new Error('Rules must be a JSON list.');
+        rules = parsed;
+        jsonError.classList.add('hidden');
+        render();
+      } catch (err) {
+        jsonError.textContent = err.message;
+        jsonError.classList.remove('hidden');
+      }
+    });
+    render();
+  }
+
+  document.querySelectorAll('[data-rules-editor]').forEach(init);
+})();
+</script>

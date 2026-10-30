@@ -23,6 +23,7 @@ from django.views.generic import DetailView, TemplateView, View
 
 from accounts import workos_auth
 from accounts.models import User
+from audits.agentic.rules import validate_rules
 from audits.agentic.tool_entries import parse_tool_entries
 from audits.comparison import compare_runs
 from audits.events import ScenarioResult
@@ -175,7 +176,9 @@ def _merge_structured_agentic_fields(metadata: dict, post) -> dict:
         and (key in _EXPLICIT_FALSE_FIELDS or str(post.get(key, "")).strip() != "")
         for key in post
     )
-    if not has_control:
+    # A cleared rule editor must still remove rules saved earlier.
+    clears_rules = "agentic_rules_json" in post and bool((metadata.get("agentic") or {}).get("rules"))
+    if not has_control and not clears_rules:
         return metadata
     agentic = dict(metadata.get("agentic") or {})
     agentic.setdefault("schema_version", 2)
@@ -287,6 +290,19 @@ def _merge_structured_agentic_fields(metadata: dict, post) -> dict:
     for section in owned_sections:
         if agentic.get(section) in ({}, None):
             agentic.pop(section, None)
+
+    if "agentic_rules_json" in post:
+        raw_rules = str(post.get("agentic_rules_json") or "").strip()
+        if raw_rules:
+            rules = json.loads(raw_rules)
+            problems = validate_rules(rules)
+            if problems:
+                raise ValueError("; ".join(
+                    f"rule {p.index + 1}: {p.message}" if p.index >= 0 else p.message for p in problems
+                ))
+            agentic["rules"] = rules
+        else:
+            agentic.pop("rules", None)
 
     result = dict(metadata)
     result["agentic"] = agentic
@@ -2369,8 +2385,8 @@ class ScenarioCreateView(ProjectMixin, View):
         else:
             try:
                 metadata = _merge_structured_agentic_fields({}, request.POST)
-            except (ValueError, json.JSONDecodeError):
-                messages.error(request, "Structured agentic controls must contain valid numbers, JSON, and forbidden tool entries (name or name(arg=value)).")
+            except (ValueError, json.JSONDecodeError) as exc:
+                messages.error(request, f"Structured agentic controls are invalid: {exc}")
                 return _scenario_redirect(request.POST.get("set_id", "").strip() or None)
         file_uri_raw = request.POST.get("file_uri", "").strip()
         file_uri = file_uri_raw or None
@@ -2449,8 +2465,8 @@ class ScenarioEditView(ProjectMixin, View):
             else:
                 try:
                     metadata = _merge_structured_agentic_fields(prior_metadata, request.POST)
-                except (ValueError, json.JSONDecodeError):
-                    messages.error(request, "Structured agentic controls must contain valid numbers, JSON, and forbidden tool entries (name or name(arg=value)).")
+                except (ValueError, json.JSONDecodeError) as exc:
+                    messages.error(request, f"Structured agentic controls are invalid: {exc}")
                     return _scenario_redirect(set_id or None)
             rev = update_scenario_content(
                 scenario=scenario, user=request.user, description=desc,

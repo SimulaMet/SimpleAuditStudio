@@ -729,6 +729,11 @@ function buildAgenticMetadata(form, baseMetadata) {
   }
   const mode = form.querySelector('[name="agentic_enforcement_mode"]')?.value;
   if (mode) agentic.enforcement = { ...(agentic.enforcement || {}), mode };
+  // Structured rules live in their own textarea (see partials/agentic_rules_editor.html).
+  const rulesStore = form.querySelector('textarea[name="agentic_rules_json"]');
+  let parsedRules = null;
+  try { parsedRules = rulesStore?.value.trim() ? JSON.parse(rulesStore.value) : null; } catch (_) { parsedRules = null; }
+  if (parsedRules) agentic.rules = parsedRules; else delete agentic.rules;
   for (const section of owned) if (!agentic[section] || Object.keys(agentic[section]).length === 0) delete agentic[section];
   metadata.agentic = agentic;
   return metadata;
