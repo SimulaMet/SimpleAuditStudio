@@ -46,3 +46,10 @@ def test_custom_check_built_in_the_editor_is_saved():
             "check": "count", "expect": {"op": "at_least", "value": 1}}
     merged = _merge_structured_agentic_fields({}, _post(agentic_rules_json=json.dumps([rule])))
     assert merged["agentic"]["rules"] == [rule]
+
+
+def test_unsupported_rule_from_the_migration_is_saved_unchanged_beside_a_new_rule():
+    unsupported = {"type": "check", "check": "unsupported", "legacy": {"type": "precedes", "first": "a", "then": "b"}}
+    rule = {"type": "check", "select": {"kind": "tool", "where": []}, "check": "count", "expect": {"op": "at_least", "value": 1}}
+    merged = _merge_structured_agentic_fields({}, _post(agentic_rules_json=json.dumps([unsupported, rule])))
+    assert merged["agentic"]["rules"] == [unsupported, rule]

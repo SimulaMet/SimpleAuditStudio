@@ -173,6 +173,15 @@
       card.querySelector('[data-remove]').addEventListener('click', () => { rules.splice(index, 1); render(); sync(); });
     }
 
+    // Mirrors rule_engine.unsupported_text. The rule is shown as stored and kept unchanged on save.
+    function renderUnsupported(card, rule, index) {
+      const legacy = rule.legacy && typeof rule.legacy === 'object' ? rule.legacy : {};
+      const name = legacy.type || rule.check || rule.type || 'rule';
+      card.querySelector('[data-summary]').textContent = `No longer supported (${name}): edit this rule to a count, exists or none check.`;
+      card.querySelector('[data-code]').textContent = JSON.stringify(legacy);
+      card.querySelector('[data-remove]').addEventListener('click', () => { rules.splice(index, 1); render(); sync(); });
+    }
+
     function render() {
       list.innerHTML = '';
       rules.forEach((rule, index) => {
@@ -186,7 +195,8 @@
             <button type="button" data-remove class="text-[11px] text-gray-500 hover:text-red-300 shrink-0">Remove</button>
           </div>
           <div class="grid grid-cols-1 md:grid-cols-2 gap-2" data-fields></div>`;
-        renderCustom(card, card.querySelector('[data-fields]'), rule, index);
+        if (rule.check === 'unsupported') renderUnsupported(card, rule, index);
+        else renderCustom(card, card.querySelector('[data-fields]'), rule, index);
         list.appendChild(card);
       });
       sync();
