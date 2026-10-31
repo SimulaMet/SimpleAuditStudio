@@ -31,4 +31,6 @@ class Command(BaseCommand):
         scenario_set, version, status = seed_agentic_scenarios(
             project, user, log=self.stdout.write, reseed=options["reseed"]
         )
-        self.stdout.write(f"{status}: {scenario_set.name} v{version.version}")
+        # A skipped seed returns no new version; report the set as already published.
+        label = f"v{version.version}" if version is not None else "already published"
+        self.stdout.write(f"{status}: {scenario_set.name} {label}")

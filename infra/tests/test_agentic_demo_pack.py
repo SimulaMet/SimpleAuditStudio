@@ -1,9 +1,16 @@
 """Regression tests for the sparse agentic demo pack (catalog v3 mirror)."""
+import io
 import json
 from pathlib import Path
+from types import SimpleNamespace
+from unittest import mock
+
+from django.core.management import call_command
+from django.test import TestCase
 
 from audits.agentic.schema_v2 import validate_agentic_metadata
 from infra.fixtures.agentic_scenarios import AGENTIC_SCENARIOS
+from infra.tests.factories import ProjectFactory, UserFactory
 
 _CATALOG = Path(__file__).resolve().parents[1] / "fixtures" / "agentic_demo_catalog_v3.json"
 
@@ -79,3 +86,19 @@ def test_seed_function_contract_stable():
 
     signature = str(inspect.signature(seed_agentic_scenarios))
     assert signature == "(project, user, log=None, reseed=False)", signature
+
+
+
+class SeedCommandSkipTest(TestCase):
+    def test_reports_a_skipped_set_without_a_version(self):
+        # A second seed run returns (set, None, "skipped"); the command must print it.
+        UserFactory(is_superuser=True)
+        ProjectFactory()
+        out = io.StringIO()
+        skipped = SimpleNamespace(name="Agentic Audit: Explanatory Scenarios")
+        with mock.patch(
+            "infra.fixtures.agentic_scenarios.seed_agentic_scenarios",
+            return_value=(skipped, None, "skipped"),
+        ):
+            call_command("seed_agentic_scenarios", stdout=out)
+        self.assertIn("skipped: Agentic Audit: Explanatory Scenarios already published", out.getvalue())
