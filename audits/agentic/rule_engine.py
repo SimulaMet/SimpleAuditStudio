@@ -144,6 +144,11 @@ def _units(kind: str, trajectory: AgentTrajectory) -> list[tuple[Any, str]]:
                 except json.JSONDecodeError:
                     docs = []
             for doc in docs if isinstance(docs, list) else []:
+                if isinstance(doc, str):
+                    try:
+                        doc = json.loads(doc)
+                    except json.JSONDecodeError:
+                        continue
                 if isinstance(doc, dict):
                     out.append((doc, step.span_id))
         return out
