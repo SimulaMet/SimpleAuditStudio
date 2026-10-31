@@ -137,3 +137,15 @@ def test_packet_keeps_every_retrieved_source_and_drops_noise():
     result = packet["tool_steps"][0]["result"]
     assert "score" not in result
     assert len(result) <= 1700
+
+
+def test_packet_reads_retrieval_documents_sent_as_json_strings():
+    # Open WebUI's instrumentation exports each document as its own JSON string.
+    trajectory = AgentTrajectory([TrajectoryStep("r1", "retrieval", "retrieval", attributes={
+        "gen_ai.retrieval.documents": [
+            json.dumps({"document_id": "doc-1", "file_id": "f-1", "chunk_id": "c-1", "rank": 1, "score": 0.9}),
+            json.dumps({"source": "customer_faq.md", "content": "Returns in 30 days."}),
+            "shipping.md",
+        ]})])
+    packet = build_evidence_packet(trajectory)
+    assert packet["retrieval_source_ids"] == ["customer_faq.md", "f-1", "shipping.md"]
