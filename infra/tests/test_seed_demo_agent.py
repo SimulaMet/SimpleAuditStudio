@@ -179,6 +179,8 @@ class SeedDemoAgentPushTests(TestCase):
 
         api.create_knowledge_base.assert_not_called()
         api.create_tool.assert_not_called()
+        # An existing tool is updated so Open WebUI never keeps stale source.
+        api.update_tool.assert_called_once()
         self.assertEqual(
             api.add_file_to_knowledge_base.call_count, len(DEMO_AGENT["docs"])
         )

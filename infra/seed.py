@@ -546,7 +546,12 @@ def _push_to_openwebui(api, log, agent=None) -> dict:
             None,
         )
         if existing_tool:
-            log("  • tool already in Open WebUI; skipping create")
+            # Always push the bundled source: a stale copy in Open WebUI would keep
+            # serving old behaviour after a Studio upgrade.
+            api.update_tool(
+                tool["owui_tool_id"], tool["name"], tool_content, tool["description"],
+            )
+            log(f"  • updated tool {tool['owui_tool_id']}")
         else:
             api.create_tool(
                 tool["owui_tool_id"], tool["name"], tool_content, tool["description"],
