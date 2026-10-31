@@ -73,6 +73,8 @@ def validate_rules(rules: Any) -> list[RuleError]:
             errors.append(RuleError(index, "", "each rule must be an object"))
         elif rule.get("type") != "check":
             errors.append(RuleError(index, str(rule.get("type", "")), "rules must be custom checks"))
+        elif set(rule) == {"type", "check", "legacy"} and rule["check"] == "unsupported" and isinstance(rule["legacy"], dict):
+            continue  # kept by migration 0004; the engine reports it as INCONCLUSIVE
         else:
             errors.extend(RuleError(index, "check", problem) for problem in validate_check(rule))
     return errors
