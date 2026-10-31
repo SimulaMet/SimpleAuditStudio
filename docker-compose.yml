@@ -189,7 +189,7 @@ services:
   # forward /chat/* WITHOUT stripping the prefix (see the Caddyfile header).
   open-webui:
     profiles: ["chat"]
-    image: ${OPEN_WEBUI_IMAGE:-ghcr.io/sushantgautam/open-webui:v0.12.4.4-subpath}
+    image: ${OPEN_WEBUI_IMAGE:-ghcr.io/sushantgautam/open-webui:v0.12.4.5-subpath}
     environment:
       WEBUI_SUBPATH: /chat
       WEBUI_AUTH_TRUSTED_EMAIL_HEADER: X-Studio-Email
