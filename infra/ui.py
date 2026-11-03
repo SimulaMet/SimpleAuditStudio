@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import re
+import time
 from datetime import UTC, datetime
 
 from django.contrib import messages
@@ -2892,6 +2893,126 @@ class OTLPCredentialToggleView(ProjectMixin, View):
         return JsonResponse({"ok": True, "enabled": cred.enabled})
 
 
+class OTLPCredentialStatusView(ProjectMixin, View):
+    """What the receiver has seen for a credential: powers the "Test OTLP" button."""
+
+    def get(self, request):
+        from django.db.models import Max
+
+        from model_registry import otlp_config
+        from model_registry.models import OTLPCredential, OtlpSpan
+        from model_registry.otlp_views import last_export
+
+        if not otlp_config.ENABLED:
+            return JsonResponse({"ok": False, "error": "OTLP is disabled on this deployment."}, status=404)
+        cred = OTLPCredential.objects.filter(
+            pk=_int(request.GET.get("credential_id")), project=request.project
+        ).first()
+        if cred is None:
+            return JsonResponse({"ok": False, "error": "Credential not found in this workspace."}, status=404)
+        seen = last_export(cred.target_id) or {}
+        stored = OtlpSpan.objects.filter(target_id=cred.target_id).aggregate(last=Max("received_at"))["last"]
+        last_at = seen.get("at")
+        if stored is not None:
+            last_at = max(last_at or 0, stored.timestamp())
+        return JsonResponse({
+            "ok": True,
+            "enabled": cred.enabled,
+            "now": time.time(),
+            "last_at": last_at,
+            "exports": seen.get("exports", 0),
+            "spans_received": seen.get("received", 0),
+            "spans_kept": seen.get("kept", 0),
+        })
+
+
+class OTLPCredentialTestView(ProjectMixin, View):
+    """Real round trip: chat with the target, then wait for its trace (admin-only).
+
+    First checks Studio's own receiver with the credential, so a failure can be
+    placed on Studio's side or the target's.
+    """
+
+    def post(self, request):
+        from model_registry import otlp_config
+        from model_registry.models import Agent, OTLPCredential, RegisteredModel
+        from model_registry.otlp_views import (
+            _require_admin,
+            chat_round_trip,
+            round_trip_test,
+        )
+
+        if not otlp_config.ENABLED:
+            return JsonResponse({"ok": False, "error": "OTLP is disabled on this deployment."}, status=404)
+        try:
+            _require_admin(request, request.project)
+        except Exception as exc:  # noqa: BLE001
+            return JsonResponse({"ok": False, "error": str(exc)}, status=403)
+        cred = OTLPCredential.objects.filter(
+            pk=_int(request.POST.get("credential_id")), project=request.project
+        ).select_related("connection").first()
+        if cred is None:
+            return JsonResponse({"ok": False, "error": "Credential not found in this workspace."}, status=404)
+        if not cred.enabled:
+            return JsonResponse({"ok": False, "stage": "disabled", "detail": "Credential is disabled: the receiver rejects every export."})
+        receiver = round_trip_test(cred, user=request.user)
+        if not receiver["ok"]:
+            return JsonResponse(receiver)
+
+        prompt = "Reply with the single word: pong"
+        agent = None
+        if request.POST.get("agent_id"):
+            agent = Agent.objects.filter(pk=_int(request.POST.get("agent_id")), project=request.project).select_related(
+                "base_model", "base_model__connection"
+            ).first()
+            if agent is None:
+                return JsonResponse({"ok": False, "error": "Agent not found in this workspace."}, status=404)
+        if agent is not None:
+            from chat import config as chat_config
+            from chat.api import ChatAPI
+
+            conn = agent.base_model.connection
+            model_id = agent.external_id or f"{conn.id}.{agent.base_model.model_id}"
+
+            def send(traceparent: str) -> str:
+                api = ChatAPI(chat_config.identity(request.user))
+                data = api.chat_completion(
+                    {"model": model_id, "stream": False, "max_tokens": 16,
+                     "messages": [{"role": "user", "content": prompt}]},
+                    headers={"traceparent": traceparent},
+                )
+                return ((data or {}).get("choices") or [{}])[0].get("message", {}).get("content") or ""
+        else:
+            import httpx
+
+            from model_registry.services import connection_api_key
+
+            conn = cred.connection
+            model = RegisteredModel.objects.filter(connection=conn, enabled=True).order_by("id").first()
+            if not (conn.base_url or "").strip() or model is None:
+                return JsonResponse({
+                    "ok": False, "stage": "call",
+                    "detail": "Receiver check passed, but this connection has no base URL or enabled model to call.",
+                })
+            headers = {"traceparent": ""}
+            key = connection_api_key(conn)
+            if key:
+                headers["Authorization"] = f"Bearer {key}"
+
+            def send(traceparent: str) -> str:
+                resp = httpx.post(
+                    f"{conn.base_url.rstrip('/')}/chat/completions",
+                    headers={**headers, "traceparent": traceparent},
+                    json={"model": model.model_id, "stream": False, "max_tokens": 16,
+                          "messages": [{"role": "user", "content": prompt}]},
+                    timeout=60,
+                )
+                resp.raise_for_status()
+                return ((resp.json().get("choices") or [{}])[0].get("message", {}).get("content")) or ""
+
+        return JsonResponse(chat_round_trip(cred, send))
+
+
 class OTLPCredentialRotateView(ProjectMixin, View):
     """Re-issue an OTLP credential's secret (old one stops working). Admin-only."""
 
@@ -4766,6 +4887,22 @@ class AgentDetailView(ProjectMixin, TemplateView):
             ctx["openwebui_live"] = agent_live_openwebui(agent, self.request.user)
         else:
             ctx["openwebui_live"] = None
+        # Credential Open WebUI exports this agent's traces with (drives the
+        # "Test tracing" button); None when OTLP or chat tracing is off.
+        ctx["otlp_credential_id"] = None
+        if agent is not None and chat_enabled():
+            from model_registry import otlp_config
+            from model_registry.models import OTLPCredential
+
+            if otlp_config.ENABLED:
+                cred = (
+                    OTLPCredential.objects.filter(
+                        project=project, enabled=True, connection__name="Open WebUI Agents"
+                    )
+                    .order_by("id")
+                    .first()
+                )
+                ctx["otlp_credential_id"] = cred.id if cred else None
         ctx["openwebui_rag"] = None
         if chat_enabled():
             try:

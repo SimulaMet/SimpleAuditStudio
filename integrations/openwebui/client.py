@@ -245,9 +245,11 @@ class OpenWebUIAdapter:
                     )
                     status = "updated"
                 except ChatAPIError as exc:
-                    # A 404 means the entry vanished in OpenWebUI — recreate
-                    # it with the same deterministic id.
-                    if "404" not in str(exc) and "not found" not in str(exc).lower():
+                    # The entry vanished in OpenWebUI — recreate it with the
+                    # same deterministic id. Updating a missing model answers
+                    # 404, or 401 "We could not find what you're looking for".
+                    gone = str(exc).lower()
+                    if "404" not in gone and "not found" not in gone and "could not find" not in gone:
                         raise
                     self._api.create_workspace_model(
                         model_id, agent.name, base_model_id=base_model_id,

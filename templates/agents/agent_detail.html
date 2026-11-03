@@ -47,6 +47,15 @@
             Expose via API
           </button>
           {% endif %}
+          {% if otlp_credential_id %}
+          <button type="button" id="agent-otlp-test"
+                  title="Chat with this agent and check its trace reaches Studio"
+                  aria-label="Test tracing for {{ agent.name }}"
+                  class="inline-flex items-center gap-1.5 text-[11px] text-gray-400 hover:text-accent">
+            <svg class="w-3.5 h-3.5" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M1 8h3l2-5 4 10 2-5h3v1.5h-2l-3 7.5-4-10-1 2.5H1V8z"/></svg>
+            Test tracing
+          </button>
+          {% endif %}
           <a href="{% url 'agent_test_chat' agent.id %}" title="Open a chat with {{ agent.name }}"
              aria-label="Chat with {{ agent.name }}"
              class="inline-flex items-center gap-1.5 text-[11px] text-gray-400 hover:text-accent">
@@ -76,6 +85,9 @@
         {% endif %}
       {% else %}
       <p class="text-xs text-gray-500">Not available in chat yet — saving this agent will publish it there.</p>
+      {% endif %}
+      {% if otlp_credential_id %}
+      <p id="agent-otlp-out" class="hidden mt-2 text-xs"></p>
       {% endif %}
     </fieldset>
     {% endif %}
@@ -540,4 +552,10 @@
   });
 })();
 </script>
+{% if otlp_credential_id %}{% include 'partials/otlp_test.html' %}
+<script>
+  document.getElementById('agent-otlp-test').addEventListener('click', e =>
+    otlpTest({{ otlp_credential_id }}, e.currentTarget, document.getElementById('agent-otlp-out'), {{ agent.id }}));
+</script>
+{% endif %}
 {% endblock %}

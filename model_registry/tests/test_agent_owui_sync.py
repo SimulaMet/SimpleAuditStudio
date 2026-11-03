@@ -229,8 +229,18 @@ class AgentSyncTest(_SyncBase):
 
     def test_update_404_recreates_missing_remote_model(self):
         """A synced agent whose entry was deleted in OpenWebUI is recreated."""
+        for message in (
+            "404 Internal Server Error",
+            # Open WebUI's real answer to updating a missing model
+            ("POST /api/v1/models/model/update failed (401): "
+             '{"detail":"We could not find what you\'re looking for :/"}'),
+        ):
+            with self.subTest(message=message):
+                self._check_recreates(message)
+
+    def _check_recreates(self, message):
         api = self._mock_chat()
-        api.update_workspace_model.side_effect = ChatAPIError("404 Internal Server Error")
+        api.update_workspace_model.side_effect = ChatAPIError(message)
         agent = AgentFactory(project=self.project)
         agent.external_id = f"studio.agent-{agent.pk}"
         agent.save()
