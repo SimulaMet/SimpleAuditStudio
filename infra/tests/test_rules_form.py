@@ -53,3 +53,19 @@ def test_unsupported_rule_from_the_migration_is_saved_unchanged_beside_a_new_rul
     rule = {"type": "check", "select": {"kind": "tool", "where": []}, "check": "count", "expect": {"op": "at_least", "value": 1}}
     merged = _merge_structured_agentic_fields({}, _post(agentic_rules_json=json.dumps([unsupported, rule])))
     assert merged["agentic"]["rules"] == [unsupported, rule]
+
+
+_VALID = {"type": "check", "select": {"kind": "tool", "where": []}, "check": "count", "expect": {"op": "at_least", "value": 1}}
+
+
+@pytest.mark.parametrize(("rule", "message"), [
+    ({"type": "check", "check": "count", "expect": {"op": "at_least", "value": 2}}, "'select.kind' must be one of"),
+    ({"type": "check", "select": {"kind": "tool", "where": 5}, "check": "count", "expect": {"op": "at_least", "value": 1}},
+     "'select.where' must be a list"),
+    ({"type": "check", "select": {"kind": "tool", "where": None}, "check": "count", "expect": {"op": "at_least", "value": 1}},
+     "'select.where' must be a list"),
+])
+def test_rule_the_form_cannot_edit_is_rejected_on_save_with_its_number(rule, message):
+    # The editor keeps such a rule as typed under "Edit as JSON"; saving names it.
+    with pytest.raises(ValueError, match=f"rule 2: {message}"):
+        _merge_structured_agentic_fields({}, _post(agentic_rules_json=json.dumps([_VALID, rule])))
