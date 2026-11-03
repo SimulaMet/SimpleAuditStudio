@@ -343,6 +343,11 @@
         <button type="button" id="otlp-copy" class="px-3 py-1.5 rounded-lg text-xs text-gray-300 bg-surface-overlay hover:text-white">Copy env vars</button>
       </div>
     </div>
+    <div id="otlp-test-box" class="hidden space-y-2 border-t border-gray-800 pt-3 text-xs">
+      <button type="button" id="otlp-test" title="Call the target with a test request and check its trace reaches Studio"
+              class="px-3 py-1.5 rounded-lg text-xs text-gray-300 bg-surface-overlay hover:text-white">Test OTLP</button>
+      <p id="otlp-test-out" class="hidden"></p>
+    </div>
   </div>
 </dialog>
 
@@ -553,6 +558,8 @@
     const current = CONNS[connId].otlp;
     $('#otlp-mode').value = current && current.enabled ? current.auth_mode : 'disabled';
     otlpResult.classList.add('hidden');
+    $('#otlp-test-out').classList.add('hidden');
+    $('#otlp-test-box').classList.toggle('hidden', !(current && current.enabled));
     otlpDialog.dataset.connId = connId;
     $('#otlp-rotate').classList.toggle('hidden', !(current && current.auth_mode !== 'none'));
     otlpDialog.showModal();
@@ -574,6 +581,7 @@
   }
   function otlpApply(connId, data) {
     CONNS[connId].otlp = { id: data.credential.id, auth_mode: data.credential.auth_mode, enabled: true };
+    $('#otlp-test-box').classList.remove('hidden');
     $('#otlp-rotate').classList.remove('hidden');
     showOtlpResult(Object.entries(data.env_vars).map(([k, v]) => `${k}=${v}`).join('\n'), data.revealed ? OTLP_NOTE_SHOWN : OTLP_NOTE_NEW);
   }
@@ -599,6 +607,7 @@
           if (!resp.ok) throw new Error(data.error || `HTTP ${resp.status}`);
           current.enabled = false;
         }
+        $('#otlp-test-box').classList.add('hidden');
         otlpEnv.textContent = 'OTLP tracing is disabled for this connection.';
         $('#otlp-warning').classList.add('hidden');
         otlpResult.classList.remove('hidden');
@@ -612,6 +621,10 @@
     } finally {
       btn.disabled = false; btn.textContent = 'Save';
     }
+  });
+  $('#otlp-test').addEventListener('click', () => {
+    const current = CONNS[otlpDialog.dataset.connId].otlp;
+    if (current) otlpTest(current.id, $('#otlp-test'), $('#otlp-test-out'));
   });
   $('#otlp-copy').addEventListener('click', async () => {
     try { await navigator.clipboard.writeText(otlpEnv.textContent); $('#otlp-copy').textContent = 'Copied!'; }
@@ -668,4 +681,5 @@
   });
 })();
 </script>
+{% include 'partials/otlp_test.html' %}
 {% endblock %}

@@ -1,0 +1,38 @@
+<script>
+  // "Test OTLP": a real round trip. Studio calls the target with a small chat
+  // request carrying a trace id, waits for the reply, then waits for that
+  // trace to reach the receiver. Used by the connections modal and agent page.
+  async function otlpTest(credId, btn, out, agentId) {
+    const ago = s => s < 90 ? `${Math.max(0, Math.round(s))}s ago` : s < 5400 ? `${Math.round(s / 60)} min ago` : `${Math.round(s / 3600)} h ago`;
+    const secs = ms => (ms / 1000).toFixed(1) + ' s';
+    const say = (text, tone) => {
+      out.textContent = text;
+      out.className = out.className.replace(/\btext-(emerald|amber|red|gray)-\d+/g, '') + ' ' +
+        ({ ok: 'text-emerald-400', warn: 'text-amber-300', bad: 'text-red-400' }[tone] || 'text-gray-400');
+      out.classList.remove('hidden');
+    };
+    const csrf = (document.querySelector('[name=csrfmiddlewaretoken]') || {}).value
+      || (document.cookie.match(/csrftoken=([^;]+)/) || [])[1] || '';
+    const label = btn.innerHTML;
+    btn.disabled = true; btn.textContent = 'Testing…';
+    say('Sending a test request and waiting for the reply and its trace…', 'warn');
+    try {
+      const params = { credential_id: credId };
+      if (agentId) params.agent_id = agentId;
+      const r = await fetch('{% url "otlp_credential_test" %}', {
+        method: 'POST', credentials: 'same-origin', headers: { 'X-CSRFToken': csrf },
+        body: new URLSearchParams(params),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
+      if (d.stage === 'linked') say(`Round trip OK: the model replied in ${secs(d.reply_ms)} and ${d.spans} span${d.spans === 1 ? '' : 's'} of that request reached Studio.`, 'ok');
+      else if (d.stage === 'arrived') say(`Model replied in ${secs(d.reply_ms)} and a trace arrived, but it is not linked to this request: the target does not adopt the traceparent header, so audits cannot match its spans.`, 'warn');
+      else if (d.stage === 'no_trace') say(`Model replied in ${secs(d.reply_ms)}, but no trace reached Studio within 15 s. Check the target's OTEL_* settings (endpoint URL and credentials).`, 'bad');
+      else say(d.detail || 'Round trip failed.', 'bad');
+    } catch (err) {
+      say(`Test failed: ${err.message}`, 'bad');
+    } finally {
+      btn.disabled = false; btn.innerHTML = label;
+    }
+  }
+</script>

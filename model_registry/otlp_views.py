@@ -21,6 +21,7 @@ import io
 import json
 import logging
 import threading
+import time
 
 from django.conf import settings
 from django.db import close_old_connections
@@ -45,6 +46,26 @@ from model_registry.models import ModelConnection, OTLPCredential, OtlpSpan
 # without changing the endpoint contract.)
 _SPAN_STORE: dict[str, SpanStore] = {}
 IN_MEMORY_SPAN_CAP = 20_000  # per target; the DB holds the durable copy
+
+
+# Per-target receipt log for the "Test OTLP" button: every authenticated export
+# is noted here, including ones whose spans are all filtered out, so a user can
+# tell "nothing arrives" from "arrives but nothing auditable". Per process.
+_LAST_EXPORT: dict[str, dict] = {}
+
+
+def note_export(target_id: str, received: int, kept: int) -> None:
+    prev = _LAST_EXPORT.get(target_id) or {"exports": 0, "received": 0, "kept": 0}
+    _LAST_EXPORT[target_id] = {
+        "at": time.time(),
+        "exports": prev["exports"] + 1,
+        "received": prev["received"] + received,
+        "kept": prev["kept"] + kept,
+    }
+
+
+def last_export(target_id: str) -> dict | None:
+    return _LAST_EXPORT.get(target_id)
 
 
 def _store_for_target(target_id: str) -> SpanStore:
@@ -446,6 +467,7 @@ def otlp_traces(request):
         payload = _otlp_body_to_dict(body, request.headers.get("Content-Type"))
         _normalize_span_status(payload)
         raw_spans = parse_otlp_json(payload)
+        received_count = len(raw_spans)
         # Store only the spans the audit reads (tool, LLM, retrieval, ...);
         # transport and framework spans are most of an export and are dropped here.
         raw_spans = select_auditable_spans(raw_spans)
@@ -454,6 +476,7 @@ def otlp_traces(request):
             s for s in raw_spans
             if s.get("span_id") and s.get("trace_id") and s["trace_id"].strip("0")
         ]
+        note_export(cred.target_id, received_count, len(raw_spans))
         if not buffer_has_room(len(raw_spans)):
             # Nothing from this export is kept: the exporter retries the whole batch.
             return JsonResponse(
@@ -486,6 +509,111 @@ def otlp_traces(request):
         )
     except Exception:  # noqa: BLE001 - never fail the export; ack a rejection
         return JsonResponse({"partialSuccess": {"rejectedSpans": 1}}, status=200)
+
+
+def round_trip_test(cred: OTLPCredential, user=None) -> dict:
+    """Send one synthetic LLM span to this receiver with ``cred`` and check it lands.
+
+    Exercises the same path an app uses (auth, decode, audit filter, capture
+    policy), in-process, so a pass means Studio's side is healthy regardless of
+    the app. The test span is removed again. Never raises.
+    """
+    import os
+
+    from django.test import Client
+
+    headers: dict[str, str] = {}
+    if cred.auth_mode != OTLPCredential.AuthMode.NONE:
+        secret = otlp.reveal_secret(cred, user=user)
+        if secret is None:
+            return {"ok": False, "stage": "secret", "detail": "No readable secret stored for this credential. Rotate the secret, then test again."}
+        if cred.auth_mode == OTLPCredential.AuthMode.BASIC:
+            token = base64.b64encode(f"{cred.username}:{secret}".encode()).decode()
+            headers["HTTP_AUTHORIZATION"] = f"Basic {token}"
+        else:
+            headers["HTTP_AUTHORIZATION"] = f"Bearer {secret}"
+    trace_id, span_id = os.urandom(16).hex(), os.urandom(8).hex()
+    now = time.time_ns()
+    body = {"resourceSpans": [{"scopeSpans": [{"spans": [{
+        "traceId": trace_id, "spanId": span_id, "name": "studio.otlp.test",
+        "startTimeUnixNano": str(now - 1_000_000), "endTimeUnixNano": str(now),
+        "attributes": [{"key": "openinference.span.kind", "value": {"stringValue": "LLM"}}],
+    }]}]}]}
+    prior = last_export(cred.target_id)
+    before = (prior or {}).get("kept", 0)
+    started = time.monotonic()
+    try:
+        resp = Client(SERVER_NAME="localhost").post(
+            "/otlp/v1/traces", data=json.dumps(body), content_type="application/json", **headers,
+        )
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "stage": "send", "detail": f"Receiver error: {exc}"}
+    ms = round((time.monotonic() - started) * 1000)
+    kept_now = (last_export(cred.target_id) or {}).get("kept", 0)
+    # The test is not the app's traffic: put the receipt log back as it was.
+    if prior is None:
+        _LAST_EXPORT.pop(cred.target_id, None)
+    else:
+        _LAST_EXPORT[cred.target_id] = prior
+    if resp.status_code == 401:
+        return {"ok": False, "stage": "auth", "detail": "Receiver rejected this credential's own stored secret (401). Rotate the secret."}
+    if resp.status_code != 200:
+        return {"ok": False, "stage": "receive", "detail": f"Receiver answered HTTP {resp.status_code}."}
+    if kept_now <= before:
+        return {"ok": False, "stage": "filter", "detail": "Receiver accepted the export but kept no span. Check the capture policy."}
+    try:
+        flush_pending(cred.target_id)
+        OtlpSpan.objects.filter(target_id=cred.target_id, trace_id=trace_id).delete()
+    except Exception:
+        logging.getLogger(__name__).info("OTLP test span cleanup skipped", exc_info=True)
+    return {"ok": True, "ms": ms}
+
+
+def _trace_spans_seen(target_id: str, trace_id: str) -> int:
+    """Spans of one trace received so far. Read-only: unlike a run's fetch it does not claim them."""
+    flush_pending(target_id)
+    return OtlpSpan.objects.filter(target_id=target_id, trace_id=trace_id).count() or len(
+        get_spans_for_trace(target_id, trace_id)
+    )
+
+
+def chat_round_trip(cred: OTLPCredential, send, *, wait: float = 15.0) -> dict:
+    """Call the target for real, then wait for its trace to reach the receiver.
+
+    ``send(traceparent)`` makes one small chat request carrying that W3C header
+    and returns the reply text. A target that adopts the header exports spans
+    under our trace id ("linked"); one that does not still shows up as a fresh
+    export after the call ("arrived"). Never raises.
+    """
+    import os
+
+    trace_id = os.urandom(16).hex()
+    traceparent = f"00-{trace_id}-{os.urandom(8).hex()}-01"
+    t0 = time.time()
+    started = time.monotonic()
+    try:
+        reply = send(traceparent)
+    except Exception as exc:  # noqa: BLE001 - shown to the user
+        return {"ok": False, "stage": "call", "detail": f"The call to the target failed: {str(exc)[:240]}"}
+    reply_ms = round((time.monotonic() - started) * 1000)
+    out = {"reply_ms": reply_ms, "reply": (reply or "")[:80]}
+    deadline = time.monotonic() + wait
+    spans, arrived = 0, False
+    while True:
+        spans = _trace_spans_seen(cred.target_id, trace_id)
+        arrived = bool((last_export(cred.target_id) or {}).get("at", 0) > t0)
+        if spans or time.monotonic() >= deadline:
+            break
+        time.sleep(1.0)
+    try:
+        OtlpSpan.objects.filter(target_id=cred.target_id, trace_id=trace_id).delete()
+    except Exception:
+        logging.getLogger(__name__).info("OTLP round-trip cleanup skipped", exc_info=True)
+    if spans:
+        return {"ok": True, "stage": "linked", "spans": spans, **out}
+    if arrived:
+        return {"ok": True, "stage": "arrived", **out}
+    return {"ok": False, "stage": "no_trace", **out}
 
 
 # ─── Credential management (session-authenticated) ──────────────────────────

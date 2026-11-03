@@ -94,11 +94,13 @@ class ChatAPI:
             raise ChatAPIError("Open WebUI signed us in but returned no token.")
         return response
 
-    def request(self, method: str, path: str, json: Any | None = None) -> Any:
+    def request(
+        self, method: str, path: str, json: Any | None = None, headers: dict[str, str] | None = None,
+    ) -> Any:
         if self._token is None:
             self.sign_in()
         return self._send(method, path, json=json,
-                          headers={"Authorization": f"Bearer {self._token}"})
+                          headers={**(headers or {}), "Authorization": f"Bearer {self._token}"})
 
     def _send(self, method: str, path: str, *, json: Any | None, headers: dict[str, str]) -> Any:
         url = f"{self.base_url}{path}"
@@ -457,7 +459,7 @@ class ChatAPI:
             if isinstance(model, dict) and model.get("id")
         ]
 
-    def chat_completion(self, payload: dict[str, Any]) -> Any:
+    def chat_completion(self, payload: dict[str, Any], headers: dict[str, str] | None = None) -> Any:
         """Run an OpenAI-shaped completion through Open WebUI, as this user.
 
         ``payload`` is passed through to OWUI's ``/api/v1/chat/completions``
@@ -466,7 +468,7 @@ class ChatAPI:
         response, which is already OpenAI-compatible, so callers can hand it
         back to their client verbatim.
         """
-        return self.request("POST", "/api/v1/chat/completions", json=payload)
+        return self.request("POST", "/api/v1/chat/completions", json=payload, headers=headers)
 
 
 
