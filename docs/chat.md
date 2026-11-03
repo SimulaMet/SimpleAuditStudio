@@ -284,14 +284,18 @@ So enabling it is one line:
 SIMPLEAUDIT_CHAT_OTLP=true
 ```
 
-For an authenticated target (a `basic` or `bearer` OTLP credential instead of a
-`none` one), set the matching variables — embedded mode reads them from the
-environment it starts Open WebUI with, docker mode passes them straight through:
-
-```bash
-OTEL_BASIC_AUTH_USERNAME=sa_<target_id>     # from the credential
-OTEL_BASIC_AUTH_PASSWORD=<password>          # shown once at creation
-```
+Open WebUI exports with Basic auth (`sa_open_webui` plus a password). Nothing needs
+configuring: the password is derived from `DJANGO_SECRET_KEY` (HMAC-SHA256 of a fixed
+label), by Studio when it starts Open WebUI (embedded) and by the `open-webui`
+service's entrypoint in compose. That entrypoint drops the raw key from the
+environment before Open WebUI starts, so Open WebUI never holds it. Studio registers
+the matching credential at startup (an old open `none` credential is upgraded), and
+the credential is revealable in the connection's OTLP dialog. Set
+`SIMPLEAUDIT_CHAT_OTLP_PASSWORD` in `.env` to use your own password instead (both
+services read it). A credential set up by hand for the connection (Basic or Bearer)
+is never overwritten; give Open WebUI its secret with `OTEL_BASIC_AUTH_USERNAME` /
+`OTEL_BASIC_AUTH_PASSWORD`. Changing `DJANGO_SECRET_KEY` changes the derived
+password: restart both so they agree.
 
 If no enabled `none` credential exists and no auth is set, the listener answers
 401 and Open WebUI drops the spans.

@@ -276,8 +276,11 @@ class StartupSyncTests(TestCase):
     def test_chat_down_is_reported_not_raised(self):
         with patch.object(sync.config, "ENABLED", True), patch.object(
             sync, "push_now", side_effect=ChatAPIError("chat is down")
-        ):
-            self.assertEqual(sync.startup_sync(), ["Chat not synced at startup: chat is down"])
+        ), patch.object(sync, "_start_retry") as retry:
+            self.assertEqual(
+                sync.startup_sync(), ["Chat not synced at startup (retrying in the background): chat is down"],
+            )
+            retry.assert_called_once()
 
 
 class AgentOtlpCredentialTests(TestCase):
@@ -308,3 +311,147 @@ class AgentOtlpCredentialTests(TestCase):
         cred = OTLPCredential.objects.get(connection=self.connection)
         self.assertEqual(cred.auth_mode, OTLPCredential.AuthMode.NONE)
         self.assertTrue(cred.enabled)
+
+
+class AgentOtlpBasicCredentialTest(TestCase):
+    def setUp(self):
+        from infra.tests.factories import ProjectFactory, UserFactory
+        from model_registry.models import ModelConnection
+
+        UserFactory(username="chat-admin2", is_superuser=True)
+        self.project = ProjectFactory()
+        self.connection = ModelConnection.objects.create(
+            project=self.project, name="Open WebUI Agents", provider="openai",
+            base_url="http://open-webui/chat/api", enabled=True,
+        )
+
+    def _run(self):
+        with patch.object(sync.config, "OTLP_ENABLED", True), patch.object(sync.config, "ENABLED", True), \
+                patch.object(sync.config, "otlp_password", return_value="pw-for-owui"):
+            return sync.ensure_agent_otlp_credentials()
+
+    def test_known_password_creates_basic_credential_once(self):
+        from model_registry import otlp_services as otlp
+        from model_registry.models import OTLPCredential
+
+        self.assertEqual(self._run(), 1)
+        self.assertEqual(self._run(), 0)
+        cred = OTLPCredential.objects.get(connection=self.connection)
+        self.assertEqual(cred.auth_mode, "basic")
+        self.assertIsNotNone(otlp.verify_basic(sync.config.OTLP_USERNAME, "pw-for-owui"))
+
+    def test_open_credential_is_upgraded_to_basic(self):
+        from model_registry import otlp_services as otlp
+        from model_registry.models import OTLPCredential
+
+        otlp.create_credential(project=self.project, connection=self.connection, auth_mode="none")
+        self.assertEqual(self._run(), 1)
+        self.assertEqual(OTLPCredential.objects.get(connection=self.connection).auth_mode, "basic")
+
+    def test_hand_made_credential_is_left_alone(self):
+        from model_registry import otlp_services as otlp
+
+        nc = otlp.create_credential(project=self.project, connection=self.connection, auth_mode="bearer")
+        self.assertEqual(self._run(), 0)
+        self.assertIsNotNone(otlp.verify_bearer(nc.secret))
+
+
+class OtlpPasswordTest(TestCase):
+    def test_derived_in_embedded_and_docker_only_and_stable(self):
+        import os
+
+        env = {k: v for k, v in os.environ.items() if k != "SIMPLEAUDIT_CHAT_OTLP_PASSWORD"}
+        env["DJANGO_SECRET_KEY"] = "k1"
+        with patch.dict(os.environ, env, clear=True):
+            derived = {}
+            for mode in ("embedded", "docker"):
+                with patch.object(sync.config, "MODE", mode):
+                    derived[mode] = sync.config.otlp_password()
+            self.assertEqual(derived["embedded"], derived["docker"])
+            self.assertEqual(len(derived["docker"]), 64)
+            with patch.object(sync.config, "MODE", "off"):
+                self.assertEqual(sync.config.otlp_password(), "")
+            with patch.dict(os.environ, {"SIMPLEAUDIT_CHAT_OTLP_PASSWORD": "mine"}):
+                self.assertEqual(sync.config.otlp_password(), "mine")
+            with patch.dict(os.environ, {"DJANGO_SECRET_KEY": "k2"}), patch.object(sync.config, "MODE", "docker"):
+                self.assertNotEqual(sync.config.otlp_password(), derived["docker"])
+
+
+class OtlpCredentialSelfHealTest(TestCase):
+    """The exporter's password works even if no sync ever registered its credential."""
+
+    def setUp(self):
+        from infra.tests.factories import ProjectFactory, UserFactory
+        from model_registry import otlp_services as otlp
+        from model_registry.models import ModelConnection
+
+        otlp.clear_auth_cache()
+        UserFactory(username="chat-admin3", is_superuser=True)
+        self.project = ProjectFactory()
+        self.connection = ModelConnection.objects.create(
+            project=self.project, name="Open WebUI Agents", provider="openai",
+            base_url="http://open-webui/chat/api", enabled=True,
+        )
+
+    def _basic(self, user, pw):
+        import base64
+
+        return "Basic " + base64.b64encode(f"{user}:{pw}".encode()).decode()
+
+    def test_first_export_registers_the_credential_then_authenticates(self):
+        from model_registry import otlp_services as otlp
+        from model_registry.models import OTLPCredential
+
+        with patch.object(sync.config, "OTLP_ENABLED", True), patch.object(sync.config, "ENABLED", True), \
+                patch.object(sync.config, "otlp_password", return_value="pw-owui"):
+            self.assertFalse(OTLPCredential.objects.exists())
+            good = otlp.authenticate(self._basic(sync.config.OTLP_USERNAME, "pw-owui"))
+            self.assertIsNotNone(good)
+            self.assertEqual(good.auth_mode, "basic")
+            otlp.clear_auth_cache()
+            self.assertIsNone(otlp.authenticate(self._basic(sync.config.OTLP_USERNAME, "wrong")))
+            self.assertIsNone(otlp.authenticate(self._basic("someone-else", "pw-owui")))
+
+    def test_startup_registers_without_chat_running(self):
+        from model_registry.models import OTLPCredential
+
+        with patch.object(sync.config, "OTLP_ENABLED", True), patch.object(sync.config, "ENABLED", True), \
+                patch.object(sync.config, "otlp_password", return_value="pw-owui"), \
+                patch.object(sync, "push_now", side_effect=RuntimeError("chat down")):
+            self.assertIn("not synced", sync.startup_sync()[0])
+        self.assertEqual(OTLPCredential.objects.get(connection=self.connection).auth_mode, "basic")
+
+
+class StartupSyncRetryTest(TestCase):
+    def setUp(self):
+        sync._retrying = False
+
+    def tearDown(self):
+        sync._retrying = False
+
+    def test_failed_startup_sync_is_retried_until_chat_is_up(self):
+        calls = {"n": 0}
+
+        def flaky():
+            calls["n"] += 1
+            if calls["n"] < 3:
+                raise RuntimeError("chat booting")
+            return ["Synced 1 model connection(s) to chat."]
+
+        with patch.object(sync.config, "ENABLED", True), patch.object(sync, "_sync_once", side_effect=flaky), \
+                patch.object(sync, "ensure_agent_otlp_credentials", return_value=0), \
+                patch.object(sync, "RETRY_INTERVAL_S", 0), patch.object(sync, "RETRY_ATTEMPTS", 5):
+            report = sync.startup_sync()
+            self.assertIn("retrying", report[0])
+            for _ in range(200):
+                if calls["n"] >= 3 and not sync._retrying:
+                    break
+                time.sleep(0.01)
+        self.assertEqual(calls["n"], 3)
+        self.assertFalse(sync._retrying)
+
+    def test_only_one_retry_thread_at_a_time(self):
+        with patch.object(sync.threading, "Thread") as thread:
+            sync._start_retry()
+            sync._start_retry()
+        self.assertEqual(thread.call_count, 1)

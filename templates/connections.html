@@ -325,7 +325,7 @@
       <h2 class="text-base font-semibold text-gray-100">OTLP credential for <span id="otlp-dialog-conn"></span></h2>
       <button type="button" data-dialog-close aria-label="Close" title="Close" class="w-7 h-7 rounded text-gray-500 hover:text-gray-200">✕</button>
     </div>
-    <p class="text-xs text-gray-400">Issue a credential so this target can push OTLP traces to Studio. The secret is shown once — copy it now.</p>
+    <p class="text-xs text-gray-400">Issue a credential so this target can push OTLP traces to Studio. Saving the mode already in use shows the stored secret again; rotating issues a new one and stops the old one working.</p>
     <div class="flex items-center gap-2">
       <label class="text-xs text-gray-300" for="otlp-mode">Auth mode</label>
       <select id="otlp-mode" class="px-2.5 py-1.5 rounded-lg bg-surface-overlay border border-gray-700 text-xs text-gray-200">
@@ -334,9 +334,10 @@
         <option value="bearer">Bearer Token</option>
       </select>
       <button type="button" id="otlp-issue" class="px-3 py-1.5 rounded-lg bg-accent text-white text-xs font-medium hover:bg-accent-hover">Save</button>
+      <button type="button" id="otlp-rotate" class="hidden px-3 py-1.5 rounded-lg text-xs text-gray-300 bg-surface-overlay hover:text-white" title="Issue a new secret; the current one stops working at once">Rotate secret</button>
     </div>
     <div id="otlp-result" class="hidden space-y-2 text-xs">
-      <p id="otlp-warning" class="hidden text-amber-300 bg-amber-900/20 rounded px-2 py-1.5">Copy the secret now — it won't be shown again.</p>
+      <p id="otlp-warning" class="hidden text-amber-300 bg-amber-900/20 rounded px-2 py-1.5"></p>
       <pre id="otlp-env" class="bg-surface-overlay border border-gray-700 rounded-lg p-3 font-mono text-[11px] text-gray-200 whitespace-pre-wrap break-all"></pre>
       <div class="flex items-center gap-2">
         <button type="button" id="otlp-copy" class="px-3 py-1.5 rounded-lg text-xs text-gray-300 bg-surface-overlay hover:text-white">Copy env vars</button>
@@ -553,13 +554,35 @@
     $('#otlp-mode').value = current && current.enabled ? current.auth_mode : 'disabled';
     otlpResult.classList.add('hidden');
     otlpDialog.dataset.connId = connId;
+    $('#otlp-rotate').classList.toggle('hidden', !(current && current.auth_mode !== 'none'));
     otlpDialog.showModal();
   }
-  function showOtlpResult(env, secret) {
+  function showOtlpResult(env, note) {
     otlpEnv.textContent = env;
-    $('#otlp-warning').classList.toggle('hidden', !secret);
+    const warn = $('#otlp-warning');
+    warn.textContent = note || '';
+    warn.classList.toggle('hidden', !note);
     otlpResult.classList.remove('hidden');
   }
+  const OTLP_NOTE_NEW = 'Secret stored. Anyone with it can push traces for this connection; admins can show it again from this dialog.';
+  const OTLP_NOTE_SHOWN = 'Stored secret. Treat it like a password.';
+  async function otlpPost(url, params) {
+    const resp = await fetch(url, { method: 'POST', headers: { 'X-CSRFToken': csrfToken() }, body: new URLSearchParams(params) });
+    const data = await resp.json();
+    if (!resp.ok) { const err = new Error(data.error || `HTTP ${resp.status}`); err.needsRotate = !!data.needs_rotate; throw err; }
+    return data;
+  }
+  function otlpApply(connId, data) {
+    CONNS[connId].otlp = { id: data.credential.id, auth_mode: data.credential.auth_mode, enabled: true };
+    $('#otlp-rotate').classList.remove('hidden');
+    showOtlpResult(Object.entries(data.env_vars).map(([k, v]) => `${k}=${v}`).join('\n'), data.revealed ? OTLP_NOTE_SHOWN : OTLP_NOTE_NEW);
+  }
+  $('#otlp-rotate').addEventListener('click', async () => {
+    const connId = otlpDialog.dataset.connId, current = CONNS[connId].otlp;
+    if (!current || !confirm('Rotate the secret? The target using the current one will stop exporting until it is updated.')) return;
+    try { otlpApply(connId, await otlpPost('{% url "otlp_credential_rotate" %}', { credential_id: current.id, origin: location.origin })); }
+    catch (err) { otlpEnv.textContent = `Error: ${err.message}`; otlpResult.classList.remove('hidden'); }
+  });
   document.addEventListener('click', e => { const b = e.target.closest('[data-otlp]'); if (b) openOtlp(b.dataset.otlp); });
   $('#otlp-issue').addEventListener('click', async () => {
     const connId = otlpDialog.dataset.connId, mode = $('#otlp-mode').value;
@@ -581,16 +604,10 @@
         otlpResult.classList.remove('hidden');
         return;
       }
-      const resp = await fetch('{% url "otlp_credential_create" %}', {
-        method: 'POST', headers: { 'X-CSRFToken': csrfToken() },
-        body: new URLSearchParams({ connection_id: connId, auth_mode: mode, origin: location.origin }),
-      });
-      const data = await resp.json();
-      if (!resp.ok) throw new Error(data.error || `HTTP ${resp.status}`);
-      CONNS[connId].otlp = { id: data.credential.id, auth_mode: data.credential.auth_mode, enabled: true };
-      showOtlpResult(Object.entries(data.env_vars).map(([k, v]) => `${k}=${v}`).join('\n'), data.secret);
+      otlpApply(connId, await otlpPost('{% url "otlp_credential_create" %}', { connection_id: connId, auth_mode: mode, origin: location.origin }));
     } catch (err) {
       otlpEnv.textContent = `Error: ${err.message}`;
+      $('#otlp-warning').classList.add('hidden');
       otlpResult.classList.remove('hidden');
     } finally {
       btn.disabled = false; btn.textContent = 'Save';

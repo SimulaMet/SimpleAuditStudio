@@ -451,7 +451,7 @@ def _ensure_agent_model_reference(agent, user) -> None:
         _sync_internal_agent_connection_base_url(model.connection)
         return
 
-    connection, _ = ModelConnection.objects.get_or_create(
+    connection, created = ModelConnection.objects.get_or_create(
         project=agent.project,
         name="Open WebUI Agents",
         defaults={
@@ -462,6 +462,11 @@ def _ensure_agent_model_reference(agent, user) -> None:
             "created_by": user,
         },
     )
+    if created:
+        # Open WebUI exports with a known password: register it now, not at the next sync.
+        from chat.sync import ensure_agent_otlp_credentials
+
+        ensure_agent_otlp_credentials()
     RegisteredModel.objects.create(
         connection=connection,
         project=agent.project,

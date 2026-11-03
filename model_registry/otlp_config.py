@@ -28,3 +28,14 @@ def is_disabled(value: str | None) -> bool:
 
 #: The OTLP listener is on unless explicitly switched off.
 ENABLED = not is_disabled(os.environ.get("SIMPLEAUDIT_OTLP"))
+
+
+#: Accept pushes that carry no ``Authorization`` header, using an enabled
+#: ``none`` credential. On by default (Open WebUI's boot-time exporter cannot
+#: send credentials); set ``SIMPLEAUDIT_OTLP_ALLOW_UNAUTHENTICATED=false`` to
+#: answer 401 to every export that is not Basic or Bearer authenticated.
+ALLOW_UNAUTHENTICATED = not is_disabled(os.environ.get("SIMPLEAUDIT_OTLP_ALLOW_UNAUTHENTICATED"))
+
+#: Largest export body (bytes, before and after gzip) the receiver reads.
+#: Larger exports get 413 before any parsing.
+MAX_BODY_BYTES = int(os.environ.get("SIMPLEAUDIT_OTLP_MAX_BODY_BYTES") or 8 * 1024 * 1024)

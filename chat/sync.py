@@ -17,6 +17,7 @@ from __future__ import annotations
 import logging
 import os
 import threading
+import time
 
 from chat import config
 from chat.api import ChatAPI, ChatAPIError, connection_payload
@@ -164,30 +165,49 @@ RAG_OVERRIDES_FUNCTION_FILE = os.path.join(
 
 
 def ensure_agent_otlp_credentials() -> int:
-    """Give each workspace's Open WebUI Agents connection an open OTLP credential.
+    """Register the credential Open WebUI exports its agent spans with.
 
     Agent runs show the trace checkbox only when their connection has an enabled
-    OTLP credential, and Open WebUI exports its spans to Studio unauthenticated, so
-    a ``none`` credential is the right default here. Only runs when chat tracing is
-    on. Idempotent; returns how many credentials it created. Never raises.
+    OTLP credential. Open WebUI exports with Basic auth when ``config.otlp_password()``
+    is set (always, when Studio starts it), so the credential carries that known
+    password and an old open ``none`` one is upgraded. Otherwise (a separate
+    container with no shared password) an open ``none`` credential is created.
+    A credential someone set up by hand is left alone. Only runs when chat tracing
+    is on. Idempotent; returns how many credentials it created or changed. Never raises.
     """
     if not (config.ENABLED and config.OTLP_ENABLED):
         return 0
     from model_registry.models import ModelConnection, OTLPCredential
-    from model_registry.otlp_services import create_credential
+    from model_registry.otlp_services import create_credential, verify_secret
 
-    created = 0
+    password = config.otlp_password()
+    changed = 0
     try:
         user = _admin()
         connections = ModelConnection.objects.filter(name="Open WebUI Agents", enabled=True)
         for conn in connections.select_related("project"):
-            if OTLPCredential.objects.filter(project=conn.project, connection=conn, enabled=True).exists():
-                continue
-            create_credential(project=conn.project, connection=conn, auth_mode="none", user=user)
-            created += 1
+            cred = OTLPCredential.objects.filter(project=conn.project, connection=conn).order_by("-enabled", "id").first()
+            if password:
+                managed = (
+                    cred is not None and cred.enabled and cred.auth_mode == OTLPCredential.AuthMode.BASIC
+                    and cred.username == config.OTLP_USERNAME
+                )
+                if managed and verify_secret(password, cred.salt, cred.secret_hash):
+                    continue
+                if cred is not None and cred.enabled and cred.auth_mode != OTLPCredential.AuthMode.NONE and not managed:
+                    continue  # set up by hand
+                create_credential(
+                    project=conn.project, connection=conn, auth_mode="basic", user=user,
+                    username=config.OTLP_USERNAME, secret=password,
+                )
+            else:
+                if cred is not None and cred.enabled:
+                    continue
+                create_credential(project=conn.project, connection=conn, auth_mode="none", user=user)
+            changed += 1
     except Exception:
         logger.info("Agent OTLP credential sync skipped", exc_info=True)
-    return created
+    return changed
 
 
 def _install_function(api: ChatAPI, function_id: str, path: str, label: str) -> tuple[str | None, str]:
@@ -235,22 +255,73 @@ def sync_all_agents() -> int:
     return synced
 
 
+#: A chat that is still booting (Open WebUI's first start runs database migrations) fails the
+#: startup sync; it is retried in the background so the sync still happens, not at the next edit.
+RETRY_INTERVAL_S = float(os.environ.get("SIMPLEAUDIT_CHAT_SYNC_RETRY_SECONDS") or 15)
+RETRY_ATTEMPTS = int(os.environ.get("SIMPLEAUDIT_CHAT_SYNC_RETRY_ATTEMPTS") or 40)
+_retry_lock = threading.Lock()
+_retrying = False
+
+
+def _sync_once() -> list[str]:
+    """One pass of the startup sync; raises if chat cannot be reached."""
+    result = push_now()
+    reports = [f"Synced {result['pushed']} model connection(s) to chat."]
+    reports.append(f"Synced {sync_all_agents()} agent(s) to chat.")
+    return reports
+
+
+def _retry_sync() -> None:
+    global _retrying
+    from django.db import close_old_connections
+
+    try:
+        for _ in range(RETRY_ATTEMPTS):
+            time.sleep(RETRY_INTERVAL_S)
+            close_old_connections()
+            try:
+                reports = _sync_once()
+            except Exception:
+                logger.info("Chat sync retry: chat not ready", exc_info=True)
+                continue
+            ensure_agent_otlp_credentials()
+            logger.info("Chat synced on retry: %s", " ".join(reports))
+            return
+        logger.warning("Chat sync gave up after %d retries", RETRY_ATTEMPTS)
+    finally:
+        close_old_connections()
+        with _retry_lock:
+            _retrying = False
+
+
+def _start_retry() -> None:
+    global _retrying
+    with _retry_lock:
+        if _retrying:
+            return
+        _retrying = True
+    threading.Thread(target=_retry_sync, name="chat-sync-retry", daemon=True).start()
+
+
 def startup_sync() -> list[str]:
     """The whole chat sync, run at startup. Returns report lines.
 
     ``push_now`` covers connections, the bundled functions and the agent OTLP
     credentials; this adds every agent. Best-effort: a chat that is down or still
-    starting is reported and skipped, never raised, so the process still starts.
+    starting is reported and retried in the background, never raised, so the
+    process still starts.
     """
     if not config.ENABLED:
         return []
+    # Database-only, so it must not wait on a chat that is still booting.
+    ensure_agent_otlp_credentials()
     try:
-        result = push_now()
-        reports = [f"Synced {result['pushed']} model connection(s) to chat."]
-        reports.append(f"Synced {sync_all_agents()} agent(s) to chat.")
+        reports = _sync_once()
     except Exception as exc:
         logger.info("Startup chat sync skipped", exc_info=True)
-        return [f"Chat not synced at startup: {exc}"]
+        _start_retry()
+        return [f"Chat not synced at startup (retrying in the background): {exc}"]
+    ensure_agent_otlp_credentials()  # an agent sync may have just created the connection
     return reports
 
 

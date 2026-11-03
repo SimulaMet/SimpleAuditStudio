@@ -122,3 +122,72 @@ class OTLPIngestFilterTest(TestCase):
         row = otlp_views.get_spans_for_trace_db(self.target_id, TRACE_ID)[0]
         self.assertEqual(row["status"], "ERROR")
         self.assertEqual(row["attributes"]["exception.message"], "Unknown order ACME-9999")
+
+
+class OTLPCheapRejectTest(TestCase):
+    def setUp(self):
+        self.project = ProjectFactory()
+        self.conn = ModelConnectionFactory(project=self.project, name="cheap-reject")
+        otlp.create_credential(project=self.project, connection=self.conn, auth_mode="none")
+        self.client = Client(SERVER_NAME="localhost")
+
+    def _post(self, body, **extra):
+        return self.client.post("/otlp/v1/traces", data=body, content_type="application/json", **extra)
+
+    def test_unauthenticated_rejected_when_disallowed(self):
+        from unittest import mock
+
+        body = _export([_span("01" * 8, "chat", attributes={"gen_ai.operation.name": "chat"})])
+        self.assertEqual(self._post(body).status_code, 200)
+        with mock.patch("model_registry.otlp_config.ALLOW_UNAUTHENTICATED", False):
+            self.assertEqual(self._post(body).status_code, 401)
+
+    def test_oversized_body_rejected_before_parsing(self):
+        from unittest import mock
+
+        with mock.patch("model_registry.otlp_config.MAX_BODY_BYTES", 10):
+            self.assertEqual(self._post(_export([_span("01" * 8, "chat")])).status_code, 413)
+
+    def test_gzip_bomb_rejected(self):
+        from unittest import mock
+
+        bomb = gzip.compress(b"0" * 5000)
+        with mock.patch("model_registry.otlp_config.MAX_BODY_BYTES", 1000):
+            resp = self._post(bomb, HTTP_CONTENT_ENCODING="gzip")
+        self.assertEqual(resp.status_code, 413)
+
+
+class OTLPUnclaimedTest(TestCase):
+    def setUp(self):
+        self.project = ProjectFactory()
+        self.conn = ModelConnectionFactory(project=self.project, name="unclaimed")
+        self.nc = otlp.create_credential(project=self.project, connection=self.conn, auth_mode="bearer")
+        self.target = self.nc.credential.target_id
+        self.client = Client(SERVER_NAME="localhost")
+
+    def _push(self, trace_id=TRACE_ID):
+        span = _span("01" * 8, "chat", attributes={"gen_ai.operation.name": "chat"})
+        span["traceId"] = trace_id
+        return self.client.post(
+            "/otlp/v1/traces", data=_export([span]), content_type="application/json",
+            HTTP_AUTHORIZATION=f"Bearer {self.nc.secret}",
+        )
+
+    def test_zero_hold_stores_only_claimed_traces(self):
+        from datetime import timedelta
+        from unittest import mock
+
+        from model_registry.models import OtlpSpan
+
+        with mock.patch.object(otlp, "SPAN_HOLD_TTL", timedelta(0)):
+            self._push()
+            self.assertEqual(OtlpSpan.objects.filter(target_id=self.target).count(), 0)
+            otlp.claim_traces(self.target, {TRACE_ID})
+            self._push()
+        self.assertEqual(OtlpSpan.objects.filter(target_id=self.target, held_until=None).count(), 1)
+
+    def test_all_zero_trace_id_is_dropped(self):
+        from model_registry.models import OtlpSpan
+
+        self._push("0" * 32)
+        self.assertEqual(OtlpSpan.objects.filter(target_id=self.target).count(), 0)

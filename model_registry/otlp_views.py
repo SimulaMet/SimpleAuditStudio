@@ -17,6 +17,7 @@ from __future__ import annotations
 import atexit
 import base64
 import gzip
+import io
 import json
 import logging
 import threading
@@ -29,11 +30,11 @@ from django.views.decorators.csrf import csrf_exempt
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
-from simpleaudit.tracing.auth import parse_basic_header, parse_bearer_header
 from simpleaudit.tracing.store import _OTLP_SPAN_KIND_NAMES, SpanStore, normalize_span
 
 from audits.agentic.auditable import select_auditable_spans
 from infra.exceptions import StableAPIError
+from model_registry import otlp_config
 from model_registry import otlp_services as otlp
 from model_registry.models import ModelConnection, OTLPCredential, OtlpSpan
 
@@ -247,6 +248,9 @@ def _write_rows(rows: list[OtlpSpan]) -> None:
     for target_id, group in by_target.items():
         trace_ids = {row.trace_id for row in group}
         claimed = otlp.claimed_trace_ids(target_id, trace_ids)
+        if otlp.SPAN_HOLD_TTL.total_seconds() <= 0:
+            # No hold window: a span whose trace no run has claimed is not stored.
+            group = [row for row in group if row.trace_id in claimed]
         for row in group:
             row.held_until = None if row.trace_id in claimed else hold_until
         # held_until is not in update_fields: a conflicting row keeps the state it
@@ -385,6 +389,12 @@ def _hexify_id_fields(node) -> None:
             _hexify_id_fields(item)
 
 
+def _bounded_gunzip(body: bytes, limit: int) -> bytes | None:
+    """Gunzip ``body``; ``None`` if it inflates past ``limit`` bytes."""
+    out = gzip.GzipFile(fileobj=io.BytesIO(body)).read(limit + 1)
+    return None if len(out) > limit else out
+
+
 @csrf_exempt
 def otlp_traces(request):
     """Accept an OTLP/HTTP-JSON trace export from an authenticated target.
@@ -401,30 +411,21 @@ def otlp_traces(request):
     if request.method != "POST":
         return JsonResponse({"error": {"code": "method_not_allowed", "message": "Use POST."}}, status=405)
 
-    authorization = request.headers.get("Authorization")
-    cred = None
-    if authorization:
-        # A presented credential must verify. Falling back to an open "none"
-        # credential here would let a wrong or revoked token write into that
-        # target, so only a request with no Authorization header at all uses it.
-        if authorization.strip().lower().startswith("basic"):
-            parsed = parse_basic_header(authorization)
-            if parsed:
-                cred = otlp.verify_basic(*parsed)
-        elif authorization.strip().lower().startswith("bearer"):
-            token = parse_bearer_header(authorization)
-            if token:
-                cred = otlp.verify_bearer(token)
-    else:
-        # Targets that can't send credentials use an enabled "none" credential.
-        cred = OTLPCredential.objects.filter(
-            auth_mode=OTLPCredential.AuthMode.NONE, enabled=True
-        ).first()
+    cred = otlp.authenticate(
+        request.headers.get("Authorization"), allow_unauthenticated=otlp_config.ALLOW_UNAUTHENTICATED,
+    )
 
     if cred is None:
         return JsonResponse(
             {"error": {"code": "unauthorized", "message": "Invalid or missing OTLP credentials."}},
             status=401,
+        )
+
+    # Cheap rejects before any decode work: an oversized body, or a gzip body
+    # that inflates past the cap, is never parsed.
+    if len(request.body) > otlp_config.MAX_BODY_BYTES:
+        return JsonResponse(
+            {"error": {"code": "payload_too_large", "message": "Export body too large."}}, status=413,
         )
 
     try:
@@ -436,13 +437,23 @@ def otlp_traces(request):
         # evidence selection use).
         body = request.body
         if request.headers.get("Content-Encoding", "").lower() == "gzip":
-            body = gzip.decompress(body)
+            body = _bounded_gunzip(body, otlp_config.MAX_BODY_BYTES)
+            if body is None:
+                return JsonResponse(
+                    {"error": {"code": "payload_too_large", "message": "Export body too large."}},
+                    status=413,
+                )
         payload = _otlp_body_to_dict(body, request.headers.get("Content-Type"))
         _normalize_span_status(payload)
         raw_spans = parse_otlp_json(payload)
         # Store only the spans the audit reads (tool, LLM, retrieval, ...);
         # transport and framework spans are most of an export and are dropped here.
         raw_spans = select_auditable_spans(raw_spans)
+        # A span without ids can never be claimed by a run: drop it before storage.
+        raw_spans = [
+            s for s in raw_spans
+            if s.get("span_id") and s.get("trace_id") and s["trace_id"].strip("0")
+        ]
         if not buffer_has_room(len(raw_spans)):
             # Nothing from this export is kept: the exporter retries the whole batch.
             return JsonResponse(

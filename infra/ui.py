@@ -2807,7 +2807,7 @@ class OTLPCredentialCreateView(ProjectMixin, View):
         if not otlp_config.ENABLED:
             return JsonResponse({"ok": False, "error": "OTLP is disabled on this deployment."}, status=404)
         from model_registry import otlp_services as otlp
-        from model_registry.models import ModelConnection
+        from model_registry.models import ModelConnection, OTLPCredential
         from model_registry.otlp_views import _endpoint_url, _require_admin
 
         blocked = _require_write_access(request)
@@ -2827,29 +2827,42 @@ class OTLPCredentialCreateView(ProjectMixin, View):
         if auth_mode == "none":
             # No-auth OTLP is set up by Studio for its own agents, never picked by a user.
             return JsonResponse({"ok": False, "error": "Use basic or bearer authentication."}, status=400)
+        endpoint = _endpoint_url(request, origin=(post.get("origin") or "").strip())
+        existing = OTLPCredential.objects.filter(project=request.project, connection=conn).first()
+        if existing is not None and existing.auth_mode == auth_mode:
+            # Saving the mode already in use must not rotate a secret a live target holds:
+            # re-enable if needed and hand back the stored one.
+            secret = otlp.reveal_secret(existing, user=request.user)
+            if secret is None:
+                return JsonResponse({
+                    "ok": False, "needs_rotate": True,
+                    "error": "This secret was issued before it could be read back. Rotate it to get a readable one.",
+                }, status=409)
+            if not existing.enabled:
+                existing.enabled = True
+                existing.save(update_fields=["enabled", "updated_at"])
+            return JsonResponse(_otlp_payload(existing, secret, endpoint, revealed=True))
         try:
             new_cred = otlp.create_credential(project=request.project, connection=conn, auth_mode=auth_mode, user=request.user)
         except ValueError as e:
             return JsonResponse({"ok": False, "error": str(e)}, status=400)
-        endpoint = _endpoint_url(request, origin=(post.get("origin") or "").strip())
-        payload = {
-            "ok": True,
-            "credential": {
-                "id": new_cred.credential.id,
-                "auth_mode": new_cred.credential.auth_mode,
-                "username": new_cred.credential.username,
-                "target_id": new_cred.credential.target_id,
-            },
-            "secret": new_cred.secret,
-            "endpoint": endpoint,
-        }
-        if new_cred.credential.auth_mode == "basic":
-            payload["env_vars"] = dict(otlp.otlp_env_vars(endpoint=endpoint, username=new_cred.credential.username, password=new_cred.secret))
-        elif new_cred.credential.auth_mode == "bearer":
-            payload["env_vars"] = dict(otlp.otlp_bearer_env_vars(endpoint=endpoint, token=new_cred.secret))
-        else:  # none
-            payload["env_vars"] = dict(otlp.otlp_open_env_vars(endpoint=endpoint))
-        return JsonResponse(payload)
+        return JsonResponse(_otlp_payload(new_cred.credential, new_cred.secret, endpoint))
+
+
+def _otlp_payload(cred, secret: str, endpoint: str, *, revealed: bool = False) -> dict:
+    """The JSON the OTLP dialog renders: credential identity, secret, ready-to-paste env vars."""
+    from model_registry import otlp_services as otlp
+
+    return {
+        "ok": True,
+        "revealed": revealed,
+        "credential": {
+            "id": cred.id, "auth_mode": cred.auth_mode, "username": cred.username, "target_id": cred.target_id,
+        },
+        "secret": secret,
+        "endpoint": endpoint,
+        "env_vars": otlp.credential_env_vars(cred, secret, endpoint),
+    }
 
 
 class OTLPCredentialToggleView(ProjectMixin, View):
@@ -2906,22 +2919,7 @@ class OTLPCredentialRotateView(ProjectMixin, View):
         except ValueError as e:
             return JsonResponse({"ok": False, "error": str(e)}, status=400)
         endpoint = _endpoint_url(request, origin=(post.get("origin") or "").strip())
-        payload = {
-            "ok": True,
-            "credential": {
-                "id": new_cred.credential.id,
-                "auth_mode": new_cred.credential.auth_mode,
-                "username": new_cred.credential.username,
-                "target_id": new_cred.credential.target_id,
-            },
-            "secret": new_cred.secret,
-            "endpoint": endpoint,
-        }
-        if new_cred.credential.auth_mode == "basic":
-            payload["env_vars"] = dict(otlp.otlp_env_vars(endpoint=endpoint, username=new_cred.credential.username, password=new_cred.secret))
-        else:  # bearer
-            payload["env_vars"] = dict(otlp.otlp_bearer_env_vars(endpoint=endpoint, token=new_cred.secret))
-        return JsonResponse(payload)
+        return JsonResponse(_otlp_payload(new_cred.credential, new_cred.secret, endpoint))
 
 
 class DiscoverModelsView(ProjectMixin, View):
