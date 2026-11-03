@@ -43,4 +43,5 @@ jobs:
       - name: Build Compose image
         run: docker build -f deploy/compose/Dockerfile -t simpleaudit-studio-compose:ci .
       - name: Validate compose file
-        run: cp .env.example .env && docker compose config --quiet
+        # WEBUI_SECRET_KEY is required (no default) and blank in .env.example.
+        run: cp .env.example .env && WEBUI_SECRET_KEY=ci-placeholder docker compose config --quiet
