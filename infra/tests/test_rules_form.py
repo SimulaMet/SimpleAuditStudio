@@ -85,3 +85,14 @@ def test_between_condition_without_two_numbers_is_rejected_on_save():
         {"field": "tool.argument.n", "op": "between", "value": None}]}, "check": "exists"}
     with pytest.raises(ValueError, match="rule 2: condition 1: 'between' needs two numbers, low first"):
         _merge_structured_agentic_fields({}, _post(agentic_rules_json=json.dumps([_VALID, rule])))
+
+
+@pytest.mark.parametrize(("condition_value", "expect", "message"), [
+    ("abc", {"op": "at_least", "value": 1}, "condition 1: 'at_least' needs a number"),
+    (2, {"op": "at_least", "value": None}, "'expect' needs a count of 0 or more"),
+])
+def test_numeric_value_the_old_editor_stored_as_text_or_null_is_rejected_on_save(condition_value, expect, message):
+    rule = {"type": "check", "select": {"kind": "tool", "where": [
+        {"field": "tool.argument.n", "op": "at_least", "value": condition_value}]}, "check": "count", "expect": expect}
+    with pytest.raises(ValueError, match=f"rule 2: {message}"):
+        _merge_structured_agentic_fields({}, _post(agentic_rules_json=json.dumps([_VALID, rule])))

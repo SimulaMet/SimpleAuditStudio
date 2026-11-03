@@ -997,7 +997,7 @@ def run_scenario(
 
                     all_spans = (evidence or {}).get("all_spans") or []
                     trajectory = normalize(all_spans)
-                    expectations = validate_agentic_metadata(metadata or {})
+                    expectations = validate_agentic_metadata(metadata or {}, values=False)
 
                     evaluation = evaluate_agentic(
                         trajectory, expectations, None,
@@ -1294,7 +1294,7 @@ def run_scenario_repeated(
 
                 all_spans = (evidence or {}).get("all_spans") or []
                 trajectory = normalize(all_spans)
-                expectations = validate_agentic_metadata(metadata or {})
+                expectations = validate_agentic_metadata(metadata or {}, values=False)
                 evaluation = evaluate_agentic(
                     trajectory, expectations, None,
                     llm=None, task=test_prompt or "",

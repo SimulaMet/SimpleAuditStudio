@@ -11,6 +11,7 @@ is INCONCLUSIVE. Rules are ANDed: each one is checked on its own.
 from __future__ import annotations
 
 import json
+import math
 from typing import Any
 
 from .checks.answer import final_answer
@@ -87,8 +88,13 @@ def _expect_problems(expect: Any) -> list[str]:
     return [] if _count_ok(value) else ["'expect' needs a count of 0 or more"]
 
 
-def validate_check(rule: dict) -> list[str]:
-    """Problems with a rule, in plain words."""
+def validate_check(rule: dict, values: bool = True) -> list[str]:
+    """Problems with a rule, in plain words.
+
+    With ``values=False`` the operand values (condition values and ``expect``) are not
+    checked: an audit evaluates the rule anyway, and evaluate_check reports a bad value
+    on that rule alone instead of the whole scenario failing validation.
+    """
     problems: list[str] = []
     unknown = set(rule) - _RULE_KEYS
     if unknown:
@@ -125,11 +131,10 @@ def validate_check(rule: dict) -> list[str]:
             allowed = tuple(dict.fromkeys(TEXT_OPS + NUMBER_OPS))
         if condition["op"] not in allowed:
             problems.append(f"condition {index + 1}: operator '{condition['op']}' does not fit '{condition['field']}'")
-        if condition["op"] in ("one_of", "not_one_of") and not _list_value(condition.get("value")):
-            problems.append(f"condition {index + 1}: '{condition['op']}' needs one or more values")
-        if condition["op"] == "between" and _number_pair(condition.get("value")) is None:
-            problems.append(f"condition {index + 1}: 'between' needs two numbers, low first")
-    if check in ("count", "distinct"):
+        problem = _value_problem(condition) if values else None
+        if problem:
+            problems.append(f"condition {index + 1}: {problem}")
+    if check in ("count", "distinct") and values:
         problems += _expect_problems(rule.get("expect"))
     if check == "distinct" and not rule.get("field"):
         problems.append("'distinct' needs a field to count")
@@ -224,16 +229,38 @@ def _list_value(value: Any) -> list:
     return []
 
 
+def _number(value: Any) -> float | None:
+    """A condition's numeric operand, or None when it is not a number (null, NaN, text, a bool)."""
+    if isinstance(value, bool):
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return None if math.isnan(number) else number
+
+
 def _number_pair(value: Any) -> tuple[float, float] | None:
     """(low, high) of a between condition, or None when the value is not two numbers, low first."""
     items = _list_value(value)
-    if len(items) != 2 or any(isinstance(item, bool) for item in items):
+    if len(items) != 2:
         return None
-    try:
-        low, high = float(items[0]), float(items[1])
-    except (TypeError, ValueError):
+    low, high = _number(items[0]), _number(items[1])
+    if low is None or high is None or low > high:
         return None
-    return (low, high) if low <= high else None
+    return low, high
+
+
+def _value_problem(condition: dict) -> str | None:
+    """What is wrong with a condition's value for its operator, or None."""
+    op, value = condition.get("op"), condition.get("value")
+    if op in ("one_of", "not_one_of") and not _list_value(value):
+        return f"'{op}' needs one or more values"
+    if op == "between" and _number_pair(value) is None:
+        return "'between' needs two numbers, low first"
+    if op in ("at_least", "at_most") and _number(value) is None:
+        return f"'{op}' needs a number"
+    return None
 
 
 def _compare(value: Any, op: str, expected: Any) -> bool:
@@ -253,10 +280,11 @@ def _compare(value: Any, op: str, expected: Any) -> bool:
         number = float(value)
     except (TypeError, ValueError):
         return False
-    if op == "at_least":
-        return number >= float(expected)
-    if op == "at_most":
-        return number <= float(expected)
+    if op in ("at_least", "at_most"):
+        bound = _number(expected)
+        if bound is None:
+            return False
+        return number >= bound if op == "at_least" else number <= bound
     if op == "between":
         pair = _number_pair(expected)
         return pair is not None and pair[0] <= number <= pair[1]
@@ -281,6 +309,11 @@ def evaluate_check(index: int, rule: dict, trajectory: AgentTrajectory, label: s
     select = rule["select"]
     kind = select["kind"]
     conditions = select.get("where", [])
+    for number, condition in enumerate(conditions, start=1):
+        if problem := _value_problem(condition):
+            return result(check_id, "rules", "INCONCLUSIVE", f"Condition {number}: {problem}; fix this rule's value.")
+    if rule["check"] in ("count", "distinct") and (problems := _expect_problems(rule.get("expect"))):
+        return result(check_id, "rules", "INCONCLUSIVE", f"{problems[0]}; fix this rule's value.")
     units = _units(kind, trajectory)
     if not units and kind == "answer":
         return result(check_id, "rules", "INCONCLUSIVE", "The trace has no final answer to check.")

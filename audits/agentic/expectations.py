@@ -15,7 +15,9 @@ class AgenticExpectations:
     rules: list[dict[str, Any]] | None = None
 
 
-def validate_agentic_metadata(metadata: dict | None) -> AgenticExpectations | None:
+def validate_agentic_metadata(metadata: dict | None, values: bool = True) -> AgenticExpectations | None:
+    """Validate the agentic section. Audits pass ``values=False``: a bad operand value then
+    fails only its own rule (evaluate_check) instead of stopping the whole scenario."""
     agentic = (metadata or {}).get("agentic")
     if agentic is None:
         return None
@@ -30,7 +32,7 @@ def validate_agentic_metadata(metadata: dict | None) -> AgenticExpectations | No
     if rules:
         from .rules import validate_rules
 
-        problems = validate_rules(rules)
+        problems = validate_rules(rules, values)
         if problems:
             raise ValueError("Invalid metadata.agentic.rules: " + "; ".join(
                 f"rule {p.index + 1}: {p.message}" for p in problems))
