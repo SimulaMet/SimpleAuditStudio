@@ -124,3 +124,40 @@ def test_retrieval_documents_sent_as_json_strings_are_read():
     assert evaluate_check(2, named, owui).status == "INCONCLUSIVE"
     sourced = normalize([_retrieval([json.dumps({"source": "customer_faq.md", "content": "Returns in 30 days."})])])
     assert evaluate_check(2, named, sourced).status == "PASS"
+
+
+def _tool_rule(op, value, field="tool.name", check="none"):
+    return {"type": "check", "select": {"kind": "tool", "where": [{"field": field, "op": op, "value": value}]},
+            "check": check}
+
+
+def test_not_one_of_reads_the_comma_string_the_editor_stored_as_a_list():
+    # The editor saved not_one_of values unsplit. Read char by char, "lookup,refund"
+    # excluded nothing that is longer than one letter, so this check passed.
+    for value in (["lookup", "refund"], "lookup,refund", "lookup, refund"):
+        rule = _tool_rule("not_one_of", value, check="all")
+        assert evaluate_check(0, rule, normalize(TRACES["one_call"])).status == "FAIL", value
+
+
+def test_one_of_with_a_comma_string_matches_whole_values():
+    rule = _tool_rule("one_of", "search,lookup", check="exists")
+    assert evaluate_check(0, rule, normalize(TRACES["one_call"])).status == "PASS"
+    assert evaluate_check(0, _tool_rule("one_of", "l,o", check="exists"), normalize(TRACES["one_call"])).status == "FAIL"
+
+
+def test_between_condition_reads_two_numbers():
+    trace = normalize([_tool("lookup", '{"n": 3}')])
+    for value in ([1, 5], "1,5"):
+        assert evaluate_check(0, _tool_rule("between", value, "tool.argument.n", "exists"), trace).status == "PASS"
+    assert evaluate_check(0, _tool_rule("between", [4, 5], "tool.argument.n", "exists"), trace).status == "FAIL"
+
+
+def test_list_operators_need_list_values():
+    assert validate_check(_tool_rule("not_one_of", ["lookup"])) == []
+    assert validate_check(_tool_rule("not_one_of", "lookup,refund")) == []
+    assert validate_check(_tool_rule("one_of", 5)) == ["condition 1: 'one_of' needs one or more values"]
+    assert validate_check(_tool_rule("not_one_of", "")) == ["condition 1: 'not_one_of' needs one or more values"]
+    assert validate_check(_tool_rule("between", [1, 5], "tool.argument.n")) == []
+    for bad in (None, [5, 1], "1", ["a", "b"]):
+        assert validate_check(_tool_rule("between", bad, "tool.argument.n")) == [
+            "condition 1: 'between' needs two numbers, low first"], bad

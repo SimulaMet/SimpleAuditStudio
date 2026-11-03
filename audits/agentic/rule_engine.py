@@ -125,6 +125,10 @@ def validate_check(rule: dict) -> list[str]:
             allowed = tuple(dict.fromkeys(TEXT_OPS + NUMBER_OPS))
         if condition["op"] not in allowed:
             problems.append(f"condition {index + 1}: operator '{condition['op']}' does not fit '{condition['field']}'")
+        if condition["op"] in ("one_of", "not_one_of") and not _list_value(condition.get("value")):
+            problems.append(f"condition {index + 1}: '{condition['op']}' needs one or more values")
+        if condition["op"] == "between" and _number_pair(condition.get("value")) is None:
+            problems.append(f"condition {index + 1}: 'between' needs two numbers, low first")
     if check in ("count", "distinct"):
         problems += _expect_problems(rule.get("expect"))
     if check == "distinct" and not rule.get("field"):
@@ -212,6 +216,31 @@ def _captured(kind: str, unit: Any, field: str) -> bool:
     return _value(kind, unit, field) is not None
 
 
+def _list_value(value: Any) -> list:
+    """The values of a one_of, not_one_of or between condition.
+
+    A string is read as a comma-separated list: the rule editor stored not_one_of and
+    between values that way, so rules saved from it keep the meaning they were typed with.
+    """
+    if isinstance(value, str):
+        return [item.strip() for item in value.split(",") if item.strip()]
+    if isinstance(value, (list, tuple)):
+        return list(value)
+    return []
+
+
+def _number_pair(value: Any) -> tuple[float, float] | None:
+    """(low, high) of a between condition, or None when the value is not two numbers, low first."""
+    items = _list_value(value)
+    if len(items) != 2 or any(isinstance(item, bool) for item in items):
+        return None
+    try:
+        low, high = float(items[0]), float(items[1])
+    except (TypeError, ValueError):
+        return None
+    return (low, high) if low <= high else None
+
+
 def _compare(value: Any, op: str, expected: Any) -> bool:
     if value is None:
         return False
@@ -220,9 +249,9 @@ def _compare(value: Any, op: str, expected: Any) -> bool:
     if op == "not_equals":
         return not (value == expected or str(value) == str(expected))
     if op == "one_of":
-        return str(value) in [str(item) for item in expected]
+        return str(value) in [str(item) for item in _list_value(expected)]
     if op == "not_one_of":
-        return str(value) not in [str(item) for item in expected]
+        return str(value) not in [str(item) for item in _list_value(expected)]
     if op == "contains":
         return str(expected) in str(value)
     try:
@@ -234,7 +263,8 @@ def _compare(value: Any, op: str, expected: Any) -> bool:
     if op == "at_most":
         return number <= float(expected)
     if op == "between":
-        return float(expected[0]) <= number <= float(expected[1])
+        pair = _number_pair(expected)
+        return pair is not None and pair[0] <= number <= pair[1]
     return False
 
 
@@ -322,6 +352,8 @@ def _condition_text(condition: dict) -> str:
     field, op, value = condition["field"], condition["op"], condition.get("value")
     if field in ("span.error", "tool.error") and op == "equals" and value is True:
         return "is an error"
+    if op in ("one_of", "not_one_of", "between"):
+        value = _list_value(value)
     if isinstance(value, bool):
         value = "yes" if value else "no"
     elif isinstance(value, list):
@@ -436,8 +468,11 @@ def _code_value(value: Any) -> str:
 
 def _code_condition(condition: dict) -> str:
     op, value = condition["op"], condition.get("value")
+    if op in ("one_of", "not_one_of", "between"):
+        value = _list_value(value)
     if op == "between":
-        return f"{condition['field']} between {_code_value(value[0])} and {_code_value(value[1])}"
+        low, high = (value + [None, None])[:2]
+        return f"{condition['field']} between {_code_value(low)} and {_code_value(high)}"
     return f"{condition['field']} {_CODE_OPS[op]} {_code_value(value)}"
 
 

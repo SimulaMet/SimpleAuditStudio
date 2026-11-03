@@ -30,7 +30,7 @@
   const KIND_LABELS = { tool: 'Tool calls', retrieval_document: 'Retrieved documents', answer: 'Final answer', any: 'Any step' };
   const CHECK_LABELS = { count: 'Count', exists: 'Exists', none: 'None', all: 'All', distinct: 'Distinct values' };
   const EXPECT_LABELS = { equals: 'exactly', at_least: 'at least', at_most: 'at most', between: 'between' };
-  const OP_LABELS = { equals: 'equals', not_equals: 'does not equal', one_of: 'is one of', contains: 'contains', at_least: 'at least', at_most: 'at most', between: 'between' };
+  const OP_LABELS = { equals: 'equals', not_equals: 'does not equal', one_of: 'is one of', not_one_of: 'is not one of', contains: 'contains', at_least: 'at least', at_most: 'at most', between: 'between' };
   const fieldFor = (name) => CATALOG.find(f => f.name === name || (f.needs_key && name.startsWith(f.name)));
   const opsFor = (name) => {
     const f = fieldFor(name);
@@ -151,7 +151,9 @@
           const op = row.querySelector('[data-co]').value;
           const raw = row.querySelector('[data-cv]').value.trim();
           const numeric = ['at_least', 'at_most', 'between'].includes(op) || (fieldFor(field)?.family === 'any' && !isNaN(Number(raw)) && raw !== '');
-          const value = op === 'one_of' ? raw.split(',').map(s => s.trim()).filter(Boolean)
+          const items = raw.split(',').map(s => s.trim()).filter(Boolean);
+          const value = ['one_of', 'not_one_of'].includes(op) ? items
+            : op === 'between' ? items.map(Number)
             : raw === 'true' ? true : raw === 'false' ? false : numeric && raw !== '' ? Number(raw) : raw;
           return { field, op, value };
         }).filter(c => c.field);
