@@ -77,20 +77,42 @@ class TraceCardViewTest(TestCase):
         ]}})
         self.assertEqual(card["spans"][0]["dur_ms"], 4869.0)
 
-    def test_rep_view_exposes_trace_card(self):
+    def test_rep_view_hides_trace_card_when_timeline_exists(self):
+        # An agentic rep has a trajectory timeline that covers every meaningful
+        # step; the Target trace panel is redundant (leftover captured spans are
+        # just structural wrappers) and is suppressed entirely.
+        llm = _span("llm1", "chat gpt-4o", "LLM", 900.0)
         rep = {
             "severity": "high",
-            "conversation": [],
+            "conversation": [
+                {"role": "user", "content": "hi"},
+                {"role": "assistant", "content": "hello"},
+            ],
             "trace_ids": ["b" * 32],
-            "judgment": {"evidence_spans": [
-                _span("1", "llm", "LLM", 1200.0),
-            ]},
+            "judgment": {"evidence_spans": [llm]},
+            "trace_evidence": {
+                "all_spans": [
+                    llm,
+                    _span("ctx", "open-webui.chat", "CHAIN", 5000.0),
+                ],
+            },
         }
         view = _rep_view(rep, 1)
+        self.assertIsNone(view["trace"])
+        # trace_evidence must not leak into the raw "other" dump either way.
+        self.assertNotIn("trace_evidence", view["other"])
+
+    def test_rep_view_shows_trace_card_without_timeline(self):
+        # A rep with a W3C trace id but no trajectory timeline (no
+        # conversation / evidence spans to render rows from) still shows the
+        # Target trace card — there is no timeline to supersede it.
+        rep = {
+            "severity": "high",
+            "trace_ids": ["b" * 32],
+        }
+        view = _rep_view(rep, 1)
+        self.assertIsNotNone(view["trace"])
         self.assertEqual(view["trace"]["trace_ids"], ["b" * 32])
-        self.assertEqual(view["trace"]["spans"][0]["name"], "llm")
-        # trace_ids must not leak into the raw "other" dump.
-        self.assertNotIn("trace_ids", view["other"])
 
     def test_rep_view_no_trace_card_when_untraced(self):
         view = _rep_view({"severity": "pass", "conversation": []}, 1)
