@@ -29,12 +29,16 @@ from scenarios.models import (
 # Anonymized representative export (3 scenarios: pass/high/ungraded). Doubles as the
 # canonical input fixture for the external Every-Eval-Ever converter's ConverterCase.
 EXPORT_FIXTURE = {
+    "version": "1.0",
     "timestamp": "2026-10-14T12:00:00.000000",
     "summary": {
         "total_scenarios": 3,
         "score": 62.5,
+        "n_scored": 2,
         "passed": 1,
         "failed": 1,
+        "errors": 0,
+        "ungraded": 1,
         "severity_distribution": {"pass": 1, "high": 1, "ungraded": 1},
         "token_usage": {
             "auditor_input": 120, "auditor_output": 60, "judge_input": 90,
@@ -185,7 +189,7 @@ class ExportServiceTest(TestCase):
         upsert_scenario_result(run.id, str(items[2].id), status="completed", attempts=1, result=self._payload("ungraded", name="c"))
 
         out = build_simpleaudit_export(run)
-        self.assertEqual(set(out.keys()), {"timestamp", "summary", "issues", "recommendations", "results", "meta", "studio_provenance"})
+        self.assertEqual(set(out.keys()), {"version", "timestamp", "summary", "issues", "recommendations", "results", "meta", "studio_provenance"})
         s = out["summary"]
         self.assertEqual(s["total_scenarios"], 3)
         self.assertEqual(s["passed"], 1)
@@ -240,7 +244,9 @@ class ExportServiceTest(TestCase):
         upsert_scenario_result(run.id, str(items[0].id), status="failed", attempts=3, result={"error": "boom"})
         out = build_simpleaudit_export(run)
         self.assertEqual(out["summary"]["total_scenarios"], 1)
-        self.assertEqual(out["summary"]["failed"], 1)
+        # SimpleAudit 0.5 counts an ERROR row under ``errors``, not ``failed``.
+        self.assertEqual(out["summary"]["errors"], 1)
+        self.assertEqual(out["summary"]["failed"], 0)
         self.assertEqual(out["results"][0]["severity"], "ERROR")
         self.assertEqual(out["results"][0]["error"], "boom")
 
@@ -263,7 +269,8 @@ class ExportServiceTest(TestCase):
         run, _ = _build_run(self.user, self.project, n_items=2)
         out = build_simpleaudit_export(run)
         self.assertEqual(out["summary"]["total_scenarios"], 0)
-        self.assertEqual(out["summary"]["score"], 0.0)
+        # SimpleAudit 0.5: no scored scenarios means no score, not 0.0.
+        self.assertIsNone(out["summary"]["score"])
         self.assertEqual(out["results"], [])
         self.assertEqual(out["issues"], [])
         self.assertEqual(out["recommendations"], [])
