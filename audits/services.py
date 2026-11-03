@@ -439,6 +439,24 @@ def cancel_run(run: AuditRun, user) -> bool:
     return True
 
 
+def _engine_run_meta(run: AuditRun) -> dict:
+    """The engine's run-level ``meta`` block (SimpleAudit PR 138), from frozen snapshots.
+
+    Set on the document directly because older supported engines neither accept
+    nor emit ``meta``. ``max_turns``/``language`` appear only when the run set them.
+    """
+    meta: dict = {}
+    for role in ROLES:
+        view = frozen_model(run, role)
+        meta[f"{role}_model"] = view["model_id"] or view["display_name"]
+        meta[f"{role}_provider"] = view["provider"]
+    params = run.generation_parameters_snapshot or {}
+    for key in ("max_turns", "language"):
+        if params.get(key) is not None:
+            meta[key] = params[key]
+    return meta
+
+
 def build_simpleaudit_export(run: AuditRun) -> dict:
     """Reassemble a run's durable scenario results into the canonical engine JSON.
 
@@ -503,6 +521,7 @@ def build_simpleaudit_export(run: AuditRun) -> dict:
         for key, value in extra.items():
             result.setdefault(key, value)
 
+    document["meta"] = _engine_run_meta(run)
     document["studio_provenance"] = {
         "simpleaudit_version": run.simpleaudit_version,
         "git_commit": run.git_commit,

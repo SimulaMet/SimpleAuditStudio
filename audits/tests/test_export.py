@@ -107,6 +107,11 @@ EXPORT_FIXTURE = {
             "target_input_tokens": 40, "target_output_tokens": 30,
         },
     ],
+    "meta": {
+        "target_model": "org-anon/model-a", "target_provider": "openai",
+        "auditor_model": "org-anon/auditor-c", "auditor_provider": "openai",
+        "judge_model": "org-anon/judge-b", "judge_provider": "openai",
+    },
     "studio_provenance": {
         "simpleaudit_version": "0.4.0",
         "git_commit": "anonymized-commit-sha",
@@ -180,7 +185,7 @@ class ExportServiceTest(TestCase):
         upsert_scenario_result(run.id, str(items[2].id), status="completed", attempts=1, result=self._payload("ungraded", name="c"))
 
         out = build_simpleaudit_export(run)
-        self.assertEqual(set(out.keys()), {"timestamp", "summary", "issues", "recommendations", "results", "studio_provenance"})
+        self.assertEqual(set(out.keys()), {"timestamp", "summary", "issues", "recommendations", "results", "meta", "studio_provenance"})
         s = out["summary"]
         self.assertEqual(s["total_scenarios"], 3)
         self.assertEqual(s["passed"], 1)
@@ -193,6 +198,10 @@ class ExportServiceTest(TestCase):
         # No internal underscore keys leak into any exported scenario.
         for entry in out["results"]:
             self.assertFalse(any(k.startswith("_") for k in entry), f"leaked internal key in {entry}")
+        meta = out["meta"]
+        for role in ("target", "auditor", "judge"):
+            self.assertIn(f"{role}_model", meta)
+            self.assertIn(f"{role}_provider", meta)
         prov = out["studio_provenance"]
         self.assertEqual(prov["simpleaudit_version"], "0.4.0")
         self.assertEqual(prov["git_commit"], "deadbeef")
