@@ -99,3 +99,28 @@ def test_all_check_with_nothing_to_check_is_inconclusive_not_pass():
     rule = {"type": "check", "select": {"kind": "tool", "where": [
         {"field": "tool.name", "op": "equals", "value": "lookup"}]}, "check": "all"}
     assert evaluate_check(0, rule, normalize([_answer("no tools")])).status == "INCONCLUSIVE"
+
+
+def _retrieval(documents):
+    return {"span_id": "r1", "name": "retrieval", "attributes": {
+        "gen_ai.operation.name": "retrieval", "gen_ai.retrieval.documents": documents}}
+
+
+def test_retrieval_documents_sent_as_json_strings_are_read():
+    # Open WebUI's instrumentation exports each document as its own JSON string, without a source.
+    owui = normalize([_retrieval([
+        json.dumps({"document_id": "doc-1", "file_id": "f-1", "chunk_id": "c-1", "rank": 1, "score": 0.9,
+                    "content": "Returns in 30 days."}),
+        "not json",
+    ])])
+    count = {"type": "check", "select": {"kind": "retrieval_document", "where": []}, "check": "count",
+             "expect": {"op": "equals", "value": 1}}
+    text = {"type": "check", "select": {"kind": "retrieval_document", "where": [
+        {"field": "retrieval.text", "op": "contains", "value": "30 days"}]}, "check": "exists"}
+    named = {"type": "check", "select": {"kind": "retrieval_document", "where": [
+        {"field": "retrieval.source", "op": "equals", "value": "customer_faq.md"}]}, "check": "exists"}
+    assert evaluate_check(0, count, owui).status == "PASS"
+    assert evaluate_check(1, text, owui).status == "PASS"
+    assert evaluate_check(2, named, owui).status == "INCONCLUSIVE"
+    sourced = normalize([_retrieval([json.dumps({"source": "customer_faq.md", "content": "Returns in 30 days."})])])
+    assert evaluate_check(2, named, sourced).status == "PASS"

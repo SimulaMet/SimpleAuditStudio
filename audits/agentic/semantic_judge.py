@@ -60,11 +60,26 @@ def _compact_result(result: Any) -> str:
     return _bounded(json.dumps(_compact(result), ensure_ascii=False, default=str), _MAX_RESULT_CHARS)
 
 
+def _document(item: Any) -> Any:
+    """A retrieval document, parsed when it arrives as a JSON object or list; any other string stays a name."""
+    if isinstance(item, str):
+        try:
+            parsed = json.loads(item)
+        except json.JSONDecodeError:
+            return item
+        if isinstance(parsed, (dict, list)):
+            return parsed
+    return item
+
+
 def _retrieved_sources(trajectory: AgentTrajectory) -> list[str]:
     """Sources of every document the trace shows, whichever step returned it."""
     sources: set[str] = set()
     for step in trajectory.steps:
-        sources.update(_source_values(step.attributes.get("gen_ai.retrieval.documents")))
+        documents = step.attributes.get("gen_ai.retrieval.documents")
+        if isinstance(documents, list):
+            documents = [_document(item) for item in documents]
+        sources.update(_source_values(documents))
         if step.kind == "tool":
             sources.update(_captured_tool_sources(step))
     return sorted(sources)
