@@ -2807,7 +2807,7 @@ class OTLPCredentialCreateView(ProjectMixin, View):
         if not otlp_config.ENABLED:
             return JsonResponse({"ok": False, "error": "OTLP is disabled on this deployment."}, status=404)
         from model_registry import otlp_services as otlp
-        from model_registry.models import ModelConnection
+        from model_registry.models import ModelConnection, OTLPCredential
         from model_registry.otlp_views import _endpoint_url, _require_admin
 
         blocked = _require_write_access(request)
@@ -2827,29 +2827,42 @@ class OTLPCredentialCreateView(ProjectMixin, View):
         if auth_mode == "none":
             # No-auth OTLP is set up by Studio for its own agents, never picked by a user.
             return JsonResponse({"ok": False, "error": "Use basic or bearer authentication."}, status=400)
+        endpoint = _endpoint_url(request, origin=(post.get("origin") or "").strip())
+        existing = OTLPCredential.objects.filter(project=request.project, connection=conn).first()
+        if existing is not None and existing.auth_mode == auth_mode:
+            # Saving the mode already in use must not rotate a secret a live target holds:
+            # re-enable if needed and hand back the stored one.
+            secret = otlp.reveal_secret(existing, user=request.user)
+            if secret is None:
+                return JsonResponse({
+                    "ok": False, "needs_rotate": True,
+                    "error": "This secret was issued before it could be read back. Rotate it to get a readable one.",
+                }, status=409)
+            if not existing.enabled:
+                existing.enabled = True
+                existing.save(update_fields=["enabled", "updated_at"])
+            return JsonResponse(_otlp_payload(existing, secret, endpoint, revealed=True))
         try:
             new_cred = otlp.create_credential(project=request.project, connection=conn, auth_mode=auth_mode, user=request.user)
         except ValueError as e:
             return JsonResponse({"ok": False, "error": str(e)}, status=400)
-        endpoint = _endpoint_url(request, origin=(post.get("origin") or "").strip())
-        payload = {
-            "ok": True,
-            "credential": {
-                "id": new_cred.credential.id,
-                "auth_mode": new_cred.credential.auth_mode,
-                "username": new_cred.credential.username,
-                "target_id": new_cred.credential.target_id,
-            },
-            "secret": new_cred.secret,
-            "endpoint": endpoint,
-        }
-        if new_cred.credential.auth_mode == "basic":
-            payload["env_vars"] = dict(otlp.otlp_env_vars(endpoint=endpoint, username=new_cred.credential.username, password=new_cred.secret))
-        elif new_cred.credential.auth_mode == "bearer":
-            payload["env_vars"] = dict(otlp.otlp_bearer_env_vars(endpoint=endpoint, token=new_cred.secret))
-        else:  # none
-            payload["env_vars"] = dict(otlp.otlp_open_env_vars(endpoint=endpoint))
-        return JsonResponse(payload)
+        return JsonResponse(_otlp_payload(new_cred.credential, new_cred.secret, endpoint))
+
+
+def _otlp_payload(cred, secret: str, endpoint: str, *, revealed: bool = False) -> dict:
+    """The JSON the OTLP dialog renders: credential identity, secret, ready-to-paste env vars."""
+    from model_registry import otlp_services as otlp
+
+    return {
+        "ok": True,
+        "revealed": revealed,
+        "credential": {
+            "id": cred.id, "auth_mode": cred.auth_mode, "username": cred.username, "target_id": cred.target_id,
+        },
+        "secret": secret,
+        "endpoint": endpoint,
+        "env_vars": otlp.credential_env_vars(cred, secret, endpoint),
+    }
 
 
 class OTLPCredentialToggleView(ProjectMixin, View):
@@ -2906,22 +2919,7 @@ class OTLPCredentialRotateView(ProjectMixin, View):
         except ValueError as e:
             return JsonResponse({"ok": False, "error": str(e)}, status=400)
         endpoint = _endpoint_url(request, origin=(post.get("origin") or "").strip())
-        payload = {
-            "ok": True,
-            "credential": {
-                "id": new_cred.credential.id,
-                "auth_mode": new_cred.credential.auth_mode,
-                "username": new_cred.credential.username,
-                "target_id": new_cred.credential.target_id,
-            },
-            "secret": new_cred.secret,
-            "endpoint": endpoint,
-        }
-        if new_cred.credential.auth_mode == "basic":
-            payload["env_vars"] = dict(otlp.otlp_env_vars(endpoint=endpoint, username=new_cred.credential.username, password=new_cred.secret))
-        else:  # bearer
-            payload["env_vars"] = dict(otlp.otlp_bearer_env_vars(endpoint=endpoint, token=new_cred.secret))
-        return JsonResponse(payload)
+        return JsonResponse(_otlp_payload(new_cred.credential, new_cred.secret, endpoint))
 
 
 class DiscoverModelsView(ProjectMixin, View):
@@ -3316,6 +3314,9 @@ _REP_KNOWN_KEYS = {
     "severity", "rationale", "evidence", "judge_rationale", "judgment", "scenario_name",
     "scenario_description", "expected_behavior", "file_uri", "_rep_index", "_language", "error",
     "trace_ids",
+    # Consumed by the trajectory timeline + Target trace panel; must not leak
+    # into the raw "other" dump (it is a large span payload with no value shown
+    # verbatim).
     "trace_evidence",
     "agentic_evaluation",
     *(f"{r}_{d}_tokens" for r in _REP_TOKEN_ROLES for d in ("input", "output")),
@@ -3376,22 +3377,26 @@ def _trace_span_content_blocks(span: dict) -> list[tuple[str, str]]:
     return blocks
 
 
-def _trace_card_view(rep: dict) -> dict | None:
+def _trace_card_view(rep: dict, has_timeline: bool = False) -> dict | None:
     """The trace section of one rep: W3C trace ids + the captured spans.
 
     ``trace_ids`` are the ids the engine propagated the rep's turns under
     (persisted on the result); the spans are the ones the target exported for
-    those ids (``judgment["evidence_spans"]``). Returns ``None`` when the rep
-    carries no trace data (tracing was off, or the target exported nothing).
+    those ids (``judgment["evidence_spans"]`` or the full ``trace_evidence``
+    capture). Returns ``None`` when the rep carries no trace data.
 
-    Spans are shown longest-first with connection noise dropped: targets with
-    OpenInference semantic kinds surface their signal spans first, targets with
-    plain OTel auto-instrumentation (raw SPAN_KIND_*, http.* attributes) are
-    still readable because the meaningful operations are the long ones (the
-    model call, the request root). Each span also carries ``offset_ms``
-    (time since the earliest span — trajectory ordering) and ``content_blocks``
-    (tool args/results, input, output) for the expandable span detail.
+    Spans are shown longest-first with connection noise dropped; each carries
+    ``offset_ms`` (time since the earliest span) and ``content_blocks`` (tool
+    args/results, input, output) for the expandable detail.
+
+    When a trajectory timeline already renders this rep's steps, this panel is
+    redundant: the timeline covers every meaningful step and the leftover
+    captured spans are just structural wrappers (e.g. Open WebUI's
+    ``invoke_workflow`` CHAIN spans) that add noise. So when a timeline exists
+    (``has_timeline``), the panel is suppressed entirely.
     """
+    if has_timeline:
+        return None
     trace_ids = rep.get("trace_ids") or []
     spans = ((rep.get("judgment") or {}).get("evidence_spans") or []) if isinstance(rep.get("judgment"), dict) else []
     # The header reports every span the target exported; the evidence subset
@@ -3429,6 +3434,56 @@ def _trace_card_view(rep: dict) -> dict | None:
     }
 
 
+#: Span kinds rendered as their own timeline row style (everything else is generic).
+_AGENTIC_SPAN_KIND_ICONS = {
+    "LLM": ("🧠", "text-sky-300"),
+    "RETRIEVER": ("📚", "text-emerald-300"),
+    "TOOL": ("🔧", "text-amber-300"),
+    "AGENT": ("🤖", "text-fuchsia-300"),
+    "GUARDRAIL": ("🛡️", "text-fuchsia-300"),
+    "EVALUATOR": ("⚖️", "text-violet-300"),
+}
+
+
+def _llm_tool_decision(span: dict, attrs: dict) -> tuple[str, str] | None:
+    """Extract the tool call(s) an LLM span decided on, if any.
+
+    Returns ``(name, detail)`` for a single tool call, ``("a + b", ...)`` when
+    several were requested, or ``None`` when the span's output did not decide a
+    tool call (i.e. it produced a plain answer). Used to render Open WebUI-style
+    traces, where every model step is an ``LLM`` span and the tool-decision
+    steps carry the tool name/args in their output message rather than as a
+    separate TOOL span.
+    """
+    out_msgs = attrs.get("gen_ai.output.messages")
+    try:
+        msgs = json.loads(out_msgs) if isinstance(out_msgs, str) else out_msgs
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(msgs, list):
+        return None
+    names, args = [], []
+    for m in msgs:
+        if not isinstance(m, dict):
+            continue
+        for tc in m.get("tool_calls") or []:
+            fn = (tc.get("function") or {}) if isinstance(tc, dict) else {}
+            nm = fn.get("name")
+            if nm:
+                names.append(str(nm))
+            ar = fn.get("arguments")
+            if ar:
+                args.append(ar if isinstance(ar, str) else json.dumps(ar))
+    if not names:
+        return None
+    label = names[0] if len(names) == 1 else " + ".join(names[:2]) + ("…" if len(names) > 2 else "")
+    detail = ""
+    if args:
+        a = args[0]
+        detail = a if len(a) <= 96 else a[:93] + "..."
+    return label, detail
+
+
 def _as_text_list(value) -> list[str]:
     """Normalise issues / behaviours / recommendations to a list of strings."""
     if not value:
@@ -3443,14 +3498,6 @@ def _as_text_list(value) -> list[str]:
             out.append(str(item))
     return out
 
-
-# ─── Agentic results (evidence-linked findings, timeline, judge panel) ──────
-#
-# The judging lane (audits/agentic) attaches an ``agentic_evaluation`` dict to
-# each rep and puts captured spans on ``judgment["evidence_spans"]``. These
-# helpers turn that payload into presentation-ready structures; every block
-# self-hides when the corresponding data is absent, so the panels work with
-# both the current payload shape and the target contract.
 
 #: Finding cards sort by this severity rank first (CRITICAL > HIGH > MEDIUM > LOW).
 _AGENTIC_SEVERITY_RANK = {"critical": 0, "high": 1, "medium": 2, "low": 3}
@@ -3518,16 +3565,34 @@ def _agentic_span_view(span: dict) -> dict | None:
     elif not isinstance(kb_sources, list):
         kb_sources = []
     start = span.get("start_time")
+
+    display_name = span.get("name") or tool_name or "step"
+    is_tool_decision = False
+    decision_detail = ""
+    if kind == "LLM" and not tool_name:
+        decision = _llm_tool_decision(span, attrs)
+        if decision:
+            # Render a model step that decided to call a tool as a distinct
+            # 🔧 "agent → tool" row rather than another generic 🧠 LLM row.
+            label, summary = decision
+            is_tool_decision = True
+            icon, tone = "🔧", "text-amber-300"
+            display_name = f"agent → {label}"
+            tool_name = label
+            decision_detail = summary
+
     return {
         "span_id": str(span["span_id"]),
         "label": _span_label(str(span["span_id"])),
         "kind": span.get("kind") or "",
         "icon": icon,
         "tone": tone,
-        "name": span.get("name") or tool_name or "step",
+        "name": display_name,
         "tool_name": tool_name,
         "arguments": _arguments_preview(attrs.get("gen_ai.tool.call.arguments")),
         "redundant_reason": str(attrs.get("redundant_reason") or ""),
+        "decision_detail": decision_detail,
+        "is_tool_decision": is_tool_decision,
         "kb_sources": list(dict.fromkeys(str(s) for s in kb_sources)),
         "started_at": start,
         "duration_ms": round(_trace_span_duration_ms(span), 1),
@@ -3535,6 +3600,214 @@ def _agentic_span_view(span: dict) -> dict | None:
         "raw_json": json.dumps(span, indent=2, ensure_ascii=False, default=str),
         "is_retrieval": kind == "RETRIEVER" or bool(kb_sources) or "retriev" in str(tool_name).lower(),
     }
+
+
+def _mark_redundant_reruns(raw_spans: list[dict], rows: list[dict]) -> None:
+    """Flag LLM spans that are a redundant re-answer of the previous one.
+
+    Open WebUI's saved-chat agent loop can invoke the base model more than once
+    per user turn with an *identical* prompt (verified via OTLP span_id reuse:
+    multiple ``POST /chat/completions`` under one request span). When two
+    consecutive ``kind=LLM`` spans share the exact same input and both finish
+    with ``stop`` as an ``answer`` — i.e. neither is a tool decision — the later
+    one is a redundant re-run, not a distinct agent step. We mark it so the
+    timeline can de-emphasize it instead of presenting it as a separate action.
+
+    This only annotates display; it never drops or reorders steps. Tool-loop
+    iterations (which carry ``finish_reasons=['tool_calls']``) are untouched, so
+    legitimate multi-step agent behavior is preserved.
+    """
+    by_id = {str(s.get("span_id")): s for s in raw_spans if isinstance(s, dict)}
+    prev_llm: dict | None = None
+    for row in rows:
+        is_rerun = bool(row.get("is_redundant_rerun"))
+        row["card_border_class"] = "border-red-900/40 opacity-60" if is_rerun else "border-gray-800/70"
+        row["name_class"] = "opacity-50" if is_rerun else ""
+        span = by_id.get(row["span_id"])
+        attrs = span.get("attributes") if isinstance(span, dict) else None
+        attrs = attrs if isinstance(attrs, dict) else {}
+        is_llm = str(span.get("kind", "")).upper() == "LLM" if isinstance(span, dict) else False
+        finish = attrs.get("gen_ai.response.finish_reasons")
+        is_answer = is_llm and finish == ["stop"] and not row.get("is_tool_decision")
+        if is_answer:
+            inp = attrs.get("gen_ai.input.messages")
+            if prev_llm is not None and prev_llm.get("_input") == inp:
+                row["is_redundant_rerun"] = True
+                row["rerun_of"] = prev_llm.get("anchor")
+            prev_llm = {"_input": inp, "anchor": row.get("anchor")}
+        # Non-answer / non-LLM rows break the "consecutive answer" chain but we
+        # keep the last answer for the next comparison window.
+
+
+def _synthetic_tool_spans(conv: list[dict]) -> list[dict]:
+    """Minimal TOOL/INFERENCE span rows derived from conversation tool markers.
+
+    Used both as the whole-timeline fallback (no OTLP at all) and — when OTLP
+    spans exist but carry no tool/retriever steps — as a merge so the
+    trajectory still shows what the agent actually did with tools and KB.
+    """
+    import re as _re
+
+    synthetic = []
+    idx = 0
+    # Streaming format: [TOOL_CALL name()]{"json"} — args after the ]
+    # Non-streaming format: [TOOL_CALL name({"json"})] — args inside ()
+    pat_stream = _re.compile(r"\[TOOL_CALL\s+(\w+)\(\)\]\s*(\{.*?\})?")
+    pat_nonstream = _re.compile(r"\[TOOL_CALL\s+(\w+)\(([^)]+)\)\]")
+    pat_result = _re.compile(r"\[TOOL_RESULT\s+(\w+)\](.*?)(?=\[TOOL_|$)", _re.DOTALL)
+    # Collect results per tool name (in order of appearance)
+    result_queue: dict[str, list[str]] = {}
+    for msg in conv:
+        content = (msg or {}).get("content", "") or ""
+        for rm in pat_result.finditer(content):
+            rname = rm.group(1)
+            rtext = rm.group(2).strip()
+            result_queue.setdefault(rname, []).append(rtext)
+    result_idx: dict[str, int] = {}
+    for msg in conv:
+        role = (msg or {}).get("role", "")
+        content = (msg or {}).get("content", "") or ""
+        if role != "assistant":
+            continue
+        found = list(pat_stream.finditer(content)) + list(pat_nonstream.finditer(content))
+        found.sort(key=lambda m: m.start())
+        for m in found:
+            name, args_raw = m.group(1), (m.group(2) or m.group(3) or "{}")
+            try:
+                args_preview = json.dumps(json.loads(args_raw))[:200]
+            except (json.JSONDecodeError, TypeError):
+                args_preview = args_raw[:200]
+            # Attach the next available result for this tool
+            ri = result_idx.get(name, 0)
+            result_text = None
+            if ri < len(result_queue.get(name, [])):
+                result_text = result_queue[name][ri]
+                result_idx[name] = ri + 1
+            attrs: dict = {
+                "tool_name": name,
+                "gen_ai.tool.call.arguments": args_preview,
+                "arguments": args_preview,
+            }
+            if result_text:
+                attrs["gen_ai.tool.call.result"] = result_text
+                attrs["tool.result"] = result_text
+                # Extract KB sources from retrieval-style results so the
+                # timeline row surfaces them like a real RETRIEVER span would.
+                # The result text may have trailing prose after the JSON.
+                stripped = result_text.strip()
+                if stripped.startswith(("[", "{")):
+                    # Find the matching closing bracket for the JSON portion.
+                    depth = 0
+                    end = 0
+                    for ci, ch in enumerate(stripped):
+                        if ch in "[{":
+                            depth += 1
+                        elif ch in "]}":
+                            depth -= 1
+                            if depth == 0:
+                                end = ci + 1
+                                break
+                    if end > 0:
+                        try:
+                            rdata = json.loads(stripped[:end])
+                            if isinstance(rdata, dict):
+                                src = rdata.get("source") or rdata.get("data_source")
+                                if src:
+                                    attrs["openwebui.retrieval.data_source"] = [src] if isinstance(src, str) else list(src)
+                            elif isinstance(rdata, list) and rdata and isinstance(rdata[0], dict):
+                                srcs = [d.get("source") for d in rdata if isinstance(d, dict) and d.get("source")]
+                                if srcs:
+                                    attrs["openwebui.retrieval.data_source"] = srcs
+                        except (json.JSONDecodeError, TypeError):
+                            pass
+            synthetic.append({
+                "span_id": f"conv-tool-{idx}",
+                "name": f"tool_call:{name}",
+                "start_time": 0.0,
+                "duration": 0.0,
+                "kind": "tool",
+                "attributes": attrs,
+                "status": "ok",
+            })
+            idx += 1
+        # Add a response/inference step for the prose after tool markers,
+        # matching the trajectory's conv-response-N span IDs so evidence
+        # links from judge dimensions resolve correctly.
+        parts = _re.split(r"\n\s*\n", content, maxsplit=1)
+        prose = ""
+        if len(parts) > 1:
+            candidate = parts[1].strip()
+            if candidate and not candidate.startswith(("{", "[")):
+                prose = candidate
+        if not prose or len(prose) < 20:
+            no_markers = _re.sub(
+                r"\[(?:TOOL_CALL|TOOL_RESULT)\s+\w+(?:\([^)]*\))?\][^\n]*", "", content,
+            ).strip()
+            if no_markers and not no_markers.startswith(("{", "[")):
+                prose = no_markers
+        if prose and len(prose) > 20:
+            synthetic.append({
+                "span_id": f"conv-response-{idx}",
+                "name": "final_response",
+                "start_time": 0.0,
+                "duration": 0.0,
+                "kind": "inference",
+                "attributes": {"output.value": prose},
+                "status": "ok",
+            })
+            idx += 1
+    return synthetic
+
+
+def _merge_synthesized_tool_spans(raw_spans: list[dict], synthetic: list[dict]) -> list[dict]:
+    """Interleave conversation-derived tool/response steps into real OTLP spans.
+
+    Open WebUI exports only CHAIN + LLM spans; its server-side tool loop and
+    KB retrieval leave no TOOL/RETRIEVER spans. Without this merge the
+    trajectory timeline shows nothing but ``chat_completion`` even though the
+    agent demonstrably called tools (markers are in the conversation). Real
+    OTLP steps always win: synthesized rows are added only for tool names the
+    trace does not already cover, appended after the last timed span (they
+    carry no timestamps of their own).
+
+    A tool counts as "covered" when either a real TOOL/RETRIEVER span exists
+    for it **or** an LLM span is itself a tool decision for it (rendered as an
+    ``agent → <tool>`` row by ``_agentic_span_view``). The latter matters
+    because OWUI's LLM tool-decision spans already show the tool name and
+    arguments — re-synthesizing the same call from the conversation transcript
+    would duplicate every tool step.
+    """
+    covered: set[str] = set()
+    for s in raw_spans:
+        attrs = s.get("attributes") if isinstance(s.get("attributes"), dict) else {}
+        kind = str(s.get("kind") or "").upper()
+        name = attrs.get("gen_ai.tool.name") or attrs.get("tool_name")
+        if name and (kind in ("TOOL", "RETRIEVER") or kind == ""):
+            covered.add(str(name))
+        # LLM span that decided to call a tool: pull the name(s) out of its
+        # output so we don't re-synthesize those calls below.
+        if kind == "LLM":
+            decision = _llm_tool_decision(s, attrs)
+            if decision:
+                for n in decision[0].split(","):
+                    covered.add(n.strip())
+    extra = [s for s in synthetic if s.get("kind") == "tool" and s.get("attributes", {}).get("tool_name") not in covered]
+    if not extra:
+        return list(raw_spans)
+    base_start = min(
+        (s.get("end_time") for s in raw_spans if isinstance(s.get("end_time"), (int, float))),
+        default=None,
+    )
+    merged = list(raw_spans)
+    for i, s in enumerate(extra):
+        row = dict(s)
+        # Offset each synthetic step after the previous one, past the last real
+        # span, so chronological ordering is stable and honest (approximate).
+        offset = (base_start or 0.0) + 0.05 * (i + 1)
+        row["start_time"] = offset
+        row["end_time"] = offset + 0.01
+        merged.append(row)
+    return merged
 
 
 def _duplicate_inference_flags(spans: list[dict]) -> dict[int, str]:
@@ -3613,6 +3886,7 @@ def _agentic_timeline_view(rep: dict) -> dict | None:
             else None
         )
         rows.append(row)
+    _mark_redundant_reruns(raw_spans, rows)
     if not rows:
         return None
     # Readable references in execution order (LLM-1, TOOL-1 ...); the id stays the anchor.
@@ -3932,6 +4206,12 @@ def _rep_view(rep: dict, index: int) -> dict:
     )
     grade = _judge_grade(rep.get("judgment"))
     agentic = rep.get("agentic_evaluation") if isinstance(rep.get("agentic_evaluation"), dict) else None
+    # The raw "Agentic check data" dump exposes this dict verbatim. Strip the
+    # captured-span payload: its content is already presented by the trajectory
+    # timeline and the (deduped) Target trace panel, so dumping it again as raw
+    # JSON only bloats the page with no new information.
+    if isinstance(agentic, dict):
+        agentic = {k: v for k, v in agentic.items() if k != "trace_evidence"}
     timeline = _agentic_timeline_view(rep)
     label_for = timeline["label_for"] if timeline else {}
     if agentic and isinstance(agentic.get("checks"), list):
@@ -3978,7 +4258,7 @@ def _rep_view(rep: dict, index: int) -> dict:
         "rationale": rep.get("rationale") or rep.get("evidence") or rep.get("judge_rationale") or "",
         "tokens": tokens,
         "total_tokens": total_tokens,
-        "trace": _trace_card_view(rep),
+        "trace": _trace_card_view(rep, has_timeline=bool(timeline)),
         "agentic": agentic,
         # Evidence-linked presentation of the agentic evaluation. Each block is
         # None (and therefore hidden) when its data is absent from the payload.

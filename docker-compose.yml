@@ -190,6 +190,21 @@ services:
   open-webui:
     profiles: ["chat"]
     image: ${OPEN_WEBUI_IMAGE:-ghcr.io/sushantgautam/open-webui:v0.12.4.5-subpath}
+    # Derives the OTLP password, then drops the raw key and password from the
+    # environment before Open WebUI starts, so Open WebUI never holds the Django key.
+    # (`$$` is compose's escape for a literal `$`.) Command is the image's own CMD.
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        if [ -z "$$SIMPLEAUDIT_CHAT_OTLP_PASSWORD" ]; then
+          SIMPLEAUDIT_CHAT_OTLP_PASSWORD=$$(python3 -c 'import hmac,hashlib,os;print(hmac.new(os.environ["SIMPLEAUDIT_OTLP_DERIVE_KEY"].encode(),b"simpleaudit-chat-otlp",hashlib.sha256).hexdigest())')
+        fi
+        export OTEL_BASIC_AUTH_USERNAME=sa_open_webui OTEL_BASIC_AUTH_PASSWORD="$$SIMPLEAUDIT_CHAT_OTLP_PASSWORD"
+        unset SIMPLEAUDIT_OTLP_DERIVE_KEY SIMPLEAUDIT_CHAT_OTLP_PASSWORD
+        exec "$$@"
+      - sh
+    command: ["bash", "start.sh"]
     environment:
       WEBUI_SUBPATH: /chat
       WEBUI_AUTH_TRUSTED_EMAIL_HEADER: X-Studio-Email
@@ -217,13 +232,17 @@ services:
       # set SIMPLEAUDIT_CHAT_OTLP=false to opt out. Open WebUI passes
       # OTEL_EXPORTER_OTLP_ENDPOINT to its HTTP exporter as-is, so this must be
       # the full Studio ingestion URL. Exports
-      # unauthenticated by default (matches an enabled "none" credential); for a
-      # basic/bearer credential set OTEL_BASIC_AUTH_USERNAME / OTEL_BASIC_AUTH_PASSWORD.
+      # with Basic auth (see the entrypoint above).
       ENABLE_OTEL: ${SIMPLEAUDIT_CHAT_OTLP:-true}
       ENABLE_OTEL_TRACES: ${SIMPLEAUDIT_CHAT_OTLP:-true}
       OTEL_OTLP_SPAN_EXPORTER: "http"
       OTEL_EXPORTER_OTLP_ENDPOINT: ${SIMPLEAUDIT_CHAT_OTLP_ENDPOINT:-http://web:8000/otlp/v1/traces}
       OTEL_SERVICE_NAME: ${SIMPLEAUDIT_CHAT_OTLP_SERVICE_NAME:-open-webui}
+      # Basic auth for the export: the entrypoint below turns these two into
+      # OTEL_BASIC_AUTH_*. The password is SIMPLEAUDIT_CHAT_OTLP_PASSWORD if set, else
+      # derived from DJANGO_SECRET_KEY exactly as chat/config.py does for web.
+      SIMPLEAUDIT_CHAT_OTLP_PASSWORD: ${SIMPLEAUDIT_CHAT_OTLP_PASSWORD:-}
+      SIMPLEAUDIT_OTLP_DERIVE_KEY: ${DJANGO_SECRET_KEY:-change-me}
     volumes:
       - open_webui_data:/app/backend/data
     restart: unless-stopped
@@ -247,7 +266,8 @@ services:
       # /chat/static/custom.css to Studio's /chat/css-mask, which picks the
       # admin vs plain mask from the session.)
     ports:
-      - "${STUDIO_PORT:-8000}:8000"
+      # Same number on both sides: Caddy listens on :$STUDIO_PORT (see its environment).
+      - "${STUDIO_PORT:-8000}:${STUDIO_PORT:-8000}"
     depends_on:
       web:
         condition: service_healthy

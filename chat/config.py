@@ -123,6 +123,30 @@ OTLP_ENDPOINT = (os.environ.get("SIMPLEAUDIT_CHAT_OTLP_ENDPOINT") or "").rstrip(
 OTLP_SERVICE_NAME = os.environ.get("SIMPLEAUDIT_CHAT_OTLP_SERVICE_NAME", "open-webui")
 
 
+#: Basic-auth username Open WebUI exports its spans with.
+OTLP_USERNAME = "sa_open_webui"
+
+
+def otlp_password() -> str:
+    """The Basic-auth password Open WebUI exports with, or ``""`` for unauthenticated.
+
+    ``SIMPLEAUDIT_CHAT_OTLP_PASSWORD`` wins. Otherwise, when Studio starts Open WebUI
+    itself (embedded) or compose starts it (docker, whose Open WebUI entrypoint
+    derives the same value), a password derived from the Django secret key, so there
+    is nothing to configure or store.
+    """
+    explicit = (os.environ.get("SIMPLEAUDIT_CHAT_OTLP_PASSWORD") or "").strip()
+    if explicit:
+        return explicit
+    if MODE not in {"embedded", "docker"}:
+        return ""
+    import hashlib
+    import hmac
+
+    key = os.environ.get("DJANGO_SECRET_KEY", "change-me").encode()
+    return hmac.new(key, b"simpleaudit-chat-otlp", hashlib.sha256).hexdigest()
+
+
 def otlp_endpoint_url(studio_port: int | None = None) -> str:
     """The full OTLP trace-ingestion URL Open WebUI should export spans to.
 

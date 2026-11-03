@@ -24,13 +24,19 @@ The "Focus" button toggles a wide mode that pushes the app chrome aside.
         <span class="w-7 h-7 rounded-full bg-surface-overlay border border-gray-700 flex items-center justify-center text-sm" title="{{ s.kind }}">{{ s.icon }}</span>
         {% if not forloop.last %}<span class="w-px flex-1 bg-gray-700/60 mt-1"></span>{% endif %}
       </div>
-      <details class="agentic-tl-card min-w-0 flex-1 rounded-lg border border-gray-800/70 bg-surface-overlay/40 group-open:border-violet-800/50">
+      <details class="agentic-tl-card min-w-0 flex-1 rounded-lg border {{ s.card_border_class }} bg-surface-overlay/40 group-open:border-violet-800/50">
         <summary class="cursor-pointer select-none flex flex-wrap items-center gap-x-2 gap-y-1 px-3 py-2">
-          <span class="shrink-0 px-1.5 py-0.5 rounded bg-surface-overlay/60 border border-gray-800 text-[10px] uppercase tracking-wide {{ s.tone }}" title="{{ s.kind }}">{{ s.label|default:s.kind|default:"STEP" }}</span>
+          <span class="shrink-0 px-1.5 py-0.5 rounded bg-surface-overlay/60 border border-gray-800 text-[10px] uppercase tracking-wide {{ s.tone }}" title="{{ s.kind }}{% if s.is_redundant_rerun %} — redundant re-run by Open WebUI (identical input, no tool call){% endif %}">{{ s.label|default:s.kind|default:"STEP" }}</span>
           {% if s.response %}<span class="shrink-0 px-1.5 py-0.5 rounded bg-emerald-950 border border-emerald-800/60 text-[10px] uppercase tracking-wide text-emerald-300" title="The model call that writes the answer">response</span>{% endif %}
-          <span class="min-w-0 truncate text-sm text-gray-200" title="{{ s.name }}">{{ s.name }}</span>
+          <span class="min-w-0 truncate text-sm text-gray-200 {{ s.name_class }}" title="{{ s.name }}{% if s.is_redundant_rerun %} (duplicate of an earlier identical call){% endif %}">{{ s.name }}</span>
+          {% if s.is_redundant_rerun %}
+          <span class="shrink-0 text-[10px] italic text-red-400/70" title="Open WebUI invoked the model again with the exact same input; this is a redundant re-run, not a distinct step">↻ duplicate call</span>
+          {% endif %}
           {% if s.redundant_reason %}<span class="shrink-0 px-1.5 py-0.5 rounded bg-amber-950 border border-amber-800/60 text-[10px] uppercase tracking-wide text-amber-300" title="{{ s.redundant_reason }}">redundant</span>{% endif %}
-          {% if s.arguments %}<span class="min-w-0 truncate text-xs font-mono text-gray-400" title="{{ s.arguments }}">{{ s.arguments }}</span>{% endif %}
+          {% if s.is_tool_decision and s.decision_detail %}
+          <span class="min-w-0 truncate text-xs text-amber-300/90 font-mono" title="Model decided to invoke: {{ s.decision_detail }}">{{ s.decision_detail }}</span>
+          {% elif s.arguments %}<span class="min-w-0 truncate text-xs font-mono text-gray-400" title="{{ s.arguments }}">{{ s.arguments }}</span>
+          {% elif s.tool_name %}<span class="min-w-0 truncate text-xs text-gray-500" title="{{ s.tool_name }}">· {{ s.tool_name }}</span>{% endif %}
           {% if s.kb_sources %}
           <span class="min-w-0 text-xs text-emerald-300/90" title="Knowledge sources observed on this retrieval step">📚 {{ s.kb_sources|join:", " }}</span>
           {% endif %}

@@ -180,8 +180,8 @@ class OTLPCredential(models.Model):
     token (generic OTel exporters). The receiver authenticates the request and
     tags every ingested span with ``target_id`` so spans are attributable.
 
-    Only a salted hash of the secret is stored — the plaintext password/token
-    is shown once at creation and cannot be read back.
+    Verification uses a salted hash of the secret. A sealed (encrypted) copy is
+    kept so a workspace admin can reveal it again; the plaintext is never stored.
     """
 
     class AuthMode(models.TextChoices):
@@ -193,7 +193,12 @@ class OTLPCredential(models.Model):
     connection = models.ForeignKey(ModelConnection, on_delete=models.CASCADE, related_name="otlp_credentials")
     auth_mode = models.CharField(max_length=10, choices=AuthMode.choices, default=AuthMode.BASIC)
     # For basic: the username the target sends. For bearer: a stable label.
-    username = models.CharField(max_length=250, blank=True, default="")
+    username = models.CharField(max_length=250, blank=True, default="", db_index=True)
+    # The secret sealed with a key derived from SECRET_KEY, so an owning-workspace
+    # admin can read it back ("reveal"). Verification never uses it, only the
+    # hash below. Empty for credentials issued before reveal existed (rotate to
+    # get one) and for ``none`` credentials.
+    secret_encrypted = models.TextField(blank=True, default="")
     # Salted SHA-256 of the secret (password for basic, token for bearer).
     secret_hash = models.BinaryField(null=True, blank=True)
     salt = models.BinaryField(null=True, blank=True)

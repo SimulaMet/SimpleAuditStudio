@@ -796,10 +796,9 @@ def _spawn(home: Path, studio_port: int | None = None) -> subprocess.Popen:
         # picks the HTTP exporter from OTEL_OTLP_SPAN_EXPORTER (not the standard
         # OTEL_EXPORTER_OTLP_PROTOCOL) and passes the endpoint to the exporter
         # explicitly, so the exporter POSTs to it as-is (protobuf wire format):
-        # this must be the full /otlp/v1/traces URL. Exports unauthenticated by
-        # default (matches the listener's "none" credential fallback); for a
-        # basic/bearer credential, set OTEL_BASIC_AUTH_USERNAME / _PASSWORD in the
-        # environment, which is inherited here.
+        # this must be the full /otlp/v1/traces URL. Exports with Basic auth using
+        # ``chat.otlp_password()`` (see there); Studio registers the matching
+        # credential in ``chat.sync.ensure_agent_otlp_credentials``.
         env.update(
             ENABLE_OTEL="true",
             ENABLE_OTEL_TRACES="true",
@@ -807,6 +806,8 @@ def _spawn(home: Path, studio_port: int | None = None) -> subprocess.Popen:
             OTEL_EXPORTER_OTLP_ENDPOINT=chat.otlp_endpoint_url(studio_port),
             OTEL_SERVICE_NAME=chat.OTLP_SERVICE_NAME,
         )
+        if chat.otlp_password():
+            env.update(OTEL_BASIC_AUTH_USERNAME=chat.OTLP_USERNAME, OTEL_BASIC_AUTH_PASSWORD=chat.otlp_password())
     # Open WebUI keeps its signing key in ``.webui_secret_key`` in the working
     # directory, with no setting for it: running it from its own data folder
     # keeps that out of wherever Studio was started and stable across restarts
