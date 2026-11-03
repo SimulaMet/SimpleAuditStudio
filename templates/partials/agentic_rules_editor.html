@@ -182,6 +182,21 @@
       card.querySelector('[data-remove]').addEventListener('click', () => { rules.splice(index, 1); render(); sync(); });
     }
 
+    // Why the form cannot edit a rule, or null when it can. Such a rule (typed under
+    // "Edit as JSON") is shown as written and kept unchanged; the server reports what is wrong on save.
+    const isObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
+    function notEditable(rule) {
+      if (!isObject(rule)) return 'it is not an object';
+      if (!isObject(rule.select)) return 'it has no select';
+      if (rule.select.where !== undefined && !Array.isArray(rule.select.where)) return 'its select.where is not a list';
+      return null;
+    }
+    function renderRaw(card, rule, index, reason) {
+      card.querySelector('[data-summary]').textContent = `The form cannot edit this rule: ${reason}. It is kept as written; fix it in the JSON or remove it.`;
+      card.querySelector('[data-code]').textContent = JSON.stringify(rule);
+      card.querySelector('[data-remove]').addEventListener('click', () => { rules.splice(index, 1); render(); sync(); });
+    }
+
     function render() {
       list.innerHTML = '';
       rules.forEach((rule, index) => {
@@ -195,7 +210,9 @@
             <button type="button" data-remove class="text-[11px] text-gray-500 hover:text-red-300 shrink-0">Remove</button>
           </div>
           <div class="grid grid-cols-1 md:grid-cols-2 gap-2" data-fields></div>`;
-        if (rule.check === 'unsupported') renderUnsupported(card, rule, index);
+        const reason = notEditable(rule);
+        if (isObject(rule) && rule.check === 'unsupported') renderUnsupported(card, rule, index);
+        else if (reason) renderRaw(card, rule, index, reason);
         else renderCustom(card, card.querySelector('[data-fields]'), rule, index);
         list.appendChild(card);
       });

@@ -102,7 +102,11 @@ def validate_check(rule: dict) -> list[str]:
         kind = None
     else:
         kind = select["kind"]
-    for index, condition in enumerate(select.get("where", []) if isinstance(select, dict) else []):
+    where = select.get("where", []) if isinstance(select, dict) else []
+    if not isinstance(where, list):
+        problems.append("'select.where' must be a list")
+        where = []
+    for index, condition in enumerate(where):
         if not isinstance(condition, dict) or "field" not in condition or "op" not in condition:
             problems.append(f"condition {index + 1} needs a field and an operator")
             continue
