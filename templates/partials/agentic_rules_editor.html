@@ -1,0 +1,228 @@
+{% load json_filters %}
+<!--
+  Structured rules (checked from the trace). Each card is one rule; the stored
+  JSON lives in agentic_rules_json and is shown only under "Edit as JSON".
+-->
+<script id="rule-field-catalog" type="application/json">{{ ""|rule_field_catalog|safe }}</script>
+<script id="rule-starters" type="application/json">{{ ""|rule_starters|safe }}</script>
+<div class="space-y-2" data-rules-editor>
+  <div class="flex items-center justify-between gap-2">
+    <p class="text-xs font-semibold text-gray-400">Rules <span class="font-normal text-gray-600">(checked from the trace)</span></p>
+    <button type="button" data-rules-advanced-toggle class="hidden text-[11px] text-gray-500 hover:text-gray-300 underline">Edit as JSON</button>
+  </div>
+  <div data-rules-list class="space-y-2"></div>
+  <p data-rules-empty class="text-[11px] text-gray-600">No rules. A scenario with no rules is checked by its other settings only.</p>
+  <div class="flex flex-wrap items-center gap-2">
+    <select data-rules-picker class="px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-1 focus:ring-accent/50"></select>
+    <button type="button" data-rules-add class="px-2.5 py-1 rounded-lg bg-surface-overlay text-gray-300 text-xs hover:text-gray-100">+ Add rule</button>
+  </div>
+  <div data-rules-advanced class="hidden">
+    <textarea name="agentic_rules_json" rows="8" spellcheck="false" class="w-full px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 font-mono text-[11px] focus:outline-none focus:ring-1 focus:ring-accent/50">{{ agentic|editor_rules_json }}</textarea>
+    <p data-rules-json-error class="text-[11px] text-red-300 hidden"></p>
+  </div>
+</div>
+<script>
+(function () {
+  const STARTERS = JSON.parse(document.getElementById('rule-starters')?.textContent || '[]');
+  const TEXT_OPS = ['equals', 'not_equals', 'one_of', 'not_one_of', 'contains'];
+  const NUMBER_OPS = ['equals', 'at_least', 'at_most', 'between'];
+  const CATALOG = JSON.parse(document.getElementById('rule-field-catalog')?.textContent || '[]');
+  const KIND_LABELS = { tool: 'Tool calls', retrieval_document: 'Retrieved documents', answer: 'Final answer', any: 'Any step' };
+  const CHECK_LABELS = { count: 'Count', exists: 'Exists', none: 'None', all: 'All', distinct: 'Distinct values' };
+  const EXPECT_LABELS = { equals: 'exactly', at_least: 'at least', at_most: 'at most', between: 'between' };
+  const OP_LABELS = { equals: 'equals', not_equals: 'does not equal', one_of: 'is one of', contains: 'contains', at_least: 'at least', at_most: 'at most', between: 'between' };
+  const fieldFor = (name) => CATALOG.find(f => f.name === name || (f.needs_key && name.startsWith(f.name)));
+  const opsFor = (name) => {
+    const f = fieldFor(name);
+    if (!f) return TEXT_OPS;
+    if (f.family === 'bool') return ['equals', 'not_equals'];
+    if (f.family === 'text') return TEXT_OPS;
+    return [...new Set([...TEXT_OPS, ...NUMBER_OPS])];
+  };
+
+
+
+  const CODE_OPS = { equals: '==', not_equals: '!=', one_of: 'in', not_one_of: 'not in', contains: 'contains', at_least: '>=', at_most: '<=' };
+  const codeValue = (value) => {
+    if (typeof value === 'boolean') return value ? 'true' : 'false';
+    if (Array.isArray(value)) return `[${value.map(codeValue).join(', ')}]`;
+    if (typeof value === 'number') return String(value);
+    return JSON.stringify(String(value ?? ''));
+  };
+  const codeCondition = (c) => (c.op === 'between'
+    ? `${c.field} between ${codeValue(c.value[0])} and ${codeValue(c.value[1])}`
+    : `${c.field} ${CODE_OPS[c.op] || c.op} ${codeValue(c.value)}`);
+  const codeExpect = (expect) => (expect.op === 'between'
+    ? `between ${codeValue(expect.value[0])} and ${codeValue(expect.value[1])}`
+    : `${CODE_OPS[expect.op] || expect.op} ${codeValue(expect.value)}`);
+  // Mirrors rule_engine.check_code: the raw form, shown under the readable summary.
+  function code(rule) {
+    const where = (rule.select?.where || []).map(codeCondition);
+    const scope = `${rule.select?.kind}${where.length ? ' where ' + where.join(' and ') : ''}`;
+    if (rule.check === 'distinct') return `distinct ${rule.field} of ${scope} count ${codeExpect(rule.expect)}`;
+    if (rule.check === 'count') return `count ${scope} ${codeExpect(rule.expect)}`;
+    return `${rule.check} ${scope}`;
+  }
+  function showRule(card, rule) {
+    card.querySelector('[data-summary]').textContent = summary(rule);
+    card.querySelector('[data-code]').textContent = code(rule);
+  }
+
+  function defaults() {
+    return { type: 'check', select: { kind: 'tool', where: [] }, check: 'count', expect: { op: 'at_least', value: 1 } };
+  }
+
+  function summary(rule) {
+    const where = (rule.select?.where || []).map(c => `${c.field} ${OP_LABELS[c.op] || c.op} ${c.value ?? ''}`.trim()).join(' and ');
+    const scope = `${KIND_LABELS[rule.select?.kind] || 'Units'}${where ? ' where ' + where : ''}`;
+    const expect = rule.expect ? `${EXPECT_LABELS[rule.expect.op] || ''} ${Array.isArray(rule.expect.value) ? rule.expect.value.join(' and ') : rule.expect.value ?? ''}` : '';
+    return `${CHECK_LABELS[rule.check] || rule.check} of ${scope}${expect ? ', expect ' + expect.trim() : ''}`;
+  }
+
+  function init(root) {
+    if (root.dataset.rulesReady) return;
+    root.dataset.rulesReady = '1';
+    const store = root.querySelector('textarea[name="agentic_rules_json"]');
+    const list = root.querySelector('[data-rules-list]');
+    const picker = root.querySelector('[data-rules-picker]');
+    const emptyNote = root.querySelector('[data-rules-empty]');
+    const advanced = root.querySelector('[data-rules-advanced]');
+    const jsonError = root.querySelector('[data-rules-json-error]');
+    let rules = [];
+    try { rules = JSON.parse(store.value || '[]'); } catch (_) { rules = []; }
+    if (!Array.isArray(rules)) rules = [];
+
+    const option = (value, label) => {
+      const el = document.createElement('option');
+      el.value = value;
+      el.textContent = label;
+      return el;
+    };
+    picker.appendChild(option('check', 'Custom check'));
+    const groups = {};
+    STARTERS.forEach((starter, index) => { (groups[starter.group] ||= []).push([index, starter]); });
+    Object.entries(groups).forEach(([name, items]) => {
+      const group = document.createElement('optgroup');
+      group.label = name;
+      items.forEach(([index, starter]) => group.appendChild(option(`starter:${index}`, starter.label)));
+      picker.appendChild(group);
+    });
+
+    function sync() {
+      store.value = rules.length ? JSON.stringify(rules) : '';
+      emptyNote.classList.toggle('hidden', rules.length > 0);
+    }
+
+    function renderCustom(card, fields, rule, index) {
+      const select = (value, options) => `<select class="w-full px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs text-gray-200">${options.map(([v, l]) => `<option value="${v}" ${v === value ? 'selected' : ''}>${l}</option>`).join('')}</select>`;
+      const kindOptions = Object.entries(KIND_LABELS).map(([v, l]) => [v, l]);
+      const checkOptions = Object.entries(CHECK_LABELS).map(([v, l]) => [v, l]);
+      const expectOptions = Object.entries(EXPECT_LABELS).map(([v, l]) => [v, l]);
+      const datalist = `<datalist id="fields-${Math.random().toString(36).slice(2)}">${CATALOG.map(f => `<option value="${f.name}">`).join('')}</datalist>`;
+      fields.innerHTML = `
+        <label class="block text-[11px] text-gray-400">Look at<span data-k>${select(rule.select.kind, kindOptions)}</span></label>
+        <label class="block text-[11px] text-gray-400">Check<span data-c>${select(rule.check, checkOptions)}</span></label>
+        <div class="md:col-span-2 space-y-1" data-where></div>
+        <button type="button" data-add-cond class="justify-self-start text-[11px] text-gray-400 hover:text-gray-200 underline">+ Add condition</button>
+        <div class="grid grid-cols-2 gap-2 md:col-span-2" data-expect>
+          <label class="block text-[11px] text-gray-400">Expect<span data-eo>${select(rule.expect?.op || 'at_least', expectOptions)}</span></label>
+          <label class="block text-[11px] text-gray-400">Value<input data-ev class="w-full px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs text-gray-200" value="${Array.isArray(rule.expect?.value) ? rule.expect.value.join(',') : (rule.expect?.value ?? '')}" placeholder="a number, or two numbers for between"></label>
+        </div>
+        <label class="block text-[11px] text-gray-400 md:col-span-2" data-field-wrap>Field to count (distinct only)<input data-fd class="w-full px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs text-gray-200" list="${datalist.match(/id="([^"]+)"/)[1]}" value="${rule.field || ''}">${datalist}</label>`;
+      const where = fields.querySelector('[data-where]');
+      const drawWhere = () => {
+        where.innerHTML = '';
+        (rule.select.where || []).forEach((cond, i) => {
+          const row = document.createElement('div');
+          row.className = 'grid grid-cols-[1fr_auto_1fr_auto] gap-1 items-center';
+          row.innerHTML = `<input data-cf list="${fields.querySelector('datalist')?.id || ''}" value="${cond.field || ''}" placeholder="field, e.g. tool.name" class="px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs text-gray-200">
+            <select data-co class="px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs text-gray-200">${opsFor(cond.field || '').map(o => `<option value="${o}" ${o === cond.op ? 'selected' : ''}>${OP_LABELS[o]}</option>`).join('')}</select>
+            <input data-cv value="${cond.value ?? ''}" placeholder="value" class="px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs text-gray-200">
+            <button type="button" data-cremove class="text-[11px] text-gray-500 hover:text-red-300">Remove</button>`;
+          row.querySelector('[data-cremove]').addEventListener('click', () => { rule.select.where.splice(i, 1); drawWhere(); commitCustom(); });
+          where.appendChild(row);
+        });
+      };
+      const commitCustom = () => {
+        rule.select.kind = fields.querySelector('[data-k] select').value;
+        rule.check = fields.querySelector('[data-c] select').value;
+        rule.select.where = [...where.querySelectorAll(':scope > div')].map(row => {
+          const field = row.querySelector('[data-cf]').value.trim();
+          const op = row.querySelector('[data-co]').value;
+          const raw = row.querySelector('[data-cv]').value.trim();
+          const numeric = ['at_least', 'at_most', 'between'].includes(op) || (fieldFor(field)?.family === 'any' && !isNaN(Number(raw)) && raw !== '');
+          const value = op === 'one_of' ? raw.split(',').map(s => s.trim()).filter(Boolean)
+            : raw === 'true' ? true : raw === 'false' ? false : numeric && raw !== '' ? Number(raw) : raw;
+          return { field, op, value };
+        }).filter(c => c.field);
+        const expectOp = fields.querySelector('[data-eo] select').value;
+        const expectRaw = fields.querySelector('[data-ev]').value.trim();
+        rule.expect = { op: expectOp, value: expectOp === 'between' ? expectRaw.split(',').map(Number) : Number(expectRaw) };
+        const fd = fields.querySelector('[data-fd]').value.trim();
+        if (fd) rule.field = fd; else delete rule.field;
+        fields.querySelector('[data-field-wrap]').classList.toggle('hidden', rule.check !== 'distinct');
+        showRule(card, rule);
+        sync();
+      };
+      fields.querySelector('[data-add-cond]').addEventListener('click', () => { rule.select.where.push({ field: '', op: 'equals', value: '' }); drawWhere(); commitCustom(); });
+      fields.addEventListener('input', commitCustom);
+      fields.addEventListener('change', commitCustom);
+      fields.querySelector('[data-field-wrap]').classList.toggle('hidden', rule.check !== 'distinct');
+      drawWhere();
+      showRule(card, rule);
+      card.querySelector('[data-remove]').addEventListener('click', () => { rules.splice(index, 1); render(); sync(); });
+    }
+
+    function render() {
+      list.innerHTML = '';
+      rules.forEach((rule, index) => {
+        const card = document.createElement('div');
+        card.className = 'rounded-lg border border-gray-800 bg-surface-overlay/40 p-2.5 space-y-2';
+        card.innerHTML = `<div class="flex items-start justify-between gap-2">
+            <div class="min-w-0">
+              <p data-summary class="text-xs text-gray-200 break-words"></p>
+              <p data-code class="font-mono text-[11px] text-gray-500 break-words"></p>
+            </div>
+            <button type="button" data-remove class="text-[11px] text-gray-500 hover:text-red-300 shrink-0">Remove</button>
+          </div>
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-2" data-fields></div>`;
+        renderCustom(card, card.querySelector('[data-fields]'), rule, index);
+        list.appendChild(card);
+      });
+      sync();
+    }
+
+    root.querySelector('[data-rules-add]').addEventListener('click', () => {
+      const choice = picker.value;
+      if (choice.startsWith('starter:')) {
+        STARTERS[Number(choice.slice('starter:'.length))].rules.forEach(rule => rules.push(structuredClone(rule)));
+      } else {
+        rules.push(defaults());
+      }
+      render();
+    });
+    root.querySelector('[data-rules-advanced-toggle]').addEventListener('click', () => {
+      advanced.classList.toggle('hidden');
+    });
+    // Internal: the JSON view is only offered when the page is opened with ?advanced=1.
+    if (new URLSearchParams(window.location.search).get('advanced') === '1') {
+      root.querySelector('[data-rules-advanced-toggle]').classList.remove('hidden');
+    }
+    store.addEventListener('input', () => {
+      try {
+        const parsed = store.value.trim() ? JSON.parse(store.value) : [];
+        if (!Array.isArray(parsed)) throw new Error('Rules must be a JSON list.');
+        rules = parsed;
+        jsonError.classList.add('hidden');
+        render();
+      } catch (err) {
+        jsonError.textContent = err.message;
+        jsonError.classList.remove('hidden');
+      }
+    });
+    render();
+  }
+
+  document.querySelectorAll('[data-rules-editor]').forEach(init);
+})();
+</script>

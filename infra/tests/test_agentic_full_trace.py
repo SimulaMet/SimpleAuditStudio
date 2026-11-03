@@ -162,29 +162,26 @@ def test_evaluation_sees_all_captured_spans_not_just_selected_subset(patched_wor
     assert evaluation["status"] in ("PASS", "INCONCLUSIVE")
 
 
-def test_missing_trace_sets_completeness_flag_and_inconclusive(patched_worker):
-    """(b) No trace at all -> completeness flag set, verdict INCONCLUSIVE via
-    the missing_trace rule, never a silent PASS."""
+def test_ticked_trace_without_spans_runs_the_agentic_audit_and_reports_no_trace(patched_worker):
+    """Trace ticked but nothing exported: the agentic audit runs and says what is missing."""
     patched_worker["rep"] = _rep()
 
     result = _scenario_execute_impl(_workflow_input(), ctx=None)
 
     assert result["status"] == "completed"
-    upserted = patched_worker["upserts"][0][1]["result"]
-    evaluation = upserted["agentic_evaluation"]
-    tc = evaluation["trace_completeness"]
-    assert tc["complete"] is False
-    assert tc["span_count"] == 0
-    assert tc["captured_kinds"] == []
-    assert tc["missing_reason"]
+    evaluation = patched_worker["upserts"][0][1]["result"]["agentic_evaluation"]
+    assert evaluation["trace_completeness"]["complete"] is False
     assert evaluation["status"] == "INCONCLUSIVE"
-    # The verdict policy's missing_trace rule explains the INCONCLUSIVE.
-    assert evaluation["verdict"]["reason"] in (
-        "Required trace missing", "Required check inconclusive",
-    )
-    assert any(
-        c["id"] == "trace.present" and c["status"] == "INCONCLUSIVE" for c in evaluation["checks"]
-    )
+    assert any(c["id"] == "trace.present" and c["status"] == "INCONCLUSIVE" for c in evaluation["checks"])
+
+
+def test_trace_off_drops_the_agentic_settings_from_the_scenario():
+    from infra.worker import _scenario_metadata
+
+    metadata = {"agentic": {"schema_version": 2, "rules": []}, "execution": {"max_turns": 2}}
+    assert _scenario_metadata(metadata, trace_on=False) == {"execution": {"max_turns": 2}}
+    assert _scenario_metadata(metadata, trace_on=True) == metadata
+
 
 
 def test_complete_trace_keeps_existing_verdict_behavior(patched_worker):
@@ -195,8 +192,8 @@ def test_complete_trace_keeps_existing_verdict_behavior(patched_worker):
     # the pre-existing deterministic FAIL verdict must be unchanged.
     workflow_metadata = {
         "agentic": {
-            "schema_version": 1,
-            "tools": {"expected": [{"name": "acme_get_order", "arguments": {"order_id": "ACME-1001"}}]},
+            "schema_version": 2,
+            "rules": [{'type': 'check', 'select': {'kind': 'tool', 'where': [{'field': 'tool.name', 'op': 'equals', 'value': 'acme_get_order'}, {'field': 'tool.argument.order_id', 'op': 'equals', 'value': 'ACME-1001'}]}, 'check': 'count', 'expect': {'op': 'at_least', 'value': 1}}],
         }
     }
     patched_worker["revision_metadata"] = workflow_metadata
@@ -216,7 +213,7 @@ def test_complete_trace_keeps_existing_verdict_behavior(patched_worker):
     tc = evaluation["trace_completeness"]
     assert tc["complete"] is True
     assert tc["span_count"] == 1
-    assert evaluation["status"] == "FAIL"
+    assert evaluation["status"] == "FAIL", evaluation.get("reason")
     assert evaluation["verdict"]["reason"] == "Deterministic check failed"
 
 

@@ -11,7 +11,7 @@
  * pages have no chat sidebar, but the "Open Sidebar" toggle button is present
  * and must stay hidden (same hook as embed.css).
  *
- * DRIFT RISK: the tab-nav selector below is structural (main#main-content >
+ * DRIFT RISK: the tab-nav selector below is structural (main >
  * div > nav) because Open WebUI gives that <nav> no id or aria-label, only
  * Tailwind classes. An upgrade that changes the DOM depth or adds a sibling
  * nav will silently re-expose the tab bar. Detection is visual: if the
@@ -22,14 +22,14 @@
  */
 
 /* The workspace tab bar (Models / Knowledge / Prompts / Skills / Tools).
- * Structural: the <nav> in the first child of main#main-content holds this
+ * Structural: the <nav> in the first child of main holds this
  * link row, but also the section's "Create" button — so only the scrollable
  * link row (the overflow-x-auto div) goes, not the whole nav. Detection is
  * visual: if the Models/Knowledge/Prompts/Skills/Tools links reappear at the
  * top of the embedded frame, re-check the workspace DOM and update the
  * selector. The #workspace-container id is the stable "keep" hook — if it is
  * renamed, the whole section disappears, which is loud and easy to spot. */
-main#main-content > div > nav div.overflow-x-auto {
+main > div > nav div.overflow-x-auto {
   display: none !important;
 }
 

@@ -45,6 +45,25 @@ class ChatAPIError(RuntimeError):
     """Open WebUI refused or could not be reached."""
 
 
+def service_token() -> str | None:
+    """A token for Studio's service account (admin), from the trusted-header sign-in.
+
+    Open WebUI takes the role from the trusted headers on each sign-in, so the
+    account is admin here by design: the runner calls models and agents as admin.
+    None when the chat is unreachable; callers treat that as "no key".
+    """
+    identity = {
+        chat.EMAIL_HEADER: chat.SERVICE_EMAIL,
+        chat.NAME_HEADER: chat.SERVICE_NAME,
+        chat.ROLE_HEADER: "admin",
+    }
+    try:
+        return (ChatAPI(identity).sign_in() or {}).get("token") or None
+    except Exception:
+        logger.info("Service sign-in to Open WebUI failed", exc_info=True)
+        return None
+
+
 class ChatAPI:
     """An Open WebUI session for one Studio user.
 
@@ -271,10 +290,10 @@ class ChatAPI:
             json={"id": function_id, "name": name, "content": content, "meta": {}},
         )
 
-    def create_function(self, name: str, content: str, function_id: str | None = None) -> dict[str, Any]:
-        """Create a function; ``id`` is Open WebUI's slug for it."""
+    def create_function(self, name: str, content: str, function_id: str) -> dict[str, Any]:
+        """Create a function; ``function_id`` is Open WebUI's slug for it."""
         payload = {
-            "id": function_id or "studio_langfuse_capture",
+            "id": function_id,
             "name": name,
             "content": content,
             "meta": {},
@@ -572,3 +591,19 @@ def _knowledge_summary(item: dict[str, Any]) -> dict[str, Any]:
         "file_count": len(files) if isinstance(files, list) else item.get("file_count"),
         "updated_at": item.get("updated_at"),
     }
+
+
+def agent_tool_ids(model_id: str) -> list[str]:
+    """The tool ids attached to an Open WebUI model (the agent's bundle), as the chat expects.
+
+    Open WebUI runs a request's tools only when the request names them, so a run
+    sends this list. Empty when the model or the chat is unavailable.
+    """
+    from chat.sync import _admin  # lazy: chat.sync imports this module
+
+    try:
+        model = ChatAPI.as_user(_admin()).request("GET", f"/api/v1/models/model?id={model_id}") or {}
+    except Exception:
+        logger.info("Could not read the tool list for %s", model_id, exc_info=True)
+        return []
+    return [str(t) for t in ((model.get("meta") or {}).get("toolIds") or []) if t]

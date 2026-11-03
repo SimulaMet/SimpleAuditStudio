@@ -585,7 +585,7 @@ def start_open_webui(studio_port: int | None = None) -> subprocess.Popen:
 OWUI_WHEEL_URL = os.environ.get(
     "SIMPLEAUDIT_CHAT_WHEEL",
     "https://github.com/SushantGautam/open-webui/releases/download/"
-    "v0.12.4-subpath/open_webui-0.12.4-py3-none-any.whl",
+    "v0.12.4.5-subpath/open_webui-0.12.4.5-py3-none-any.whl",
 )
 OWUI_PACKAGE = os.environ.get("SIMPLEAUDIT_CHAT_PACKAGE", "open-webui")
 
@@ -712,12 +712,17 @@ def _locate_owui_interpreter(home: Path) -> str:
 
 
 def _secret_key(home: Path) -> str:
-    """Open WebUI's signing key — generated once, persisted.
+    """Open WebUI's signing key: the shared ``WEBUI_SECRET_KEY`` if set, else one generated once and persisted.
 
-    A direct uvicorn launch has no `serve` to persist the key, and a fresh
-    random key on every start would sign every session out; the file plays
-    the role ``.webui_secret_key`` serves for `open-webui serve`.
+    A shared key (set in `.env` for `manage.py dev`, or exported for `spin`) lets
+    several installs read the same stored provider keys. Without it, a direct
+    uvicorn launch has no `serve` to persist the key, and a fresh random key on
+    every start would sign every session out; the file plays the role
+    ``.webui_secret_key`` serves for `open-webui serve`.
     """
+    shared = os.environ.get("WEBUI_SECRET_KEY", "").strip()
+    if shared:
+        return shared
     key_file = home / "webui_secret_key"
     try:
         if key_file.exists():
@@ -776,6 +781,14 @@ def _spawn(home: Path, studio_port: int | None = None) -> subprocess.Popen:
         # Nothing here serves Ollama, and Open WebUI polls it on every page load
         # (a 500 per poll in the console) and shows an empty section in settings.
         "ENABLE_OLLAMA_API": "false",
+        # Retrieval defaults Studio always wants: hybrid search (BM25 + vector), cached
+        # retrieval queries, and filesystem-style knowledge exec. Env-overridable.
+        "ENABLE_RAG_HYBRID_SEARCH": os.environ.get("ENABLE_RAG_HYBRID_SEARCH", "true"),
+        "ENABLE_QUERIES_CACHE": os.environ.get("ENABLE_QUERIES_CACHE", "true"),
+        "ENABLE_KB_EXEC": os.environ.get("ENABLE_KB_EXEC", "true"),
+        # Studio pins the Open WebUI build, so its "new version available"
+        # banner is noise. Operators can still opt back in with the env var.
+        "ENABLE_VERSION_UPDATE_CHECK": os.environ.get("ENABLE_VERSION_UPDATE_CHECK", "false"),
         "WEBUI_URL": chat.public_url(),
     }
     if chat.OTLP_ENABLED:

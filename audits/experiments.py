@@ -530,6 +530,7 @@ def launch_experiment(*, project, user, name: str, runs: list[dict], repeat: dic
                 experiment=experiment,
                 agent=r.get("agent"),
                 trace_config={} if r.get("target_trace") is False else None,
+                trace_requested=r.get("target_trace") is True,
             )
             for r in runs
         ] if run_now else []

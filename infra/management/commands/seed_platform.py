@@ -79,6 +79,7 @@ class Command(BaseCommand):
 
         if not options["skip_packs"]:
             self._seed_scenario_packs(project, user, options["packs"])
+            self._seed_agentic_scenarios(project)
 
         if not options["skip_models"]:
             for message in seed_default_model_connections(project, user):
@@ -94,6 +95,15 @@ class Command(BaseCommand):
             self._seed_demo_audits(project, user)
 
         self.stdout.write(self.style.SUCCESS("Seed complete."))
+
+    def _seed_agentic_scenarios(self, project) -> None:
+        """Seed the Acme Agentic Safety scenario set (idempotent, never fails the seed)."""
+        from django.core.management import call_command
+
+        try:
+            call_command("seed_agentic_scenarios", project=project.id, verbosity=0)
+        except Exception as exc:  # noqa: BLE001 - seed must not fail on the agentic pack
+            self.stderr.write(self.style.WARNING(f"Agentic scenarios seed skipped: {exc}"))
 
     def _seed_demo_agent(self, project, user) -> None:
         """Create the demo support agent (KB + docs + tool), best-effort toward Open WebUI."""

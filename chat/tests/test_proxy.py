@@ -381,8 +381,8 @@ class WheelMarkerTests(SimpleTestCase):
     def test_default_wheel_is_content_capture_release(self):
         # Pinned exactly: a version bump must change this assertion deliberately,
         # not pass silently via a substring of an older tag.
-        self.assertIn("v0.12.4-subpath", proxy.OWUI_WHEEL_URL)
-        self.assertIn("open_webui-0.12.4-py3-none-any.whl", proxy.OWUI_WHEEL_URL)
+        self.assertIn("v0.12.4.5-subpath", proxy.OWUI_WHEEL_URL)
+        self.assertIn("open_webui-0.12.4.5-py3-none-any.whl", proxy.OWUI_WHEEL_URL)
 
     def test_install_requirement_includes_observability_extra(self):
         requirement = proxy._owui_install_requirement()
@@ -404,3 +404,19 @@ class WheelMarkerTests(SimpleTestCase):
             managed = Path(tmp)
             proxy._wheel_marker(managed).write_text("https://example.com/old.whl")
             self.assertFalse(proxy._managed_venv_matches_wheel(managed))
+
+
+class SecretKeyTests(SimpleTestCase):
+    def test_a_shared_env_key_wins_and_writes_no_file(self):
+        with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ, {"WEBUI_SECRET_KEY": "shared-key"}):
+            home = Path(tmp)
+            self.assertEqual(proxy._secret_key(home), "shared-key")
+            self.assertFalse((home / "webui_secret_key").exists())
+
+    def test_without_env_the_key_is_generated_once_and_reused(self):
+        with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("WEBUI_SECRET_KEY", None)
+            home = Path(tmp)
+            first = proxy._secret_key(home)
+            self.assertEqual(proxy._secret_key(home), first)
+            self.assertTrue((home / "webui_secret_key").exists())

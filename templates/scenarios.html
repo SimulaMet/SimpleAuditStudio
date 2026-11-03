@@ -648,62 +648,18 @@ function buildAgenticMetadata(form, baseMetadata) {
   // Sparse: empty fields are omitted from the saved metadata (absent = not
   // checked); checkbox pairs write explicit false to keep it an assertion.
   const isEmpty = (v) => v === null || v === undefined || v === '' || v === false || (Array.isArray(v) && v.length === 0);
-  const planned = [
-    ['tools', 'expected', csv('agentic_tools_expected').map((name) => ({ name, min_calls: 1, max_calls: null }))],
-    ['tools', 'forbidden', csv('agentic_tools_forbidden')],
-    ['tools', 'allowed', csv('agentic_tools_allowed')],
-    ['retrieval', 'sources', csv('agentic_sources')],
-    ['retrieval', 'min_documents', number('agentic_retrieval_min_documents')],
-    ['retrieval', 'max_documents', number('agentic_retrieval_max_documents')],
-    ['rerank', 'required', bool('agentic_rerank_required'), true],
-    ['rerank', 'min_calls', number('agentic_rerank_min_calls')],
-    ['rerank', 'max_calls', number('agentic_rerank_max_calls')],
-    ['policy', 'read_only', bool('agentic_policy_read_only'), true],
-    ['policy', 'allowed_data_scopes', csv('agentic_policy_allowed_data_scopes')],
-    ['policy', 'forbidden_data_scopes', csv('agentic_policy_forbidden_data_scopes')],
-    ['policy', 'forbidden_side_effects', csv('agentic_policy_forbidden_side_effects')],
-    ['policy', 'allowed_destinations', csv('agentic_policy_allowed_destinations')],
-    ['policy', 'allow_side_effects', bool('agentic_policy_allow_side_effects'), true],
-    ['guardrails', 'required', csv('agentic_guardrails_required')],
-    ['guardrails', 'must_pass', csv('agentic_guardrails_must_pass')],
-    ['guardrails', 'before_actions', json('agentic_guardrails_before_actions')],
-    ['approvals', 'required_for', csv('agentic_approvals_required_for')],
-    ['approvals', 'must_precede_execution', bool('agentic_approvals_must_precede_execution'), true],
-    ['handoffs', 'allowed', csv('agentic_handoffs_allowed')],
-    ['handoffs', 'forbidden', csv('agentic_handoffs_forbidden')],
-    ['handoffs', 'required', csv('agentic_handoffs_required')],
-    ['handoffs', 'max_handoffs', number('agentic_handoffs_max_handoffs')],
-    ['handoffs', 'max_depth', number('agentic_handoffs_max_depth')],
-    ['trajectory', 'required_sequence', csv('agentic_sequence')],
-    ['trajectory', 'max_steps', number('agentic_trajectory_max_steps')],
-    ['trajectory', 'max_retries_per_tool', number('agentic_trajectory_max_retries_per_tool')],
-    ['trajectory', 'max_identical_consecutive_calls', number('agentic_trajectory_max_identical_consecutive_calls')],
-    ['budgets', 'max_tool_calls', number('agentic_max_tool_calls')],
-    ['budgets', 'max_errors', number('agentic_budgets_max_errors')],
-    ['state', 'assertions', json('agentic_state_assertions')],
-    ['semantic_judge', 'enabled', bool('agentic_semantic_judge_enabled'), true],
-    ['semantic_judge', 'criteria', csv('agentic_semantic_judge_criteria')],
-  ];
-  // Sections the form owns are rebuilt from scratch so cleared fields stop
-  // asserting; unknown sections/fields round-trip untouched.
-  const owned = [...new Set(planned.map(([s]) => s))];
-  for (const section of owned) delete agentic[section];
-  for (const [section, key, value, keepFalse] of planned) {
-    if (isEmpty(value) && !(keepFalse && value === false)) continue;
-    agentic[section] = { ...(agentic[section] || {}), [key]: value };
-  }
-  if (form.querySelector('[name="agentic_sources"]')) {
-    const sources = csv('agentic_sources');
-    const retrieval = { ...(agentic.retrieval || {}) };
-    if (sources.length) retrieval.required = true; else delete retrieval.required;
-    if (Object.keys(retrieval).length) agentic.retrieval = retrieval; else delete agentic.retrieval;
-  }
-  if (form.querySelector('[name="agentic_semantic_judge_criteria"]') && csv('agentic_semantic_judge_criteria').length) {
-    agentic.semantic_judge = { ...(agentic.semantic_judge || {}), enabled: true };
-  }
+  // The form owns the semantic judge, enforcement mode, and rules; other stored keys stay.
+  const judgeEnabled = form.querySelector('[name="agentic_semantic_judge_enabled"]')?.value === '1';
+  const judgeCriteria = csv('agentic_semantic_judge_criteria');
+  if (judgeEnabled || judgeCriteria.length) agentic.semantic_judge = { enabled: judgeEnabled, criteria: judgeCriteria };
+  else delete agentic.semantic_judge;
   const mode = form.querySelector('[name="agentic_enforcement_mode"]')?.value;
   if (mode) agentic.enforcement = { ...(agentic.enforcement || {}), mode };
-  for (const section of owned) if (!agentic[section] || Object.keys(agentic[section]).length === 0) delete agentic[section];
+  // Structured rules live in their own textarea (see partials/agentic_rules_editor.html).
+  const rulesStore = form.querySelector('textarea[name="agentic_rules_json"]');
+  let parsedRules = null;
+  try { parsedRules = rulesStore?.value.trim() ? JSON.parse(rulesStore.value) : null; } catch (_) { parsedRules = null; }
+  if (parsedRules) agentic.rules = parsedRules; else delete agentic.rules;
   metadata.agentic = agentic;
   return metadata;
 }

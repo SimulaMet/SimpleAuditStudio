@@ -57,7 +57,7 @@ MODE = (os.environ.get("SIMPLEAUDIT_CHAT") or "").strip().lower()
 ENABLED = not is_disabled(MODE)
 
 #: The base path the Open WebUI subpath build serves at. Must match the
-#: WEBUI_SUBPATH baked into the image (0.12.0-subpath -> /chat). Defined
+#: WEBUI_SUBPATH baked into the image (0.12.4.5-subpath -> /chat). Defined
 #: first: UPSTREAM below bakes it into the default.
 SUBPATH = os.environ.get("SIMPLEAUDIT_CHAT_SUBPATH", "/chat")
 if not SUBPATH.startswith("/"):
@@ -95,6 +95,11 @@ EMBED_ADMIN_FLAG_TTL = int(os.environ.get("SIMPLEAUDIT_CHAT_EMBED_ADMIN_TTL", "3
 EMAIL_HEADER = "X-Studio-Email"
 NAME_HEADER = "X-Studio-Name"
 ROLE_HEADER = "X-Studio-Role"
+
+#: Studio's own Open WebUI account: the runner signs in as it (admin, via the
+#: trusted headers) to call agents and models on anyone's behalf. Not a secret.
+SERVICE_EMAIL = os.environ.get("SIMPLEAUDIT_CHAT_SERVICE_EMAIL", "studio-audit@studio.local")
+SERVICE_NAME = "Studio audit"
 #: Every header the proxy injects — it must strip all of them off the incoming
 #: request before adding its own, or a client could forge them.
 TRUSTED_HEADERS = (EMAIL_HEADER, NAME_HEADER, ROLE_HEADER)

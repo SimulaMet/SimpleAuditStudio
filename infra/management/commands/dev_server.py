@@ -70,19 +70,9 @@ def _sync_chat_models() -> str:
     keys, deleted connections), and a chat pinned to a connection whose key was
     not pushed answers "Not authenticated" until the next connection save.
     """
-    from chat.api import ChatAPIError
-    from chat.sync import push_now
+    from chat.sync import startup_sync
 
-    try:
-        result = push_now()
-    except ChatAPIError as exc:
-        return f"Models not synced to chat: {exc}"
-    kept = f", kept {result['kept']} added in chat" if result["kept"] else ""
-    message = f"Synced {result['pushed']} model connection(s) to chat{kept}."
-    from chat.sync import ensure_tracing_function
-
-    message += f" {ensure_tracing_function()}"
-    return message
+    return " ".join(startup_sync())
 
 
 def _backfill_demo_chat() -> str:
@@ -113,37 +103,6 @@ def _backfill_demo_chat() -> str:
         )
     except Exception as exc:  # noqa: BLE001 - runs in a startup thread; log, don't crash
         logger.info("Demo chat backfill skipped: %s", exc)
-
-
-def _seed_agentic_demo() -> str:
-    """Preload the completed Agentic demo run once its agent is synced to chat.
-
-    ``seed_agentic_demo`` needs the Support Refund Assistant's ``external_id``
-    (set by ``_backfill_demo_chat`` above), so it can only succeed after the
-    chat stack is ready. Idempotent: skips when the demo run already exists.
-    Never raises — a missing fixture or unmet precondition just logs and moves
-    on, so first-run never blocks on the agentic demo.
-    """
-    try:
-        from io import StringIO
-
-        from django.contrib.auth import get_user_model
-
-        from accounts.models import Project
-
-        user = get_user_model().objects.order_by("id").first()
-        project = Project.objects.order_by("id").first()
-        if user is None or project is None:
-            return ""
-        out = StringIO()
-        call_command("seed_agentic_demo", project=project.id, stdout=out)
-        return out.getvalue().strip()
-    except CommandError as exc:
-        logger.info("Agentic demo seed skipped: %s", exc)
-        return ""
-    except Exception as exc:  # noqa: BLE001 - runs in a startup thread; log, don't crash
-        logger.info("Agentic demo seed skipped: %s", exc)
-        return ""
 
 
 class Command(BaseCommand):
@@ -277,10 +236,6 @@ class Command(BaseCommand):
         # the stack, mirroring the uvx CLI.
         chat_process = self.start_chat_if_enabled(options["port"], web_port)
 
-        # Optional Pipelines filter service (chat tracing to Langfuse). Opt-in via
-        # SIMPLEAUDIT_PIPELINES; a failed start never blocks the stack.
-        self.start_pipelines_if_enabled()
-
         # Zero-Docker mode: spin up embedded Hatchet (sidecar + embedded Postgres)
         # and point the worker's shared client at it. Setting _CLIENT directly
         # avoids touching infra.worker.get_client() (which is gated on
@@ -383,7 +338,6 @@ class Command(BaseCommand):
             finally:
                 self._stop_web(web_proc)
                 self._stop_chat()
-                self._stop_pipelines()
             return
 
         # --- Worker in the MAIN thread (required for signal handlers) ---
@@ -397,7 +351,6 @@ class Command(BaseCommand):
         finally:
             self._stop_web(web_proc)
             self._stop_chat()
-            self._stop_pipelines()
 
     def start_chat_if_enabled(self, public_port: int, internal_port: int):
         """Start Open WebUI + its front door when SIMPLEAUDIT_CHAT is on.
@@ -462,9 +415,6 @@ class Command(BaseCommand):
                 backfilled = _backfill_demo_chat()
                 if backfilled:
                     print(f"   {backfilled}", flush=True)
-                agentic = _seed_agentic_demo()
-                if agentic:
-                    print(f"   {agentic}", flush=True)
             elif process.poll() is not None:
                 print(f"\n⚠️  Chat stopped (exit {process.returncode}). Studio is unaffected.", flush=True)
                 print(f"   What happened: {chat_proxy.log_path()}\n", flush=True)
@@ -516,43 +466,6 @@ class Command(BaseCommand):
             stop_open_webui()
         except Exception:  # chat teardown must never block shutdown
             logger.exception("Chat teardown skipped")
-
-    def start_pipelines_if_enabled(self):
-        """Start the Studio Pipelines filter service when SIMPLEAUDIT_PIPELINES is on.
-
-        A failed start never blocks the stack — it logs and returns, exactly like
-        chat. Returns the process, or None when disabled or failed.
-        """
-        from chat import pipelines_sidecar
-
-        if not pipelines_sidecar.enabled():
-            return None
-        self.stdout.write(self.style.NOTICE(
-            "Starting pipelines filter service (chat tracing)..."))
-        try:
-            process = pipelines_sidecar.start()
-        except (OSError, RuntimeError) as exc:
-            self.stdout.write(self.style.WARNING(
-                f"\n⚠️  Pipelines service could not start ({exc}); continuing without it.\n"
-            ))
-            return None
-        if process is None:
-            self.stdout.write(self.style.WARNING(
-                "\n⚠️  Pipelines service did not come up; continuing without it.\n"
-            ))
-            return None
-        self.stdout.write(
-            f"   Chat tracing endpoint: http://127.0.0.1:{pipelines_sidecar.port()}/v1/models\n"
-        )
-        return process
-
-    def _stop_pipelines(self):
-        try:
-            from chat.pipelines_sidecar import stop
-
-            stop()
-        except Exception:  # teardown must never block shutdown
-            logger.exception("Pipelines teardown skipped")
 
     def prepare_database(self):
         """Apply migrations and make sure the bootstrap admin (a superuser) exists."""

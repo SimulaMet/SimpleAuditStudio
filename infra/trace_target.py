@@ -179,6 +179,10 @@ _OPENWEBUI_AGENT_UNSUPPORTED_PARAMS = frozenset({
     "search_mode",
     "top_k",
     "relevance_threshold",
+    # The agent's Open Webui model supplies its own tools; Studio's tool specs
+    # would make Open Webui expect a caller-side executor.
+    "tools",
+    "tool_choice",
 })
 
 
@@ -216,7 +220,7 @@ async def _openwebui_saved_chat_call(
     raw_client = getattr(client, "client", None)
     base_url = str(getattr(raw_client, "base_url", ""))
     extra_body = kwargs.get("extra_body") or {}
-    if raw_client is None or "/chat/api/v1" not in base_url or not extra_body.get("session_id"):
+    if raw_client is None or "/chat/api/v1" not in base_url:
         return None
 
     import asyncio
@@ -233,6 +237,8 @@ async def _openwebui_saved_chat_call(
     body.pop("extra_body", None)
     body.update(_openwebui_saved_chat_params(extra_body))
     body = _openwebui_saved_chat_params(body)
+    # Open Webui's chat endpoint needs a session to emit tool events on; one per turn.
+    body.setdefault("session_id", str(uuid4()))
     body.update(
         {
             "parent_id": None,

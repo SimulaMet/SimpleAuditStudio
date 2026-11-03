@@ -23,6 +23,7 @@ from django.views.generic import DetailView, TemplateView, View
 
 from accounts import workos_auth
 from accounts.models import User
+from audits.agentic.rules import validate_rules
 from audits.comparison import compare_runs
 from audits.events import ScenarioResult
 from audits.models import AuditRun
@@ -150,143 +151,47 @@ def _int(value, default: int = 0) -> int:
 # Form fields that carry an explicit off/false value (checkbox pairs with a
 # hidden "0" sentinel). These stay written even when unchecked so an explicit
 # false remains an assertion after save.
-_EXPLICIT_FALSE_FIELDS = {
-    "agentic_rerank_required",
-    "agentic_policy_read_only",
-    "agentic_policy_allow_side_effects",
-    "agentic_approvals_must_precede_execution",
-    "agentic_semantic_judge_enabled",
-}
+
 
 
 def _merge_structured_agentic_fields(metadata: dict, post) -> dict:
-    """Merge authoring controls into agentic metadata without dropping extensions.
+    """Merge the authoring form into agentic metadata.
 
-    Sparse semantics: a section is only created when at least one of its form
-    fields carries a non-empty value (or an explicit false from a checkbox
-    pair). Untouched sections are removed again rather than being filled with
-    dormant defaults, so absence stays "not checked". Fields whose empty form
-    value maps to ``None``/empty list drop out of the saved section entirely;
-    unknown top-level and per-section fields round-trip untouched.
+    The form owns three things: the rules (``agentic_rules_json``), the semantic
+    judge, and the enforcement mode. Every other key in the stored metadata is kept
+    as it is.
     """
-    has_control = any(
-        key.startswith("agentic_") and key != "agentic_scenario"
-        and (key in _EXPLICIT_FALSE_FIELDS or str(post.get(key, "")).strip() != "")
-        for key in post
-    )
-    if not has_control:
+    if not any(key.startswith("agentic_") and key != "agentic_scenario" for key in post):
         return metadata
     agentic = dict(metadata.get("agentic") or {})
     agentic.setdefault("schema_version", 2)
 
-    def csv(name):
-        return [value.strip() for value in post.get(name, "").split(",") if value.strip()]
-
-    def number(name):
-        value = post.get(name)
-        if value in (None, ""):
-            return None
-        return int(value)
-
-    def boolean(name):
-        return post.get(name) == "1"
-
-    def json_value(name):
-        value = post.get(name, "").strip()
-        if not value:
-            return []
-        parsed = json.loads(value)
-        if not isinstance(parsed, list):
-            raise TypeError(f"Field '{name}' must be a JSON array, got {type(parsed).__name__}")
-        return parsed
-
-    # (section, key, value, include_when_empty) — include_when_empty marks the
-    # explicit-false checkbox sentinels that must survive as assertions.
-    planned = [
-        ("tools", "expected", [{"name": name, "min_calls": 1, "max_calls": None} for name in csv("agentic_tools_expected")], False),
-        ("tools", "forbidden", csv("agentic_tools_forbidden"), False),
-        ("tools", "allowed", csv("agentic_tools_allowed"), False),
-        ("retrieval", "sources", csv("agentic_sources"), False),
-        ("retrieval", "min_documents", number("agentic_retrieval_min_documents"), False),
-        ("retrieval", "max_documents", number("agentic_retrieval_max_documents"), False),
-        ("rerank", "required", boolean("agentic_rerank_required"), True),
-        ("rerank", "min_calls", number("agentic_rerank_min_calls"), False),
-        ("rerank", "max_calls", number("agentic_rerank_max_calls"), False),
-        ("policy", "read_only", boolean("agentic_policy_read_only"), True),
-        ("policy", "allowed_data_scopes", csv("agentic_policy_allowed_data_scopes"), False),
-        ("policy", "forbidden_data_scopes", csv("agentic_policy_forbidden_data_scopes"), False),
-        ("policy", "forbidden_side_effects", csv("agentic_policy_forbidden_side_effects"), False),
-        ("policy", "allowed_destinations", csv("agentic_policy_allowed_destinations"), False),
-        ("policy", "allow_side_effects", boolean("agentic_policy_allow_side_effects"), True),
-        ("guardrails", "required", csv("agentic_guardrails_required"), False),
-        ("guardrails", "must_pass", csv("agentic_guardrails_must_pass"), False),
-        ("guardrails", "before_actions", json_value("agentic_guardrails_before_actions"), False),
-        ("approvals", "required_for", csv("agentic_approvals_required_for"), False),
-        ("approvals", "must_precede_execution", boolean("agentic_approvals_must_precede_execution"), True),
-        ("handoffs", "allowed", csv("agentic_handoffs_allowed"), False),
-        ("handoffs", "forbidden", csv("agentic_handoffs_forbidden"), False),
-        ("handoffs", "required", csv("agentic_handoffs_required"), False),
-        ("handoffs", "max_handoffs", number("agentic_handoffs_max_handoffs"), False),
-        ("handoffs", "max_depth", number("agentic_handoffs_max_depth"), False),
-        ("trajectory", "required_sequence", csv("agentic_sequence"), False),
-        ("trajectory", "max_steps", number("agentic_trajectory_max_steps"), False),
-        ("trajectory", "max_retries_per_tool", number("agentic_trajectory_max_retries_per_tool"), False),
-        ("trajectory", "max_identical_consecutive_calls", number("agentic_trajectory_max_identical_consecutive_calls"), False),
-        ("budgets", "max_tool_calls", number("agentic_max_tool_calls"), False),
-        ("budgets", "max_errors", number("agentic_budgets_max_errors"), False),
-        ("state", "assertions", json_value("agentic_state_assertions"), False),
-        ("semantic_judge", "enabled", boolean("agentic_semantic_judge_enabled"), True),
-        ("semantic_judge", "criteria", csv("agentic_semantic_judge_criteria"), False),
-    ]
-
-    # Sections the form owns: rebuilt from scratch so stale values from a
-    # previous revision do not leak through once their fields are cleared.
-    owned_sections = {section for section, _, _, _ in planned}
-    for section in sorted(owned_sections & set(agentic)):
-        del agentic[section]
-
-    for section, key, value, include_when_empty in planned:
-        empty = value in (None, [], "", False)
-        if empty and not include_when_empty:
-            continue
-        current = dict(agentic.get(section) or {})
-        if empty and value is False:
-            current[key] = False
-        elif value is None:
-            current.pop(key, None)
+    if "agentic_rules_json" in post:
+        raw_rules = str(post.get("agentic_rules_json") or "").strip()
+        if raw_rules:
+            rules = json.loads(raw_rules)
+            problems = validate_rules(rules)
+            if problems:
+                raise ValueError("; ".join(
+                    f"rule {p.index + 1}: {p.message}" if p.index >= 0 else p.message for p in problems
+                ))
+            agentic["rules"] = rules
         else:
-            current[key] = value
-        agentic[section] = current
+            agentic.pop("rules", None)
 
-    # retrieval.required follows the sources field: present only when the
-    # author entered at least one source.
-    if "agentic_sources" in post:
-        sources = csv("agentic_sources")
-        retrieval = dict(agentic.get("retrieval") or {})
-        if sources:
-            retrieval["required"] = True
-        else:
-            retrieval.pop("required", None)
-        if retrieval:
-            agentic["retrieval"] = retrieval
+    criteria = [v.strip() for v in str(post.get("agentic_semantic_judge_criteria") or "").split(",") if v.strip()]
+    enabled = post.get("agentic_semantic_judge_enabled") == "1"
+    if enabled or criteria:
+        agentic["semantic_judge"] = {"enabled": enabled, "criteria": criteria}
+    else:
+        agentic.pop("semantic_judge", None)
 
-    # semantic_judge.enabled=True is implied when criteria were entered.
-    if "agentic_semantic_judge_criteria" in post and csv("agentic_semantic_judge_criteria"):
-        semantic = dict(agentic.get("semantic_judge") or {})
-        semantic["enabled"] = True
-        agentic["semantic_judge"] = semantic
-
-    mode = post.get("agentic_enforcement_mode", "")
+    mode = str(post.get("agentic_enforcement_mode") or "").strip()
     if mode:
-        current = dict(agentic.get("enforcement") or {})
-        current["mode"] = mode
-        agentic["enforcement"] = current
+        agentic["enforcement"] = {**(agentic.get("enforcement") or {}), "mode": mode}
 
-    # Drop sections left empty by this merge (e.g. cleared all tools fields).
-    for section in owned_sections:
-        if agentic.get(section) in ({}, None):
-            agentic.pop(section, None)
-
+    if not metadata.get("agentic") and set(agentic) <= {"schema_version"}:
+        return metadata
     result = dict(metadata)
     result["agentic"] = agentic
     return result
@@ -1546,6 +1451,7 @@ class NewExperimentView(ProjectMixin, TemplateView):
                         system_prompt_version=run_spec.get("system_prompt_version"),
                         agent=run_spec.get("agent"),
                         trace_config={} if run_spec.get("target_trace") is False else None,
+                        trace_requested=run_spec.get("target_trace") is True,
                         experiment=experiment,
                     )
                 if repeat:
@@ -2368,8 +2274,8 @@ class ScenarioCreateView(ProjectMixin, View):
         else:
             try:
                 metadata = _merge_structured_agentic_fields({}, request.POST)
-            except (ValueError, json.JSONDecodeError):
-                messages.error(request, "Structured agentic controls must contain valid numbers and JSON.")
+            except (ValueError, json.JSONDecodeError) as exc:
+                messages.error(request, f"Structured agentic controls are invalid: {exc}")
                 return _scenario_redirect(request.POST.get("set_id", "").strip() or None)
         file_uri_raw = request.POST.get("file_uri", "").strip()
         file_uri = file_uri_raw or None
@@ -2448,8 +2354,8 @@ class ScenarioEditView(ProjectMixin, View):
             else:
                 try:
                     metadata = _merge_structured_agentic_fields(prior_metadata, request.POST)
-                except (ValueError, json.JSONDecodeError):
-                    messages.error(request, "Structured agentic controls must contain valid numbers and JSON.")
+                except (ValueError, json.JSONDecodeError) as exc:
+                    messages.error(request, f"Structured agentic controls are invalid: {exc}")
                     return _scenario_redirect(set_id or None)
             rev = update_scenario_content(
                 scenario=scenario, user=request.user, description=desc,
@@ -2918,6 +2824,9 @@ class OTLPCredentialCreateView(ProjectMixin, View):
         auth_mode = (post.get("auth_mode") or "basic").strip().lower()
         if auth_mode not in ("none", "basic", "bearer"):
             return JsonResponse({"ok": False, "error": "auth_mode must be 'none', 'basic', or 'bearer'."}, status=400)
+        if auth_mode == "none":
+            # No-auth OTLP is set up by Studio for its own agents, never picked by a user.
+            return JsonResponse({"ok": False, "error": "Use basic or bearer authentication."}, status=400)
         try:
             new_cred = otlp.create_credential(project=request.project, connection=conn, auth_mode=auth_mode, user=request.user)
         except ValueError as e:
@@ -3163,6 +3072,8 @@ def _result_rows(run: AuditRun, items: dict | None = None) -> list[dict]:
             "agreement_rate": agreement,
             "severity_distribution": sev_dist,
             "n_reps": n_reps if (n_reps > 1 and "reps" in r) else None,
+            "agentic_status": (r.get("agentic_evaluation") or {}).get("status", ""),
+            "agentic_tooltip": f"Agentic: {(r.get('agentic_evaluation') or {}).get('status', '').lower()}\nJudge: {severity}",
         })
     return results
 
@@ -3405,6 +3316,7 @@ _REP_KNOWN_KEYS = {
     "severity", "rationale", "evidence", "judge_rationale", "judgment", "scenario_name",
     "scenario_description", "expected_behavior", "file_uri", "_rep_index", "_language", "error",
     "trace_ids",
+    "trace_evidence",
     "agentic_evaluation",
     *(f"{r}_{d}_tokens" for r in _REP_TOKEN_ROLES for d in ("input", "output")),
 }
@@ -3545,6 +3457,11 @@ _AGENTIC_SEVERITY_RANK = {"critical": 0, "high": 1, "medium": 2, "low": 3}
 #: ...then by status (FAIL > INCONCLUSIVE > ERROR > PASS).
 _AGENTIC_STATUS_RANK = {"fail": 0, "inconclusive": 1, "error": 2, "pass": 3}
 #: Span kinds rendered as their own timeline row style (everything else is generic).
+#: Readable reference prefix per span kind: LLM-1, TOOL-2, RETRIEVAL-1 ...
+_AGENTIC_REF_PREFIX = {"LLM": "LLM", "TOOL": "TOOL", "RETRIEVER": "RETRIEVAL", "AGENT": "AGENT",
+                       "GUARDRAIL": "GUARDRAIL", "EVALUATOR": "EVAL", "CHAIN": "STEP"}
+#: The model call that writes the answer (not one that only decides a tool call).
+_RESPONSE_ICON = "💬"
 _AGENTIC_SPAN_KIND_ICONS = {
     "LLM": ("🧠", "text-sky-300"),
     "RETRIEVER": ("📚", "text-emerald-300"),
@@ -3553,6 +3470,37 @@ _AGENTIC_SPAN_KIND_ICONS = {
     "GUARDRAIL": ("🛡️", "text-fuchsia-300"),
     "EVALUATOR": ("⚖️", "text-violet-300"),
 }
+
+
+def _span_label(sid: str) -> str:
+    """Short display label for a synthetic conversation span id.
+
+    Display only: the id itself stays the link anchor, so these links keep working.
+    """
+    return sid
+
+
+def _document_source_names(value) -> list[str]:
+    """Source names of a ``gen_ai.retrieval.documents`` value (a list, or its JSON text)."""
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except (json.JSONDecodeError, ValueError):
+            return []
+    if not isinstance(value, list):
+        return []
+    return [str(d["source"]) for d in value if isinstance(d, dict) and d.get("source")]
+
+
+def _arguments_preview(value) -> str:
+    """Short one-line tool arguments for the timeline header (compact JSON when parseable)."""
+    if not value:
+        return ""
+    try:
+        value = json.dumps(json.loads(value), ensure_ascii=False)
+    except (TypeError, ValueError):
+        value = str(value)
+    return value if len(value) <= 120 else value[:117] + "…"
 
 
 def _agentic_span_view(span: dict) -> dict | None:
@@ -3564,7 +3512,7 @@ def _agentic_span_view(span: dict) -> dict | None:
     icon, tone = _AGENTIC_SPAN_KIND_ICONS.get(kind, ("•", "text-gray-400"))
     tool_name = attrs.get("gen_ai.tool.name") or attrs.get("tool_name") or ""
     # KB retrieval rows surface the observed source ids/names from attributes.
-    kb_sources = attrs.get("openwebui.retrieval.data_source") or attrs.get("retrieval.source_ids") or []
+    kb_sources = _document_source_names(attrs.get("gen_ai.retrieval.documents")) or attrs.get("retrieval.source_ids") or []
     if isinstance(kb_sources, (str, int)):
         kb_sources = [kb_sources]
     elif not isinstance(kb_sources, list):
@@ -3572,12 +3520,15 @@ def _agentic_span_view(span: dict) -> dict | None:
     start = span.get("start_time")
     return {
         "span_id": str(span["span_id"]),
+        "label": _span_label(str(span["span_id"])),
         "kind": span.get("kind") or "",
         "icon": icon,
         "tone": tone,
         "name": span.get("name") or tool_name or "step",
         "tool_name": tool_name,
-        "kb_sources": [str(s) for s in kb_sources],
+        "arguments": _arguments_preview(attrs.get("gen_ai.tool.call.arguments")),
+        "redundant_reason": str(attrs.get("redundant_reason") or ""),
+        "kb_sources": list(dict.fromkeys(str(s) for s in kb_sources)),
         "started_at": start,
         "duration_ms": round(_trace_span_duration_ms(span), 1),
         "content_blocks": _trace_span_content_blocks(span),
@@ -3586,161 +3537,34 @@ def _agentic_span_view(span: dict) -> dict | None:
     }
 
 
-def _synthetic_tool_spans(conv: list[dict]) -> list[dict]:
-    """Minimal TOOL/INFERENCE span rows derived from conversation tool markers.
+def _duplicate_inference_flags(spans: list[dict]) -> dict[int, str]:
+    """Flag a model call whose input repeats the previous model call in the same trace.
 
-    Used both as the whole-timeline fallback (no OTLP at all) and — when OTLP
-    spans exist but carry no tool/retriever steps — as a merge so the
-    trajectory still shows what the agent actually did with tools and KB.
+    Open WebUI can call the base model twice with byte-identical input on a turn with
+    no tool call (SushantGautam/open-webui#6). Works on the ordered span list: within
+    one trace, a ``chat``/LLM span with the same input as the previous LLM span is a
+    duplicate. Returns ``{index: reason}`` for the flagged spans.
     """
-    import re as _re
+    import hashlib
 
-    synthetic = []
-    idx = 0
-    # Streaming format: [TOOL_CALL name()]{"json"} — args after the ]
-    # Non-streaming format: [TOOL_CALL name({"json"})] — args inside ()
-    pat_stream = _re.compile(r"\[TOOL_CALL\s+(\w+)\(\)\]\s*(\{.*?\})?")
-    pat_nonstream = _re.compile(r"\[TOOL_CALL\s+(\w+)\(([^)]+)\)\]")
-    pat_result = _re.compile(r"\[TOOL_RESULT\s+(\w+)\](.*?)(?=\[TOOL_|$)", _re.DOTALL)
-    # Collect results per tool name (in order of appearance)
-    result_queue: dict[str, list[str]] = {}
-    for msg in conv:
-        content = (msg or {}).get("content", "") or ""
-        for rm in pat_result.finditer(content):
-            rname = rm.group(1)
-            rtext = rm.group(2).strip()
-            result_queue.setdefault(rname, []).append(rtext)
-    result_idx: dict[str, int] = {}
-    for msg in conv:
-        role = (msg or {}).get("role", "")
-        content = (msg or {}).get("content", "") or ""
-        if role != "assistant":
-            continue
-        found = list(pat_stream.finditer(content)) + list(pat_nonstream.finditer(content))
-        found.sort(key=lambda m: m.start())
-        for m in found:
-            name, args_raw = m.group(1), (m.group(2) or m.group(3) or "{}")
-            try:
-                args_preview = json.dumps(json.loads(args_raw))[:200]
-            except (json.JSONDecodeError, TypeError):
-                args_preview = args_raw[:200]
-            # Attach the next available result for this tool
-            ri = result_idx.get(name, 0)
-            result_text = None
-            if ri < len(result_queue.get(name, [])):
-                result_text = result_queue[name][ri]
-                result_idx[name] = ri + 1
-            attrs: dict = {
-                "tool_name": name,
-                "gen_ai.tool.call.arguments": args_preview,
-                "arguments": args_preview,
-            }
-            if result_text:
-                attrs["gen_ai.tool.call.result"] = result_text
-                attrs["tool.result"] = result_text
-                # Extract KB sources from retrieval-style results so the
-                # timeline row surfaces them like a real RETRIEVER span would.
-                # The result text may have trailing prose after the JSON.
-                stripped = result_text.strip()
-                if stripped.startswith(("[", "{")):
-                    # Find the matching closing bracket for the JSON portion.
-                    depth = 0
-                    end = 0
-                    for ci, ch in enumerate(stripped):
-                        if ch in "[{":
-                            depth += 1
-                        elif ch in "]}":
-                            depth -= 1
-                            if depth == 0:
-                                end = ci + 1
-                                break
-                    if end > 0:
-                        try:
-                            rdata = json.loads(stripped[:end])
-                            if isinstance(rdata, dict):
-                                src = rdata.get("source") or rdata.get("data_source")
-                                if src:
-                                    attrs["openwebui.retrieval.data_source"] = [src] if isinstance(src, str) else list(src)
-                            elif isinstance(rdata, list) and rdata and isinstance(rdata[0], dict):
-                                srcs = [d.get("source") for d in rdata if isinstance(d, dict) and d.get("source")]
-                                if srcs:
-                                    attrs["openwebui.retrieval.data_source"] = srcs
-                        except (json.JSONDecodeError, TypeError):
-                            pass
-            synthetic.append({
-                "span_id": f"conv-tool-{idx}",
-                "name": f"tool_call:{name}",
-                "start_time": 0.0,
-                "duration": 0.0,
-                "kind": "tool",
-                "attributes": attrs,
-                "status": "ok",
-            })
-            idx += 1
-        # Add a response/inference step for the prose after tool markers,
-        # matching the trajectory's conv-response-N span IDs so evidence
-        # links from judge dimensions resolve correctly.
-        parts = _re.split(r"\n\s*\n", content, maxsplit=1)
-        prose = ""
-        if len(parts) > 1:
-            candidate = parts[1].strip()
-            if candidate and not candidate.startswith(("{", "[")):
-                prose = candidate
-        if not prose or len(prose) < 20:
-            no_markers = _re.sub(
-                r"\[(?:TOOL_CALL|TOOL_RESULT)\s+\w+(?:\([^)]*\))?\][^\n]*", "", content,
-            ).strip()
-            if no_markers and not no_markers.startswith(("{", "[")):
-                prose = no_markers
-        if prose and len(prose) > 20:
-            synthetic.append({
-                "span_id": f"conv-response-{idx}",
-                "name": "final_response",
-                "start_time": 0.0,
-                "duration": 0.0,
-                "kind": "inference",
-                "attributes": {"output.value": prose},
-                "status": "ok",
-            })
-            idx += 1
-    return synthetic
-
-
-def _merge_synthesized_tool_spans(raw_spans: list[dict], synthetic: list[dict]) -> list[dict]:
-    """Interleave conversation-derived tool/response steps into real OTLP spans.
-
-    Open WebUI exports only CHAIN + LLM spans; its server-side tool loop and
-    KB retrieval leave no TOOL/RETRIEVER spans. Without this merge the
-    trajectory timeline shows nothing but ``chat_completion`` even though the
-    agent demonstrably called tools (markers are in the conversation). Real
-    OTLP tool/retriever spans always win: synthesized rows are added only for
-    tool names the trace does not already cover, appended after the last timed
-    span (they carry no timestamps of their own).
-    """
-    covered: set[str] = set()
-    for s in raw_spans:
-        attrs = s.get("attributes") if isinstance(s.get("attributes"), dict) else {}
-        name = attrs.get("gen_ai.tool.name") or attrs.get("tool_name")
-        kind = str(s.get("kind") or "").upper()
-        if name and (kind in ("TOOL", "RETRIEVER") or kind == ""):
-            covered.add(str(name))
-    extra = [s for s in synthetic if s.get("kind") == "tool" and s.get("attributes", {}).get("tool_name") not in covered]
-    if not extra:
-        return list(raw_spans)
-    base_start = min(
-        (s.get("end_time") for s in raw_spans if isinstance(s.get("end_time"), (int, float))),
-        default=None,
+    flags: dict[int, str] = {}
+    last_input_by_trace: dict[str, str] = {}
+    order = sorted(
+        (i for i, sp in enumerate(spans) if str(sp.get("kind") or "").upper() == "LLM"),
+        key=lambda i: (spans[i].get("start_time") or 0, i),
     )
-    merged = list(raw_spans)
-    for i, s in enumerate(extra):
-        row = dict(s)
-        # Offset each synthetic step after the previous one, past the last real
-        # span, so chronological ordering is stable and honest (approximate).
-        offset = (base_start or 0.0) + 0.05 * (i + 1)
-        row["start_time"] = offset
-        row["end_time"] = offset + 0.01
-        merged.append(row)
-    return merged
+    for i in order:
+        sp = spans[i]
+        attrs = sp.get("attributes") if isinstance(sp.get("attributes"), dict) else {}
+        raw_input = attrs.get("gen_ai.input.messages")
+        if raw_input in (None, ""):
+            continue
+        digest = hashlib.sha256(str(raw_input).encode("utf-8")).hexdigest()
+        trace = str(sp.get("trace_id") or "")
+        if last_input_by_trace.get(trace) == digest:
+            flags[i] = "duplicate model call: same input as the previous model call in this trace (issue #6)"
+        last_input_by_trace[trace] = digest
+    return flags
 
 
 def _agentic_timeline_view(rep: dict) -> dict | None:
@@ -3749,29 +3573,17 @@ def _agentic_timeline_view(rep: dict) -> dict | None:
     Repeated span ids get unique DOM anchors: the first occurrence keeps the
     bare id, later ones gain ``-2``, ``-3``, … suffixes, and every finding
     jump link resolves through the same mapping so duplicates land correctly.
-    Returns ``None`` when the rep carries no spans (the block hides itself).
-
-    When no OTLP evidence spans exist but the conversation contains captured
-    tool-call markers, synthesizes minimal span rows so evidence links work.
-    When OTLP spans exist but none are tool/retriever steps (Open WebUI only
-    exports CHAIN + LLM), the conversation-derived tool steps are merged in so
-    the trajectory reflects what the agent actually did.
+    Returns ``None`` when the rep carries no captured spans (the block hides itself).
+    Rows are never reconstructed from the conversation.
     """
     raw_spans = ((rep.get("judgment") or {}).get("evidence_spans") or []) if isinstance(rep.get("judgment"), dict) else []
     raw_spans = [s for s in raw_spans if isinstance(s, dict)]
     if not raw_spans:
-        # Fallback: synthesize spans from conversation tool-call markers.
-        raw_spans = _synthetic_tool_spans(rep.get("conversation") or [])
-        if not raw_spans:
-            return None
-    elif any(
-        str(s.get("kind") or "").upper() in ("TOOL", "RETRIEVER") or "retriev" in str(s.get("name") or "").lower()
-        for s in raw_spans
-    ) is False:
-        # Real OTLP spans exist but carry no tool/retriever steps: OWUI's
-        # server-side tool loop leaves no such spans. Merge the
-        # conversation-derived steps in so the timeline is not all LLM.
-        raw_spans = _merge_synthesized_tool_spans(raw_spans, _synthetic_tool_spans(rep.get("conversation") or []))
+        # No captured spans: no trajectory to show.
+        return None
+    for idx, reason in _duplicate_inference_flags(raw_spans).items():
+        attrs = raw_spans[idx].get("attributes") if isinstance(raw_spans[idx].get("attributes"), dict) else {}
+        raw_spans[idx]["attributes"] = {**attrs, "redundant_reason": reason}
     base_start = min(
         (s.get("start_time") for s in raw_spans if isinstance(s.get("start_time"), (int, float))),
         default=None,
@@ -3779,7 +3591,7 @@ def _agentic_timeline_view(rep: dict) -> dict | None:
     rows, seen = [], {}
     # When all spans share the same start_time (synthetic fallback), preserve
     # insertion order (chronological: tools → response) instead of sorting
-    # alphabetically by span_id which would put conv-response-N first.
+    # alphabetically by span_id.
     has_real_times = any(
         isinstance(s.get("start_time"), (int, float)) and s["start_time"] != 0.0
         for s in raw_spans
@@ -3803,6 +3615,19 @@ def _agentic_timeline_view(rep: dict) -> dict | None:
         rows.append(row)
     if not rows:
         return None
+    # Readable references in execution order (LLM-1, TOOL-1 ...); the id stays the anchor.
+    counts: dict[str, int] = {}
+    label_for: dict[str, str] = {}
+    for row in rows:
+        kind = str(row.get("kind") or "").upper()
+        prefix = _AGENTIC_REF_PREFIX.get(kind, kind or "STEP")
+        counts[prefix] = counts.get(prefix, 0) + 1
+        row["label"] = f"{prefix}-{counts[prefix]}"
+        label_for.setdefault(row["span_id"], row["label"])
+    # The last model call, after every tool call, is the one that writes the answer.
+    model_rows = [row for row in rows if str(row.get("kind") or "").upper() == "LLM"]
+    if model_rows:
+        model_rows[-1].update(icon=_RESPONSE_ICON, response=True)
     anchor_for: dict[str, str] = {}
     for row in rows:
         anchor_for.setdefault(row["span_id"], row["anchor"])
@@ -3812,8 +3637,12 @@ def _agentic_timeline_view(rep: dict) -> dict | None:
         "total": len(rows),
         "captured": max(len(all_spans), len(rows)),
         "anchor_for": anchor_for,
+        "label_for": label_for,
         "spans_json": json.dumps(raw_spans, indent=2, ensure_ascii=False, default=str),
     }
+
+
+_CHECK_TITLES = {"trace.present": "Trace evidence present"}
 
 
 def _agentic_findings_view(evaluation: dict) -> list[dict]:
@@ -3830,8 +3659,11 @@ def _agentic_findings_view(evaluation: dict) -> list[dict]:
         span_ids = check.get("evidence_span_ids") or []
         if not isinstance(span_ids, list):
             span_ids = [span_ids]
+        details = check.get("details") if isinstance(check.get("details"), dict) else {}
+        check_id = str(check.get("id") or "check")
         cards.append({
-            "id": str(check.get("id") or "check"),
+            "id": check_id,
+            "title": details.get("rule") or _CHECK_TITLES.get(check_id, check_id),
             "category": str(check.get("category") or ""),
             "status": status,
             "severity": severity,
@@ -3937,7 +3769,6 @@ def _agentic_trace_completeness_view(evaluation: dict, timeline: dict | None) ->
     complete = bool(tc.get("complete")) if "complete" in tc else (bool(captured_kinds) or (span_count or 0) > 0)
     return {
         "complete": complete,
-        "derived_from_conversation": bool(tc.get("derived_from_conversation")),
         "span_count": span_count,
         "captured_kinds": [str(k) for k in captured_kinds],
         "missing_reason": str(missing_reason),
@@ -4102,6 +3933,14 @@ def _rep_view(rep: dict, index: int) -> dict:
     grade = _judge_grade(rep.get("judgment"))
     agentic = rep.get("agentic_evaluation") if isinstance(rep.get("agentic_evaluation"), dict) else None
     timeline = _agentic_timeline_view(rep)
+    label_for = timeline["label_for"] if timeline else {}
+    if agentic and isinstance(agentic.get("checks"), list):
+        # Each check's evidence ids come with display labels; the ids stay the link anchors.
+        agentic = {**agentic, "checks": [
+            {**c, "evidence_spans": [{"id": str(sid), "label": label_for.get(str(sid), _span_label(str(sid)))} for sid in (c.get("evidence_span_ids") or [])]}
+            if isinstance(c, dict) else c
+            for c in agentic["checks"]
+        ]}
     # Finding cards and judge dimensions cite span ids; resolve each to its
     # unique DOM anchor so a jump link lands on the correct row even when span
     # ids repeat.
@@ -4109,26 +3948,16 @@ def _rep_view(rep: dict, index: int) -> dict:
     judge = _agentic_judge_view(agentic or {})
     anchor_for = timeline["anchor_for"] if timeline else {}
 
-    def _span_label(sid: str) -> str:
-        """Human-friendly label for a synthetic span id."""
-        if sid.startswith("conv-tool-"):
-            # Look up the tool name from the timeline rows
-            row = next((r for r in (timeline or {}).get("rows", []) if r.get("span_id") == sid), None)
-            return (row or {}).get("tool_name") or f"Tool {sid.rsplit('-', 1)[-1]}"
-        if sid.startswith("conv-response-"):
-            return "Response"
-        return sid
-
     for card in findings:
         card["spans"] = [
-            {"span_id": sid, "label": _span_label(sid), "anchor": anchor_for.get(sid, sid)}
-            for sid in card.pop("span_ids")
+            {"span_id": sid, "label": label_for.get(sid, _span_label(sid)), "anchor": anchor_for.get(sid, sid)}
+            for sid in dict.fromkeys(card.pop("span_ids"))
         ]
     if judge:
         for dim in judge["dimensions"]:
             dim["spans"] = [
-                {"span_id": sid, "label": _span_label(sid), "anchor": anchor_for.get(sid, sid)}
-                for sid in dim.pop("span_ids")
+                {"span_id": sid, "label": label_for.get(sid, _span_label(sid)), "anchor": anchor_for.get(sid, sid)}
+                for sid in dict.fromkeys(dim.pop("span_ids"))
             ]
     # The scenario's own decision answer: the last one in the conversation, so a
     # follow-up turn's answer replaces the opening one.
@@ -4727,12 +4556,10 @@ class AgentDetailView(ProjectMixin, TemplateView):
                 return None
 
         retrieval = default_retrieval_settings()
-        retrieval["search_mode"] = request.POST.get("search_mode", "semantic")
-        if retrieval["search_mode"] not in {"semantic", "hybrid"}:
-            retrieval["search_mode"] = "semantic"
+        mode = request.POST.get("search_mode", "semantic")
+        retrieval["search_mode"] = "hybrid" if mode in {"hybrid", "hybrid_balanced", "bm25_heavy"} else "semantic"
         retrieval["top_k"] = _positive_int("top_k", 5)
-        retrieval["rerank_enabled"] = request.POST.get("rerank_enabled") == "on"
-        retrieval["rerank_top_k"] = _positive_int("rerank_top_k", 4)
+        retrieval["final_k"] = _positive_int("final_k", 5)
         for field in ("relevance_threshold", "bm25_weight"):
             retrieval[field] = _optional_float(field)
         retrieval["full_context"] = request.POST.get("full_context") == "on"

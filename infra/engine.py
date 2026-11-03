@@ -463,8 +463,28 @@ def auditor_kwargs(*, target: dict, auditor: dict, judge: dict, generation: dict
                     if owui_route.get("connection_id"):
                         try:
                             owui_conn = ModelConnection.objects.get(id=owui_route["connection_id"])
+                            # An agent runs as its Open WebUI agent model, so Open WebUI
+                            # applies the agent's own tools and knowledge (saved-chat
+                            # path). Other targets keep the base model's prefixed id.
+                            wrapper_model = str((target or {}).get("model_id") or "")
+                            route_model = (
+                                wrapper_model
+                                if wrapper_model.startswith("studio.agent-")
+                                else f"{base_conn.id}.{base_model_row.model_id}"
+                            )
+                            if route_model.startswith("studio.agent-"):
+                                # The agent's bundle is named on each run, so Open WebUI
+                                # runs its tools on the saved-chat path (see trace_target).
+                                from chat.api import agent_tool_ids
+
+                                gen_params = dict(target_cfg.get("gen_params") or {})
+                                gen_params["extra_body"] = {
+                                    **(gen_params.get("extra_body") or {}),
+                                    "tool_ids": agent_tool_ids(route_model),
+                                }
+                                target_cfg["gen_params"] = gen_params
                             target_cfg.update({
-                                "model": f"{base_conn.id}.{base_model_row.model_id}",
+                                "model": route_model,
                                 "base_url": owui_conn.base_url,
                                 # Placeholder; TraceContextModelTarget swaps it
                                 # for an OWUI session JWT on every turn.
@@ -704,7 +724,6 @@ def _collect_evidence_spans(
     provider: Any,
     *,
     token_budget: int | None = None,
-    window: tuple[float, float] | None = None,
     settle_timeout: float | None = None,
     capture_level: str = "structural",
     structured: bool = False,
@@ -717,11 +736,6 @@ def _collect_evidence_spans(
     eventual consistency — it retries until the trace is available or its
     timeout elapses), de-duplicate, and select the evidence-relevant kinds via
     the engine's ``select_spans``.
-
-    When the provider supports it and no trace id matched, a time-window
-    fallback (``window`` = wall-clock seconds the run executed) attributes the
-    spans the target exported during that window — the correlation fallback
-    for targets that do not adopt the propagated trace id.
 
     The fetch is settled: remote exporters flush in batches, so the spans for
     a trace id can arrive several seconds after the model call returns. The
@@ -760,15 +774,6 @@ def _collect_evidence_spans(
                 logger = __import__("logging").getLogger("simpleaudit.engine")
                 logger.warning("Trace fetch failed for %s: %s", tid, exc)
 
-    def _fetch_window() -> None:
-        if window is not None and hasattr(provider, "fetch_window"):
-            start_ts, end_ts = window
-            try:
-                _add(provider.fetch_window(start_ts, end_ts))
-            except Exception as exc:  # noqa: BLE001 - tracing must not break the run
-                logger = __import__("logging").getLogger("simpleaudit.engine")
-                logger.warning("Trace window fetch failed: %s", exc)
-
     # Settle: remote exporters flush spans in batches on a fixed interval (5s
     # for OpenWebUI's OTLP exporter), so the last batch of a run can arrive
     # several seconds after the model call returns. Keep polling until no new
@@ -777,8 +782,6 @@ def _collect_evidence_spans(
         deadline = _time.monotonic() + settle_timeout
         while True:
             _fetch_all()
-            if not all_spans:
-                _fetch_window()
             if all_spans:
                 before = len(all_spans)
                 _time.sleep(min(_SETTLE_QUIET_S, max(0.0, deadline - _time.monotonic())))
@@ -840,8 +843,9 @@ def _collect_evidence_spans(
 
 
 def _drop_connection_noise(spans: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Drop connection-level spans (connect / DNS / TLS / sub-ms GETs) that
-    carry no judging signal.
+    """Drop spans that carry no judging signal: connection-level spans (connect /
+    DNS / TLS / sub-ms GETs) and CHAIN workflow wrappers, which record orchestration
+    rather than a model call or a tool call.
 
     Plain OTel auto-instrumentation (e.g. an OpenWebUI deployment) exports
     hundreds of these around each request; keeping them would drown the real
@@ -851,6 +855,8 @@ def _drop_connection_noise(spans: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """
     def _noise(s: dict[str, Any]) -> bool:
         name = (s.get("name") or "").lower()
+        if (s.get("kind") or "").upper() == "CHAIN":
+            return True
         if name in {"connect", "dns lookup", "tls handshake"}:
             return True
         start, end = s.get("start_time"), s.get("end_time")
@@ -949,7 +955,11 @@ def run_scenario(
         provider = build_trace_provider(trace_config)
         if provider is not None:
             audit_run_id = f"audit_{new_trace_id()[:12]}"
-            correlation = TraceCorrelation(audit_run_id=audit_run_id)
+            # Per turn, the engine records the turn's trace id; claiming it then keeps
+            # its spans before the hold can expire, and the run's length doesn't matter.
+            correlation = TraceCorrelation(
+                audit_run_id=audit_run_id, on_new_trace=getattr(provider, "claim", None),
+            )
 
             # Supply evidence resolver to the engine. It runs after target
             # execution, before judge, and has access to correlation IDs.
@@ -963,18 +973,10 @@ def run_scenario(
                 or (_agentic_meta or {}).get("judge_guidance")
                 or None
             )
-            import time as _t
-            _exec_start_ts = _t.time()
 
             def _evidence_resolver(execution):
-                # Window: from just before execution started to now (plus a
-                # small buffer for late-arriving spans).  Enables the
-                # fetch_window fallback for targets that don't propagate
-                # the W3C traceparent (e.g. OpenWebUI).
-                _window = (_exec_start_ts - 2.0, _t.time() + 5.0)
                 evidence = _collect_evidence_spans(
                     execution.trace_correlation, provider, settle_timeout=20.0,
-                    window=_window,
                     capture_level=(trace_config or {}).get("content_capture", "structural"),
                     structured=True,
                 )
@@ -994,12 +996,7 @@ def run_scenario(
                     from audits.agentic.verdict_policy import compute_overall_verdict
 
                     all_spans = (evidence or {}).get("all_spans") or []
-                    conv = list(execution.conversation) if hasattr(execution, "conversation") else []
-                    # When no real OTLP spans exist, fall back to the
-                    # conversation-derived trajectory (parses [TOOL_CALL]
-                    # markers). This lets the judge evaluate actual agent
-                    # behaviour even when the target doesn't export traces.
-                    trajectory = normalize(all_spans, conversation=conv or None)
+                    trajectory = normalize(all_spans)
                     expectations = validate_agentic_metadata(metadata or {})
 
                     evaluation = evaluate_agentic(
@@ -1007,17 +1004,11 @@ def run_scenario(
                         llm=None, task=test_prompt or "",
                     )
                     complete = bool(trajectory.steps)
-                    derived_from_conv = not all_spans and complete
                     evaluation["trace_completeness"] = {
                         "complete": complete,
-                        "derived_from_conversation": derived_from_conv,
                         "span_count": len(trajectory.steps),
                         "captured_kinds": sorted({step.kind for step in trajectory.steps}),
-                        "missing_reason": (
-                            "Derived from conversation markers (no OTLP spans captured)."
-                            if derived_from_conv
-                            else (None if complete else "No trace spans were captured.")
-                        ),
+                        "missing_reason": None if complete else "Trace was on, but the target exported no OTLP spans.",
                     }
                     if not complete:
                         evaluation.update(compute_overall_verdict({
@@ -1049,8 +1040,6 @@ def run_scenario(
             evidence_resolver = _evidence_resolver
 
     full_trace_evidence = None
-    import time as _t
-    _exec_start_ts_outer = _t.time()
     try:
         with (provider or nullcontext()):
             # run_async maps the scenario dict onto run_scenario (file_uri,
@@ -1081,7 +1070,6 @@ def run_scenario(
             if provider is not None and correlation is not None:
                 full_trace_evidence = _collect_evidence_spans(
                     correlation, provider, settle_timeout=20.0,
-                    window=(_exec_start_ts_outer - 2.0, _t.time() + 5.0),
                     capture_level=(trace_config or {}).get("content_capture", "structural"),
                     structured=True,
                 )
@@ -1255,7 +1243,8 @@ def run_scenario_repeated(
             from simpleaudit.tracing.context import TraceCorrelation
 
             rep_correlations[rep_index] = TraceCorrelation(
-                audit_run_id=getattr(provider, "_audit_run_id", None)
+                audit_run_id=getattr(provider, "_audit_run_id", None),
+                on_new_trace=getattr(provider, "claim", None),
             )
         if on_rep_started:
             on_rep_started(rep_index)
@@ -1304,8 +1293,7 @@ def run_scenario_repeated(
                 from audits.agentic.verdict_policy import compute_overall_verdict
 
                 all_spans = (evidence or {}).get("all_spans") or []
-                conv = list(execution.conversation) if hasattr(execution, "conversation") else []
-                trajectory = normalize(all_spans, conversation=conv or None)
+                trajectory = normalize(all_spans)
                 expectations = validate_agentic_metadata(metadata or {})
                 evaluation = evaluate_agentic(
                     trajectory, expectations, None,
@@ -1316,7 +1304,7 @@ def run_scenario_repeated(
                     "complete": complete,
                     "span_count": len(trajectory.steps),
                     "captured_kinds": sorted({step.kind for step in trajectory.steps}),
-                    "missing_reason": None if complete else "No trace spans were captured.",
+                    "missing_reason": None if complete else "Trace was on, but the target exported no OTLP spans.",
                 }
                 if not complete:
                     evaluation.update(compute_overall_verdict({

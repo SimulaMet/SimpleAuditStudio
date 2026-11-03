@@ -167,6 +167,7 @@ override them when you deliberately need to.
 | `DJANGO_SECRET_KEY` | Required outside local SQLite mode. |
 | `DJANGO_DEBUG` | `true` for debugging only. `dev` sets it; the others leave it off. |
 | `DJANGO_ALLOWED_HOSTS` | Comma-separated; default `*` (see security notes). |
+| `SIMPLEAUDIT_SECURE_COOKIES` | Session and CSRF cookies are `Secure` by default (production). Set `false` only for a plain-HTTP local replica, e.g. `http://127.0.0.1`, where the browser would otherwise drop the login cookie. |
 | `DJANGO_CSRF_TRUSTED_ORIGINS` | Extra trusted origins (full URLs). |
 | `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_HOST`, `POSTGRES_PORT`, `POSTGRES_CONN_MAX_AGE` | PostgreSQL connection (`compose` mode). |
 | `SIMPLEAUDIT_LOCAL_SQLITE` **internal** | `1` = local SQLite database at the repository's `dev.sqlite3`. Set automatically by the `dev` entry point and by the test suite. |
@@ -200,7 +201,7 @@ override them when you deliberately need to.
 | `setup_local` | migrate + bootstrap + seed (local dev, one-shot). |
 | `bootstrap_platform` | Create the admin user and default workspace (idempotent). |
 | `seed_platform` | Import scenario packs and model connections, plus demo runs (`seed_demo_audits`) and the demo "Support Refund Assistant" agent (skip with `--skip-demo-agent`). |
-| `seed_agentic_scenarios` | Seed the dedicated Acme Agentic Safety scenario set. |
+| `seed_agentic_scenarios` | Seed the default agentic audit scenario set (D01-D10). |
 | `seed_agentic_demo` | Preload completed synthetic results, traces, and a separate Agentic verdict rollup after the demo Agent sync; never runs an audit or calls a model. |
 | `dev` | Local dev stack (embedded, hot-reload, chat, one-time sign-in). `--disable-chat`, `--no-worker`, `--no-reload`, `--no-browser`. |
 | `dev_server` | Lower-level version of the same stack. Use `dev` instead. |

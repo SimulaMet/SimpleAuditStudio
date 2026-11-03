@@ -4,6 +4,9 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
+from .checks.retrieval import _captured_tool_sources, _source_values
+from .schema import AgentTrajectory
+
 #: Version strings recorded in every judgement payload so results are
 #: reproducible against a specific prompt/model contract.
 PROMPT_VERSION = "agentic-semantic-v1"
@@ -12,7 +15,10 @@ UNCERTAIN_REASON_LLM_UNAVAILABLE = "llm_unavailable"
 #: Per-field size caps for the evidence packet sent to the judge model.
 _MAX_FIELD_CHARS = 800
 _MAX_TOOL_STEPS = 25
-_MAX_RESULT_EXCERPT = 400
+_MAX_ARGUMENT_CHARS = 400
+_MAX_RESULT_CHARS = 1600
+_MAX_LEAF_CHARS = 240
+_MAX_LIST_ITEMS = 10
 
 
 @dataclass
@@ -28,6 +34,40 @@ class SemanticJudgmentResult:
 def _bounded(value: Any, limit: int = _MAX_FIELD_CHARS) -> str:
     text = value if isinstance(value, str) else json.dumps(value, default=str, ensure_ascii=False)
     return text if len(text) <= limit else text[:limit] + "…[truncated]"
+
+
+def _compact(value: Any) -> Any:
+    """Keep the observed content of a result: drop empty fields, cap long text and long lists."""
+    if isinstance(value, str):
+        return value if len(value) <= _MAX_LEAF_CHARS else value[:_MAX_LEAF_CHARS] + "…"
+    if isinstance(value, dict):
+        return {key: _compact(item) for key, item in value.items() if item not in (None, "", [], {})}
+    if isinstance(value, list):
+        items = [_compact(item) for item in value[:_MAX_LIST_ITEMS]]
+        if len(value) > _MAX_LIST_ITEMS:
+            items.append(f"… {len(value) - _MAX_LIST_ITEMS} more")
+        return items
+    return value
+
+
+def _compact_result(result: Any) -> str:
+    """Any tool result, parsed when it is JSON, compacted and bounded."""
+    if isinstance(result, str):
+        try:
+            result = json.loads(result)
+        except json.JSONDecodeError:
+            return _bounded(result, _MAX_RESULT_CHARS)
+    return _bounded(json.dumps(_compact(result), ensure_ascii=False, default=str), _MAX_RESULT_CHARS)
+
+
+def _retrieved_sources(trajectory: AgentTrajectory) -> list[str]:
+    """Sources of every document the trace shows, whichever step returned it."""
+    sources: set[str] = set()
+    for step in trajectory.steps:
+        sources.update(_source_values(step.attributes.get("gen_ai.retrieval.documents")))
+        if step.kind == "tool":
+            sources.update(_captured_tool_sources(step))
+    return sorted(sources)
 
 
 def build_tool_result_handling_prompt(
@@ -107,16 +147,11 @@ def build_evidence_packet(
         tool_steps.append({
             "span_id": step.span_id,
             "name": step.tool_name or step.name,
-            "arguments": _bounded(step.arguments, _MAX_RESULT_EXCERPT),
-            "result_excerpt": _bounded(step.result, _MAX_RESULT_EXCERPT),
+            "arguments": _bounded(step.arguments, _MAX_ARGUMENT_CHARS),
+            "result": _compact_result(step.result),
             "status": step.status,
         })
-    retrieval_sources = sorted({
-        ref
-        for step in steps
-        if getattr(step, "kind", None) == "retrieval"
-        for ref in (getattr(step, "source_refs", None) or [])
-    })
+    retrieval_sources = _retrieved_sources(trajectory)
     return {
         "task": _bounded(task),
         "expectations": list(expectations or []),

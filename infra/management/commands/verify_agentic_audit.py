@@ -149,7 +149,7 @@ def _evaluator_check() -> list[tuple[str, bool, str]]:
     missing = evaluate(AgentTrajectory(), None, {})
     forbidden = evaluate(
         AgentTrajectory(steps=[TrajectoryStep(span_id="tool-1", kind="tool", name="forbidden")]),
-        {"agentic": {"tools": {"expected": [], "forbidden": ["forbidden"]}}}, {},
+        {"agentic": {"schema_version": 2, "rules": [{'type': 'check', 'select': {'kind': 'tool', 'where': [{'field': 'tool.name', 'op': 'equals', 'value': 'forbidden'}]}, 'check': 'none'}]}}, {},
     )
     return [
         ("missing-content-inconclusive", missing.get("status") == "INCONCLUSIVE", repr(missing.get("status"))),
@@ -166,13 +166,14 @@ def _trajectory_check() -> tuple[str, bool, str]:
         TrajectoryStep(span_id="t", kind="tool", name="lookup"),
     ])
     result = evaluate(trajectory, {"agentic": {
-        "trajectory": {
-            "required_sequence": [{"kind": "retrieval"}, {"kind": "tool"}],
-            "order_mode": "exact",
-        },
+        "schema_version": 2,
+        "rules": [
+            {'type': 'check', 'select': {'kind': 'any', 'where': [{'field': 'span.kind', 'op': 'equals', 'value': 'retrieval'}]}, 'check': 'exists'},
+            {'type': 'check', 'select': {'kind': 'tool', 'where': [{'field': 'tool.name', 'op': 'equals', 'value': 'lookup'}]}, 'check': 'count', 'expect': {'op': 'at_least', 'value': 1}},
+        ],
     }})
     statuses = {item["id"]: item["status"] for item in result["checks"]}
-    return "trajectory-sequence-check", statuses.get("trajectory.exact_sequence") == "PASS", repr(statuses)
+    return "trajectory-rule-check", statuses.get("rule.0.check") == "PASS" and statuses.get("rule.1.check") == "PASS", repr(statuses)
 
 
 def _verdict_check() -> tuple[str, bool, str]:
@@ -208,7 +209,8 @@ def _fixture_provenance_check() -> tuple[str, str, str]:
 
 def _ui_check() -> tuple[str, bool, str]:
     source = RESULT_PANEL_PATH.read_text()
-    valid = "check.evidence_span_ids" in source and "rep.trace" in source
+    # Check evidence links are rendered on the verdict cards (agentic-span-link to trace anchors).
+    valid = "agentic-span-link" in source and "trace-span-" in source
     return "ui-evidence-linking", valid, "result panel does not render check or trace evidence"
 
 
@@ -337,9 +339,9 @@ class Command(BaseCommand):
     @staticmethod
     def _acme_pack_is_valid() -> bool:
         from audits.agentic.schema_v2 import validate_agentic_metadata
-        from infra.management.commands.seed_agentic_scenarios import SCENARIOS
+        from infra.fixtures.agentic_scenarios import AGENTIC_SCENARIOS
 
-        return bool(SCENARIOS) and all(
+        return bool(AGENTIC_SCENARIOS) and all(
             validate_agentic_metadata(spec.get("metadata", {}).get("agentic", {}))[0]
-            for spec in SCENARIOS.values()
+            for spec in AGENTIC_SCENARIOS
         )

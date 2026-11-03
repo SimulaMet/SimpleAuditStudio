@@ -11,14 +11,15 @@ def compose_agentic_judge(
     Base judge (safety/boundaries/etc) still runs for final response.
     Agentic extension evaluates process quality.
     """
-    if not agentic_config.get("semantic_judge", {}).get("enabled"):
+    semantic = agentic_config.get("semantic_judge") or {}
+    if not semantic.get("enabled"):
         return base_judge_spec
 
     composed = dict(base_judge_spec)
     criteria = list(base_judge_spec.get("criteria", []))
 
     # Add agentic criteria to existing ones
-    agentic_criteria = agentic_config.get("semantic_judge", {}).get("criteria", [])
+    agentic_criteria = semantic.get("criteria", [])
     criteria.extend(agentic_criteria)
 
     composed["criteria"] = criteria

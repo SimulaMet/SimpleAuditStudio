@@ -14,7 +14,7 @@ class ClassifySpanTest(SimpleTestCase):
         self.assertEqual(classify_span(_span("x", **{"gen_ai.tool.name": "acme_get_order"})), "tool")
 
     def test_retrieval_attribute_is_retrieval(self):
-        self.assertEqual(classify_span(_span("x", **{"openwebui.retrieval.data_source": ["kb"]})), "retrieval")
+        self.assertEqual(classify_span(_span("x", **{"gen_ai.retrieval.documents": [{"source": "kb"}]})), "retrieval")
 
     def test_gen_ai_chat_is_inference(self):
         self.assertEqual(classify_span(_span("chat", **{"gen_ai.operation.name": "chat"})), "inference")

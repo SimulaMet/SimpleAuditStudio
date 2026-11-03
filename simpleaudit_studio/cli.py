@@ -259,10 +259,6 @@ def main() -> None:
         else:
             print()
 
-    # Optional Pipelines filter service (chat -> Langfuse tracing). Opt-in via
-    # SIMPLEAUDIT_PIPELINES; a failed start never blocks the stack.
-    _start_pipelines_sidecar()
-
     username = os.environ.get("BOOTSTRAP_USERNAME", "studio")
     password = os.environ.get("BOOTSTRAP_PASSWORD", "localdevpass123")
 
@@ -321,47 +317,12 @@ def main() -> None:
         try:
             stop_embedded_hatchet()
         finally:
-            _stop_pipelines_sidecar()
             if chat_process is not None:
                 from chat.proxy import stop_open_webui
 
                 stop_open_webui()
             if mock_server is not None:
                 mock_server.shutdown()
-
-
-def _start_pipelines_sidecar():
-    """Start the Studio Pipelines filter service when SIMPLEAUDIT_PIPELINES is on.
-
-    A failed start never blocks the stack — it logs and returns None, exactly
-    like chat. Returns the process, or None when disabled or failed.
-    """
-    from chat import pipelines_sidecar
-
-    if not pipelines_sidecar.enabled():
-        return None
-    print("📡 Starting pipelines filter service (chat tracing)...")
-    try:
-        process = pipelines_sidecar.start()
-    except (OSError, RuntimeError) as exc:
-        print(f"⚠️  Pipelines service could not start ({exc}); continuing without it.")
-        return None
-    if process is None:
-        print("⚠️  Pipelines service did not come up; continuing without it.")
-        return None
-    print(f"   Chat tracing endpoint: http://127.0.0.1:{pipelines_sidecar.port()}/v1/models\n")
-    return process
-
-
-def _stop_pipelines_sidecar() -> None:
-    try:
-        from chat.pipelines_sidecar import stop
-
-        stop()
-    except Exception:  # teardown must never block shutdown
-        import logging
-
-        logging.getLogger(__name__).exception("Pipelines teardown skipped")
 
 
 def _set_embedded_chat_defaults(*, disable_chat: bool) -> None:
@@ -400,9 +361,6 @@ def start_chat(chat_proxy, internal_port: int):
             backfilled = _backfill_demo_chat()
             if backfilled:
                 print(f"   {backfilled}", flush=True)
-            agentic_demo = _backfill_agentic_demo()
-            if agentic_demo:
-                print(f"   {agentic_demo}", flush=True)
         elif process.poll() is not None:
             print(f"\n⚠️  Chat stopped (exit {process.returncode}). Studio is unaffected.")
             print(f"   What happened: {chat_proxy.log_path()}\n", flush=True)
@@ -420,15 +378,9 @@ def _sync_chat_models() -> str:
     Signals keep it in step afterwards (chat/signals.py); this is the first one,
     for a chat that has just started or was off while connections changed.
     """
-    from chat.api import ChatAPIError
-    from chat.sync import push_now
+    from chat.sync import startup_sync
 
-    try:
-        result = push_now()
-    except ChatAPIError as exc:
-        return f"Models not synced to chat: {exc}"
-    kept = f", kept {result['kept']} added in chat" if result["kept"] else ""
-    return f"Synced {result['pushed']} model connection(s) to chat{kept}."
+    return " ".join(startup_sync())
 
 
 def _backfill_demo_chat() -> str:
@@ -460,28 +412,6 @@ def _backfill_demo_chat() -> str:
     except Exception as exc:  # noqa: BLE001 - runs in a startup thread; don't crash it
         print(f"   Demo chat backfill skipped: {exc}", flush=True)
         return ""
-
-
-def _backfill_agentic_demo() -> str:
-    """Preload the synthetic completed Agentic example after Agent sync."""
-    from io import StringIO
-
-    from django.contrib.auth import get_user_model
-    from django.core.management import call_command
-
-    from accounts.models import Project
-
-    user = get_user_model().objects.order_by("id").first()
-    project = Project.objects.order_by("id").first()
-    if user is None or project is None:
-        return ""
-    output = StringIO()
-    try:
-        call_command("seed_agentic_demo", project=project.id, stdout=output, verbosity=0)
-    except Exception as exc:  # noqa: BLE001 - startup demo data must not prevent Studio running
-        print(f"   Preloaded Agentic example not ready: {exc}", flush=True)
-        return ""
-    return output.getvalue().strip()
 
 
 def _ensure_ports_available(args) -> None:
