@@ -69,3 +69,19 @@ def test_rule_the_form_cannot_edit_is_rejected_on_save_with_its_number(rule, mes
     # The editor keeps such a rule as typed under "Edit as JSON"; saving names it.
     with pytest.raises(ValueError, match=f"rule 2: {message}"):
         _merge_structured_agentic_fields({}, _post(agentic_rules_json=json.dumps([_VALID, rule])))
+
+
+def test_not_one_of_saved_by_the_old_editor_is_still_accepted():
+    # Rules stored before the editor split not_one_of values must stay valid.
+    rule = {"type": "check", "select": {"kind": "tool", "where": [
+        {"field": "tool.name", "op": "not_one_of", "value": "lookup,refund"}]}, "check": "none"}
+    merged = _merge_structured_agentic_fields({}, _post(agentic_rules_json=json.dumps([rule])))
+    assert merged["agentic"]["rules"] == [rule]
+
+
+def test_between_condition_without_two_numbers_is_rejected_on_save():
+    # The old editor turned "1,5" into NaN, which JSON stores as null.
+    rule = {"type": "check", "select": {"kind": "tool", "where": [
+        {"field": "tool.argument.n", "op": "between", "value": None}]}, "check": "exists"}
+    with pytest.raises(ValueError, match="rule 2: condition 1: 'between' needs two numbers, low first"):
+        _merge_structured_agentic_fields({}, _post(agentic_rules_json=json.dumps([_VALID, rule])))
