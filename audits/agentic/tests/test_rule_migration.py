@@ -38,3 +38,22 @@ def test_all_of_groups_are_flattened_into_separate_rules():
 def test_metadata_without_rules_is_unchanged():
     metadata = {"agentic": {"trace": {"required": True}}}
     assert migration.convert_metadata(metadata) == metadata
+
+
+def test_unsupported_rules_kept_by_the_migration_pass_validation_and_are_inconclusive():
+    from audits.agentic.checks.rules import rule_checks
+    from audits.agentic.expectations import validate_agentic_metadata
+    from audits.agentic.trajectory import normalize
+
+    metadata = migration.convert_metadata({"agentic": {"schema_version": 2, "enforcement": {}, "rules": [
+        {"type": "precedes", "first": "a", "then": "b"}]}})
+    converted = metadata["agentic"]["rules"]
+    assert validate_agentic_metadata(metadata).rules == converted
+    trace = normalize([{"span_id": "t1", "name": "execute_tool", "attributes": {
+        "gen_ai.operation.name": "execute_tool", "gen_ai.tool.name": "a"}}])
+    assert [check.status for check in rule_checks(trace, converted)] == ["INCONCLUSIVE"]
+
+
+def test_only_the_migration_shape_of_an_unsupported_rule_skips_validation():
+    junk = {"type": "check", "check": "unsupported", "select": "junk"}
+    assert validate_rules([junk]) != []
