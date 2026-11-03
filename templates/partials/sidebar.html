@@ -11,7 +11,7 @@ set before paint in base.html). Mobile: an off-canvas drawer opened from the top
       <img src="{% static 'logo.svg' %}?v=3" alt="SimpleAudit" class="h-8 w-8 object-contain rounded-lg shrink-0">
       <span class="sidebar-label ml-2 text-sm font-semibold text-gray-300 whitespace-nowrap group-hover:text-gray-100 transition-colors">SimpleAudit Studio</span>
     </a>
-    <button type="button" data-sidebar-close class="md:hidden ml-auto w-8 h-8 rounded-lg text-gray-400 hover:text-gray-100 hover:bg-surface-overlay" aria-label="Close menu" title="Close menu">✕</button>
+    <button type="button" data-sidebar-close class="md:hidden ml-auto w-8 h-8 rounded-lg text-gray-400 hover:text-gray-100 hover:bg-surface-overlay" aria-label="Close menu" title="Close menu">{% include "partials/icon.html" with name="x" cls="w-4 h-4 mx-auto" %}</button>
   </div>
 
   <!-- Outside the scrolling nav so its menu isn't clipped. -->
@@ -21,7 +21,7 @@ set before paint in base.html). Mobile: an off-canvas drawer opened from the top
       <button type="button" id="workspace-switcher-btn" aria-haspopup="true" aria-expanded="false"
               aria-label="Workspace: {{ request.project.name|default:'none' }}"
               class="sb-item w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm bg-surface-overlay border border-gray-700/60 text-gray-200 hover:border-accent/40 transition-colors">
-        <span class="sb-icon text-base w-5 text-center shrink-0" aria-hidden="true">▣</span>
+        <span class="sb-icon text-base w-5 text-center shrink-0" aria-hidden="true">{% include "partials/icon.html" with name="briefcase" %}</span>
         <span class="sidebar-label flex-1 text-left truncate font-medium">{{ request.project.name|default:"No workspace" }}</span>
         <span class="sidebar-label text-sm text-gray-400 shrink-0 leading-none" aria-hidden="true">▾</span>
       </button>

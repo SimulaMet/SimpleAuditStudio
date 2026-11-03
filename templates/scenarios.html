@@ -116,11 +116,11 @@
               <span class="ml-2 text-xs text-gray-600" title="Revision {{ item.revision.revision }} of this scenario: each edit to its description or expected behaviour adds a revision">rev {{ item.revision.revision }}</span>
             </div>
             <div class="flex gap-1 shrink-0">
-              <button data-write onclick="openEditForm({{ item.scenario.id }}, event)" title="Edit scenario" aria-label="Edit scenario" class="w-7 h-7 text-xs text-gray-500 hover:text-accent">✎</button>
+              <button data-write onclick="openEditForm({{ item.scenario.id }}, event)" title="Edit scenario" aria-label="Edit scenario" class="w-7 h-7 text-xs text-gray-500 hover:text-accent">{% include "partials/icon.html" with name="pencil" cls="w-3.5 h-3.5 mx-auto" %}</button>
               <form method="post" data-write action="{% url 'scenario_delete' item.scenario.id %}" data-confirm="Delete this scenario?" onclick="event.stopPropagation()">
                 {% csrf_token %}
                 <input type="hidden" name="set_id" value="{{ selected.id }}">
-                <button title="Delete scenario" aria-label="Delete scenario" class="w-7 h-7 text-xs text-gray-600 hover:text-red-400">✕</button>
+                <button title="Delete scenario" aria-label="Delete scenario" class="w-7 h-7 text-xs text-gray-600 hover:text-red-400">{% include "partials/icon.html" with name="trash-2" cls="w-3.5 h-3.5 mx-auto" %}</button>
               </form>
             </div>
           </div>

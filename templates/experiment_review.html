@@ -34,14 +34,14 @@
     {% endif %}
     {% if repeat %}
     <div class="text-sm text-gray-300 bg-accent/10 border border-accent/30 rounded-lg px-3 py-2">
-      <p><span class="text-accent">↻ Repeats {{ repeat_label }}.</span>
+      <p><span class="text-accent"><span class="inline-flex items-center gap-1">{% include "partials/icon.html" with name="refresh-cw" cls="w-3.5 h-3.5" %}Repeats {{ repeat_label }}.</span></span>
         {% if repeat.start == "at" %}Nothing runs now; the first runs start {{ repeat_first_local|date:"D M j, H:i" }} ({{ repeat.timezone }}).
         {% else %}Runs start now, then repeat from {{ repeat_first_local|date:"D M j, H:i" }} ({{ repeat.timezone }}).{% endif %}</p>
       <p class="text-xs text-gray-500 mt-0.5">Each selected run becomes a monitor, charted over time on the experiment page.</p>
     </div>
     {% endif %}
     {% for w in design_warnings %}
-    <p class="text-xs text-amber-300 bg-amber-900/20 rounded-lg px-3 py-2">⚠ {{ w }}</p>
+    <p class="text-xs text-amber-300 bg-amber-900/20 rounded-lg px-3 py-2">{% include "partials/icon.html" with name="triangle-alert" cls="w-3.5 h-3.5 -mt-0.5 mr-1" %}{{ w }}</p>
     {% endfor %}
   </div>
 
@@ -76,7 +76,7 @@
               <input type="text" name="run-{{ r.i }}-name" value="{{ r.name }}" maxlength="250" aria-label="Run name"
                      class="w-full px-2 py-1 rounded bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-2 focus:ring-accent/50">
               <p class="mt-1 text-[11px] text-gray-500" data-settings-summary></p>
-              {% for w in r.warnings %}<p class="mt-1 text-[11px] text-amber-300">⚠ {{ w }}</p>{% endfor %}
+              {% for w in r.warnings %}<p class="mt-1 text-[11px] text-amber-300">{% include "partials/icon.html" with name="triangle-alert" cls="w-3.5 h-3.5 -mt-0.5 mr-1" %}{{ w }}</p>{% endfor %}
             </td>
             <td class="px-2 py-2 align-top text-right whitespace-nowrap">
               <button type="button" data-edit class="text-xs text-gray-400 hover:text-accent" aria-expanded="false">Edit</button>

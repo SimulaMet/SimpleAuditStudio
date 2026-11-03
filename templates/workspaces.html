@@ -16,7 +16,7 @@
   {% for card in workspace_cards %}
   <div class="bg-surface-raised rounded-xl border p-4 {% if card.is_current %}border-accent/40{% else %}border-gray-800{% endif %}">
     <div class="flex items-center gap-2 mb-1">
-      <span class="text-base">▣</span>
+      <span class="text-gray-400">{% include "partials/icon.html" with name="briefcase" %}</span>
       <span class="font-medium text-gray-100 truncate">{{ card.project.name }}</span>
       {% if card.is_current %}<span class="text-[10px] bg-accent/20 text-accent rounded px-1.5 py-0.5 shrink-0">Current</span>{% endif %}
       {% if card.project.archived %}<span class="text-[10px] bg-gray-700/60 text-gray-300 rounded px-1.5 py-0.5 shrink-0" title="Archived — read-only">Archived</span>{% endif %}

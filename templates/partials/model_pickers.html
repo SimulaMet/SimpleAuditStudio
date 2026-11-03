@@ -52,7 +52,7 @@ Field names match the single-select partial so one-run posts look the same.
              class="px-2.5 pt-2 pb-1 text-[10px] uppercase tracking-wide text-gray-600 flex items-center gap-1.5">
             <span>{{ conn.name }}</span>
             {% if conn.is_shared %}
-            <span class="normal-case px-1 py-0.5 rounded bg-violet-900/40 text-violet-300" title="{{ conn.share_label }} — from {{ conn.project.name }}. Uses that workspace's API key.">⇄ shared</span>
+            <span class="normal-case px-1 py-0.5 rounded bg-violet-900/40 text-violet-300" title="{{ conn.share_label }} — from {{ conn.project.name }}. Uses that workspace's API key."><span class="inline-flex items-center gap-1">{% include "partials/icon.html" with name="arrow-left-right" cls="w-3 h-3" %}shared</span></span>
             {% else %}
             <span class="normal-case px-1 py-0.5 rounded bg-gray-800 text-gray-500" title="{{ conn.share_label }}">this workspace</span>
             {% endif %}

@@ -244,7 +244,7 @@ class PickerSharingTests(TestCase):
     def test_picker_lists_shared_model_with_label(self):
         page = self.client.get("/experiments/new/")
         self.assertContains(page, "Shared GPT")
-        self.assertContains(page, "⇄ shared")
+        self.assertContains(page, "shared</span>")
         # The model checkbox is present and usable.
         self.assertContains(page, f'value="{self.model.id}"')
 

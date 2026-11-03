@@ -5,7 +5,7 @@
       <img src="{% static 'logo.svg' %}?v=3" alt="SimpleAudit" class="h-8 w-8 object-contain rounded-lg shrink-0">
       <span class="sidebar-label ml-2 text-sm font-semibold text-gray-300 whitespace-nowrap group-hover:text-gray-100 transition-colors">SimpleAudit Studio</span>
     </a>
-    <button type="button" data-sidebar-close class="md:hidden ml-auto w-8 h-8 rounded-lg text-gray-400 hover:text-gray-100 hover:bg-surface-overlay" aria-label="Close menu" title="Close menu">✕</button>
+    <button type="button" data-sidebar-close class="md:hidden ml-auto w-8 h-8 rounded-lg text-gray-400 hover:text-gray-100 hover:bg-surface-overlay" aria-label="Close menu" title="Close menu">{% include "partials/icon.html" with name="x" cls="w-4 h-4 mx-auto" %}</button>
   </div>
 
   <!-- File tree (rendered by the visualizer SPA) -->

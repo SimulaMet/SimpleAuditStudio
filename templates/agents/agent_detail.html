@@ -79,7 +79,7 @@
         </p>
         {% else %}
         <p class="text-xs text-amber-400">
-          ⚠ Registered in Studio as <code class="font-mono text-[11px]">{{ agent.external_id }}</code>,
+          {% include "partials/icon.html" with name="triangle-alert" cls="w-3.5 h-3.5 -mt-0.5 mr-1" %}Registered in Studio as <code class="font-mono text-[11px]">{{ agent.external_id }}</code>,
           but the chat entry is not reachable right now. Save the agent to retry the sync.
         </p>
         {% endif %}
@@ -343,7 +343,7 @@
   <div class="p-5 space-y-4">
     <div class="flex items-center justify-between">
       <h2 class="text-base font-semibold text-gray-100">Expose <span id="expose-model-name"></span> via API</h2>
-      <button type="button" data-dialog-close aria-label="Close" title="Close" class="w-7 h-7 rounded text-gray-500 hover:text-gray-200">✕</button>
+      <button type="button" data-dialog-close aria-label="Close" title="Close" class="w-7 h-7 rounded text-gray-500 hover:text-gray-200">{% include "partials/icon.html" with name="x" cls="w-3.5 h-3.5 mx-auto" %}</button>
     </div>
     <p class="text-xs text-gray-400">Point any OpenAI-compatible client at this endpoint with your personal API key. The key acts as you — it can only call agents you can see.</p>
 

@@ -82,14 +82,14 @@
           </a>
           <div class="absolute right-2 top-1.5 flex items-center gap-1" data-write>
             <a href="?v={{ v.version }}#content" title="Edit starting from v{{ v.version }}; saving creates a new version" aria-label="Edit from v{{ v.version }}"
-               class="text-xs text-gray-500 hover:text-accent">✎</a>
+               class="text-xs text-gray-500 hover:text-accent">{% include "partials/icon.html" with name="pencil" cls="w-3.5 h-3.5" %}</a>
             {% if versions|length > 1 %}
             <form method="post" action="{% url 'prompts' %}" data-confirm="Delete {{ prompt.name }} v{{ v.version }}? Other versions keep their numbers.">
               {% csrf_token %}<input type="hidden" name="action" value="delete_version"><input type="hidden" name="version_id" value="{{ v.id }}">
-              <button title="Delete v{{ v.version }}" aria-label="Delete v{{ v.version }}" class="text-xs text-gray-600 hover:text-red-400">✕</button>
+              <button title="Delete v{{ v.version }}" aria-label="Delete v{{ v.version }}" class="text-xs text-gray-600 hover:text-red-400">{% include "partials/icon.html" with name="trash-2" cls="w-3.5 h-3.5" %}</button>
             </form>
             {% else %}
-            <span class="text-xs text-gray-700 cursor-help" title="The only version: delete the prompt instead" aria-hidden="true">✕</span>
+            <span class="text-xs text-gray-700 cursor-help" title="The only version: delete the prompt instead" aria-hidden="true">{% include "partials/icon.html" with name="trash-2" cls="w-3.5 h-3.5" %}</span>
             {% endif %}
           </div>
           {% if v.previous_number %}

@@ -11,17 +11,17 @@
   <div class="flex items-center gap-2 shrink-0">
     {% if run.experiment %}
     <a href="{% url 'experiment_detail' run.experiment.id %}" title="Part of experiment “{{ run.experiment.name }}” — open its comparison" class="inline-flex items-center gap-1.5 h-8 px-2.5 rounded-lg bg-surface-overlay text-gray-300 text-xs font-medium hover:text-accent transition-colors">
-      <span aria-hidden="true">⊞</span><span>Experiment</span>
+      {% include "partials/icon.html" with name="layers" cls="w-4 h-4" %}<span>Experiment</span>
     </a>
     {% endif %}
     {% if user.is_authenticated %}
     {% if run.monitor %}
     <a href="{% url 'monitor_detail' run.monitor.id %}" title="Repeats as monitor “{{ run.monitor.name }}” ({{ run.monitor.interval_display }}) — open its drift chart" class="inline-flex items-center gap-1.5 h-8 px-2.5 rounded-lg bg-accent/15 text-accent text-xs font-medium hover:bg-accent/25 transition-colors">
-      <span aria-hidden="true">↻</span><span>Monitor</span>
+      {% include "partials/icon.html" with name="refresh-cw" cls="w-4 h-4" %}<span>Monitor</span>
     </a>
     {% elif can_schedule %}
     <a href="{% url 'new_experiment' %}?clone_from={{ run.id }}&repeat=168#schedule-card" title="Repeat this exact run on a schedule to track drift" aria-label="Monitor for drift" class="inline-flex items-center gap-1.5 h-8 px-2.5 rounded-lg bg-surface-overlay text-gray-400 text-xs font-medium hover:text-accent transition-colors">
-      <span aria-hidden="true" class="text-sm">↻</span><span class="hidden sm:inline">Monitor for drift</span>
+      {% include "partials/icon.html" with name="refresh-cw" cls="w-4 h-4" %}<span class="hidden sm:inline">Monitor for drift</span>
     </a>
     {% endif %}
     <a href="{% url 'new_experiment' %}?clone_from={{ run.id }}" title="Clone this run" aria-label="Clone this run" class="inline-flex items-center justify-center w-8 h-8 rounded-lg bg-surface-overlay text-gray-400 hover:text-accent transition-colors">

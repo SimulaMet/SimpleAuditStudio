@@ -87,6 +87,10 @@
     button:disabled, [aria-disabled="true"] { cursor: not-allowed; opacity: .5; }
     [data-href] { cursor: pointer; }
     tr[data-href]:focus-visible { outline-offset: -2px; }
+    /* WCAG 2.2 target size (24px minimum) for standalone small controls. */
+    button, [role="button"], summary, select, input:not([type="checkbox"]):not([type="radio"]):not([type="hidden"]) { min-height: 1.5rem; }
+    /* Not the top bar (fixed 48px): its stacked title/breadcrumb must keep natural line height. */
+    :where(main, footer) a:where(.text-xs, .text-sm, [class*="text-[11px]"], [class*="text-[10px]"]) { display: inline-block; min-height: 1.5rem; line-height: 1.5rem; }
     @media (pointer: coarse) { .w-7.h-7 { min-width: 2.75rem; min-height: 2.75rem; } }
     @media (prefers-reduced-motion: reduce) { *, ::before, ::after { transition-duration: .01ms !important; animation-duration: .01ms !important; } }
   </style>

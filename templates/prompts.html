@@ -24,7 +24,7 @@
   <section class="bg-surface-raised rounded-xl border border-gray-800 hover:border-accent/40 transition-colors cursor-pointer flex flex-col min-w-0"
            data-href="{% url 'prompt_detail' p.id %}" data-prompt data-search="{{ p.name|lower }} {{ p.description|lower }}">
     <header class="flex items-start gap-3 px-4 pt-4">
-      <span class="w-9 h-9 shrink-0 rounded-lg bg-accent/15 text-accent flex items-center justify-center" aria-hidden="true">¶</span>
+      <span class="w-9 h-9 shrink-0 rounded-lg bg-accent/15 text-accent flex items-center justify-center" aria-hidden="true">{% include "partials/icon.html" with name="pilcrow" cls="w-4 h-4" %}</span>
       <div class="min-w-0 flex-1">
         <div class="flex flex-wrap items-center gap-2">
           <a href="{% url 'prompt_detail' p.id %}" class="text-sm font-semibold text-gray-100 hover:text-accent">{{ p.name }}</a>

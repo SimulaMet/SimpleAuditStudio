@@ -41,9 +41,9 @@
           <h2 class="text-sm font-semibold text-gray-100">{{ conn.name }}</h2>
           <span class="px-1.5 py-0.5 rounded bg-gray-800 text-[10px] text-gray-400 uppercase tracking-wide">{{ conn.provider }}</span>
           {% if conn.is_shared %}
-          <span class="px-1.5 py-0.5 rounded bg-violet-900/40 text-violet-300 text-[10px]" title="{{ conn.share_label }} — shared into this workspace by {{ conn.project.name }}. Read-only here.">⇄ shared · {{ conn.project.name }}</span>
+          <span class="px-1.5 py-0.5 rounded bg-violet-900/40 text-violet-300 text-[10px]" title="{{ conn.share_label }} — shared into this workspace by {{ conn.project.name }}. Read-only here."><span class="inline-flex items-center gap-1">{% include "partials/icon.html" with name="arrow-left-right" cls="w-3 h-3" %}shared · {{ conn.project.name }}</span></span>
           {% else %}
-          <span class="px-1.5 py-0.5 rounded bg-gray-800 text-[10px] text-gray-400" title="{{ conn.share_label }}">⌂ this workspace</span>
+          <span class="px-1.5 py-0.5 rounded bg-gray-800 text-[10px] text-gray-400" title="{{ conn.share_label }}"><span class="inline-flex items-center gap-1">{% include "partials/icon.html" with name="house" cls="w-3 h-3" %}this workspace</span></span>
           {% endif %}
           {% if not conn.enabled %}<span class="px-1.5 py-0.5 rounded bg-gray-800 text-[10px] text-gray-400" title="Its models can't be picked for new runs">disabled</span>{% endif %}
           {% if conn.can_edit %}
@@ -69,13 +69,13 @@
                 class="px-2.5 py-1 rounded-lg text-xs text-gray-300 bg-surface-overlay hover:text-white">OTLP</button>
         {% endif %}
         <button type="button" data-write data-conn-open="{{ conn.id }}" title="Edit connection" aria-label="Edit connection {{ conn.name }}"
-                class="w-7 h-7 rounded-lg text-gray-400 hover:text-accent hover:bg-surface-overlay">✎</button>
+                class="w-7 h-7 rounded-lg text-gray-400 hover:text-accent hover:bg-surface-overlay">{% include "partials/icon.html" with name="pencil" cls="w-3.5 h-3.5 mx-auto" %}</button>
         {% if conn.in_use %}
         <span class="w-7 h-7 inline-flex items-center justify-center text-gray-600 cursor-help" title="Can't delete: runs or monitors use its models"><svg class="w-3.5 h-3.5" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 1a3.5 3.5 0 0 0-3.5 3.5V6H4a1.5 1.5 0 0 0-1.5 1.5v6A1.5 1.5 0 0 0 4 15h8a1.5 1.5 0 0 0 1.5-1.5v-6A1.5 1.5 0 0 0 12 6h-.5V4.5A3.5 3.5 0 0 0 8 1Zm2 5H6V4.5a2 2 0 1 1 4 0V6Z"/></svg></span>
         {% else %}
         <form method="post" data-write action="{% url 'connection_delete' conn.id %}" data-confirm="Delete connection “{{ conn.name }}” and its {{ conn.model_list|length }} model{{ conn.model_list|length|pluralize }}?">
           {% csrf_token %}
-          <button title="Delete connection and its models" aria-label="Delete connection {{ conn.name }}" class="w-7 h-7 rounded-lg text-gray-500 hover:text-red-400 hover:bg-surface-overlay">✕</button>
+          <button title="Delete connection and its models" aria-label="Delete connection {{ conn.name }}" class="w-7 h-7 rounded-lg text-gray-500 hover:text-red-400 hover:bg-surface-overlay">{% include "partials/icon.html" with name="trash-2" cls="w-3.5 h-3.5 mx-auto" %}</button>
         </form>
         {% endif %}
         {% else %}
@@ -140,7 +140,7 @@
             {% endif %}
             <span data-write class="opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
               <button type="button" data-edit title="Edit name, model ID or description" aria-label="Edit {{ m.display_name|default:m.model_id }}"
-                      class="w-7 h-7 rounded text-gray-500 hover:text-accent">✎</button>
+                      class="w-7 h-7 rounded text-gray-500 hover:text-accent">{% include "partials/icon.html" with name="pencil" cls="w-3.5 h-3.5 mx-auto" %}</button>
               {% if m.usage %}
               <span class="inline-flex w-7 h-7 items-center justify-center text-gray-600 cursor-help" title="Used by {{ m.usage }} run{{ m.usage|pluralize }} — kept for reproducibility"><svg class="w-3.5 h-3.5" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 1a3.5 3.5 0 0 0-3.5 3.5V6H4a1.5 1.5 0 0 0-1.5 1.5v6A1.5 1.5 0 0 0 4 15h8a1.5 1.5 0 0 0 1.5-1.5v-6A1.5 1.5 0 0 0 12 6h-.5V4.5A3.5 3.5 0 0 0 8 1Zm2 5H6V4.5a2 2 0 1 1 4 0V6Z"/></svg></span>
               {% else %}
@@ -148,7 +148,7 @@
                 {% csrf_token %}
                 <input type="hidden" name="action" value="delete_model">
                 <input type="hidden" name="rm_id" value="{{ m.id }}">
-                <button title="Remove model" aria-label="Remove {{ m.display_name|default:m.model_id }}" class="w-7 h-7 rounded text-gray-500 hover:text-red-400">✕</button>
+                <button title="Remove model" aria-label="Remove {{ m.display_name|default:m.model_id }}" class="w-7 h-7 rounded text-gray-500 hover:text-red-400">{% include "partials/icon.html" with name="trash-2" cls="w-3.5 h-3.5 mx-auto" %}</button>
               </form>
               {% endif %}
             </span>
@@ -193,7 +193,7 @@
     <input type="hidden" name="conn_id" value="">
     <div class="flex items-center justify-between">
       <h2 class="text-base font-semibold text-gray-100" id="conn-dialog-title">Add connection</h2>
-      <button type="button" data-dialog-close aria-label="Close" title="Close" class="w-7 h-7 rounded text-gray-500 hover:text-gray-200">✕</button>
+      <button type="button" data-dialog-close aria-label="Close" title="Close" class="w-7 h-7 rounded text-gray-500 hover:text-gray-200">{% include "partials/icon.html" with name="x" cls="w-3.5 h-3.5 mx-auto" %}</button>
     </div>
     <div>
       <p class="block text-xs text-gray-500 mb-1.5">Start from</p>
@@ -288,7 +288,7 @@
     <input type="hidden" name="conn_id" value="">
     <div class="flex items-center justify-between">
       <h2 class="text-base font-semibold text-gray-100">Add models to <span id="models-dialog-conn"></span></h2>
-      <button type="button" data-dialog-close aria-label="Close" title="Close" class="w-7 h-7 rounded text-gray-500 hover:text-gray-200">✕</button>
+      <button type="button" data-dialog-close aria-label="Close" title="Close" class="w-7 h-7 rounded text-gray-500 hover:text-gray-200">{% include "partials/icon.html" with name="x" cls="w-3.5 h-3.5 mx-auto" %}</button>
     </div>
     <div id="discover-box">
       <div class="flex items-center gap-2 mb-2">
@@ -308,7 +308,7 @@
                class="px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm text-gray-100 focus:outline-none focus:ring-2 focus:ring-accent/50">
         <textarea name="model_description" rows="2" maxlength="1000" placeholder="Description (optional)" aria-label="Description"
                   class="sm:col-span-2 px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm text-gray-100 focus:outline-none focus:ring-2 focus:ring-accent/50"></textarea>
-        <p class="sm:col-span-2 text-[11px] text-gray-600">Name and description apply when you add a single model. Edit any model later with ✎.</p>
+        <p class="sm:col-span-2 text-[11px] text-gray-600">Name and description apply when you add a single model. Edit any model later with the pencil icon.</p>
       </div>
     </details>
     <div class="flex items-center justify-end gap-2 pt-1">
@@ -323,7 +323,7 @@
   <div class="p-5 space-y-4">
     <div class="flex items-center justify-between">
       <h2 class="text-base font-semibold text-gray-100">OTLP credential for <span id="otlp-dialog-conn"></span></h2>
-      <button type="button" data-dialog-close aria-label="Close" title="Close" class="w-7 h-7 rounded text-gray-500 hover:text-gray-200">✕</button>
+      <button type="button" data-dialog-close aria-label="Close" title="Close" class="w-7 h-7 rounded text-gray-500 hover:text-gray-200">{% include "partials/icon.html" with name="x" cls="w-3.5 h-3.5 mx-auto" %}</button>
     </div>
     <p class="text-xs text-gray-400">Issue a credential so this target can push OTLP traces to Studio. Saving the mode already in use shows the stored secret again; rotating issues a new one and stops the old one working.</p>
     <div class="flex items-center gap-2">
