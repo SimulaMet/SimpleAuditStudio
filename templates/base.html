@@ -81,6 +81,14 @@
     @media (max-width: 639.98px) {
       .agentic-tl-row { gap: .5rem; }
     }
+    /* ── Interaction affordance & accessibility ──────────────────────── */
+    :focus-visible { outline: 2px solid #6c8cff; outline-offset: 2px; }
+    button:not(:disabled), [role="button"], summary, select, label[for], input[type="checkbox"], input[type="radio"] { cursor: pointer; }
+    button:disabled, [aria-disabled="true"] { cursor: not-allowed; opacity: .5; }
+    [data-href] { cursor: pointer; }
+    tr[data-href]:focus-visible { outline-offset: -2px; }
+    @media (pointer: coarse) { .w-7.h-7 { min-width: 2.75rem; min-height: 2.75rem; } }
+    @media (prefers-reduced-motion: reduce) { *, ::before, ::after { transition-duration: .01ms !important; animation-duration: .01ms !important; } }
   </style>
 {% include "partials/ui_js.html" %}
 </head>
@@ -100,12 +108,12 @@
           </svg>
         </button>
         <div class="min-w-0">
-          <h1 class="text-sm font-semibold text-gray-200 leading-tight truncate flex items-center gap-2">
+          <div class="text-sm font-semibold text-gray-200 leading-tight truncate flex items-center gap-2">
             <a href="/" class="hover:opacity-80 transition-opacity md:hidden" title="Go to homepage">
               <img src="{% static 'logo.svg' %}?v=3" alt="SimpleAudit" class="h-4 w-4 object-contain rounded shrink-0">
             </a>
-            <a href="/" class="hover:text-accent transition-colors">{% for item in nav_items %}{% if item.active %}{{ item.label }}{% if item.active_child %} / {{ item.active_child }}{% endif %}{% endif %}{% empty %}SimpleAudit{% endfor %}</a>
-          </h1>
+            <a href="/" class="hover:text-accent transition-colors">{% for item in nav_items %}{% if item.active %}{{ item.label }}{% if item.active_child %} / {{ item.active_child }}{% endif %}{% endif %}{% empty %}SimpleAudit{% endfor %}<span class="sr-only">Studio home</span></a>
+          </div>
           <nav class="text-xs text-gray-500 leading-tight hidden sm:flex items-center gap-1 truncate" aria-label="Breadcrumb">
             <a href="/" class="hover:text-gray-300 transition-colors">Studio</a>
             {% for item in nav_items %}

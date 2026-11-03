@@ -185,8 +185,8 @@
     run(cell) {
       const d = cell.getData();
       let html = `<a href="${d.url}" class="text-gray-100 font-medium hover:text-accent" title="${esc(d.name)} · Run #${d.id}">${esc(d.name)}</a> <span class="text-gray-500 text-xs">#${d.id}</span>`;
-      if (d.experiment) html += ` <a href="/experiments/${d.experiment.id}/" class="text-[11px] text-gray-400 hover:text-accent" title="Part of experiment “${esc(d.experiment.name)}”">⊞</a>`;
-      if (d.monitor) html += ` <a href="/monitors/${d.monitor.id}/" class="text-[11px] text-accent" title="Repeats as monitor “${esc(d.monitor.name)}”">↻</a>`;
+      if (d.experiment) html += ` <a href="/experiments/${d.experiment.id}/" class="text-[11px] text-gray-400 hover:text-accent" aria-label="Part of experiment ${esc(d.experiment.name)}" title="Part of experiment “${esc(d.experiment.name)}”">⊞</a>`;
+      if (d.monitor) html += ` <a href="/monitors/${d.monitor.id}/" class="text-[11px] text-accent" aria-label="Repeats as monitor ${esc(d.monitor.name)}" title="Repeats as monitor “${esc(d.monitor.name)}”">↻</a>`;
       if (d.archived) html += ` <span class="text-[10px] text-gray-500" title="Archived">archived</span>`;
       return html;
     },

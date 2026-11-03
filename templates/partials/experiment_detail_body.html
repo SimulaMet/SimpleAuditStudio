@@ -75,9 +75,9 @@
       </thead>
       <tbody>
         {% for m in monitors %}
-        <tr class="border-b border-gray-800/50 hover:bg-surface-overlay/50 cursor-pointer" onclick="location='/monitors/{{ m.id }}/'">
+        <tr class="border-b border-gray-800/50 hover:bg-surface-overlay/50 cursor-pointer" data-href="/monitors/{{ m.id }}/">
           <td class="px-3 py-2.5 text-gray-200 max-w-[18rem]">
-            <span class="block truncate" title="{{ m.name }}">{{ m.name }}</span>
+            <a href="/monitors/{{ m.id }}/" class="block truncate hover:text-accent" title="{{ m.name }}">{{ m.name }}</a>
             {% if not m.enabled %}<span class="text-[11px] text-gray-500">paused</span>{% endif %}
             {% if m.last_error %}<span class="text-[11px] text-yellow-500" title="{{ m.last_error }}">⚠ last tick had a problem</span>{% endif %}
           </td>
@@ -188,8 +188,8 @@
       </thead>
       <tbody>
         {% for r in runs %}
-        <tr class="border-b border-gray-800/50 hover:bg-surface-overlay/50 cursor-pointer" onclick="location='/runs/{{ r.id }}/'">
-          <td class="px-3 py-2.5 text-gray-200">#{{ r.id }} <span class="text-xs text-gray-500">{{ r.name }}</span></td>
+        <tr class="border-b border-gray-800/50 hover:bg-surface-overlay/50 cursor-pointer" data-href="/runs/{{ r.id }}/">
+          <td class="px-3 py-2.5 text-gray-200"><a href="/runs/{{ r.id }}/" class="hover:text-accent">#{{ r.id }}</a> <span class="text-xs text-gray-500">{{ r.name }}</span></td>
           {% for v in r.factor_values %}<td class="px-3 py-2.5 text-xs text-gray-300 whitespace-nowrap">{{ v }}</td>{% endfor %}
           <td class="px-3 py-2.5 text-xs text-gray-400">{{ r.get_status_display }}{% if r.status != 'completed' and r.total_scenarios %} · {{ r.completed_scenarios }}/{{ r.total_scenarios }}{% endif %}</td>
           <td class="px-3 py-2.5 text-xs text-gray-200">{% if r.pass_rate is not None %}{{ r.pass_rate|floatformat:0 }}%{% else %}—{% endif %}</td>

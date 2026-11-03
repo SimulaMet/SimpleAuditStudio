@@ -18,4 +18,31 @@ document.addEventListener('submit', e => {
   const msg = e.target.dataset && e.target.dataset.confirm;
   if (msg && !confirm(msg)) e.preventDefault();
 }, true);
+// Clickable rows/cards: <tr|section data-href="/x/"> opens its detail page on click or Enter,
+// unless the click lands on a nested control. Ctrl/Cmd/middle-click opens a new tab.
+(() => {
+  const nested = 'a, button, input, select, textarea, label, summary, form, [role="button"]';
+  const target = e => { const el = e.target.closest('[data-href]'); const inner = e.target.closest(nested); return el && !(inner && el.contains(inner) && inner !== el) ? el : null; };
+  const go = (el, newTab) => newTab ? window.open(el.dataset.href, '_blank', 'noopener') : (window.location.href = el.dataset.href);
+  document.addEventListener('click', e => { const el = target(e); if (el && !window.getSelection().toString()) go(el, e.metaKey || e.ctrlKey); });
+  document.addEventListener('auxclick', e => { const el = e.button === 1 && target(e); if (el) go(el, true); });
+  document.addEventListener('keydown', e => {
+    const t = e.target;
+    if (t.matches && t.matches('[data-href]') && e.key === 'Enter') go(t, e.metaKey || e.ctrlKey);
+    else if (t.matches && t.matches('[role="button"][onclick]:not(button)') && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); t.click(); }
+  });
+  // Accessibility fallbacks for markup that predates these conventions: placeholder-only fields
+  // get an accessible name, and clickable non-interactive elements become focusable buttons.
+  document.addEventListener('DOMContentLoaded', () => {
+    document.querySelectorAll('tr[data-href]:not([tabindex])').forEach(r => r.tabIndex = 0);
+    document.querySelectorAll('input:not([type=hidden]):not([type=checkbox]):not([type=radio]), textarea, select').forEach(f => {
+      if (f.labels && f.labels.length || f.hasAttribute('aria-label') || f.hasAttribute('aria-labelledby')) return;
+      const name = f.getAttribute('placeholder') || f.getAttribute('title') || f.name || (f.tagName === 'SELECT' ? f.options[0]?.text.trim() : f.type === 'file' ? 'Choose file' : '');
+      if (name) f.setAttribute('aria-label', name.replace(/[_-]+/g, ' '));
+    });
+    document.querySelectorAll('div[onclick]:not([role]):not([tabindex]):not(.fixed)').forEach(el => {
+      if (!/stopPropagation/.test(el.getAttribute('onclick'))) { el.setAttribute('role', 'button'); el.tabIndex = 0; }
+    });
+  });
+})();
 </script>

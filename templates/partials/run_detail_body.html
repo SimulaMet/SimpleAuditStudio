@@ -523,7 +523,7 @@ function openScriptModal() {
       }).sort((x, y) => x.name.localeCompare(y.name));
       const shown = rows.slice(0, DETAIL_MAX);
       const more = rows.length - shown.length;
-      head = `<button type="button" data-back class="text-gray-500 hover:text-gray-200 mr-1" title="All turns of rep ${rep + 1}">&larr;</button>${swatch(cs.bg)}Repetition ${rep + 1} · ${cs.label} · ${ids.length}`;
+      head = `<button type="button" data-back aria-label="Back to all turns" class="text-gray-500 hover:text-gray-200 mr-1" title="All turns of rep ${rep + 1}">&larr;</button>${swatch(cs.bg)}Repetition ${rep + 1} · ${cs.label} · ${ids.length}`;
       body = `<p class="text-gray-500 mb-1.5">${pct}% of scenarios · ${kindHint(key)}${split}</p>`
         + (shown.length ? `<ul class="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-0.5 text-gray-400 max-h-48 overflow-y-auto">${shown.map(r => `<li class="flex items-center gap-2 min-w-0"><span class="truncate">${esc(r.name)}</span>${r.role ? `<span class="shrink-0 text-[10px] text-gray-500">${esc(r.role)}</span>` : ''}</li>`).join('')}</ul>` : '<p class="text-gray-500">No scenarios here right now.</p>')
         + (more > 0 ? `<p class="mt-1 text-gray-500">+${more} more</p>` : '');

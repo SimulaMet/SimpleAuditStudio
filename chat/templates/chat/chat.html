@@ -198,6 +198,7 @@ hidden (chat/embed.css), so this bar is the only way to choose models.
     {% endif %}
   </header>
   {% if has_models %}
+  <h1 style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap">Chat playground</h1>
   <iframe id="chat-frame" src="{{ chat_url }}" title="Chat" allow="clipboard-write; microphone"></iframe>
   {% else %}
   <main class="empty-state" id="no-models">

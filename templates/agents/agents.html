@@ -28,10 +28,10 @@
 <!-- List of agents (only reached when chat is on). -->
 <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
   {% for agent in agents %}
-  <section class="bg-surface-raised rounded-xl border border-gray-800 p-4 {% if not agent.enabled %}opacity-60{% endif %}">
+  <section class="bg-surface-raised rounded-xl border border-gray-800 hover:border-accent/40 transition-colors cursor-pointer p-4 {% if not agent.enabled %}opacity-60{% endif %}" data-href="{% url 'agent_detail' agent.id %}">
     <div class="flex items-start justify-between gap-2">
       <div class="min-w-0">
-        <h2 class="text-sm font-semibold text-gray-100 truncate">{{ agent.name }}</h2>
+        <h2 class="text-sm font-semibold text-gray-100 truncate"><a href="{% url 'agent_detail' agent.id %}" class="hover:text-accent">{{ agent.name }}</a></h2>
         <p class="text-xs text-gray-500 mt-0.5">{{ agent.base_model.display_name }} · {{ agent.base_model.connection.name }}</p>
       </div>
       {% if not agent.enabled %}<span class="px-1.5 py-0.5 rounded bg-gray-800 text-[10px] text-gray-400 shrink-0">disabled</span>{% endif %}

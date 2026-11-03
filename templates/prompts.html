@@ -21,8 +21,8 @@
 {% if prompts %}
 <div class="grid grid-cols-1 lg:grid-cols-2 gap-4" id="prompt-list">
   {% for p in prompts %}
-  <section class="bg-surface-raised rounded-xl border border-gray-800 flex flex-col min-w-0"
-           data-prompt data-search="{{ p.name|lower }} {{ p.description|lower }}">
+  <section class="bg-surface-raised rounded-xl border border-gray-800 hover:border-accent/40 transition-colors cursor-pointer flex flex-col min-w-0"
+           data-href="{% url 'prompt_detail' p.id %}" data-prompt data-search="{{ p.name|lower }} {{ p.description|lower }}">
     <header class="flex items-start gap-3 px-4 pt-4">
       <span class="w-9 h-9 shrink-0 rounded-lg bg-accent/15 text-accent flex items-center justify-center" aria-hidden="true">¶</span>
       <div class="min-w-0 flex-1">
@@ -51,7 +51,7 @@
       <span class="flex-1"></span>
       <form method="post" data-write data-confirm="Delete system prompt “{{ p.name }}” and its {{ p.version_count }} version{{ p.version_count|pluralize }}?">
         {% csrf_token %}<input type="hidden" name="action" value="delete"><input type="hidden" name="prompt_id" value="{{ p.id }}">
-        <button title="Delete prompt" aria-label="Delete prompt {{ p.name }}" class="w-7 h-7 rounded-lg text-gray-500 hover:text-red-400 hover:bg-surface-overlay">✕</button>
+        <button title="Delete prompt" aria-label="Delete prompt {{ p.name }}" class="w-7 h-7 rounded-lg text-gray-500 hover:text-red-400 hover:bg-surface-overlay"><svg class="w-3.5 h-3.5 mx-auto" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M10 11v6M14 11v6"/></svg></button>
       </form>
     </footer>
   </section>

@@ -27,9 +27,9 @@
       </thead>
       <tbody>
         {% for s in monitors %}
-        <tr class="border-b border-gray-800/50 hover:bg-surface-overlay/50 cursor-pointer" onclick="location='/monitors/{{ s.id }}/'">
+        <tr class="border-b border-gray-800/50 hover:bg-surface-overlay/50 cursor-pointer" data-href="/monitors/{{ s.id }}/">
           <td class="px-3 py-2.5 text-gray-200 font-medium">
-            {{ s.name }}
+            <a href="/monitors/{{ s.id }}/" class="hover:text-accent">{{ s.name }}</a>
             {% if not s.enabled %}<span class="ml-1 inline-flex px-2 py-0.5 rounded-full text-xs bg-gray-800 text-gray-400">paused</span>{% endif %}
             {% if s.last_error %}<span class="ml-1 text-yellow-500" title="{{ s.last_error }}">⚠</span>{% endif %}
             {% if s.experiment %}<a href="{% url 'experiment_detail' s.experiment.id %}" onclick="event.stopPropagation()" class="block text-[11px] text-gray-500 hover:text-accent truncate max-w-[18rem]">⊞ {{ s.experiment.name }}</a>{% endif %}

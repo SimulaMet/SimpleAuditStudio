@@ -30,8 +30,8 @@
 {% if judges %}
 <div class="grid grid-cols-1 lg:grid-cols-2 gap-4" id="judge-list">
   {% for j in judges %}
-  <section class="bg-surface-raised rounded-xl border border-gray-800 flex flex-col min-w-0"
-           data-judge data-search="{{ j.name|lower }} {{ j.description|lower }} {{ j.current.base_name|lower }} {{ j.current.output_label|lower }}">
+  <section class="bg-surface-raised rounded-xl border border-gray-800 hover:border-accent/40 transition-colors cursor-pointer flex flex-col min-w-0"
+           data-href="{% url 'judge_detail' j.id %}" data-judge data-search="{{ j.name|lower }} {{ j.description|lower }} {{ j.current.base_name|lower }} {{ j.current.output_label|lower }}">
     <header class="flex items-start gap-3 px-4 pt-4">
       <span class="w-9 h-9 shrink-0 rounded-lg bg-accent/15 text-accent flex items-center justify-center" aria-hidden="true">⚖</span>
       <div class="min-w-0 flex-1">
@@ -67,7 +67,7 @@
       {% else %}
       <form method="post" data-write data-confirm="Delete judge “{{ j.name }}” and its {{ j.version_count }} version{{ j.version_count|pluralize }}?">
         {% csrf_token %}<input type="hidden" name="action" value="delete"><input type="hidden" name="judge_id" value="{{ j.id }}">
-        <button title="Delete judge" aria-label="Delete judge {{ j.name }}" class="w-7 h-7 rounded-lg text-gray-500 hover:text-red-400 hover:bg-surface-overlay">✕</button>
+        <button title="Delete judge" aria-label="Delete judge {{ j.name }}" class="w-7 h-7 rounded-lg text-gray-500 hover:text-red-400 hover:bg-surface-overlay"><svg class="w-3.5 h-3.5 mx-auto" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M10 11v6M14 11v6"/></svg></button>
       </form>
       {% endif %}
     </footer>
