@@ -42,6 +42,9 @@
 
 
 
+  // Text that is not a number stays text: JSON has no NaN (it would be saved as null), and the
+  // server names the value it cannot use.
+  const asNumber = (text) => (text !== '' && Number.isFinite(Number(text)) ? Number(text) : text);
   const CODE_OPS = { equals: '==', not_equals: '!=', one_of: 'in', not_one_of: 'not in', contains: 'contains', at_least: '>=', at_most: '<=' };
   const codeValue = (value) => {
     if (typeof value === 'boolean') return value ? 'true' : 'false';
@@ -153,13 +156,14 @@
           const numeric = ['at_least', 'at_most', 'between'].includes(op) || (fieldFor(field)?.family === 'any' && !isNaN(Number(raw)) && raw !== '');
           const items = raw.split(',').map(s => s.trim()).filter(Boolean);
           const value = ['one_of', 'not_one_of'].includes(op) ? items
-            : op === 'between' ? items.map(Number)
-            : raw === 'true' ? true : raw === 'false' ? false : numeric && raw !== '' ? Number(raw) : raw;
+            : op === 'between' ? items.map(asNumber)
+            : raw === 'true' ? true : raw === 'false' ? false : numeric && raw !== '' ? asNumber(raw) : raw;
           return { field, op, value };
         }).filter(c => c.field);
         const expectOp = fields.querySelector('[data-eo] select').value;
         const expectRaw = fields.querySelector('[data-ev]').value.trim();
-        rule.expect = { op: expectOp, value: expectOp === 'between' ? expectRaw.split(',').map(Number) : Number(expectRaw) };
+        rule.expect = { op: expectOp, value: expectOp === 'between' ? expectRaw.split(',').map(s => asNumber(s.trim()))
+          : expectRaw === '' ? 0 : asNumber(expectRaw) };
         const fd = fields.querySelector('[data-fd]').value.trim();
         if (fd) rule.field = fd; else delete rule.field;
         fields.querySelector('[data-field-wrap]').classList.toggle('hidden', rule.check !== 'distinct');

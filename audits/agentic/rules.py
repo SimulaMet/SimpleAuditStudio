@@ -61,8 +61,11 @@ STARTERS: list[dict[str, Any]] = [
 ]
 
 
-def validate_rules(rules: Any) -> list[RuleError]:
-    """Validation problems for a rule list. An empty list means every rule is valid."""
+def validate_rules(rules: Any, values: bool = True) -> list[RuleError]:
+    """Validation problems for a rule list. An empty list means every rule is valid.
+
+    ``values=False`` skips operand values; see ``validate_check``.
+    """
     from .rule_engine import validate_check
 
     if not isinstance(rules, list):
@@ -76,7 +79,7 @@ def validate_rules(rules: Any) -> list[RuleError]:
         elif set(rule) == {"type", "check", "legacy"} and rule["check"] == "unsupported" and isinstance(rule["legacy"], dict):
             continue  # kept by migration 0004; the engine reports it as INCONCLUSIVE
         else:
-            errors.extend(RuleError(index, "check", problem) for problem in validate_check(rule))
+            errors.extend(RuleError(index, "check", problem) for problem in validate_check(rule, values))
     return errors
 
 

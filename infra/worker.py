@@ -734,7 +734,7 @@ def _scenario_execute_impl(workflow_input: ScenarioInput, ctx: Context) -> dict:
 
                     from audits.agentic.evaluate import evaluate as evaluate_agentic
                     trajectory = normalize(all_spans)
-                    expectations = validate_agentic_metadata(revision.metadata or {})
+                    expectations = validate_agentic_metadata(revision.metadata or {}, values=False)
                     evaluation = evaluate_agentic(
                         trajectory, expectations, run.agent_config_snapshot,
                         llm=None, task=revision.test_prompt or "",

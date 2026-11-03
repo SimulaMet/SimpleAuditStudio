@@ -173,7 +173,7 @@ def validate_agentic_metadata(metadata: dict) -> tuple[bool, list[str]]:
     if "rules" in metadata:
         from .rules import validate_rules
 
-        for problem in validate_rules(metadata["rules"]):
+        for problem in validate_rules(metadata["rules"], values=False):
             where = f"rules[{problem.index}]" if problem.index >= 0 else "rules"
             errors.append(f"{where}: {problem.message}")
 

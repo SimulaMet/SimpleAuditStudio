@@ -161,3 +161,46 @@ def test_list_operators_need_list_values():
     for bad in (None, [5, 1], "1", ["a", "b"]):
         assert validate_check(_tool_rule("between", bad, "tool.argument.n")) == [
             "condition 1: 'between' needs two numbers, low first"], bad
+
+
+def test_at_least_and_at_most_conditions_compare_numbers():
+    trace = normalize([_tool("lookup", '{"n": 3}')])
+    assert evaluate_check(0, _tool_rule("at_least", 2, "tool.argument.n", "exists"), trace).status == "PASS"
+    assert evaluate_check(0, _tool_rule("at_least", "2", "tool.argument.n", "exists"), trace).status == "PASS"
+    assert evaluate_check(0, _tool_rule("at_most", 2, "tool.argument.n", "exists"), trace).status == "FAIL"
+
+
+def test_numeric_conditions_need_numbers():
+    assert validate_check(_tool_rule("at_least", 2, "tool.argument.n")) == []
+    for op in ("at_least", "at_most"):
+        for bad in (None, "abc", "", float("nan"), True):
+            assert validate_check(_tool_rule(op, bad, "tool.argument.n")) == [f"condition 1: '{op}' needs a number"], bad
+
+
+def test_a_bad_value_leaves_only_its_own_rule_inconclusive():
+    # The old editor stored NaN as null; the engine raised and the whole scenario
+    # ended as one agentic.evaluate ERROR. Now only that rule says what is wrong.
+    trace = normalize([_tool("lookup", '{"n": 3}')])
+    for op, value in (("at_least", None), ("at_most", "abc"), ("between", None), ("one_of", 5)):
+        check = evaluate_check(0, _tool_rule(op, value, "tool.argument.n", "exists"), trace)
+        assert check.status == "INCONCLUSIVE", (op, value)
+        assert check.summary.startswith("Condition 1: "), check.summary
+    count = {"type": "check", "select": {"kind": "tool", "where": []}, "check": "count", "expect": {"op": "at_least", "value": None}}
+    assert evaluate_check(0, count, trace).status == "INCONCLUSIVE"
+
+
+def test_audit_keeps_the_other_rules_when_one_value_is_bad():
+    from audits.agentic.evaluate import evaluate
+    from audits.agentic.expectations import validate_agentic_metadata
+
+    good = _tool_rule("equals", "lookup", check="exists")
+    meta = {"agentic": {"schema_version": 2, "rules": [good, _tool_rule("at_least", None, "tool.argument.n", "exists")]}}
+    try:  # saving (the default) still rejects the value
+        validate_agentic_metadata(meta)
+        raise AssertionError("a save must reject the bad value")
+    except ValueError as exc:
+        assert "rule 2: condition 1: 'at_least' needs a number" in str(exc)
+    validate_agentic_metadata(meta, values=False)  # an audit reports it on its rule instead
+    out = evaluate(normalize([_tool("lookup", '{"n": 3}')]), meta)
+    statuses = {c["id"]: c["status"] for c in out["checks"] if c["id"].startswith("rule.")}
+    assert statuses == {"rule.0.check": "PASS", "rule.1.check": "INCONCLUSIVE"}
