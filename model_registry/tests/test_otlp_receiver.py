@@ -262,7 +262,7 @@ class OtlpSpanPersistenceTest(TestCase):
         body = self._body([{
             "traceId": self.TRACE_ID, "spanId": "11" * 8, "name": "llm chat", "kind": 1,
             "startTimeUnixNano": 1_700_000_000_000_000_000, "endTimeUnixNano": 1_700_000_001_000_000_000,
-            "attributes": [{"key": "openinference.span.kind", "value": {"stringValue": "LLM"}}],
+            "attributes": [{"key": "gen_ai.operation.name", "value": {"stringValue": "chat"}}],
             "status": {"code": 0},
         }])
         resp = self.client.post(
@@ -363,8 +363,8 @@ class OTLPProtobufIngestionTest(TestCase):
         sp.kind = trace_pb2.Span.SpanKind.SPAN_KIND_SERVER
         sp.start_time_unix_nano = 1_700_000_000_000_000_000
         sp.end_time_unix_nano = 1_700_000_001_500_000_000
-        sp.attributes.add(key="openinference.span.kind", value={"string_value": "LLM"})
-        sp.attributes.add(key="llm.model_name", value={"string_value": "test-model"})
+        sp.attributes.add(key="gen_ai.operation.name", value={"string_value": "chat"})
+        sp.attributes.add(key="gen_ai.request.model", value={"string_value": "test-model"})
         self.BODY = req.SerializeToString()
 
     def _post(self, body, content_type="application/x-protobuf"):
@@ -540,29 +540,27 @@ class SpanKindRefinementTest(TestCase):
         ])
         self.assertEqual(spans[0]["kind"], "RETRIEVER")
 
-    def test_explicit_openinference_kind_wins_over_operation(self):
+    def test_genai_operation_is_authoritative(self):
         spans = self._post_spans([
             _span_with_attrs("s3" * 8, "some_span", {
-                "openinference.span.kind": "AGENT",
                 "gen_ai.operation.name": "execute_tool",
             }),
         ])
-        self.assertEqual(spans[0]["kind"], "AGENT")
+        self.assertEqual(spans[0]["kind"], "TOOL")
 
     def test_plain_llm_span_keeps_llm_kind(self):
         spans = self._post_spans([
             _span_with_attrs("s4" * 8, "chat", {
-                "openinference.span.kind": "LLM",
                 "gen_ai.operation.name": "chat",
             }),
         ])
         self.assertEqual(spans[0]["kind"], "LLM")
 
-    def test_refine_helper_never_downgrades_specific_kind(self):
+    def test_refine_helper_requires_genai_semantics(self):
         from model_registry.otlp_views import _refine_span_kind
 
         # A span already classified TOOL must not be demoted by an unrelated op.
-        self.assertEqual(_refine_span_kind({"kind": "TOOL", "attributes": {}}), "TOOL")
+        self.assertEqual(_refine_span_kind({"kind": "TOOL", "attributes": {}}), "CHAIN")
         # CHAIN + execute_tool upgrades to TOOL.
         self.assertEqual(
             _refine_span_kind({"kind": "CHAIN", "attributes": {"gen_ai.operation.name": "execute_tool"}}),
