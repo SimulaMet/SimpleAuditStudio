@@ -122,6 +122,8 @@ def validate_cron(expr: str, now=None, tz: str = "UTC") -> str:
     from cronsim import CronSim, CronSimError
 
     expr = " ".join((expr or "").split())
+    if len(expr) > 120:   # Monitor.cron_expression max_length
+        raise ValueError("Cron expression is too long (120 characters at most).")
     if len(expr.split(" ")) != 5:
         raise ValueError("Cron expression needs 5 fields: minute hour day-of-month month day-of-week.")
     now = now or timezone.now()
@@ -261,7 +263,12 @@ def parse_repeat(post, now=None) -> dict | None:
         raw = (post.get("first_run_at") or "").strip()
         if not raw:
             raise ValueError("Pick when the first run should start, or choose “Now”.")
-        at = timezone.make_aware(datetime.fromisoformat(raw), tz)
+        try:
+            at = timezone.make_aware(datetime.fromisoformat(raw), tz)
+            if at.year >= 9999:   # date arithmetic below would overflow
+                raise OverflowError
+        except OverflowError as exc:
+            raise ValueError("Pick a first run time before the year 9999.") from exc
         if at <= now:
             raise ValueError("The first run time is in the past.")
         first = cron_next(cron_expression, at - timedelta(minutes=1), tz_name) if cron_expression else at
@@ -314,6 +321,10 @@ def create_monitor(*, project, user, name: str, run: dict, repeat: dict, experim
 
     # Monitors spend the workspace's keys unattended: same rule as launching.
     require_project_role(user, project, ProjectMembership.Role.ADMIN, ProjectMembership.Role.AUDITOR)
+    if run.get("agent"):
+        # A Monitor stores only a target model: every tick would audit the
+        # agent's bare base model. Covers both experiment launch paths.
+        raise ValueError("Repeating an agent run is not supported yet; launch it once instead.")
     if Monitor.objects.filter(project=project).count() >= MAX_MONITORS_PER_PROJECT:
         raise ValueError(
             f"This workspace already has {MAX_MONITORS_PER_PROJECT} monitors (the limit). Delete some first."

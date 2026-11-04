@@ -27,7 +27,7 @@
       {% csrf_token %}
       <div>
         <label class="block text-xs text-gray-500 mb-1">Set Name</label>
-        <input type="text" name="name" placeholder="e.g. Medical Safety v2" required
+        <input type="text" name="name" maxlength="250" placeholder="e.g. Medical Safety v2" required
                class="w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-accent/50">
       </div>
       <div>
@@ -63,8 +63,8 @@
       <!-- Version selector -->
       {% if versions %}
       <div class="flex items-center gap-2 mb-4 flex-wrap">
-        <label class="text-xs text-gray-500">Version:</label>
-        <select onchange="if(this.value) window.location='?set={{ selected.id }}&version='+this.value; else window.location='?set={{ selected.id }}'"
+        <label for="version-select" class="text-xs text-gray-500">Version:</label>
+        <select id="version-select" onchange="if(this.value) window.location='?set={{ selected.id }}&version='+this.value; else window.location='?set={{ selected.id }}'"
                 class="px-2 py-1 rounded bg-surface-overlay border border-gray-700 text-xs text-gray-300">
           {% for v in versions %}
           <option value="{{ v.version }}" {% if viewing_version and viewing_version.version == v.version %}selected{% endif %}>
@@ -111,17 +111,20 @@
         <div id="scenario-{{ item.scenario.id }}" class="rounded-lg border border-gray-800 bg-surface-overlay/50 overflow-hidden">
           <div class="flex items-center justify-between px-3 py-2 cursor-pointer select-none hover:bg-surface-overlay/80 transition-colors" role="button" tabindex="0" aria-label="Toggle details for {{ item.scenario.title|escape }}" onclick="toggleViewMode({{ item.scenario.id }})">
             <div class="min-w-0 flex-1">
-              <span class="text-sm text-gray-200 truncate">{{ item.scenario.title }}</span>
+              <span class="block text-sm text-gray-200 truncate">{{ item.scenario.title }}</span>
               {% if item.scenario.category %}<span class="ml-2 text-xs text-gray-500">{{ item.scenario.category }}</span>{% endif %}
               <span class="ml-2 text-xs text-gray-600" title="Revision {{ item.revision.revision }} of this scenario: each edit to its description or expected behaviour adds a revision">rev {{ item.revision.revision }}</span>
+              {% if item.scenario.archived_at %}<span class="ml-2 text-xs text-amber-400" title="This scenario was deleted, but this version still contains it and runs of this version execute it. Edit another scenario (publishing a new version) to drop it.">deleted · still in this version</span>{% endif %}
             </div>
             <div class="flex gap-1 shrink-0">
+              {% if viewing_is_latest %}{# editing an older version's form would republish its old text #}
               <button data-write onclick="openEditForm({{ item.scenario.id }}, event)" title="Edit scenario" aria-label="Edit scenario" class="w-7 h-7 text-xs text-gray-500 hover:text-accent">{% include "partials/icon.html" with name="pencil" cls="w-3.5 h-3.5 mx-auto" %}</button>
               <form method="post" data-write action="{% url 'scenario_delete' item.scenario.id %}" data-confirm="Delete this scenario?" onclick="event.stopPropagation()">
                 {% csrf_token %}
                 <input type="hidden" name="set_id" value="{{ selected.id }}">
                 <button title="Delete scenario" aria-label="Delete scenario" class="w-7 h-7 text-xs text-gray-600 hover:text-red-400">{% include "partials/icon.html" with name="trash-2" cls="w-3.5 h-3.5 mx-auto" %}</button>
               </form>
+              {% endif %}
             </div>
           </div>
           <!-- Description preview (collapsed only; hidden when view mode is open) -->
@@ -192,10 +195,11 @@
                   onsubmit="return confirmScenarioSave({{ item.scenario.id }}, this) && syncAgenticFields(this)">
               {% csrf_token %}
               <input type="hidden" name="set_id" value="{{ selected.id }}">
+              <input type="hidden" name="base_revision_id" value="{{ item.revision.id }}">
               <div class="grid grid-cols-2 gap-2">
-                <input type="text" name="title" value="{{ item.scenario.title }}" required
+                <input type="text" name="title" maxlength="300" value="{{ item.scenario.title }}" required
                        class="px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-1 focus:ring-accent/50">
-                <input type="text" name="category" value="{{ item.scenario.category }}" placeholder="Category"
+                <input type="text" name="category" maxlength="120" value="{{ item.scenario.category }}" placeholder="Category"
                        class="px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-1 focus:ring-accent/50">
               </div>
               <div data-nondecision-fields>
@@ -235,7 +239,7 @@
                   <div>
                     <label class="text-xs text-gray-500">Severity ceiling</label>
                     <p class="text-[11px] text-gray-600 mb-1">Caps the max severity the judge can assign when the target fails. Use when you know a scenario's worst case (e.g. set "medium" so it never escalates to critical even if the judge thinks it should). Passed to the engine as the scenario's <code class="text-gray-400">severity</code> field. Most scenarios don't need this — leave empty to let the judge decide freely.</p>
-                    <select name="severity_ceiling" class="w-full px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-1 focus:ring-accent/50">
+                    <select name="severity_ceiling" aria-label="Severity ceiling" class="w-full px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-1 focus:ring-accent/50">
                       <option value="" {% if not item.revision.severity_ceiling %}selected{% endif %}>— No ceiling (judge decides) —</option>
                       <option value="pass" {% if item.revision.severity_ceiling == "pass" %}selected{% endif %}>pass</option>
                       <option value="low" {% if item.revision.severity_ceiling == "low" %}selected{% endif %}>low</option>
@@ -283,9 +287,9 @@
         {% csrf_token %}
         <input type="hidden" name="set_id" value="{{ selected.id }}">
         <div class="grid grid-cols-2 gap-2">
-          <input type="text" name="name" placeholder="Scenario name" required
+          <input type="text" name="name" maxlength="300" placeholder="Scenario name" required
                  class="px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-accent/50">
-          <input type="text" name="category" placeholder="Category (optional)"
+          <input type="text" name="category" maxlength="120" placeholder="Category (optional)"
                  class="px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-accent/50">
         </div>
         <div data-nondecision-fields>
@@ -324,7 +328,7 @@
             <div>
               <label class="text-xs text-gray-500">Severity ceiling</label>
               <p class="text-[11px] text-gray-600 mb-1">Caps the max severity the judge can assign when the target fails. Use when you know a scenario's worst case (e.g. set "medium" so it never escalates to critical even if the judge thinks it should). Passed to the engine as the scenario's <code class="text-gray-400">severity</code> field. Most scenarios don't need this — leave empty to let the judge decide freely.</p>
-              <select name="severity_ceiling" class="w-full px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-1 focus:ring-accent/50">
+              <select name="severity_ceiling" aria-label="Severity ceiling" class="w-full px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-1 focus:ring-accent/50">
                 <option value="">— No ceiling (judge decides) —</option>
                 <option value="pass">pass</option>
                 <option value="low">low</option>
@@ -391,7 +395,7 @@ document.addEventListener('click', e => {
       {% csrf_token %}
       <div>
         <label class="text-xs text-gray-500 block mb-1">Name</label>
-        <input type="text" name="name" value="{{ selected.name }}" required
+        <input type="text" name="name" maxlength="250" value="{{ selected.name }}" required
                class="w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-accent/50">
       </div>
       <div>

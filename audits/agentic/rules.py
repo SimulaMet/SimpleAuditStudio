@@ -95,6 +95,6 @@ def describe_rule(rule: dict) -> str:
 def check_label(check_id: str) -> str:
     """Readable name for a check id; rule checks read as 'Rule N · Custom check'."""
     parts = check_id.split(".")
-    if len(parts) == 3 and parts[0] == "rule" and parts[1].isdigit() and parts[2] == "check":
+    if len(parts) == 3 and parts[0] == "rule" and parts[1].isdecimal() and parts[2] == "check":
         return f"Rule {int(parts[1]) + 1} · Custom check"
     return check_id

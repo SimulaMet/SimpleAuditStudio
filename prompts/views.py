@@ -7,7 +7,7 @@ from django.http import Http404
 from django.shortcuts import redirect
 from django.views.generic import TemplateView
 
-from infra.ui import ProjectMixin, _require_write_access
+from infra.ui import ProjectMixin, _int, _require_write_access
 from prompts.models import SystemPrompt, SystemPromptVersion
 from prompts.services import (
     create_prompt,
@@ -59,7 +59,7 @@ class PromptsView(ProjectMixin, TemplateView):
         action = request.POST.get("action")
         if action == "delete_version":
             version = SystemPromptVersion.objects.select_related("prompt").filter(
-                pk=request.POST.get("version_id") or 0, prompt__project=p).first()
+                pk=_int(request.POST.get("version_id")), prompt__project=p).first()
             if version is None:
                 messages.error(request, "Version not found.")
                 return redirect("prompts")
@@ -70,7 +70,7 @@ class PromptsView(ProjectMixin, TemplateView):
                 messages.error(request, str(e))
             return redirect("prompt_detail", prompt_id=version.prompt_id)
         elif action == "delete":
-            prompt = SystemPrompt.objects.filter(pk=request.POST.get("prompt_id") or 0, project=p).first()
+            prompt = SystemPrompt.objects.filter(pk=_int(request.POST.get("prompt_id")), project=p).first()
             if prompt is not None:
                 try:
                     delete_prompt(prompt)
@@ -112,7 +112,7 @@ class PromptDetailView(ProjectMixin, TemplateView):
         cloning = None
         if prompt is None:
             cloning = SystemPromptVersion.objects.select_related("prompt").filter(
-                pk=self.request.GET.get("clone") or (form or {}).get("clone") or 0,
+                pk=_int(self.request.GET.get("clone") or (form or {}).get("clone")),
                 prompt__project=self.request.project,
             ).first()
         if form is None:
@@ -153,7 +153,8 @@ class PromptDetailView(ProjectMixin, TemplateView):
         prompt = self._prompt()
         post = request.POST
         form = {k: post.get(k, "") for k in ("name", "description", "content", "note")}
-        name = form["name"].strip()
+        name = form["name"].strip()[:250]   # model max_length (Postgres rejects longer)
+        form["note"] = form["note"][:500]
         error = None
         if not name:
             error = "Give the prompt a name."

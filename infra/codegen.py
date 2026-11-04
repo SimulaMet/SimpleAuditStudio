@@ -23,7 +23,6 @@ export that variable before running.
 from __future__ import annotations
 
 import json
-import re
 
 from audits.models import AuditRun
 from scenarios.models import ScenarioSetVersionItem
@@ -32,14 +31,47 @@ from scenarios.models import ScenarioSetVersionItem
 def _py(value) -> str:
     """A Python literal for use inside the generated script.
 
-    ``json.dumps`` is close but not valid Python: it emits ``null`` / ``true``
-    / ``false``. Convert those to their Python forms so the generated script
-    actually runs.
+    Real Python tokens (``None``/``True``/``False``, quoted strings),
+    so frozen scenario text is reproduced exactly, including words such as
+    "true" or "null" inside strings, and no value can break out of its literal.
     """
-    text = json.dumps(value, indent=4, ensure_ascii=False)
-    # Replace JSON-only literals with Python ones. Word-boundary guards keep
-    # "null"/"true"/"false" inside strings untouched.
-    return re.sub(r"\bnull\b", "None", re.sub(r"\b(true|false)\b", lambda m: m.group(1).capitalize(), text))
+    return _literal(value, 0)
+
+
+def _literal(value, level: int) -> str:
+    # Same layout as json.dumps(indent=4), but Python tokens; strings use
+    # json.dumps, which is a valid (double-quoted) Python string literal.
+    pad, inner = " " * 4 * level, " " * 4 * (level + 1)
+    if value is None or isinstance(value, bool):
+        return repr(value)
+    if isinstance(value, (int, float)):
+        return repr(value)
+    if isinstance(value, str):
+        return json.dumps(value, ensure_ascii=False)
+    if isinstance(value, dict):
+        if not value:
+            return "{}"
+        rows = [f"{inner}{json.dumps(str(k), ensure_ascii=False)}: {_literal(v, level + 1)}" for k, v in value.items()]
+        return "{\n" + ",\n".join(rows) + "\n" + pad + "}"
+    if isinstance(value, (list, tuple)):
+        if not value:
+            return "[]"
+        rows = [f"{inner}{_literal(v, level + 1)}" for v in value]
+        return "[\n" + ",\n".join(rows) + "\n" + pad + "]"
+    return json.dumps(str(value), ensure_ascii=False)
+
+
+def _q(value) -> str:
+    """A quoted Python string literal for a user/registry-controlled value."""
+    return json.dumps("" if value is None else str(value), ensure_ascii=False)
+
+
+def _doc(value) -> str:
+    """Text safe inside a generated triple-quoted docstring or ``#`` comment."""
+    text = " ".join(str(value or "").split())   # no newlines: comments end at one
+    # Escape every quote: a value ending in '""' next to the template's own '"'
+    # would otherwise close the docstring.
+    return text.replace("\\", "\\\\").replace('"', '\\"')
 
 
 def _endpoint_block(snap: dict, *, prefix: str, indent: str = "") -> list:
@@ -72,25 +104,25 @@ def _endpoint_block(snap: dict, *, prefix: str, indent: str = "") -> list:
     if prefix:
         p = f"{prefix}_"
         items = [
-            f'{indent}{p}model="{snap.get("model_id")}"',
-            f'{indent}{p}provider="{provider}"',
+            f'{indent}{p}model={_q(snap.get("model_id"))}',
+            f'{indent}{p}provider={_q(provider)}',
         ]
         if base_url:
-            items.append(f'{indent}{p}base_url="{base_url}"')
+            items.append(f'{indent}{p}base_url={_q(base_url)}')
         if ref:
-            items.append(f'{indent}{p}api_key=os.environ["{ref}"]')
+            items.append(f'{indent}{p}api_key=os.environ[{_q(ref)}]')
         else:
             items.append(("#", f'{indent}# {p}api_key=os.environ["{env}"]  # uncomment & export {env}'))
         return items
     # Plain dict entries for the models list.
     items = [
-        f'{indent}"model": "{snap.get("model_id")}"',
-        f'{indent}"provider": "{provider}"',
+        f'{indent}"model": {_q(snap.get("model_id"))}',
+        f'{indent}"provider": {_q(provider)}',
     ]
     if base_url:
-        items.append(f'{indent}"base_url": "{base_url}"')
+        items.append(f'{indent}"base_url": {_q(base_url)}')
     if ref:
-        items.append(f'{indent}"api_key": os.environ["{ref}"]')
+        items.append(f'{indent}"api_key": os.environ[{_q(ref)}]')
     else:
         items.append(("#", f'{indent}# "api_key": os.environ["{env}"],  # uncomment & export {env}'))
     return items
@@ -137,7 +169,7 @@ def _render(header: str, *, version, target: dict, auditor: dict, judge_snap: di
     set_name = version.scenario_set.name
     set_version = version.version
     body_parts.append(
-        f"# Scenarios: \"{set_name}\" v{set_version} ({len(scenarios)} scenarios, frozen)\n"
+        f"# Scenarios: \"{_doc(set_name)}\" v{set_version} ({len(scenarios)} scenarios, frozen)\n"
         f"scenarios = {_py(scenarios)}"
     )
 
@@ -232,7 +264,7 @@ def _render(header: str, *, version, target: dict, auditor: dict, judge_snap: di
 def generate_run_script(run: AuditRun) -> str:
     """Build the standalone script that re-runs ``run`` with plain simpleaudit."""
     header = (
-        f'"""Re-run of Studio run #{run.id} "{run.name}".\n'
+        f'"""Re-run of Studio run #{run.id} "{_doc(run.name)}".\n'
         "\n"
         "Generated by SimpleAudit Studio — edit freely.\n"
         "Requires: pip install simpleaudit\n"
@@ -260,7 +292,7 @@ def generate_run_script_from_spec(run_spec: dict) -> str:
 
     name = run_spec.get("name") or "planned run"
     header = (
-        f'"""SimpleAudit run script for "{name}" (planned, not yet launched).\n'
+        f'"""SimpleAudit run script for "{_doc(name)}" (planned, not yet launched).\n'
         "\n"
         "Generated by SimpleAudit Studio — edit freely.\n"
         "Requires: pip install simpleaudit\n"
@@ -346,7 +378,7 @@ def generate_judge_script(judge_name: str, spec: dict) -> str:
     ]
 
     header = (
-        f'"""SimpleAudit judge "{judge_name}".\n'
+        f'"""SimpleAudit judge "{_doc(judge_name)}".\n'
         "\n"
         "Generated by SimpleAudit Studio — edit freely.\n"
         "Requires: pip install simpleaudit\n"

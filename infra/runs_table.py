@@ -20,7 +20,8 @@ from django.views import View
 
 from audits.models import AuditRun
 from audits.services import frozen_judge
-from infra.ui import ProjectMixin, write_block_reason
+from infra.export_utils import csv_safe
+from infra.ui import ProjectMixin, is_id, write_block_reason
 
 PAGE_SIZES = (10, 25, 50, 100)
 
@@ -64,7 +65,12 @@ def _date(raw: str, *, end: bool = False):
     if d is None:
         return None
     moment = timezone.make_aware(datetime.combine(d, time.min))
-    return moment + timedelta(days=1) if end else moment
+    if not end:
+        return moment
+    try:
+        return moment + timedelta(days=1)
+    except OverflowError:   # 9999-12-31: no next day; nothing can be later anyway
+        return None
 
 
 def filtered_runs(project, params):
@@ -90,13 +96,13 @@ def filtered_runs(project, params):
             | Q(target_model__display_name__icontains=q)
             | Q(target_model__model_id__icontains=q)
         )
-        if q.lstrip("#").isdigit():
+        if is_id(q.lstrip("#")):
             filt |= Q(pk=int(q.lstrip("#")))
         qs = qs.filter(filt)
     for param, field in (("target", "target_model_id"), ("set", "scenario_set_version__scenario_set_id"),
                          ("judge", "judge_version__judge_id"),
                          ("experiment", "experiment_id"), ("monitor", "monitor_id")):
-        ids = [v for v in params.getlist(param) if v.isdigit()]
+        ids = [v for v in params.getlist(param) if is_id(v)]
         if ids:
             qs = qs.filter(**{f"{field}__in": ids})
     start, end = _date(params.get("from")), _date(params.get("to"), end=True)
@@ -201,8 +207,11 @@ class RunsBulkView(ProjectMixin, View):
             return JsonResponse({"error": reason}, status=403)
         try:
             body = json.loads(request.body or b"{}")
-            ids = [int(i) for i in body.get("ids", [])][:500]
-        except (ValueError, TypeError):
+            if not isinstance(body, dict):
+                raise TypeError("body must be an object")
+            # Out-of-range ids match nothing; drop them before they overflow the DB driver.
+            ids = [i for i in (int(i) for i in body.get("ids", [])) if 0 < i < 2**63][:500]
+        except (ValueError, TypeError, OverflowError):
             return JsonResponse({"error": "Invalid request."}, status=400)
         action = body.get("action")
         runs = AuditRun.objects.filter(project=request.project, pk__in=ids)
@@ -223,8 +232,8 @@ class PreferenceView(ProjectMixin, View):
             body = json.loads(request.body or b"{}")
         except ValueError:
             return JsonResponse({"error": "Invalid JSON."}, status=400)
-        key = body.get("key")
-        if key not in allowed_preference_keys():
+        key = body.get("key") if isinstance(body, dict) else None
+        if not isinstance(key, str) or key not in allowed_preference_keys():
             return JsonResponse({"error": "Unknown preference."}, status=400)
         value = body.get("value")
         if len(json.dumps(value)) > MAX_PREFERENCE_BYTES:
@@ -254,7 +263,7 @@ class RunsExportView(ProjectMixin, View):
         writer.writerow(cols)
         for run in runs:
             row = run_row(run, counts)
-            writer.writerow([row[c] if row[c] is not None else "" for c in cols])
+            writer.writerow([csv_safe(row[c]) if row[c] is not None else "" for c in cols])
         response = HttpResponse(buf.getvalue(), content_type="text/csv; charset=utf-8")
         response["Content-Disposition"] = 'attachment; filename="runs.csv"'
         return response

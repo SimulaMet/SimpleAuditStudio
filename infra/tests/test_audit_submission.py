@@ -97,3 +97,64 @@ class AuditSubmissionTest(TestCase):
         submission = run.runtime_metadata.get("submission", {})
         self.assertEqual(submission.get("status"), "pending")
         self.assertIn("reason", submission)
+
+
+class FinishedRunStaysFinishedTest(AuditSubmissionTest):
+    """Late cancel/fail writes must not overwrite a run the worker already finished."""
+
+    def test_cancel_with_stale_object_does_not_overwrite_completed_run(self):
+        from audits.services import cancel_run
+
+        run = self._make_run()
+        stale = AuditRun.objects.get(pk=run.pk)
+        AuditRun.objects.filter(pk=run.pk).update(status=AuditRun.Status.COMPLETED)
+
+        self.assertFalse(cancel_run(stale, self.user))
+        run.refresh_from_db()
+        self.assertEqual(run.status, AuditRun.Status.COMPLETED)
+
+    def test_mark_run_failed_does_not_overwrite_cancelled_run(self):
+        from infra.worker import _mark_run_failed
+
+        run = self._make_run()
+        AuditRun.objects.filter(pk=run.pk).update(status=AuditRun.Status.CANCELLED)
+        _mark_run_failed(str(run.pk), "SIMPLEAUDIT_VERSION_MISMATCH")
+        run.refresh_from_db()
+        self.assertEqual(run.status, AuditRun.Status.CANCELLED)
+        self.assertNotEqual(run.error_code, "SIMPLEAUDIT_VERSION_MISMATCH")
+
+    def test_mark_run_failed_fails_active_run(self):
+        from infra.worker import _mark_run_failed
+
+        run = self._make_run()
+        _mark_run_failed(str(run.pk), "SIMPLEAUDIT_VERSION_MISMATCH")
+        run.refresh_from_db()
+        self.assertEqual(run.status, AuditRun.Status.FAILED)
+
+    def test_viewer_cannot_cancel(self):
+        from audits.services import cancel_run
+        from infra.exceptions import StableAPIError
+
+        run = self._make_run()
+        viewer = User.objects.create_user(username="vic", password="pass12345")
+        ProjectMembership.objects.create(project=self.project, user=viewer, role=ProjectMembership.Role.VIEWER)
+        with self.assertRaises(StableAPIError):
+            cancel_run(run, viewer)
+        run.refresh_from_db()
+        self.assertTrue(run.is_active)
+
+
+class RunNameLengthTest(AuditSubmissionTest):
+    def test_overlong_run_name_is_capped(self):
+        from unittest import mock
+
+        with mock.patch(
+            "audits.services.resolve_engine_provenance",
+            return_value=mock.Mock(version="0.1.0", commit="deadbeef", source="metadata"),
+        ):
+            run = create_audit_run(
+                project=self.project, user=self.user, name="m" * 250 + " · 2026-11-04 10:00",
+                scenario_set_version=self.version, target_model=self.target, auditor_model=self.auditor,
+                judge_model=self.judge, judge=judge_for(self.judge),
+            )
+        self.assertEqual(len(run.name), 250)

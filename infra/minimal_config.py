@@ -90,7 +90,7 @@ def _parent_pid(pid: int) -> int | None:
                              capture_output=True, text=True, timeout=10, check=False).stdout.strip()
     except (FileNotFoundError, subprocess.SubprocessError):
         return None
-    return int(out) if out.isdigit() else None
+    return int(out) if out.isdecimal() else None
 
 
 def _wait_gone(pids: list[int], seconds: float) -> None:
@@ -117,7 +117,7 @@ def _cleanup_stale_embedded_pg(data_dir: str) -> None:
         if not pid_file.exists():
             return
         raw = pid_file.read_text().splitlines()
-        if not raw or not raw[0].strip().isdigit():
+        if not raw or not raw[0].strip().isdecimal():
             return
         pid = int(raw[0].strip())
         if _pid_alive(pid):

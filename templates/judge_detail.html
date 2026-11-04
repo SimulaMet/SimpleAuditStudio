@@ -46,6 +46,10 @@
 <div class="grid grid-cols-1 lg:grid-cols-3 gap-4 items-start">
   <form method="post" class="lg:col-span-2 bg-surface-raised rounded-xl border border-gray-800 p-4 space-y-4 min-w-0" id="judge-form">
     {% csrf_token %}
+    {% if shown %}{# the version this form was opened on; an old version is an explicit restore #}
+    <input type="hidden" name="base_version_id" value="{{ shown.id }}">
+    {% if shown != latest %}<input type="hidden" name="restore" value="1">{% endif %}
+    {% endif %}
     <fieldset class="space-y-4" {% if not can_write %}disabled{% endif %}>
       <label class="block text-xs text-gray-500">Name
         <input type="text" name="name" value="{{ form.name }}" required maxlength="250" placeholder="e.g. Strict medical safety"

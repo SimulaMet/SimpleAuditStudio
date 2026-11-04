@@ -225,14 +225,26 @@ class TestAutoLoginToken(TestCase):
     def test_next_must_be_a_relative_path(self):
         # An absolute (http://) or protocol-relative (//evil) value must be
         # ignored so a tampered env var can't turn this into an open redirect.
-        for bad in ("https://evil.example.com", "//evil.example.com", ""):
+        for i, bad in enumerate(("https://evil.example.com", "//evil.example.com", "")):
+            # A fresh token per attempt: each one is single-use.
+            token = f"{self.TOKEN}-{i}"
             with patch.dict(
                 os.environ,
-                {"SIMPLEAUDIT_AUTO_LOGIN_TOKEN": self.TOKEN, "SIMPLEAUDIT_AUTO_LOGIN_NEXT": bad},
+                {"SIMPLEAUDIT_AUTO_LOGIN_TOKEN": token, "SIMPLEAUDIT_AUTO_LOGIN_NEXT": bad},
             ):
-                response = self._login(self.TOKEN, follow=False)
+                response = self._login(token, follow=False)
             self.assertEqual(response.status_code, 302)
             self.assertNotIn("evil.example.com", response.headers["Location"])
+
+    @override_settings(MINIMAL_CONFIG=True)
+    def test_token_cannot_be_replayed_after_reload(self):
+        # The autoreloader restarts the server with the parent's environment,
+        # which still carries the token; consumption must survive that.
+        with patch.dict(os.environ, {"SIMPLEAUDIT_AUTO_LOGIN_TOKEN": self.TOKEN}):
+            self.assertEqual(self._login(self.TOKEN).status_code, 200)
+        self.client.logout()
+        with patch.dict(os.environ, {"SIMPLEAUDIT_AUTO_LOGIN_TOKEN": self.TOKEN}):
+            self.assertEqual(self._login(self.TOKEN).status_code, 404)
 
     @override_settings(MINIMAL_CONFIG=True)
     def test_token_cannot_be_replayed(self):

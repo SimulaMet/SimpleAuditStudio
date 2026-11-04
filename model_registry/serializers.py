@@ -45,11 +45,11 @@ class EndpointURLField(serializers.Field):
                 self.fail("invalid")
             host = hostport[1:close]
             rest = hostport[close + 1:]
-            if rest and not (rest.startswith(":") and rest[1:].isdigit()):
+            if rest and not (rest.startswith(":") and rest[1:].isdecimal()):
                 self.fail("invalid")
         elif ":" in hostport:
             host, _, port = hostport.partition(":")
-            if not port.isdigit():
+            if not port.isdecimal():
                 self.fail("invalid")
         else:
             host = hostport

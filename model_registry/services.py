@@ -31,6 +31,38 @@ PROVIDER_PRESETS = [
 ]
 
 
+# Environment variables that hold Studio's own secrets. A connection's
+# ``secret_reference`` may not name them: its key goes to a URL the user chose.
+_PLATFORM_SECRET_NAMES = frozenset({
+    "BOOTSTRAP_PASSWORD", "DEMO_PASSWORD", "DATABASE_URL", "HATCHET_API_KEY",
+    "HATCHET_CLIENT_TOKEN", "HATCHET_TOKEN_FILE", "SIMPLEAUDIT_AUTO_LOGIN_TOKEN",
+    "SIMPLEAUDIT_CHAT_OTLP_PASSWORD", "WEBUI_SECRET_KEY", "WORKOS_API_KEY",
+})
+_PLATFORM_SECRET_PREFIXES = ("DJANGO_", "POSTGRES_", "HATCHET_", "WORKOS_", "WEBUI_", "AWS_SECRET")
+
+
+def is_platform_secret_name(name: str) -> bool:
+    """Whether ``name`` is one of Studio's own secrets rather than a model key."""
+    upper = (name or "").strip().upper()
+    return upper in _PLATFORM_SECRET_NAMES or upper.startswith(_PLATFORM_SECRET_PREFIXES)
+
+
+def _same_origin(url: str, other: str) -> bool:
+    """Exact scheme/host/port match; URLs carrying credentials never match."""
+    from urllib.parse import urlsplit
+
+    a, b = urlsplit(url.strip()), urlsplit(other.strip())
+    if a.username or a.password:
+        return False
+    defaults = {"http": 80, "https": 443}
+    try:
+        port_a = a.port or defaults.get(a.scheme)
+        port_b = b.port or defaults.get(b.scheme)
+    except ValueError:
+        return False
+    return bool(a.hostname) and (a.scheme, a.hostname, port_a) == (b.scheme, b.hostname, port_b)
+
+
 def connection_api_key(conn) -> str:
     """The connection's API key: the stored key, else the env var it names.
 
@@ -42,11 +74,15 @@ def connection_api_key(conn) -> str:
         return direct
     ref = (conn.secret_reference or "").strip()
     if ref:
+        if is_platform_secret_name(ref):
+            # A connection's key is sent to its user-chosen base URL; never let
+            # it name the platform's own secrets.
+            logger.warning("Refusing platform secret %s as a connection key", ref)
+            return ""
         return os.environ.get(ref, "")
     from chat import config as chat
 
-    base = (conn.base_url or "").strip().rstrip("/")
-    if chat.ENABLED and base.startswith(chat.UPSTREAM.rstrip("/")):
+    if chat.ENABLED and _same_origin(conn.base_url or "", chat.UPSTREAM):
         from chat.api import service_token
 
         return service_token() or ""
@@ -264,7 +300,7 @@ def visible_connections_for(user, project):
     shared_filter = Q(visibility=ModelConnection.Visibility.PUBLIC) | Q(shared_with=project)
     if _user_is_admin_of(user, project):
         shared_filter |= Q(visibility=ModelConnection.Visibility.ADMINS)
-    shared_qs = base.exclude(project=project).filter(shared_filter)
+    shared_qs = base.exclude(project=project).filter(shared_filter).distinct()   # one row per connection, not per share
     result = list(owner_qs.order_by("name")) + list(shared_qs.order_by("name"))
     for conn in result:
         conn.is_owner = conn.project_id == project.id
@@ -424,14 +460,29 @@ def _ensure_agent_model_reference(agent, user) -> None:
     if not agent.external_id:
         return
     from chat import config as chat_config
-    from model_registry.models import ModelConnection, RegisteredModel
+    from model_registry.models import Agent, ModelConnection, RegisteredModel
 
-    model = (
-        RegisteredModel.objects.select_related("connection")
-        .filter(project=agent.project, connection__name="Open WebUI Agents")
-        .order_by("id")
-        .first()
-    )
+    # One reference row per agent: this agent's own row, else a stale row no
+    # other agent owns (re-pointed below). Never another agent's row — that
+    # flipped every agent's runs, filters and picker entry to whichever agent
+    # synced last.
+    refs = RegisteredModel.objects.select_related("connection").filter(
+        project=agent.project, connection__name="Open WebUI Agents"
+    ).order_by("id")
+    model = refs.filter(model_id=agent.external_id).first() if agent.external_id else None
+    if model is None:
+        owned = set(
+            Agent.objects.filter(project=agent.project).exclude(pk=agent.pk)
+            .exclude(external_id="").values_list("external_id", flat=True)
+        )
+        # A row runs or monitors point at belongs to its (possibly deleted)
+        # agent's history; re-pointing it would relabel those runs.
+        free = refs.filter(
+            target_audit_runs__isnull=True, auditor_audit_runs__isnull=True, judge_audit_runs__isnull=True,
+            target_monitors__isnull=True, auditor_monitors__isnull=True, judge_monitors__isnull=True,
+            agents__isnull=True,
+        ).distinct()
+        model = next((m for m in free if m.model_id not in owned), None)
     if model is not None:
         updated = []
         if model.display_name != agent.name:
@@ -513,12 +564,12 @@ def agent_live_openwebui(agent, user) -> dict | None:
         return None
 
 
-def delete_agent_from_openwebui(agent) -> None:
+def delete_agent_from_openwebui(agent, user=None) -> None:
     """Delete an agent's Open WebUI model entry (best-effort, never raises)."""
     if not _chat_sync_enabled() or not agent.external_id:
         return
     try:
-        _adapter_for(_any_user()).delete_agent(agent)
+        _adapter_for(_remote_actor(agent, user)).delete_agent(agent)
     except Exception:
         logger.exception("Agent '%s' Open WebUI delete failed", agent.name)
 
@@ -545,11 +596,11 @@ def sync_knowledge_base_to_openwebui(kb, user) -> str:
         return "skipped"
 
 
-def delete_knowledge_base_from_openwebui(kb) -> None:
+def delete_knowledge_base_from_openwebui(kb, user=None) -> None:
     if not _chat_sync_enabled() or not kb.external_id:
         return
     try:
-        _adapter_for(_any_user())._api.delete_knowledge_base(kb.external_id)
+        _adapter_for(_remote_actor(kb, user))._api.delete_knowledge_base(kb.external_id)
     except Exception:
         logger.exception("Knowledge base '%s' Open WebUI delete failed", kb.name)
 
@@ -578,13 +629,24 @@ def sync_tool_to_openwebui(tool, user, *, content: str) -> str:
         return "skipped"
 
 
-def delete_tool_from_openwebui(tool) -> None:
+def delete_tool_from_openwebui(tool, user=None) -> None:
     if not _chat_sync_enabled() or not tool.external_id:
         return
     try:
-        _adapter_for(_any_user())._api.delete_tool(tool.external_id)
+        _adapter_for(_remote_actor(tool, user))._api.delete_tool(tool.external_id)
     except Exception:
         logger.exception("Tool '%s' Open WebUI delete failed", tool.name)
+
+
+def _remote_actor(obj, user):
+    """Who performs a remote delete: the object's creator, else the requester.
+
+    Never an arbitrary superuser: an object imported from Open WebUI (sync) is
+    created_by the importing user, so Open WebUI's own access rules decide
+    whether that user may delete it. ``_any_user`` remains the last resort for
+    callers without a requester.
+    """
+    return getattr(obj, "created_by", None) or user or _any_user()
 
 
 def _any_user():

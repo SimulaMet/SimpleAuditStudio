@@ -70,6 +70,13 @@ def _positive_int(value: str) -> int:
     return n
 
 
+def _require_ids(values, what: str) -> None:
+    """Form ids must be database ids: ASCII digits, at most 18 (else SQLite overflows)."""
+    for v in values:
+        if not (isinstance(v, str) and v.isascii() and v.isdecimal() and len(v) <= 18):
+            raise DesignError(f"A selected {what} is not in this workspace.")
+
+
 def parse_design(post, project) -> dict:
     """Validate the design form into lists of values per input.
 
@@ -89,6 +96,7 @@ def parse_design(post, project) -> dict:
     set_ids = [s for s in post.getlist("scenario_set") if s]
     if not version_ids and not set_ids and not follow_set_ids:
         raise DesignError("Pick at least one scenario set.")
+    _require_ids(version_ids + set_ids + follow_set_ids, "scenario set")
     chosen = list(
         ScenarioSetVersion.objects.filter(pk__in=version_ids, scenario_set__project=project).select_related("scenario_set")
     )
@@ -118,18 +126,21 @@ def parse_design(post, project) -> dict:
     # Optional agent target: the agent IS the target (its base_model is fixed
     # at creation). When set, no bare target model is required.
     agent = None
+    if len([v for v in post.getlist("agent_id") if v.strip()]) > 1:
+        raise DesignError("Pick one agent per experiment.")
     agent_raw = (post.get("agent_id") or "").strip()
     if agent_raw:
         try:
             agent = Agent.objects.select_related("base_model").get(
                 pk=int(agent_raw), project=project, enabled=True
             )
-        except (ValueError, Agent.DoesNotExist):
+        except (ValueError, OverflowError, Agent.DoesNotExist):
             raise DesignError("The selected agent is not available in this workspace.")
 
     models = {}
     for axis, (field, label) in _MODEL_AXES.items():
         ids = [m for m in post.getlist(field) if m]
+        _require_ids(ids, f"{label} model")
         if not ids and axis == "target" and agent is None:
             raise DesignError(f"Pick at least one {label} model.")
         # A model is usable when it belongs to this workspace OR its connection
@@ -158,8 +169,11 @@ def parse_design(post, project) -> dict:
                 )
         models[axis] = [found[i] for i in dict.fromkeys(ids)]
 
-    # When an agent is the target, its base_model IS the target model.
-    if agent is not None and not models.get("target"):
+    # When an agent is the target, its base_model IS the target model. Target
+    # models alongside an agent would be silently ignored, so refuse them.
+    if agent is not None and models.get("target"):
+        raise DesignError("Pick either an agent or target models, not both.")
+    if agent is not None:
         models["target"] = [agent.base_model]
 
     all_decision = _all_decision_targets(models["target"])
@@ -175,6 +189,7 @@ def parse_design(post, project) -> dict:
             raise DesignError("Pick at least one judge.")
         follow_ids = [v.split(":", 1)[1] for v in raw if v.startswith("latest:")]
         pinned_ids = [v for v in raw if not v.startswith("latest:")]
+        _require_ids(pinned_ids + follow_ids, "judge")
         judges = list(
             JudgeVersion.objects.filter(pk__in=pinned_ids, judge__project=project).select_related("judge")
         )
@@ -202,7 +217,7 @@ def parse_design(post, project) -> dict:
     if gen_raw and gen_raw != "{}":
         try:
             gen_config = json.loads(gen_raw)
-        except json.JSONDecodeError as exc:
+        except (json.JSONDecodeError, RecursionError) as exc:
             raise DesignError(f"Invalid generation config JSON: {exc}") from exc
         if not isinstance(gen_config, dict):
             raise DesignError("Generation config must be a JSON object.")
@@ -507,9 +522,13 @@ def launch_experiment(*, project, user, name: str, runs: list[dict], repeat: dic
         raise DesignError("Select at least one run to launch.")
     if len(runs) > MAX_RUNS_PER_EXPERIMENT:
         raise DesignError(f"At most {MAX_RUNS_PER_EXPERIMENT} runs per experiment.")
+    if repeat and any(r.get("agent") for r in runs):
+        # A Monitor stores only a target model, so every scheduled run would
+        # audit the agent's bare base model instead of the agent.
+        raise DesignError("Repeating an agent experiment is not supported yet; launch it once instead.")
     with transaction.atomic():
         experiment = Experiment.objects.create(
-            project=project, name=name.strip() or "Experiment", factors=factors_from_runs(runs), created_by=user
+            project=project, name=name.strip()[:250] or "Experiment", factors=factors_from_runs(runs), created_by=user
         )
         run_now = not repeat or repeat["start"] == "now"
         created = [

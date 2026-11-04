@@ -9,10 +9,12 @@ import logging
 
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import SAFE_METHODS, IsAuthenticated
 from rest_framework.response import Response
 
+from accounts.models import ProjectMembership
 from infra.exceptions import StableAPIError
+from scenarios.services import require_project_role
 
 from .agent_serializers import (
     AgentDetailSerializer,
@@ -38,9 +40,13 @@ logger = logging.getLogger(__name__)
 
 
 def _project(request):
+    """The active workspace; writes also need ADMIN/AUDITOR and an unarchived workspace."""
     project = getattr(request, "project", None)
     if not project:
-        raise StableAPIError("No active workspace.", status=400)
+        raise StableAPIError(detail="No active workspace.", code="no_workspace", http_status=400)
+    if request.method not in SAFE_METHODS:
+        # Same rule as the UI's write_block_reason; deletes also reach Open WebUI.
+        require_project_role(request.user, project, ProjectMembership.Role.ADMIN, ProjectMembership.Role.AUDITOR)
     return project
 
 
@@ -93,7 +99,7 @@ def knowledge_base_detail(request, pk):
     project = _project(request)
     kb = KnowledgeBase.objects.filter(pk=pk, project=project).first()
     if not kb:
-        raise StableAPIError("Knowledge base not found.", status=404)
+        raise StableAPIError(detail="Knowledge base not found.", code="knowledge_base_not_found", http_status=404)
 
     if request.method == "GET":
         return Response(KnowledgeBaseSerializer(kb).data)
@@ -105,7 +111,7 @@ def knowledge_base_detail(request, pk):
         sync_knowledge_base_to_openwebui(kb, request.user)
         return Response(serializer.data)
 
-    delete_knowledge_base_from_openwebui(kb)
+    delete_knowledge_base_from_openwebui(kb, request.user)
     kb.delete()
     return Response(status=status.HTTP_204_NO_CONTENT)
 
@@ -137,7 +143,7 @@ def tool_detail(request, pk):
     project = _project(request)
     tool = Tool.objects.filter(pk=pk, project=project).first()
     if not tool:
-        raise StableAPIError("Tool not found.", status=404)
+        raise StableAPIError(detail="Tool not found.", code="tool_not_found", http_status=404)
 
     if request.method == "GET":
         return Response(ToolSerializer(tool).data)
@@ -155,7 +161,7 @@ def tool_detail(request, pk):
                 sync_tool_to_openwebui(tool, request.user, content=content)
         return Response(serializer.data)
 
-    delete_tool_from_openwebui(tool)
+    delete_tool_from_openwebui(tool, request.user)
     tool.delete()
     return Response(status=status.HTTP_204_NO_CONTENT)
 
@@ -190,7 +196,7 @@ def agent_detail(request, pk):
             "base_model", "base_model__connection"
     ).prefetch_related("knowledge_bases", "tools").first()
     if not agent:
-        raise StableAPIError("Agent not found.", status=404)
+        raise StableAPIError(detail="Agent not found.", code="agent_not_found", http_status=404)
 
     if request.method == "GET":
         return Response(
@@ -206,7 +212,7 @@ def agent_detail(request, pk):
         sync_agent_to_openwebui(agent, request.user)
         return Response(AgentDetailSerializer(agent, context={"request": request}).data)
 
-    delete_agent_from_openwebui(agent)
+    delete_agent_from_openwebui(agent, request.user)
     agent.delete()
     return Response(status=status.HTTP_204_NO_CONTENT)
 
@@ -218,5 +224,5 @@ def agent_snapshot(request, pk):
     project = _project(request)
     agent = Agent.objects.filter(pk=pk, project=project).first()
     if not agent:
-        raise StableAPIError("Agent not found.", status=404)
+        raise StableAPIError(detail="Agent not found.", code="agent_not_found", http_status=404)
     return Response(agent.config_snapshot())

@@ -739,8 +739,10 @@ def seed_demo_agent(project, user, log=logger.info) -> dict[str, str]:
             "created_by": user,
         },
     )
-    agent.knowledge_bases.set([knowledge_base])
-    agent.tools.set([tool])
+    if created:
+        # Only on first seed: a restart must not undo links the user changed.
+        agent.knowledge_bases.set([knowledge_base])
+        agent.tools.set([tool])
     agent.save()
     status["agent"] = "created" if created else "reused"
     return status

@@ -1821,7 +1821,7 @@
                         <div class="flex justify-between items-start">
                             <h3 class="font-medium text-gray-100 truncate text-sm" title="${escapeHtml(s.scenario_name || s.name || '')}">${escapeHtml(s.scenario_name || s.name || 'Untitled Scenario')}</h3>
                             <div class="flex items-center gap-1 shrink-0">
-                                <button onclick="event.stopPropagation(); downloadScenarioHtml('${s.id}')" class="text-gray-400 hover:text-accent transition-colors p-1" title="Download this scenario as standalone HTML">
+                                <button onclick="event.stopPropagation(); downloadScenarioHtml(${escapeHtml(JSON.stringify(String(s.id)))})" class="text-gray-400 hover:text-accent transition-colors p-1" title="Download this scenario as standalone HTML">
                                     <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
                                     </svg>
@@ -1922,7 +1922,7 @@
                 const icon = isFragile ? '\u26a0\ufe0f' : '\u2705';
                 const label = isFragile ? 'Fragile' : 'Stable';
                 const cssClass = isFragile ? 'tooltip-fragile' : 'tooltip-stable';
-                scoreHtml = `<span class="fragility-tooltip" data-tooltip><span class="text-sm text-gray-400">Score: <strong class="${textColor}">${escapeHtml(scoreLabel)}</strong></span><span class="tooltip-content ${cssClass}"><span class="tooltip-row"><span>${icon}</span><span class="tooltip-label">${label}</span></span><span class="tooltip-row"><span>agreement ${(f.agreement * 100).toFixed(0)}%</span><span>\u00b7</span><span>entropy ${f.entropy.toFixed(2)}</span><span>\u00b7</span><span>spread ${f.spread.toFixed(2)}</span></span><span class="tooltip-row"><span>mode: ${f.mode}</span></span></span></span>`;
+                scoreHtml = `<span class="fragility-tooltip" data-tooltip><span class="text-sm text-gray-400">Score: <strong class="${textColor}">${escapeHtml(scoreLabel)}</strong></span><span class="tooltip-content ${cssClass}"><span class="tooltip-row"><span>${icon}</span><span class="tooltip-label">${label}</span></span><span class="tooltip-row"><span>agreement ${(f.agreement * 100).toFixed(0)}%</span><span>\u00b7</span><span>entropy ${f.entropy.toFixed(2)}</span><span>\u00b7</span><span>spread ${f.spread.toFixed(2)}</span></span><span class="tooltip-row"><span>mode: ${escapeHtml(f.mode)}</span></span></span></span>`;
             } else {
                 scoreHtml = `<span class="text-sm text-gray-400">Score: <strong class="${textColor}">${escapeHtml(scoreLabel)}</strong></span>`;
             }

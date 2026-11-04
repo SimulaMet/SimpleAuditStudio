@@ -7,12 +7,13 @@ from django.http import Http404, JsonResponse
 from django.shortcuts import redirect
 from django.views.generic import TemplateView
 
-from infra.ui import ProjectMixin, _require_write_access
+from infra.ui import ProjectMixin, _int, _require_write_access
 from judges.models import Judge, JudgeVersion
 from judges.services import (
     DEFAULT_BASE,
     DEFAULT_JUDGE_BASE,
     FORMATS,
+    StaleVersionError,
     base,
     base_choices,
     create_judge,
@@ -118,7 +119,7 @@ class JudgesView(ProjectMixin, TemplateView):
             messages.success(request, f"Added {len(made)} SimpleAudit judge{'s' if len(made) != 1 else ''}.")
         elif action == "delete_version":
             version = JudgeVersion.objects.select_related("judge").filter(
-                pk=request.POST.get("version_id") or 0, judge__project=p).first()
+                pk=_int(request.POST.get("version_id")), judge__project=p).first()
             if version is None:
                 messages.error(request, "Version not found.")
                 return redirect("judges")
@@ -129,7 +130,7 @@ class JudgesView(ProjectMixin, TemplateView):
                 messages.error(request, str(e))
             return redirect("judge_detail", version.judge_id)
         elif action == "delete":
-            judge = Judge.objects.filter(pk=request.POST.get("judge_id") or 0, project=p).first()
+            judge = Judge.objects.filter(pk=_int(request.POST.get("judge_id")), project=p).first()
             if judge is not None:
                 try:
                     judge.delete()
@@ -178,7 +179,7 @@ class JudgeDetailView(ProjectMixin, TemplateView):
         cloning = None
         if judge is None:
             cloning = JudgeVersion.objects.select_related("judge").filter(
-                pk=self.request.GET.get("clone") or (form or {}).get("clone") or 0,
+                pk=_int(self.request.GET.get("clone") or (form or {}).get("clone")),
                 judge__project=self.request.project,
             ).first()
             if cloning is not None:
@@ -237,8 +238,11 @@ class JudgeDetailView(ProjectMixin, TemplateView):
         p = request.project
         judge = self._judge()
         post = request.POST
-        form = {k: post.get(k, "") for k in ("name", "description", "start", *_SPEC_FIELDS, "note", "clone")}
-        name = form["name"].strip()
+        # agentic_guidance is part of the edit form; leaving it out silently
+        # dropped it from every saved version.
+        form = {k: post.get(k, "") for k in ("name", "description", "start", *_SPEC_FIELDS, "agentic_guidance", "note", "clone")}
+        name = form["name"].strip()[:250]   # model max_length (Postgres rejects longer)
+        form["note"] = form["note"][:250]
         error = None
         if not name:
             error = "Give the judge a name."
@@ -254,9 +258,20 @@ class JudgeDetailView(ProjectMixin, TemplateView):
                     messages.success(request, f"Judge “{judge.name}” created.")
                     return redirect("judge_detail", judge.id)
                 make_spec(**_spec_fields(form))   # validate before renaming
+                # The version the form was opened on; an old version shown on
+                # purpose ("restore") may be saved over a newer one.
+                base = post.get("base_version_id", "")
+                base_id = int(base) if base.isascii() and base.isdecimal() and not post.get("restore") else None
+                version, created = save_version(
+                    judge, note=form["note"], user=request.user, base_version_id=base_id, **_spec_fields(form),
+                )
                 judge.name, judge.description = name, form["description"].strip()
                 judge.save(update_fields=["name", "description", "updated_at"])
-                version, created = save_version(judge, note=form["note"], user=request.user, **_spec_fields(form))
+            except StaleVersionError as e:
+                # Reload the fresh latest: re-rendering the stale fields would
+                # arm the form (base = latest) to overwrite it on the next click.
+                messages.error(request, str(e))
+                return redirect(f"/judges/{judge.id}/")
             except ValueError as e:
                 error = str(e)
             else:
@@ -272,7 +287,7 @@ class JudgePreviewView(ProjectMixin, TemplateView):
     showing what the judge sees when deterministic checks are present."""
 
     def post(self, request):
-        form = {k: request.POST.get(k, "") for k in ("start", *_SPEC_FIELDS)}
+        form = {k: request.POST.get(k, "") for k in ("start", *_SPEC_FIELDS, "agentic_guidance")}
         try:
             info = resolve(make_spec(**_spec_fields(form)))
         except ValueError as e:

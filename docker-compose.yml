@@ -33,7 +33,7 @@ services:
     environment:
       PORT: "8901"
     ports:
-      - "8901:8901"
+      - "127.0.0.1:8901:8901"
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request;urllib.request.urlopen('http://localhost:8901/healthz',timeout=3)\" || exit 1"]
       interval: 10s
@@ -69,8 +69,8 @@ services:
       SERVER_LOG_LEVEL: info
       SERVER_INTERNAL_CLIENT_INTERNAL_GRPC_BROADCAST_ADDRESS: hatchet-server:7077
     ports:
-      - "8888:8888"   # Hatchet HTTP API / dashboard
-      - "7077:7077"   # gRPC (worker <-> server)
+      - "127.0.0.1:8888:8888"   # Hatchet HTTP API / dashboard (auth disabled: loopback only)
+      - "127.0.0.1:7077:7077"   # gRPC (worker <-> server)
     volumes:
       # The auth-disabled dev image writes its fixed worker JWT here at startup.
       # Mounted read-only into the worker so a fresh `docker compose up` works

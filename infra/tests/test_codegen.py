@@ -390,3 +390,25 @@ class JudgeScriptViewTests(TestCase):
         JudgeVersionFactory(judge=other, version=1, base="safety")
         resp = self.client.get(f"/judges/{other.id}/script/")
         assert resp.status_code == 404
+
+
+class CodegenInjectionTests(TestCase):
+    """User/registry-controlled text must never become code in a generated script."""
+
+    def test_hostile_run_name_and_model_id_stay_inert(self):
+        from infra.codegen import generate_run_script
+
+        run = _make_run(name='x"""\nimport os; os.system("pwned")\n"""')
+        run.target_config_snapshot = {**run.target_config_snapshot, "model_id": 'm"\nimport os #'}
+        script = generate_run_script(run)
+        tree = ast.parse(script)
+        imported = {a.name for node in ast.walk(tree) if isinstance(node, ast.Import) for a in node.names}
+        assert imported <= {"os", "json"}
+        calls = [n for n in ast.walk(tree) if isinstance(n, ast.Call) and getattr(n.func, "attr", "") == "system"]
+        assert not calls
+
+    def test_scenario_text_reproduced_exactly(self):
+        from infra.codegen import _py
+
+        value = {"text": "Say true or false; null is fine", "flag": True, "none": None}
+        assert ast.literal_eval(_py(value)) == value

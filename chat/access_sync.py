@@ -36,12 +36,21 @@ def _ensure_group(api: ChatAPI, project, *, kind: str, field: str, name: str) ->
         except ChatAPIError:
             logger.info("Open WebUI group %s disappeared; recreating it", group_id)
 
+    from accounts.models import Project
+
     marker = _meta(project, kind)[MARKER]
+    # Adopt only by Studio's own marker, never by name: a workspace named
+    # "Acme — Admins" would otherwise capture Acme's admin group. Never adopt a
+    # group another project already holds.
+    claimed = set(
+        Project.objects.exclude(pk=project.pk).values_list("openwebui_group_id", flat=True)
+    ) | set(Project.objects.exclude(pk=project.pk).values_list("openwebui_admin_group_id", flat=True))
     for group in api.list_groups():
+        if group.get("id") in claimed:
+            continue
         if (
             (group.get("meta") or {}).get(MARKER) == marker
             or (group.get("data") or {}).get(MARKER) == marker
-            or group.get("name") == name
         ):
             group_id = group.get("id")
             break
@@ -103,7 +112,9 @@ def _connection_grants(connection, projects: dict[int, object]) -> list[dict[str
         for project in projects.values():
             if any(m.role == "admin" for m in project.memberships.all()) and project.openwebui_admin_group_id:
                 grants.add(("group", project.openwebui_admin_group_id, "read"))
-    else:
+    if connection.visibility != ModelConnection.Visibility.PUBLIC:
+        # Explicit shares reach every member of the shared workspace, as in
+        # Studio's own pickers (visible_connections_for), at any non-public level.
         for project in connection.shared_with.all():
             if project.openwebui_group_id:
                 grants.add(("group", project.openwebui_group_id, "read"))

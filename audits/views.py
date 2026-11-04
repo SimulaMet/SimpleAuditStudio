@@ -23,6 +23,7 @@ from audits.services import (
 )
 from infra.exceptions import StableAPIError
 from infra.middleware import set_correlation_context
+from infra.ui import is_id
 from judges.models import Judge, JudgeVersion
 from judges.services import default_judge_version
 from model_registry.models import Agent, RegisteredModel
@@ -247,10 +248,8 @@ def poll_audit_run_events(request, project_id, run_id):
         raise StableAPIError(detail="Audit run not found.", code="audit_run_not_found", http_status=404) from exc
 
     after_id_raw = request.query_params.get("after_id") or "0"
-    try:
-        after_id = int(after_id_raw)
-    except (TypeError, ValueError):
-        after_id = 0
+    # Out-of-range ids (SQLite integers are 64-bit) count as "from the start".
+    after_id = int(after_id_raw) if is_id(str(after_id_raw)) else 0
 
     return Response(list_events(run.id, after_id=after_id))
 
@@ -286,10 +285,8 @@ def stream_audit_run_events(request, project_id, run_id):
         raise Http404("Audit run not found.")
 
     after_id_raw = request.headers.get("Last-Event-ID") or request.GET.get("after_id") or "0"
-    try:
-        after_id = int(after_id_raw)
-    except (TypeError, ValueError):
-        after_id = 0
+    # Out-of-range ids (SQLite integers are 64-bit) count as "from the start".
+    after_id = int(after_id_raw) if is_id(str(after_id_raw)) else 0
 
     def event_stream():
         sent_after = after_id
@@ -341,10 +338,10 @@ def compare_audit_runs(request, project_id):
     _require_project_access(request.user, project)
 
     raw_ids = request.query_params.get("run_ids", "")
-    try:
-        run_ids = [int(x.strip()) for x in raw_ids.split(",") if x.strip()]
-    except ValueError:
+    parts = [x.strip() for x in raw_ids.split(",") if x.strip()]
+    if not all(is_id(x) for x in parts):
         raise StableAPIError(detail="run_ids must be comma-separated integers.", code="bad_request", http_status=400)
+    run_ids = [int(x) for x in parts]
 
     if len(run_ids) < 2:
         raise StableAPIError(detail="Provide at least 2 run IDs to compare.", code="bad_request", http_status=400)

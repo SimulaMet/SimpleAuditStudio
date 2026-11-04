@@ -42,7 +42,7 @@ Include run_settings_js.html after the form.
         <div data-filter-item data-prompt-row="system_prompt_version" class="rounded-lg border border-gray-800 bg-surface-overlay/40 text-sm">
           <div class="flex items-start gap-2 px-2.5 py-2">
             <label for="sp-{{ sp.id }}" class="flex items-start gap-2 min-w-0 flex-1 cursor-pointer">
-              <input type="radio" name="system_prompt_version" value="{{ sp.version_list.0.id }}" data-content="{{ sp.version_list.0.content|escapejs }}" data-version="{{ sp.version_list.0.version }}" data-latest data-row-radio id="sp-{{ sp.id }}" class="mt-0.5 accent-emerald-500" {% if sp.ticked %}checked{% endif %}>
+              <input type="radio" name="system_prompt_version" value="{{ sp.version_list.0.id }}" data-content="{{ sp.version_list.0.content }}" data-version="{{ sp.version_list.0.version }}" data-latest data-row-radio id="sp-{{ sp.id }}" class="mt-0.5 accent-emerald-500" {% if sp.ticked %}checked{% endif %}>
               <span class="min-w-0">
                 <span class="text-gray-200 block truncate">{{ sp.name }}</span>
                 <span class="text-[11px] text-gray-500" data-prompt-summary>v{{ sp.version_list.0.version }} · latest</span>
@@ -55,7 +55,7 @@ Include run_settings_js.html after the form.
             {% for v in sp.version_list %}
             <div class="flex items-baseline gap-2 text-xs py-0.5">
               <label class="flex items-baseline gap-2 min-w-0 flex-1 cursor-pointer">
-                <input type="radio" name="system_prompt_version" value="{{ v.id }}" data-content="{{ v.content|escapejs }}" data-version="{{ v.version }}" {% if forloop.first %}data-latest{% endif %}
+                <input type="radio" name="system_prompt_version" value="{{ v.id }}" data-content="{{ v.content }}" data-version="{{ v.version }}" {% if forloop.first %}data-latest{% endif %}
                        {% if v.id|stringformat:"d" in sp.ticked %}checked{% endif %}>
                 <span class="text-gray-200 shrink-0">v{{ v.version }}{% if forloop.first %} <span class="text-accent">latest</span>{% endif %}</span>
                 <span class="text-gray-500 truncate" title="{{ v.content|truncatechars:300 }}">{% if v.note %}{{ v.note|truncatechars:60 }}{% else %}{{ v.content|truncatechars:60 }}{% endif %}</span>

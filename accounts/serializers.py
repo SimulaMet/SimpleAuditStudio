@@ -1,4 +1,5 @@
 from django.contrib.auth.password_validation import validate_password
+from django.contrib.auth.validators import UnicodeUsernameValidator
 from rest_framework import serializers
 
 from accounts.models import Project, ProjectMembership, User
@@ -12,11 +13,11 @@ class UserSerializer(serializers.ModelSerializer):
 
 
 class RegisterSerializer(serializers.Serializer):
-    username = serializers.CharField(max_length=150)
-    email = serializers.EmailField()
+    username = serializers.CharField(max_length=150, validators=[UnicodeUsernameValidator()])
+    email = serializers.EmailField(max_length=254)
     password = serializers.CharField(write_only=True, style={"input_type": "password"})
-    first_name = serializers.CharField(required=False, allow_blank=True, default="")
-    last_name = serializers.CharField(required=False, allow_blank=True, default="")
+    first_name = serializers.CharField(required=False, allow_blank=True, default="", max_length=150)
+    last_name = serializers.CharField(required=False, allow_blank=True, default="", max_length=150)
 
     def validate_username(self, value):
         if User.objects.filter(username__iexact=value).exists():
@@ -91,7 +92,7 @@ class ProfileUpdateSerializer(serializers.Serializer):
 
     first_name = serializers.CharField(required=False, allow_blank=True, max_length=150)
     last_name = serializers.CharField(required=False, allow_blank=True, max_length=150)
-    email = serializers.EmailField(required=False, allow_blank=True)
+    email = serializers.EmailField(required=False, allow_blank=True, max_length=254)
     username = serializers.CharField(required=False, max_length=150)
     current_password = serializers.CharField(required=False, style={"input_type": "password"}, write_only=True)
     new_password = serializers.CharField(required=False, style={"input_type": "password"}, write_only=True)
@@ -142,6 +143,9 @@ class ProfileUpdateSerializer(serializers.Serializer):
         if attrs.get("new_password"):
             user.set_password(attrs["new_password"])
             user.save(update_fields=["password"])
+            from accounts.services import revoke_auth_tokens
+
+            revoke_auth_tokens(user)
         return user
 
 
@@ -149,11 +153,11 @@ class ProfileUpdateSerializer(serializers.Serializer):
 
 
 class UserCreateSerializer(serializers.Serializer):
-    username = serializers.CharField(max_length=150)
-    email = serializers.EmailField(required=False, allow_blank=True)
+    username = serializers.CharField(max_length=150, validators=[UnicodeUsernameValidator()])
+    email = serializers.EmailField(required=False, allow_blank=True, max_length=254)
     password = serializers.CharField(write_only=True, style={"input_type": "password"})
-    first_name = serializers.CharField(required=False, allow_blank=True, default="")
-    last_name = serializers.CharField(required=False, allow_blank=True, default="")
+    first_name = serializers.CharField(required=False, allow_blank=True, default="", max_length=150)
+    last_name = serializers.CharField(required=False, allow_blank=True, default="", max_length=150)
 
 
 class UserAdminUpdateSerializer(serializers.Serializer):
@@ -161,7 +165,7 @@ class UserAdminUpdateSerializer(serializers.Serializer):
 
     first_name = serializers.CharField(required=False, allow_blank=True, max_length=150)
     last_name = serializers.CharField(required=False, allow_blank=True, max_length=150)
-    email = serializers.EmailField(required=False, allow_blank=True)
+    email = serializers.EmailField(required=False, allow_blank=True, max_length=254)
     is_active = serializers.BooleanField(required=False)
     is_superuser = serializers.BooleanField(required=False)
     password = serializers.CharField(required=False, write_only=True, style={"input_type": "password"})

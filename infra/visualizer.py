@@ -597,7 +597,7 @@ class ScenarioViewerView(LoginRequiredMixin, View):
         return HttpResponse(html, content_type="text/html; charset=utf-8")
 
 
-class VisualizerFilesView(View):
+class VisualizerFilesView(LoginRequiredMixin, View):
     """``GET /api/visualizer/api/files/`` → bounded file tree of the results dir.
 
     Response shape:
@@ -683,7 +683,7 @@ class VisualizerFilesView(View):
         )
 
 
-class VisualizerJsonView(View):
+class VisualizerJsonView(LoginRequiredMixin, View):
     """``GET /api/visualizer/json/<path>`` → the JSON content of a result file."""
 
     def get(self, request, file_path: str):
@@ -703,10 +703,10 @@ class VisualizerJsonView(View):
             return JsonResponse({"error": "Error reading file"}, status=500)
         if not is_valid_audit_data(data):
             return JsonResponse({"error": "Not an audit results file"}, status=403)
-        return JsonResponse(data)
+        return JsonResponse(data, safe=False)   # a result file may be a top-level list
 
 
-class VisualizerImageView(View):
+class VisualizerImageView(LoginRequiredMixin, View):
     """``GET /api/visualizer/image?uri=...`` → ``{"data_uri": ...}`` for previews.
 
     Reuses the audit's own ``image_data_uri`` loader so local paths, http(s) and
@@ -721,6 +721,17 @@ class VisualizerImageView(View):
         uri = request.GET.get("uri", "")
         if not uri:
             return JsonResponse({"error": "Missing uri"}, status=400)
+        # Only http(s) URLs and files inside the results directory: fsspec would
+        # otherwise open any server path or protocol (s3://, file://, ...).
+        scheme = uri.split("://", 1)[0].lower() if "://" in uri else ""
+        if scheme not in ("http", "https"):
+            if scheme:
+                return JsonResponse({"error": "Not a previewable image"}, status=415)
+            local = _resolve_results_path(uri.lstrip("/")) if not os.path.isabs(uri) else _resolve_results_path(
+                os.path.relpath(uri, results_dir() or "/"))
+            if local is None:
+                return JsonResponse({"error": "Access denied"}, status=403)
+            uri = local
         try:
             data_uri = image_data_uri(uri)
         except ValueError:
@@ -754,32 +765,26 @@ class RunExportHtmlView(ProjectMixin, View):
     """
 
     def get(self, request, run_id):
-        from audits.events import ScenarioResult
         from audits.models import AuditRun
-        from scenarios.models import ScenarioSetVersionItem
 
         run = get_object_or_404(AuditRun, pk=run_id, project=request.project)
 
-        items = {
-            str(vi.pk): vi
-            for vi in ScenarioSetVersionItem.objects.filter(
-                version=run.scenario_set_version
-            ).select_related("scenario")
-        }
-        results = []
-        for sr in ScenarioResult.objects.filter(run_id=run.id).order_by("id"):
-            item = items.get(sr.version_item_id)
-            r = sr.result or {}
-            results.append(
-                {
-                    "scenario_name": item.scenario.title if item else str(sr.version_item_id),
-                    "severity": r.get("severity", sr.status),
-                    "summary": r.get("summary", ""),
-                    "result": r,
-                }
-            )
+        # The canonical SimpleAudit export: each scenario carries its own
+        # conversation, issues and summary (repeated runs: the modal rep), which
+        # is what the offline viewer renders.
+        from audits.services import build_simpleaudit_export
+        from scenarios.models import ScenarioSetVersionItem
 
-        data = {"results": results}
+        data = build_simpleaudit_export(run)
+        # The engine names a scenario by its key; people read its title.
+        titles = {
+            vi.scenario.key: vi.scenario.title
+            for vi in ScenarioSetVersionItem.objects.filter(version=run.scenario_set_version).select_related("scenario")
+        }
+        for entry in data.get("results") or []:
+            name = entry.get("scenario_name")
+            if name in titles:
+                entry["scenario_name"] = titles[name]
         name = f"{run.name} (run {run.id})"
         try:
             html = build_standalone_html(data, name)

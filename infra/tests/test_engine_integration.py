@@ -325,7 +325,8 @@ class TargetTracePropagationTest(TestCase):
             def __init__(self, **_kwargs):
                 import simpleaudit.experiment as experiment_module
 
-                captured["auditor_class"] = experiment_module.ModelAuditor
+                # The module attribute dispatches per run; resolve this run's class.
+                captured["auditor_class"] = experiment_module.ModelAuditor.resolve()
 
             async def run_scenario_reps(self, **_kwargs):
                 return []
@@ -381,6 +382,8 @@ class TargetTracePropagationTest(TestCase):
         self.assertEqual(calls[0]["extra_body"], {"session_id": "session-1"})
         self.assertNotIn("extra_headers", calls[0])
 
+    @mock.patch("chat.config.UPSTREAM", "http://127.0.0.1:8080/chat")
+    @mock.patch("chat.config.ENABLED", True)
     def test_model_target_uses_saved_chat_path_for_openwebui_server_tools(self):
         """Open WebUI's API path must create a chat for server-side tool execution."""
         import asyncio
@@ -567,6 +570,31 @@ class AuditorKwargsTest(TestCase):
 
         self.assertEqual(kwargs["judge_params"], {"reasoning_effort": "none"})
         self.assertEqual(kwargs["judge_kwargs"], {"timeout": 180, "max_retries": 1})
+
+    def test_target_defaults_do_not_leak_into_judge_or_auditor(self):
+        from infra.engine import auditor_kwargs
+
+        kwargs, _ = auditor_kwargs(
+            target=_snap("tgt", default_parameters={"temperature": 1.3, "max_tokens": 64}),
+            auditor=_snap("aud"),
+            judge=_snap("jdg"),
+        )
+        # The engine merges `params` into every role; target defaults go only in target_params.
+        self.assertFalse(kwargs["params"])
+        self.assertEqual(kwargs["target_params"], {"temperature": 1.3, "max_tokens": 64})
+
+    def test_shared_params_override_endpoint_defaults_and_auditor_never_inherits_judge(self):
+        from infra.engine import auditor_kwargs
+
+        kwargs, _ = auditor_kwargs(
+            target=_snap("tgt", default_parameters={"temperature": 0.7}),
+            auditor=_snap("aud"),
+            judge=_snap("jdg", default_parameters={"max_tokens": 200}),
+            generation={"params": {"temperature": 0}},
+        )
+        self.assertEqual(kwargs["target_params"]["temperature"], 0)
+        self.assertNotIn("max_tokens", kwargs["auditor_params"])
+        self.assertIsNotNone(kwargs["auditor_params"])
 
     def test_roles_map_to_their_own_snapshot(self):
         from infra.engine import auditor_kwargs
@@ -1354,3 +1382,166 @@ class RealAuditorScenarioTest(TestCase):
         self.assertEqual(scenario_dict(name="n", description="d", test_prompt="", metadata={}),
                          {"name": "n", "description": "d"})
         self.assertEqual(scenario_dict(name="n", description="d", severity_ceiling="high")["severity"], "high")
+
+
+def test_concurrent_runs_keep_their_own_auditor_class(monkeypatch):
+    """Two runs in parallel worker threads must each build their own auditor class."""
+    import asyncio
+    import threading
+
+    import simpleaudit.experiment as experiment_module
+
+    from infra import engine
+
+    monkeypatch.setattr(experiment_module, "ModelAuditor", experiment_module.ModelAuditor)
+    barrier = threading.Barrier(2)
+    seen: dict[str, type] = {}
+
+    class FakeExperiment:
+        def __init__(self, models, **_kwargs):
+            self.label = models[0]["label"]
+
+        async def run_scenario_reps(self, **_kwargs):
+            # Both runs have installed their class before either builds one.
+            await asyncio.get_running_loop().run_in_executor(None, barrier.wait)
+            seen[self.label] = experiment_module.ModelAuditor.resolve()
+            return []
+
+    monkeypatch.setattr(experiment_module, "AuditExperiment", FakeExperiment)
+    classes = {"a": type("AuditorA", (), {}), "b": type("AuditorB", (), {})}
+
+    def run(label):
+        with mock.patch("infra.engine.decision_target_for", return_value=object()), \
+             mock.patch("infra.trace_target.decision_auditor_class", return_value=classes[label]), \
+             mock.patch("infra.engine.snapshot_api_key", return_value=""):
+            engine.run_scenario_repeated(
+                name=label, description="d", expected_behavior=None, test_prompt=None,
+                target=_snap(label), auditor=_snap("x"), judge=_snap("y"), n_repetitions=2, trace_config=None,
+            )
+
+    threads = [threading.Thread(target=run, args=(k,)) for k in classes]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=30)
+    assert {label.split(" ")[0] for label in seen} == {"a", "b"}
+    for label, cls in seen.items():
+        assert cls is classes[label.split(" ")[0]]
+
+
+class StudioOpenWebUIOriginTest(TestCase):
+    """The trusted-header admin JWT goes only to Studio's own Open WebUI."""
+
+    @mock.patch("chat.config.UPSTREAM", "http://127.0.0.1:8080/chat")
+    @mock.patch("chat.config.ENABLED", True)
+    def test_only_exact_origin_is_studio_owui(self):
+        import asyncio
+
+        from infra.trace_target import _is_studio_owui, _owui_get_jwt
+
+        self.assertTrue(_is_studio_owui("http://127.0.0.1:8080/chat/api/v1/"))
+        for url in ("https://attacker.example/chat/api/v1", "http://127.0.0.1:8080@attacker.example/chat/api/v1"):
+            self.assertFalse(_is_studio_owui(url), url)
+            with mock.patch("httpx.AsyncClient") as client:
+                self.assertIsNone(asyncio.run(_owui_get_jwt(url)))
+            client.assert_not_called()
+
+
+def test_repeated_traced_run_gives_each_rep_its_correlation(monkeypatch):
+    """With tracing on, the engine's trace_correlation() returns the current rep's correlation."""
+    import simpleaudit.experiment as experiment_module
+
+    from infra import engine
+
+    monkeypatch.setattr(experiment_module, "ModelAuditor", experiment_module.ModelAuditor)
+    seen = []
+
+    class FakeExperiment:
+        def __init__(self, models, rep_is_done=None, **_kwargs):
+            self.rep_is_done = rep_is_done
+
+        async def run_scenario_reps(self, trace_correlation=None, **_kwargs):
+            for i in range(2):
+                self.rep_is_done("m", i)
+                seen.append(trace_correlation())
+            return []
+
+    provider = mock.MagicMock()
+    provider.__enter__ = lambda self: self
+    provider.__exit__ = lambda self, *a: False
+    monkeypatch.setattr(experiment_module, "AuditExperiment", FakeExperiment)
+    with mock.patch("infra.tracing.build_trace_provider", return_value=provider):
+        engine.run_scenario_repeated(
+            name="s", description="d", expected_behavior=None, test_prompt=None,
+            target=_snap("t"), auditor=_snap("a"), judge=_snap("j"), n_repetitions=2,
+            trace_config={"mode": "studio"},
+        )
+    assert len(seen) == 2 and all(c is not None for c in seen)
+    assert seen[0] is not seen[1]
+
+
+def test_retry_inside_rep_gets_fresh_correlation(monkeypatch):
+    """An ERROR retry inside a rep must not reuse the failed attempt's correlation."""
+    import simpleaudit.experiment as experiment_module
+
+    from infra import engine
+
+    monkeypatch.setattr(experiment_module, "ModelAuditor", experiment_module.ModelAuditor)
+    seen = []
+
+    class FakeExperiment:
+        def __init__(self, models, rep_is_done=None, **_kwargs):
+            self.rep_is_done = rep_is_done
+
+        async def run_scenario_reps(self, trace_correlation=None, **_kwargs):
+            self.rep_is_done("m", 0)
+            seen.append(trace_correlation())   # first attempt
+            seen.append(trace_correlation())   # retry of the same rep
+            return []
+
+    provider = mock.MagicMock()
+    provider.__enter__ = lambda self: self
+    provider.__exit__ = lambda self, *a: False
+    monkeypatch.setattr(experiment_module, "AuditExperiment", FakeExperiment)
+    with mock.patch("infra.tracing.build_trace_provider", return_value=provider):
+        engine.run_scenario_repeated(
+            name="s", description="d", expected_behavior=None, test_prompt=None,
+            target=_snap("t"), auditor=_snap("a"), judge=_snap("j"), n_repetitions=2,
+            trace_config={"mode": "studio"},
+        )
+    assert seen[0] is not None and seen[1] is not None and seen[0] is not seen[1]
+
+
+def test_repeated_run_uses_judge_agentic_guidance(monkeypatch):
+    """Judge-level agentic guidance applies on the repeated path as on the single-rep path."""
+    import simpleaudit.experiment as experiment_module
+
+    from infra import engine
+
+    monkeypatch.setattr(experiment_module, "ModelAuditor", experiment_module.ModelAuditor)
+    got = []
+
+    class FakeExperiment:
+        def __init__(self, models, rep_is_done=None, **_kwargs):
+            self.rep_is_done = rep_is_done
+
+        async def run_scenario_reps(self, trace_correlation=None, evidence_resolver=None, **_kwargs):
+            self.rep_is_done("m", 0)
+            trace_correlation()
+            got.append(evidence_resolver(None))
+            return []
+
+    provider = mock.MagicMock()
+    provider.__enter__ = lambda self: self
+    provider.__exit__ = lambda self, *a: False
+    monkeypatch.setattr(experiment_module, "AuditExperiment", FakeExperiment)
+    judge = {**_snap("j"), "judge": {"spec": {"base": "safety", "output": "", "criteria": "", "probe_prompt": "",
+                                               "options": {"agentic_guidance": "Judge says"}}}}
+    with mock.patch("infra.tracing.build_trace_provider", return_value=provider), \
+         mock.patch("infra.engine._collect_evidence_spans", return_value={"all_spans": [], "selected_spans": []}):
+        engine.run_scenario_repeated(
+            name="s", description="d", expected_behavior=None, test_prompt=None,
+            target=_snap("t"), auditor=_snap("a"), judge=judge, n_repetitions=2,
+            trace_config={"mode": "studio"}, metadata={"agentic": {"schema_version": 2, "enforcement": {}}},
+        )
+    assert got and got[0]["agentic_guidance"] == "Judge says"

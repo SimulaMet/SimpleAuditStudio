@@ -12,6 +12,13 @@ def _validate_severity_ceiling(value: str) -> str:
     return value
 
 
+def _validate_document(value):
+    # The engine accepts each document as a string (path/URI/text) or an object.
+    if not isinstance(value, (str, dict)):
+        raise serializers.ValidationError("Each document must be a string or an object.")
+    return value
+
+
 class ScenarioRevisionSerializer(serializers.ModelSerializer):
     class Meta:
         model = ScenarioRevision
@@ -37,17 +44,17 @@ class ScenarioListSerializer(serializers.ModelSerializer):
 
 
 class ScenarioCreateSerializer(serializers.Serializer):
-    key = serializers.CharField(required=False, allow_blank=True, default="")
+    key = serializers.CharField(required=False, allow_blank=True, default="", max_length=200)
     title = serializers.CharField(max_length=300)
     description = serializers.CharField(allow_blank=False)
     expected_behavior = serializers.ListField(child=serializers.CharField(), allow_empty=False)
     test_prompt = serializers.CharField(required=False, allow_blank=True, default="")
     severity_ceiling = serializers.CharField(required=False, allow_blank=True, default="", validators=[_validate_severity_ceiling])
-    documents = serializers.ListField(child=serializers.DictField(), required=False, default=list)
+    documents = serializers.ListField(child=serializers.JSONField(validators=[_validate_document]), required=False, default=list)
     file_uri = serializers.JSONField(required=False, allow_null=True, default=None)
     decision = serializers.JSONField(required=False, allow_null=True, default=None)
     metadata = serializers.DictField(required=False, default=dict)
-    category = serializers.CharField(required=False, allow_blank=True, default="")
+    category = serializers.CharField(required=False, allow_blank=True, default="", max_length=120)
     tags = serializers.ListField(child=serializers.CharField(), required=False, default=list)
 
     def validate_decision(self, value):
@@ -68,12 +75,20 @@ class ScenarioCreateSerializer(serializers.Serializer):
         return attrs
 
 
+class ScenarioImportItemSerializer(ScenarioCreateSerializer):
+    """One imported scenario: the create contract's types and lengths, with the
+    import endpoint's long-standing leniency (blank description, no behaviours)."""
+
+    description = serializers.CharField(required=False, allow_blank=True, default="")
+    expected_behavior = serializers.ListField(child=serializers.CharField(), required=False, default=list)
+
+
 class ScenarioUpdateSerializer(serializers.Serializer):
     description = serializers.CharField(allow_blank=False)
     expected_behavior = serializers.ListField(child=serializers.CharField(), allow_empty=False)
     test_prompt = serializers.CharField(required=False, allow_blank=True, default="")
     severity_ceiling = serializers.CharField(required=False, allow_blank=True, default="", validators=[_validate_severity_ceiling])
-    documents = serializers.ListField(child=serializers.DictField(), required=False, default=list)
+    documents = serializers.ListField(child=serializers.JSONField(validators=[_validate_document]), required=False, default=list)
     file_uri = serializers.JSONField(required=False, allow_null=True, default=None)
     decision = serializers.JSONField(required=False, allow_null=True, default=None)
     metadata = serializers.DictField(required=False, default=dict)
@@ -109,7 +124,7 @@ class ScenarioSetCreateSerializer(serializers.Serializer):
 
 
 class PublishScenarioSetVersionSerializer(serializers.Serializer):
-    scenario_ids = serializers.ListField(child=serializers.IntegerField(), allow_empty=False)
+    scenario_ids = serializers.ListField(child=serializers.IntegerField(min_value=1, max_value=2**63 - 1), allow_empty=False)
 
 
 class ScenarioSetVersionItemSerializer(serializers.Serializer):

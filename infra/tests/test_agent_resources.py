@@ -121,6 +121,26 @@ class AgentResourcesViewTest(TestCase):
         self.assertEqual(KnowledgeBase.objects.count(), 1)
         self.assertEqual(KnowledgeBase.objects.get(pk=seeded.pk).external_id, "owui-kb-1")
 
+    def test_sync_never_repoints_a_linked_row_by_name(self):
+        """A linked row renamed to a victim KB's name must not be re-linked to it
+        (its remote delete runs as its creator)."""
+        from infra.ui import _sync_openwebui_resources
+
+        user = _member(self.project)
+        linked = KnowledgeBase.objects.create(project=self.project, name="Victim KB", external_id="admin-kb")
+        api = mock.Mock()
+        api.knowledge_bases.return_value = [{"id": "victim-kb", "name": "Victim KB", "description": ""}]
+        api.tools.return_value = [{"id": "victim-tool", "name": "T"}]
+        from model_registry.models import Tool
+        tool = Tool.objects.create(project=self.project, name="T", external_id="admin-tool")
+
+        with mock.patch("chat.api.ChatAPI.as_user", return_value=api):
+            _sync_openwebui_resources(self.project, user)
+
+        self.assertEqual(KnowledgeBase.objects.get(pk=linked.pk).external_id, "admin-kb")
+        tool.refresh_from_db()
+        self.assertEqual(tool.external_id, "admin-tool")
+
     def test_sync_renames_kb_by_external_id_not_duplicate(self):
         """A KB renamed in OWUI keeps the same id. Sync must update the existing
         row in place (matching on external_id), not CREATE a second row whose

@@ -220,6 +220,41 @@ class ExperimentFlowTests(_ExperimentBase):
             self.assertEqual(r.generation_parameters_snapshot["judge_params"], {"temperature": 0})
         self.assertEqual(runs[-1].generation_parameters_snapshot["max_turns"], 9)
 
+    def test_multi_run_agent_experiment_runs_the_agent(self):
+        """Every run of a multi-run agent design targets the agent, not its bare base model."""
+        agent = AgentFactory(project=self.project, base_model=self.t1, external_id="studio.agent-7")
+        with mock.patch("chat.config.ENABLED", True):
+            review = self.client.post(
+                "/experiments/new/", self._design(target_model=[], agent_id=str(agent.id), max_turns="3, 5")
+            )
+            self.assertEqual(len(review.context["rows"]), 2)
+            resp = self.client.post("/experiments/new/", self._review_to_launch_payload(review))
+        exp = Experiment.objects.get()
+        self.assertRedirects(resp, f"/experiments/{exp.id}/", fetch_redirect_response=False)
+        runs = list(exp.runs.all())
+        self.assertEqual(len(runs), 2)
+        for r in runs:
+            self.assertEqual(r.agent_id, agent.id)
+
+    def test_repeating_agent_experiment_is_refused(self):
+        from audits.experiments import DesignError, launch_experiment
+
+        agent = AgentFactory(project=self.project, base_model=self.t1, external_id="studio.agent-9")
+        run = {"name": "r", "version": self.v_a, "target": self.t1, "auditor": self.judge, "judge_model": self.judge,
+               "judge": judge_for(self.judge), "max_turns": None, "language": None, "n_repetitions": None,
+               "gen_config": None, "agent": agent}
+        with self.assertRaises(DesignError):
+            launch_experiment(project=self.project, user=self.user, name="x", runs=[run],
+                              repeat={"start": "now", "every": "day"})
+        self.assertFalse(Experiment.objects.exists())
+
+    def test_agent_with_target_models_is_refused(self):
+        agent = AgentFactory(project=self.project, base_model=self.t1, external_id="studio.agent-8")
+        with mock.patch("chat.config.ENABLED", True):
+            resp = self.client.post("/experiments/new/", self._design(agent_id=str(agent.id)))
+        self.assertFalse(Experiment.objects.exists())
+        self.assertContains(resp, "not both")
+
     def test_multiple_scenario_sets_become_a_factor(self):
         review = self.client.post(
             "/experiments/new/", self._design(scenario_set=[self.set_a.id, self.set_b.id], target_model=[self.t1.id], max_turns="")

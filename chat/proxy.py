@@ -285,7 +285,7 @@ def _stop_caddy_stale() -> None:
         if not file.exists():
             return
         raw = file.read_text().strip()
-        pid = int(raw) if raw.isdigit() else 0
+        pid = int(raw) if raw.isdecimal() else 0
         if pid and _pid_alive(pid):
             parent = _parent_pid(pid)
             if parent is not None and not _orphaned(parent):
@@ -362,7 +362,7 @@ def _start_caddy(port: int, internal_port: int) -> subprocess.Popen:
     # Never overwrite a file holding a *live* caddy from another run.
     try:
         raw = caddy_pid_file().read_text().strip()
-        if raw.isdigit() and _pid_alive(int(raw)):
+        if raw.isdecimal() and _pid_alive(int(raw)):
             logger.warning(
                 "Caddy (PID %s) already running; leaving its pid file as-is", raw
             )
@@ -458,7 +458,7 @@ def _stop_stale() -> None:
         if not file.exists():
             return
         raw = file.read_text().strip()
-        pid = int(raw) if raw.isdigit() else 0
+        pid = int(raw) if raw.isdecimal() else 0
         if pid and _pid_alive(pid):
             parent = _parent_pid(pid)
             if parent is not None and not _orphaned(parent):
@@ -739,6 +739,23 @@ def _secret_key(home: Path) -> str:
         return secrets.token_urlsafe(32)
 
 
+# Studio secrets Open WebUI must never inherit: its admins can run Python
+# (Functions/Tools) and would read them from os.environ. Compose already keeps
+# them apart; this does the same for the embedded child process.
+_OWUI_ENV_DENY_PREFIXES = ("DJANGO_", "POSTGRES_", "HATCHET_", "WORKOS_", "BOOTSTRAP_")
+_OWUI_ENV_DENY_NAMES = frozenset({
+    "DATABASE_URL", "DEMO_PASSWORD", "SIMPLEAUDIT_AUTO_LOGIN_TOKEN", "SIMPLEAUDIT_CHAT_OTLP_PASSWORD",
+})
+
+
+def _owui_inherited_env() -> dict[str, str]:
+    """``os.environ`` minus Studio's own secrets, for the Open WebUI child."""
+    return {
+        k: v for k, v in os.environ.items()
+        if k not in _OWUI_ENV_DENY_NAMES and not k.startswith(_OWUI_ENV_DENY_PREFIXES)
+    }
+
+
 def _spawn(home: Path, studio_port: int | None = None) -> subprocess.Popen:
     """Build the command and environment, and start the server.
 
@@ -766,7 +783,7 @@ def _spawn(home: Path, studio_port: int | None = None) -> subprocess.Popen:
                 "--forwarded-allow-ips", "*"]
 
     env = {
-        **os.environ,
+        **_owui_inherited_env(),
         "DATA_DIR": str(home),
         # The subpath build: routes mount at /chat, and FROM_INIT_PY makes
         # the wheel's packaged frontend/ the build dir (the image does the
@@ -827,7 +844,7 @@ def _spawn(home: Path, studio_port: int | None = None) -> subprocess.Popen:
     file = pid_file()
     try:
         raw = file.read_text().strip()
-        if raw.isdigit() and _pid_alive(int(raw)):
+        if raw.isdecimal() and _pid_alive(int(raw)):
             logger.warning(
                 "Open WebUI (PID %s) is already running; recording our PID %d "
                 "would orphan it, so the pid file is left as-is",

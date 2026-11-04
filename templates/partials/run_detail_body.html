@@ -132,7 +132,7 @@ function openScriptModal() {
 </div>
 <script>
 (function() {
-  const project_id = {{ request.project.id }};
+  const project_id = {{ run.project_id }};
   const run_id = {{ run.id }};
   const url = `/api/projects/${project_id}/audit-runs/${run_id}/events/`;
   let es = null;
@@ -792,7 +792,9 @@ function openScriptModal() {
     try { const d = { kind: ev.kind, version_item_id: ev.version_item_id, payload: ev.payload, ts: ev.created_at }; noteEvent(d); h(d); }
     catch (err) { console.error('[snapshot ' + ev.kind + ']', err); }
   });
-  if (!ended) connect();
+  // The event stream needs a signed-in member; anonymous viewers of a public
+  // run keep the server snapshot (a reload shows newer progress).
+  {% if user.is_authenticated %}if (!ended) connect();{% else %}if (!ended) setStreamStatus('ended');{% endif %}
 
   // Initial render
   renderAll();

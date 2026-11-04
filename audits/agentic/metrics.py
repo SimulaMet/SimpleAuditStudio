@@ -10,6 +10,9 @@ from .repetitions import aggregate_repetitions
 _SEVERITY_RANK = {"pass": 0, "low": 1, "medium": 2, "high": 3, "critical": 4, "error": 5, "unknown": 6}
 
 
+_NO_VERDICT = frozenset({"error", "ungraded", "unknown"})
+
+
 def _severity(value: Any) -> str:
     return str(value or "unknown").strip().lower()
 
@@ -102,13 +105,17 @@ def compute_run_metrics(results: list[dict[str, Any]]) -> dict[str, Any]:
                 semantic_status = str(semantic.get("status", "INCONCLUSIVE")).upper()
                 semantic_statuses[semantic_status if semantic_status in {"PASS", "FAIL", "INCONCLUSIVE"} else "INCONCLUSIVE"] += 1
 
-    passed = sum(severity in {"pass", "low"} for severity in severities)
+    # Same definition as the rest of Studio (runs table, monitors, experiments):
+    # only "pass" passes, and rows without a verdict (ERROR, ungraded, unknown)
+    # are left out of the denominator rather than counted as failures.
+    graded = [s for s in severities if s not in _NO_VERDICT]
+    passed = sum(s == "pass" for s in graded)
     agentic_total = sum(statuses.values())
     deterministic_total = sum(deterministic_statuses.values())
     semantic_total = sum(semantic_statuses.values())
     return {
         "total_scenarios": total, "completed_scenarios": total,
-        "pass_rate": passed / total,
+        "pass_rate": passed / len(graded) if graded else 0.0,
         "agentic_pass_rate": statuses["PASS"] / agentic_total if agentic_total else 0.0,
         "deterministic_pass_rate": deterministic_statuses["PASS"] / deterministic_total if deterministic_total else 0.0,
         "semantic_pass_rate": semantic_statuses["PASS"] / semantic_total if semantic_total else 0.0,

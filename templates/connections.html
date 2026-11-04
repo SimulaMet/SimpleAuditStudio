@@ -114,9 +114,9 @@
               {% csrf_token %}
               <input type="hidden" name="action" value="edit_model">
               <input type="hidden" name="rm_id" value="{{ m.id }}">
-              <input type="text" name="model_display_name" value="{{ m.display_name }}" placeholder="Display name" aria-label="Display name"
+              <input type="text" name="model_display_name" maxlength="250" value="{{ m.display_name }}" placeholder="Display name" aria-label="Display name"
                      class="w-40 px-2 py-1 rounded bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-1 focus:ring-accent/50">
-              <input type="text" name="model_id_new" value="{{ m.model_id }}" placeholder="Model ID" aria-label="Model ID" required
+              <input type="text" name="model_id_new" maxlength="250" value="{{ m.model_id }}" placeholder="Model ID" aria-label="Model ID" required
                      class="w-48 px-2 py-1 rounded bg-surface-overlay border border-gray-700 text-xs font-mono focus:outline-none focus:ring-1 focus:ring-accent/50">
               <textarea name="model_description" rows="2" maxlength="1000" placeholder="Description (optional): what it is, when to use it" aria-label="Description"
                         class="basis-full px-2 py-1 rounded bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-1 focus:ring-accent/50">{{ m.description }}</textarea>
@@ -205,7 +205,7 @@
     </div>
     <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
       <label class="sm:col-span-2 block text-xs text-gray-500">Name
-        <input type="text" name="conn_name" required placeholder="e.g. OpenAI"
+        <input type="text" name="conn_name" maxlength="250" required placeholder="e.g. OpenAI"
                class="mt-1 w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm text-gray-100 focus:outline-none focus:ring-2 focus:ring-accent/50"></label>
       <label class="block text-xs text-gray-500">Provider
         <select name="conn_provider" class="mt-1 w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm text-gray-100">
@@ -245,7 +245,7 @@
       </div>
     </fieldset>
     <label class="block text-xs text-gray-500">Base URL
-      <input type="url" name="conn_base_url" required placeholder="https://api.example.com/v1"
+      <input type="url" name="conn_base_url" maxlength="200" required placeholder="https://api.example.com/v1"
              class="mt-1 w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm font-mono text-gray-100 focus:outline-none focus:ring-2 focus:ring-accent/50">
       <span class="block mt-1 text-[11px] text-gray-600">Usually ends in <code>/v1</code>. We call <code>&lt;base URL&gt;/models</code> to discover models.</span></label>
     <fieldset>
@@ -261,7 +261,7 @@
         <span class="block mt-1 text-[11px] text-gray-600" data-key-hint>Stored in the database, never shown again or copied into run records.</span>
       </div>
       <div class="mt-2 hidden" data-key-pane="env">
-        <input type="text" name="conn_secret_ref" placeholder="OPENAI_API_KEY" aria-label="Environment variable name"
+        <input type="text" name="conn_secret_ref" maxlength="250" placeholder="OPENAI_API_KEY" aria-label="Environment variable name"
                class="w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm font-mono text-gray-100 focus:outline-none focus:ring-2 focus:ring-accent/50">
         <span class="block mt-1 text-[11px] text-gray-600">Read from the worker's environment when a run starts. Best for production.</span>
       </div>
@@ -304,7 +304,7 @@
       <div class="mt-2 grid grid-cols-1 sm:grid-cols-2 gap-2">
         <input type="text" id="manual-id" placeholder="Model ID, e.g. gpt-4o-mini" aria-label="Model ID"
                class="px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm font-mono text-gray-100 focus:outline-none focus:ring-2 focus:ring-accent/50">
-        <input type="text" name="model_display_name" id="manual-name" placeholder="Display name (optional)" aria-label="Display name"
+        <input type="text" name="model_display_name" maxlength="250" id="manual-name" placeholder="Display name (optional)" aria-label="Display name"
                class="px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm text-gray-100 focus:outline-none focus:ring-2 focus:ring-accent/50">
         <textarea name="model_description" rows="2" maxlength="1000" placeholder="Description (optional)" aria-label="Description"
                   class="sm:col-span-2 px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm text-gray-100 focus:outline-none focus:ring-2 focus:ring-accent/50"></textarea>

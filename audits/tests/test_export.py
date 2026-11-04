@@ -239,6 +239,36 @@ class ExportServiceTest(TestCase):
         self.assertEqual(reloaded["summary"]["score"], out["summary"]["score"])
         self.assertEqual(reloaded["summary"]["total_scenarios"], out["summary"]["total_scenarios"])
 
+    def test_repeated_scenario_exports_aggregated_severity_not_error(self):
+        run, items = _build_run(self.user, self.project, n_items=1)
+        result = {
+            "reps": [self._payload("pass", name="a"), self._payload("high", name="a"), self._payload("pass", name="a")],
+            "aggregated_severity": "pass", "agreement_rate": 0.67,
+        }
+        upsert_scenario_result(run.id, str(items[0].id), status="completed", attempts=1, result=result)
+        out = build_simpleaudit_export(run)
+        self.assertEqual(out["results"][0]["severity"], "pass")
+        self.assertEqual(out["summary"]["errors"], 0)
+        self.assertEqual(out["results"][0]["conversation"], [{"role": "user", "content": "hi"}])
+
+    def test_repeated_export_uses_agentic_rollup_not_modal_rep(self):
+        run, items = _build_run(self.user, self.project, n_items=1)
+        reps = [{**self._payload("pass", name="a"), "agentic_evaluation": {"status": s, "checks": []}}
+                for s in ("PASS", "FAIL", "FAIL")]
+        upsert_scenario_result(run.id, str(items[0].id), status="completed", attempts=1,
+                               result={"reps": reps, "aggregated_severity": "pass"})
+        out = build_simpleaudit_export(run)
+        self.assertEqual(out["results"][0]["agentic_evaluation"]["status"], "FAIL")
+
+    def test_repeated_export_sums_token_usage_over_reps(self):
+        run, items = _build_run(self.user, self.project, n_items=1)
+        reps = [{**self._payload("pass", name="a"), "target_input_tokens": 10, "judge_output_tokens": 3} for _ in range(3)]
+        upsert_scenario_result(run.id, str(items[0].id), status="completed", attempts=1,
+                               result={"reps": reps, "aggregated_severity": "pass"})
+        entry = build_simpleaudit_export(run)["results"][0]
+        self.assertEqual(entry["target_input_tokens"], 30)
+        self.assertEqual(entry["judge_output_tokens"], 9)
+
     def test_failed_row_appears_with_error_preserved(self):
         run, items = _build_run(self.user, self.project, n_items=1)
         upsert_scenario_result(run.id, str(items[0].id), status="failed", attempts=3, result={"error": "boom"})

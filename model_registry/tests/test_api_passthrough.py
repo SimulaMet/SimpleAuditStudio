@@ -44,6 +44,8 @@ class ApiCredentialServiceTest(TestCase):
     def setUp(self):
         self.user = UserFactory()
         self.project = ProjectFactory()
+        # Keys only verify while the owner is a member of the key's workspace.
+        MembershipFactory(user=self.user, project=self.project)
 
     def test_upsert_returns_token_and_stores_hash(self):
         nc = api_cred.upsert_credential(project=self.project, user=self.user)
@@ -330,3 +332,20 @@ class ApiKeyManagementTest(TestCase):
             anon.post("/api/v1/keys/issue/", HTTP_AUTHORIZATION="").status_code,
             (401, 403),
         )
+
+
+class PassthroughBadModelFieldTest(TestCase):
+    def test_non_string_model_is_400(self):
+        from model_registry import api_credential_services as cred_services
+
+        user = UserFactory()
+        project = ProjectFactory()
+        MembershipFactory(user=user, project=project)
+        token = cred_services.upsert_credential(project=project, user=user).secret
+        client = Client()
+        with mock.patch("chat.config.ENABLED", True):
+            resp = client.post(
+                "/api/v1/chat/completions", json.dumps({"model": 123, "messages": []}),
+                content_type="application/json", HTTP_AUTHORIZATION=f"Bearer {token}",
+            )
+        self.assertEqual(resp.status_code, 400)

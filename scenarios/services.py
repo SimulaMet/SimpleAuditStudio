@@ -52,7 +52,7 @@ def create_scenario(*, project: Project, user, key: str, title: str, description
                     test_prompt: str = "", severity_ceiling: str = "", documents=None, file_uri=None,
                     decision=None, metadata: dict | None = None, category: str = "", tags: list | None = None) -> Scenario:
     require_project_role(user, project, ProjectMembership.Role.ADMIN, ProjectMembership.Role.AUDITOR)
-    normalized_key = slugify(key) or slugify(title)
+    normalized_key = (slugify(key) or slugify(title))[:200]   # Scenario.key max_length
     if not normalized_key:
         raise StableAPIError(detail="Scenario key or title is required.", code="invalid_scenario_key")
 
@@ -146,14 +146,20 @@ def create_scenario_set(*, project: Project, user, name: str, description: str =
 
 
 @transaction.atomic
-def publish_scenario_set_version(*, scenario_set: ScenarioSet, user, scenario_ids: list[int]) -> ScenarioSetVersion:
+def publish_scenario_set_version(
+    *, scenario_set: ScenarioSet, user, scenario_ids: list[int], revisions: dict[int, ScenarioRevision] | None = None,
+) -> ScenarioSetVersion:
     """Publish an immutable ordered version from current latest revisions.
+
+    ``revisions`` pins specific revisions per scenario id (a revert restores the
+    old version's exact text); scenarios not in it use their latest revision.
 
     Concurrency note: two concurrent publishes may attempt the same next version.
     The unique `(scenario_set, version)` constraint rejects one; callers should
     retry after re-reading the latest version.
     """
     require_project_role(user, scenario_set.project, ProjectMembership.Role.ADMIN, ProjectMembership.Role.AUDITOR)
+    scenario_ids = list(dict.fromkeys(scenario_ids))   # a repeated id must not violate the item constraint
     if not scenario_ids:
         raise StableAPIError(detail="At least one scenario is required.", code="empty_scenario_set")
 
@@ -165,7 +171,10 @@ def publish_scenario_set_version(*, scenario_set: ScenarioSet, user, scenario_id
     items = []
     for position, scenario_id in enumerate(scenario_ids, start=1):
         scenario = scenarios[scenario_id]
-        revision = ScenarioRevision.objects.filter(scenario=scenario).order_by("-revision").first()
+        pinned = (revisions or {}).get(scenario_id)
+        if pinned is not None and pinned.scenario_id != scenario_id:
+            raise StableAPIError(detail="Revision does not belong to its scenario.", code="revision_mismatch")
+        revision = pinned or ScenarioRevision.objects.filter(scenario=scenario).order_by("-revision").first()
         if not revision:
             raise StableAPIError(detail=f"Scenario {scenario.key} has no revision.", code="scenario_missing_revision")
         items.append(

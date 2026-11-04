@@ -17,6 +17,7 @@ are never persisted in the database.
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import functools
 import os
 from contextlib import nullcontext
@@ -67,6 +68,14 @@ def snapshot_api_key(snapshot: dict) -> str | None:
     conn_id = snapshot.get("connection_id")
     conn = ModelConnection.objects.filter(pk=conn_id).first() if conn_id else None
     if conn is not None:
+        frozen_url = snapshot.get("base_url") or ""
+        if frozen_url and conn.base_url and frozen_url.rstrip("/") != conn.base_url.rstrip("/"):
+            from model_registry.services import _same_origin
+
+            # The connection was re-pointed after this run froze: a key resolved
+            # for its new host must not be sent to the frozen URL.
+            if not _same_origin(frozen_url, conn.base_url):
+                return None
         return connection_api_key(conn) or None
     return _resolve_secret(snapshot.get("secret_reference"))
 
@@ -239,6 +248,9 @@ def augment_agent_generation(
             "connection_id": base_model["connection_id"],
             "model_id": base_model.get("model_id"),
         }
+        if "base_url" in base_model:
+            for key in ("provider", "base_url", "default_parameters"):
+                result["_agent_base_model"][key] = base_model.get(key)
     # The frozen Agent snapshot is the execution source of truth for the
     # target's persona. When a run does not carry an explicit system prompt,
     # use the agent's — this also makes bare-model targets (e.g. SimulaChat
@@ -425,19 +437,27 @@ def auditor_kwargs(*, target: dict, auditor: dict, judge: dict, generation: dict
             from model_registry.models import ModelConnection, RegisteredModel
             try:
                 base_conn = ModelConnection.objects.get(id=agent_snap["connection_id"])
-                base_model_row = RegisteredModel.objects.filter(
+                frozen = "base_url" in agent_snap
+                base_model_row = None if frozen else RegisteredModel.objects.filter(
                     connection=base_conn, model_id=agent_snap["model_id"]
                 ).first()
-                if base_model_row:
-                    raw_params = dict(base_model_row.default_parameters or {})
+                if frozen or base_model_row:
+                    # Runs frozen with the endpoint use the snapshot; older
+                    # snapshots fall back to the live rows they always used.
+                    raw_params = dict(
+                        (agent_snap.get("default_parameters") if frozen
+                         else base_model_row.default_parameters) or {}
+                    )
+                    base_url = agent_snap["base_url"] if frozen else base_conn.base_url
                     bp_gen, bp_kw = _split_endpoint_params(raw_params)
                     provider = _normalize_provider(
-                        base_conn.provider, base_conn.base_url
+                        agent_snap.get("provider") if frozen else base_conn.provider, base_url
                     )
                     # Resolve the API key from the base connection (not the
                     # wrapper's secret_reference which points at OWUI).
-                    from model_registry.services import connection_api_key
-                    base_key = connection_api_key(base_conn) or "no-auth"
+                    # Same origin guard as snapshot_api_key: a key resolved for the
+                    # connection's current host never goes to the frozen URL.
+                    base_key = snapshot_api_key({"connection_id": base_conn.id, "base_url": base_url}) or "no-auth"
                     # Merge base-model params over the existing gen_params so
                     # that injected agent tools / extra_body survive the override.
                     merged_gen = dict(bp_gen or {})
@@ -445,9 +465,9 @@ def auditor_kwargs(*, target: dict, auditor: dict, judge: dict, generation: dict
                         if _k not in merged_gen:
                             merged_gen[_k] = _v
                     target_cfg.update({
-                        "model": base_model_row.model_id,
+                        "model": agent_snap["model_id"],
                         "provider": provider,
-                        "base_url": base_conn.base_url,
+                        "base_url": base_url,
                         "api_key": base_key,
                         "kwargs": {**_client_defaults(provider), **(bp_kw or {})} or None,
                         "gen_params": merged_gen or None,
@@ -470,7 +490,7 @@ def auditor_kwargs(*, target: dict, auditor: dict, judge: dict, generation: dict
                             route_model = (
                                 wrapper_model
                                 if wrapper_model.startswith("studio.agent-")
-                                else f"{base_conn.id}.{base_model_row.model_id}"
+                                else f"{base_conn.id}.{agent_snap['model_id']}"
                             )
                             if route_model.startswith("studio.agent-"):
                                 # The agent's bundle is named on each run, so Open WebUI
@@ -529,10 +549,17 @@ def auditor_kwargs(*, target: dict, auditor: dict, judge: dict, generation: dict
         "judge_base_url": judge_cfg["base_url"],
         "judge_api_key": judge_cfg["api_key"],
         "judge_kwargs": _merge(judge_cfg["kwargs"], gen.get("judge_kwargs")),
-        "params": _merge(target_cfg["gen_params"], gen.get("params")),
-        "target_params": _merge(target_cfg["gen_params"], gen.get("target_params")),
-        "judge_params": _merge(judge_cfg["gen_params"], gen.get("judge_params")),
-        "auditor_params": _merge(auditor_cfg["gen_params"], gen.get("auditor_params")),
+        # Each role: its endpoint defaults, then the run's shared params, then
+        # the run's per-role params (later wins). The engine applies top-level
+        # ``params`` *under* role params, so shared params are folded into every
+        # role here instead (else an endpoint default always beat the run's
+        # choice), and the target's defaults never reach the auditor or judge.
+        # Judge/auditor params are always dicts: the engine falls back to the
+        # judge's params for a ``None`` auditor_params.
+        "params": None,
+        "target_params": _merge(target_cfg["gen_params"], gen.get("params"), gen.get("target_params")),
+        "judge_params": _merge(judge_cfg["gen_params"], gen.get("params"), gen.get("judge_params")) or {},
+        "auditor_params": _merge(auditor_cfg["gen_params"], gen.get("params"), gen.get("auditor_params")) or {},
         "max_turns": int(gen.get("max_turns") or 5),
         "max_retries": int(gen.get("max_retries") or 2),
         "retry_backoff": float(gen.get("retry_backoff") or 0.5),
@@ -569,6 +596,10 @@ def auditor_kwargs(*, target: dict, auditor: dict, judge: dict, generation: dict
             extra_body = {**(extra_body or {}), **_p.pop("extra_body")}
     if extra_body is not None:
         kwargs["extra_body"] = extra_body
+    # Shared params are folded into every role; extra_body is target-only.
+    for _pk in ("judge_params", "auditor_params"):
+        if isinstance(kwargs.get(_pk), dict):
+            kwargs[_pk].pop("extra_body", None)
     # A decision model answers once and cannot take part in a follow-up turn
     # (``DecisionTarget.max_turns`` is 1), so the generation config's max_turns
     # must not reach it. Forced here rather than at either construction site so
@@ -1104,6 +1135,36 @@ def run_scenario(
     return payload
 
 
+_current_auditor_class: contextvars.ContextVar[type | None] = contextvars.ContextVar(
+    "studio_auditor_class", default=None
+)
+
+
+class _AuditorDispatch:
+    """Stands in for ``simpleaudit.experiment.ModelAuditor``: builds the class this run chose.
+
+    Attribute access (e.g. ``ModelAuditor.get_scenarios``) forwards to that class.
+    """
+
+    @staticmethod
+    def resolve() -> type:
+        cls = _current_auditor_class.get()
+        if cls is None:
+            from simpleaudit.model_auditor import ModelAuditor
+
+            return ModelAuditor
+        return cls
+
+    def __call__(self, *args: Any, **kwargs: Any):
+        return self.resolve()(*args, **kwargs)
+
+    def __getattr__(self, name: str):
+        return getattr(self.resolve(), name)
+
+
+_AUDITOR_DISPATCH = _AuditorDispatch()
+
+
 def run_scenario_repeated(
     *,
     name: str,
@@ -1173,15 +1234,20 @@ def run_scenario_repeated(
     # experiment is set up; each auditor then gets its own (a DecisionTarget
     # owns an HTTP client).
     if decision_target_for(target) is None:
-        experiment_module.ModelAuditor = TraceContextModelAuditor
+        auditor_class = TraceContextModelAuditor
     else:
         # The key is resolved here, before the loop, as auditor_kwargs does for
         # every role: AuditExperiment builds each repetition's auditor inside
         # the running event loop, where Django refuses the connection lookup.
         target_key = snapshot_api_key(target) or ""
-        experiment_module.ModelAuditor = decision_auditor_class(
+        auditor_class = decision_auditor_class(
             lambda: decision_target_for(target, resolve_key=lambda _s: target_key)
         )
+    # The worker runs scenarios concurrently in threads of one process, so the
+    # module attribute must not carry one run's class: it dispatches through a
+    # context variable that asyncio.run() copies into this run's event loop.
+    experiment_module.ModelAuditor = _AUDITOR_DISPATCH
+    _current_auditor_class.set(auditor_class)
 
     kwargs, language = auditor_kwargs(target=target, auditor=auditor, judge=judge, generation=generation)
     max_turns = kwargs["max_turns"]
@@ -1246,6 +1312,10 @@ def run_scenario_repeated(
                 audit_run_id=getattr(provider, "_audit_run_id", None),
                 on_new_trace=getattr(provider, "claim", None),
             )
+            # The engine reads the current correlation through
+            # _tracing_correlation(); without this every rep recorded nothing.
+            current_correlation["corr"] = rep_correlations[rep_index]
+        current_correlation["rep"] = rep_index
         if on_rep_started:
             on_rep_started(rep_index)
         return False
@@ -1268,15 +1338,31 @@ def run_scenario_repeated(
     # Mutable holder the engine reads each rep: the per-rep correlation
     # assigned at the rep boundary. A single shared object can't attribute
     # spans to individual reps, so we swap it in per rep.
-    current_correlation: dict[str, Any] = {"corr": None}
+    current_correlation: dict[str, Any] = {"corr": None, "rep": None}
 
     def _tracing_correlation() -> Any:
+        # The engine calls this once per attempt of a rep (it retries ERROR
+        # attempts inside the rep). A fresh correlation per attempt keeps a
+        # failed attempt's spans out of the evidence: the last attempt wins.
+        if provider is not None and current_correlation["rep"] is not None:
+            from simpleaudit.tracing.context import TraceCorrelation
+
+            corr = TraceCorrelation(
+                audit_run_id=getattr(provider, "_audit_run_id", None),
+                on_new_trace=getattr(provider, "claim", None),
+            )
+            current_correlation["corr"] = corr
+            rep_correlations[current_correlation["rep"]] = corr
+            # A new attempt: an earlier attempt's evaluation must not stick.
+            _resolver_agentic_results.pop(current_correlation["rep"], None)
         return current_correlation["corr"]
 
     # Evidence resolver for agentic multi-rep runs: uses the per-rep
     # correlation to fetch spans and run deterministic checks pre-judge.
     _agentic_meta_rep = (metadata or {}).get("agentic")
-    _resolver_agentic_results: list[dict[str, Any]] = []  # per-rep results
+    # Per-rep results keyed by rep index; the engine's ERROR retries call the
+    # resolver again for the same rep, and the last attempt wins.
+    _resolver_agentic_results: dict[int, dict[str, Any]] = {}
     if _agentic_meta_rep and provider is not None:
         def _rep_evidence_resolver(execution):
             corr = current_correlation["corr"]
@@ -1318,11 +1404,15 @@ def run_scenario_repeated(
                         "rationale": "Semantic dimensions evaluated post-hoc by worker.",
                         "dimensions": {},
                     }
-                _resolver_agentic_results.append(evaluation)
+                _resolver_agentic_results[current_correlation["rep"]] = evaluation
                 return {
                     "selected_spans": selected,
                     "agentic_evaluation": evaluation,
-                    "agentic_guidance": (_agentic_meta_rep.get("judge_guidance") or None),
+                    # Same precedence as the single-rep path: judge option first.
+                    "agentic_guidance": (
+                        ((((judge or {}).get("judge") or {}).get("spec") or {}).get("options") or {}).get("agentic_guidance")
+                        or _agentic_meta_rep.get("judge_guidance") or None
+                    ),
                 }
             except Exception:
                 import logging
@@ -1354,7 +1444,7 @@ def run_scenario_repeated(
             )
             # Collect per-rep evidence tiers while the provider is still alive.
             if provider is not None:
-                for idx, rep in enumerate(reps):
+                for rep in reps:
                     corr = rep_correlations.get(rep.get("_rep_index"))
                     full_trace_evidence = _collect_evidence_spans(
                         corr, provider, settle_timeout=20.0, structured=True,
@@ -1372,8 +1462,8 @@ def run_scenario_repeated(
                     if corr is not None:
                         rep["trace_ids"] = corr.all_trace_ids()
                     # Attach per-rep agentic evaluation from the resolver.
-                    if idx < len(_resolver_agentic_results):
-                        rep["agentic_evaluation"] = _resolver_agentic_results[idx]
+                    if rep.get("_rep_index") in _resolver_agentic_results:
+                        rep["agentic_evaluation"] = _resolver_agentic_results[rep["_rep_index"]]
     except Exception as exc:
         raise EngineError(f"Scenario execution crashed: {type(exc).__name__}: {exc}") from exc
 

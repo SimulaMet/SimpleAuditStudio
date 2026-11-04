@@ -69,3 +69,12 @@ class ScenarioResultIdempotencyTest(TestCase):
         self.assertEqual(count_results(1), 2)
         self.assertIsNotNone(get_result(1, "a"))
         self.assertIsNotNone(get_result(1, "b"))
+
+
+class CompletedResultNotDowngradedTest(TestCase):
+    def test_late_failed_duplicate_does_not_replace_completed(self):
+        upsert_scenario_result(1, "a", status="completed", attempts=1, result={"ok": True})
+        upsert_scenario_result(1, "a", status="failed", attempts=3, result={"ok": False})
+        result = get_result(1, "a")
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(result["attempts"], 3)

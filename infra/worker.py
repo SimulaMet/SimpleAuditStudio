@@ -447,6 +447,12 @@ def _scenario_execute_impl(workflow_input: ScenarioInput, ctx: Context) -> dict:
     # target exports no spans); an empty one means "trace off".
     trace_on = bool(run.trace_config)
     trace_config = enrich_trace_config(run.trace_config or None, run.target_config_snapshot)
+    # A scenario may raise its trace content capture (agentic.trace.content_capture);
+    # it must reach the engine call below, which sanitizes spans at that level.
+    _agentic_meta = (revision.metadata or {}).get("agentic")
+    _agentic_trace_cfg = _agentic_meta.get("trace") if isinstance(_agentic_meta, dict) else None
+    if trace_config and isinstance(_agentic_trace_cfg, dict) and isinstance(_agentic_trace_cfg.get("content_capture"), str):
+        trace_config = {**trace_config, "content_capture": _agentic_trace_cfg["content_capture"]}
 
     gen_params = run.generation_parameters_snapshot or {}
     if run.agent_config_snapshot:
@@ -686,7 +692,7 @@ def _scenario_execute_impl(workflow_input: ScenarioInput, ctx: Context) -> dict:
         return {"status": "skipped_existing"}
 
     failed = severity.upper() == "ERROR"
-    error = str((result_payload.get("judgment") or {}).get("error") or result_payload.get("summary") or "") if failed else ""
+    error = result_error_text(result_payload) if failed else ""
     # A failed attempt is final on the last attempt or for errors a retry can't fix;
     # otherwise it is provisional, stored as failed with attempts < max (so not terminal).
     final = not failed or attempt >= MAX_SCENARIO_ATTEMPTS or _is_permanent_error(error)
@@ -696,9 +702,6 @@ def _scenario_execute_impl(workflow_input: ScenarioInput, ctx: Context) -> dict:
     # recompute the agentic status for UI display. For non-traced agentic
     # scenarios (no spans available in the resolver), we do the full eval.
     if trace_on and (revision.metadata or {}).get("agentic"):
-        _agentic_trace_cfg = (revision.metadata or {}).get("agentic", {}).get("trace") or {}
-        if isinstance(_agentic_trace_cfg.get("content_capture"), str):
-            trace_config = {**(trace_config or {}), "content_capture": _agentic_trace_cfg["content_capture"]}
         try:
             from audits.agentic.semantic_judge import run_semantic_judge
             from audits.agentic.trajectory import normalize
@@ -841,6 +844,26 @@ def _iter_attempted_events(run_id: str, version_item_id: str):
     return [e for e in list_events(run_id) if e["version_item_id"] == version_item_id and e["kind"] == "scenario_attempted"]
 
 
+def result_error_text(payload) -> str:
+    """The error text of a stored scenario result, single or repeated.
+
+    A repeated result keeps errors inside its reps (no top-level judgment or
+    summary): read the first ERROR rep, so failures are classified (permanent
+    vs retryable) and reported like single-repetition ones.
+    """
+    payload = payload if isinstance(payload, dict) else {}
+
+    def text(item: dict) -> str:
+        return str((item.get("judgment") or {}).get("error") or item.get("error") or item.get("summary") or "")
+
+    found = text(payload)
+    if found or not isinstance(payload.get("reps"), list):
+        return found
+    reps = [r for r in payload["reps"] if isinstance(r, dict)]
+    errored = [r for r in reps if str(r.get("severity", "")).upper() == "ERROR"]
+    return next((t for t in (text(r) for r in errored + reps) if t), "")
+
+
 def _attempt_count(run_id: str, version_item_id: str) -> int:
     """Executions of this scenario so far (durable, survives resubmission)."""
     from audits.events import AuditEvent
@@ -954,7 +977,7 @@ def _maybe_finalize(run_id: str) -> str | None:
     if not ScenarioResult.objects.filter(run_id=run.pk, status="completed").exists():
         # Every scenario failed (usually a wrong URL, model id or key): the run failed.
         first = ScenarioResult.objects.filter(run_id=run.pk).order_by("id").values_list("result", flat=True).first() or {}
-        error = str((first.get("judgment") or {}).get("error") or first.get("error") or first.get("summary") or "")
+        error = result_error_text(first)
         if AuditRun.objects.filter(pk=run.pk, status__in=_ACTIVE_STATUSES).update(
             status=AuditRun.Status.FAILED, error_code="ALL_SCENARIOS_FAILED", completed_scenarios=done,
             error_message=f"Every scenario failed. First error: {error}"[:2000], finished_at=timezone.now(),
@@ -991,7 +1014,6 @@ def resume_run(run, reason: str) -> int:
     how many scenarios were resubmitted.
     """
     from audits.events import append_event
-    from audits.models import AuditRun
 
     missing = _missing_version_item_ids(run)
     if not missing:
@@ -1000,12 +1022,16 @@ def resume_run(run, reason: str) -> int:
     submit_run_workflow(
         str(run.pk), missing, simpleaudit_version=run.simpleaudit_version, git_commit=run.git_commit,
     )
-    run.refresh_from_db()
-    meta = dict(run.runtime_metadata or {})
-    meta["submission"] = {"status": "submitted", "at": timezone.now().isoformat(), "scenarios": len(missing)}
-    meta["resumes"] = int(meta.get("resumes") or 0) + 1
-    meta["last_resume"] = {"at": timezone.now().isoformat(), "reason": reason, "scenarios": len(missing)}
-    AuditRun.objects.filter(pk=run.pk).update(runtime_metadata=meta)
+    from django.db import transaction
+
+    with transaction.atomic():
+        # Locked read-modify-write so concurrent submit/resume keep each other's keys.
+        locked = type(run).objects.select_for_update().get(pk=run.pk)
+        meta = dict(locked.runtime_metadata or {})
+        meta["submission"] = {"status": "submitted", "at": timezone.now().isoformat(), "scenarios": len(missing)}
+        meta["resumes"] = int(meta.get("resumes") or 0) + 1
+        meta["last_resume"] = {"at": timezone.now().isoformat(), "reason": reason, "scenarios": len(missing)}
+        type(run).objects.filter(pk=run.pk).update(runtime_metadata=meta)
     append_event(run.pk, "_run", "run_resumed", {"reason": reason, "scenarios": len(missing)})
     logger.info("Resumed run %s (%s): resubmitted %d scenario(s)", run.pk, reason, len(missing))
     return len(missing)
@@ -1067,13 +1093,13 @@ def _mark_run_failed(run_id: str, code: str) -> None:
     from audits.models import AuditRun
 
     try:
-        run = AuditRun.objects.get(pk=int(run_id))
-    except (AuditRun.DoesNotExist, ValueError):
+        pk = int(run_id)
+    except ValueError:
         return
-    run.status = AuditRun.Status.FAILED
-    run.error_code = code
-    run.finished_at = timezone.now()
-    run.save(update_fields=["status", "error_code", "finished_at"])
+    # Never overwrite a run that already completed or was cancelled.
+    AuditRun.objects.filter(pk=pk, status__in=_ACTIVE_STATUSES).update(
+        status=AuditRun.Status.FAILED, error_code=code, finished_at=timezone.now()
+    )
 
 
 # --- Module-level task registration ---------------------------------------

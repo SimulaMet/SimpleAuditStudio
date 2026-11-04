@@ -60,6 +60,10 @@ def delete_version(version: SystemPromptVersion) -> None:
 
     from audits.models import AuditRun
 
+    # A run that names this version keeps it: deleting it would null the run's
+    # provenance link (and then let the whole prompt be deleted).
+    if version.audit_runs.exists():
+        raise ValueError(f"{version.label} is pinned by a run, so it is kept for reproducibility.")
     # A version is kept when a run froze its exact text (in the agent config
     # snapshot or the generation parameters), so history stays reproducible.
     used = AuditRun.objects.filter(project=version.prompt.project).exclude(id__isnull=True)

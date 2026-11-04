@@ -424,6 +424,8 @@ def _tool_call_sentence(check: str, rule: dict, where: list[dict]) -> str:
     name = where[0]["value"]
     args = [c for c in where[1:] if c["field"].startswith("tool.argument.") and c["op"] == "equals"]
     if len(args) != len(where) - 1:
+        if check == "none":   # "none" rules carry no expect
+            return f"No tool call where {_conditions_text(where)}"
         return f"{_expect_phrase(rule['expect'])} tool call where {_conditions_text(where)}"
     target = name
     if args:
@@ -451,11 +453,25 @@ def unsupported_text(rule: dict) -> str:
     return f"No longer supported ({name}): edit this rule to a count, exists or none check."
 
 
+def invalid_expect_text(rule: dict) -> str | None:
+    """A message when a count/distinct rule's ``expect`` is malformed, else None.
+
+    Saved rules are validated, but rows written before that (or by hand) can
+    carry a missing/unknown/short ``expect``; describing one must not crash
+    the scenario, only flag that rule.
+    """
+    if rule.get("check") in ("count", "distinct") and _expect_problems(rule.get("expect")):
+        return f"Invalid {rule['check']} rule: its expectation is malformed; fix it in the JSON."
+    return None
+
+
 def describe_check(rule: dict) -> str:
     """The rule as one readable sentence."""
     check = rule.get("check")
     if check not in CHECKS:
         return unsupported_text(rule)
+    if invalid := invalid_expect_text(rule):
+        return invalid
     select = rule.get("select", {})
     where = select.get("where", [])
     if check in ("count", "none") and select.get("kind") == "tool" and where and _is_tool_name(where[0]):
@@ -525,6 +541,8 @@ def check_code(rule: dict) -> str:
     check = rule.get("check")
     if check not in CHECKS:
         return unsupported_text(rule)
+    if invalid := invalid_expect_text(rule):
+        return invalid
     select = rule["select"]
     where = f" where {_code_conditions(select['where'])}" if select.get("where") else ""
     if check == "distinct":

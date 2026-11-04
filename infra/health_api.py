@@ -17,4 +17,4 @@ def health_panel_api(request):
             {"detail": "Admin access required.", "code": "insufficient_role"},
             status=status.HTTP_403_FORBIDDEN,
         )
-    return Response(collect_health())
+    return Response(collect_health(request.user))

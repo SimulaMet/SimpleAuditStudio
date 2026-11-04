@@ -6,20 +6,24 @@ import io
 import itertools
 import json
 import logging
+import math
 import os
 import re
 import time
+import uuid
 from datetime import UTC, datetime
 
 from django.contrib import messages
 from django.contrib.auth import login, logout
 from django.contrib.auth.forms import AuthenticationForm
 from django.contrib.auth.mixins import LoginRequiredMixin
+from django.db import transaction
 from django.db.models import Count, F, Max, ProtectedError, Q, RestrictedError
 from django.http import Http404, HttpResponse, HttpResponseForbidden, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.utils import timezone
+from django.utils.http import url_has_allowed_host_and_scheme
 from django.views.generic import DetailView, TemplateView, View
 
 from accounts import workos_auth
@@ -28,8 +32,15 @@ from audits.agentic.rules import validate_rules
 from audits.comparison import compare_runs
 from audits.events import ScenarioResult
 from audits.models import AuditRun
-from audits.services import create_audit_run, frozen_name, submit_audit_run
+from audits.services import (
+    _repeated_export_entry,
+    create_audit_run,
+    frozen_name,
+    result_severity,
+    submit_audit_run,
+)
 from infra.chat_feature import chat_enabled
+from infra.export_utils import csv_safe
 from infra.seo import SITE_NAME, _share_context
 from scenarios.models import (
     Scenario,
@@ -141,11 +152,23 @@ def write_block_reason(request) -> str | None:
     return None
 
 
+def is_id(value) -> bool:
+    """Whether ``value`` is a string holding a database id.
+
+    ASCII digits only (``"²".isdigit()`` is True but ``int()`` rejects it) and
+    at most 18 of them: longer values overflow SQLite integers or exceed
+    Python's int-conversion limit, and would 500 instead of matching nothing.
+    """
+    return isinstance(value, str) and value.isascii() and value.isdecimal() and len(value) <= 18
+
+
 def _int(value, default: int = 0) -> int:
     """``value`` as an int (query and form values), ``default`` when it isn't one."""
+    if isinstance(value, str) and not is_id(value.strip().lstrip("-")):
+        return default
     try:
         return int(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return default
 
 
@@ -170,7 +193,10 @@ def _merge_structured_agentic_fields(metadata: dict, post) -> dict:
     if "agentic_rules_json" in post:
         raw_rules = str(post.get("agentic_rules_json") or "").strip()
         if raw_rules:
-            rules = json.loads(raw_rules)
+            try:
+                rules = json.loads(raw_rules)
+            except RecursionError as exc:   # absurdly nested JSON: a client error
+                raise ValueError("Rules JSON is nested too deeply.") from exc
             problems = validate_rules(rules)
             if problems:
                 raise ValueError("; ".join(
@@ -218,7 +244,7 @@ class HealthView(AdminRequiredMixin, TemplateView):
     def get_context_data(self, **kw):
         from infra.health import collect_health
 
-        kw.setdefault("health", collect_health())
+        kw.setdefault("health", collect_health(self.request.user))
         return super().get_context_data(**kw)
 
 
@@ -266,7 +292,9 @@ class LoginView(TemplateView):
         if form.is_valid():
             login(request, form.get_user())
             next_url = request.GET.get("next") or request.POST.get("next") or ""
-            if next_url and next_url.startswith("/") and not next_url.startswith("//"):
+            if next_url and url_has_allowed_host_and_scheme(
+                next_url, allowed_hosts={request.get_host()}, require_https=request.is_secure()
+            ):
                 return redirect(next_url)
             return redirect("dashboard")
         return self.render_to_response(self.get_context_data(form=form))
@@ -301,8 +329,14 @@ class RegisterView(TemplateView):
         error = None
         if not username or not password:
             error = "Username and password are required."
-        elif User.objects.filter(username=username).exists():
+        elif User.objects.filter(username__iexact=username).exists():
             error = "Username already taken."
+        elif email and User.objects.filter(email__iexact=email).exists():
+            # Emails identify chat accounts; a duplicate would sign the new
+            # user into the existing owner's Open WebUI account.
+            error = "Email already in use."
+        elif error := _registration_field_error(username, email, password):
+            pass
         else:
             user = User.objects.create_user(username=username, password=password, email=email)
             from accounts.services import grant_default_project
@@ -311,6 +345,55 @@ class RegisterView(TemplateView):
             login(request, user)
             return redirect("dashboard")
         return self.render_to_response(self.get_context_data(error=error))
+
+
+def _profile_field_error(
+    username: str, email: str, first_name: str, last_name: str, *, current_username: str = "",
+) -> str | None:
+    """Same field rules as registration (and the User columns), for profile edits.
+
+    The username format is checked only when it changes: accounts created
+    before the rule may hold usernames it rejects, and must still save.
+    """
+    from django.contrib.auth.validators import UnicodeUsernameValidator
+    from django.core.exceptions import ValidationError
+    from django.core.validators import validate_email
+
+    if len(username) > 150 or len(first_name) > 150 or len(last_name) > 150:
+        return "Names are limited to 150 characters."
+    if len(email) > 254:
+        return "Email is too long."
+    try:
+        if username != current_username:
+            UnicodeUsernameValidator()(username)
+        if email:
+            validate_email(email)
+    except ValidationError as exc:
+        return " ".join(exc.messages)
+    return None
+
+
+def _registration_field_error(username: str, email: str, password: str) -> str | None:
+    """First validation error for a self-registration, else None."""
+    from django.contrib.auth.password_validation import validate_password
+    from django.contrib.auth.validators import UnicodeUsernameValidator
+    from django.core.exceptions import ValidationError
+    from django.core.validators import validate_email
+
+    from accounts.models import User
+
+    if len(username) > 150:   # User.username max_length
+        return "Username is too long (150 characters at most)."
+    if len(email) > 254:
+        return "Email is too long."
+    try:
+        UnicodeUsernameValidator()(username)
+        if email:
+            validate_email(email)
+        validate_password(password, user=User(username=username, email=email))
+    except ValidationError as exc:
+        return " ".join(exc.messages)
+    return None
 
 
 def logout_view(request):
@@ -342,7 +425,14 @@ def auto_login_view(request):
     expected = os.environ.get("SIMPLEAUDIT_AUTO_LOGIN_TOKEN", "")
     if not expected or not hmac.compare_digest(token, expected):
         raise Http404
-    # Single use: clear it so the URL stops working after this request.
+    # Single use, durably: the autoreloader restarts this process from a parent
+    # that still holds the token, so clearing the env var alone is not enough.
+    from accounts.services import get_site_setting, set_site_setting
+
+    digest = hashlib.sha256(expected.encode()).hexdigest()
+    if get_site_setting("auto_login_used") == digest:
+        raise Http404
+    set_site_setting("auto_login_used", digest)
     os.environ.pop("SIMPLEAUDIT_AUTO_LOGIN_TOKEN", None)
     username = os.environ.get("BOOTSTRAP_USERNAME", "studio")
     user = User.objects.filter(username=username).first()
@@ -420,11 +510,14 @@ class WorkOSVerifyView(TemplateView):
         if not email or not code:
             return self.render_to_response(self.get_context_data(error="Missing email or code."))
         try:
+            from accounts.services import registration_enabled
+
             user, created = workos_auth.authenticate_magic_auth(
                 code,
                 email,
                 ip_address=request.META.get("REMOTE_ADDR"),
                 user_agent=request.META.get("HTTP_USER_AGENT", ""),
+                allow_create=registration_enabled(),
             )
         except Exception as exc:
             logger.exception("WorkOS magic auth verification failed")
@@ -551,7 +644,7 @@ class WorkspacesView(LoginRequiredMixin, TemplateView):
         # Manage panel: ?manage=<id>, only rendered with controls for admins.
         manage_id = self.request.GET.get("manage")
         managed = None
-        if manage_id and manage_id.isdigit():
+        if manage_id and is_id(manage_id):
             candidate = next((c for c in cards if c["project"].id == int(manage_id)), None)
             if candidate:
                 memberships = candidate["project"].memberships.select_related("user").order_by("created_at")
@@ -629,7 +722,7 @@ class AdminView(SuperuserRequiredMixin, TemplateView):
             ws["has_content"] = workspace_has_content(project) if project else False
         manage_id = self.request.GET.get("manage")
         managed_members = None
-        if tab == "workspaces" and manage_id and manage_id.isdigit():
+        if tab == "workspaces" and manage_id and is_id(manage_id):
             project = next((p for p in projects if p.id == int(manage_id)), None)
             if project:
                 managed_members = list(
@@ -651,7 +744,7 @@ class AdminView(SuperuserRequiredMixin, TemplateView):
             superuser_count=superuser_count,
             registration_enabled=get_site_setting("registration_enabled"),
             managed_members=managed_members,
-            manage_id=int(manage_id) if manage_id and manage_id.isdigit() else None,
+            manage_id=int(manage_id) if manage_id and is_id(manage_id) else None,
         )
         return super().get_context_data(**kw)
 
@@ -955,7 +1048,7 @@ class EmbeddingModelSearchView(SuperuserRequiredMixin, View):
 
     def get(self, request):
         query = (request.GET.get("q") or "").strip()[:200]
-        limit = min(int(request.GET.get("limit", 15)), self.MAX_RESULTS)
+        limit = max(1, min(_int(request.GET.get("limit"), 15), self.MAX_RESULTS))
         params = {
             "filter": "sentence-transformers",
             "limit": str(limit),
@@ -1091,6 +1184,9 @@ class ProfileView(LoginRequiredMixin, TemplateView):
                 return self.render_to_response(self.get_context_data(error=error))
             user.set_password(new_password)
             user.save(update_fields=["password"])
+            from accounts.services import revoke_auth_tokens
+
+            revoke_auth_tokens(user)
             update_session_auth_hash(request, user)
             messages.success(request, "Password updated.")
             return redirect("profile")
@@ -1102,6 +1198,8 @@ class ProfileView(LoginRequiredMixin, TemplateView):
 
         if not username:
             error = "Username cannot be empty."
+        elif error := _profile_field_error(username, email, first_name, last_name, current_username=user.username):
+            pass
         elif User.objects.filter(username__iexact=username).exclude(pk=user.pk).exists():
             error = "Username already exists."
         elif email and User.objects.filter(email__iexact=email).exclude(pk=user.pk).exists():
@@ -1124,7 +1222,7 @@ class ProfileView(LoginRequiredMixin, TemplateView):
 def _run_from_query(request, param: str):
     """The active project's run named by ``?<param>=<id>``, or None."""
     raw = request.GET.get(param) or ""
-    if not raw.isdigit():
+    if not is_id(raw):
         return None
     return (
         AuditRun.objects.filter(id=int(raw), project=request.project)
@@ -1374,7 +1472,7 @@ class NewExperimentView(ProjectMixin, TemplateView):
                                             "name")}
         rep["repeat"] = rep["repeat"] or "once"
         source = None
-        if rep["clone_from"].isdigit():
+        if is_id(rep["clone_from"]):
             source = AuditRun.objects.filter(pk=int(rep["clone_from"]), project=self.request.project).first()
         return self.render_to_response(self.get_context_data(
             error=error, sel=_design_selection(post=post), clone=_settings_prefill(post), rep=rep,
@@ -1431,7 +1529,7 @@ class NewExperimentView(ProjectMixin, TemplateView):
             with transaction.atomic():
                 experiment = Experiment.objects.create(
                     project=p,
-                    name=custom_name or f"{spec['target'].display_name} · {spec['scenario_set'].label}",
+                    name=(custom_name or f"{spec['target'].display_name} · {spec['scenario_set'].label}")[:250],
                     factors=factors_from_runs([run_spec]),
                     created_by=request.user,
                 )
@@ -1457,7 +1555,7 @@ class NewExperimentView(ProjectMixin, TemplateView):
                     )
                 if repeat:
                     first_point = run
-                    if repeat["start"] == "baseline" and repeat["baseline_run"].isdigit():
+                    if repeat["start"] == "baseline" and is_id(repeat["baseline_run"]):
                         first_point = AuditRun.objects.filter(pk=int(repeat["baseline_run"]), project=p).first()
                     monitor = create_monitor(
                         project=p,
@@ -1706,8 +1804,19 @@ class NewExperimentView(ProjectMixin, TemplateView):
             rows, runs, errors = self._rows_from_post(post, p)
         except Exception as e:  # noqa: BLE001 - tampered or stale form: start again from the design
             return self._redesign(design, f"Could not read the review: {e}")
+        agent = None
+        if agent_id:
+            # The review rows carry the agent's base model; without the agent
+            # every run would audit the bare model instead of the agent.
+            from model_registry.models import Agent
+
+            agent = Agent.objects.filter(pk=_int(agent_id), project=p, enabled=True).first()
+            if agent is None:
+                errors.append("The selected agent is not available in this workspace.")
         for r in runs:
             r["target_trace"] = target_trace
+            if agent is not None:
+                r["agent"] = agent
             if not agent_id:
                 values = design.getlist(f"target_trace_{r['target'].id}")
                 r["target_trace"] = "1" in values if values else None
@@ -2052,20 +2161,37 @@ class MonitorActionView(ProjectMixin, View):
                 monitor.next_run_at = next_after(monitor, timezone.now())
             monitor.save(update_fields=["enabled", "next_run_at", "updated_at"])
             messages.success(request, f"Monitor '{monitor.name}' {'resumed' if monitor.enabled else 'paused'}.")
+        elif action == "run-now" and not owner_authorized(monitor):
+            # Same rule as the scheduler and resume: runs are created on behalf of
+            # the monitor's creator, who must still hold admin or auditor role.
+            messages.error(
+                request,
+                "Cannot run: the monitor's creator no longer has admin or auditor role. Recreate it under your account.",
+            )
         elif action == "run-now":
-            last = monitor.last_run
-            if last and last.status not in (AuditRun.Status.COMPLETED, AuditRun.Status.FAILED, AuditRun.Status.CANCELLED):
-                messages.error(request, f"Run #{last.id} from this monitor is still {last.status}.")
+            # Same row lock the scheduler tick takes: a double click, or a click
+            # racing a tick, must not start overlapping runs of one monitor.
+            from django.db import transaction
+
+            run, refusal = None, None
+            try:
+                with transaction.atomic():
+                    locked = type(monitor).objects.select_for_update().get(pk=monitor.pk)
+                    last = locked.last_run
+                    if last and last.status not in AuditRun.TERMINAL_STATUSES:
+                        refusal = f"Run #{last.id} from this monitor is still {last.status}."
+                    else:
+                        run = launch_monitor(locked)
+                        locked.last_run = run
+                        locked.last_error = ""
+                        locked.save(update_fields=["last_run", "last_error", "updated_at"])
+            except Exception as e:  # noqa: BLE001 - surface creation failure to the user
+                messages.error(request, f"Could not launch: {e}")
             else:
-                try:
-                    run = launch_monitor(monitor)
-                except Exception as e:  # noqa: BLE001 - surface creation failure to the user
-                    messages.error(request, f"Could not launch: {e}")
+                if refusal:
+                    messages.error(request, refusal)
                 else:
-                    monitor.last_run = run
-                    monitor.last_error = ""
-                    monitor.save(update_fields=["last_run", "last_error", "updated_at"])
-                    submit_audit_run(run)
+                    submit_audit_run(run)   # after commit, so the worker sees the run
                     return redirect(f"/runs/{run.id}/")
         elif action == "delete":
             name = monitor.name
@@ -2091,21 +2217,20 @@ class ScenariosView(ProjectMixin, TemplateView):
         versions = []
         viewing_version = None
         set_param = self.request.GET.get("set", "").strip()
-        if set_param.isdigit():
+        if is_id(set_param):
             selected = ScenarioSet.objects.filter(pk=int(set_param), project=p).first()
             if selected:
                 versions = list(selected.versions.order_by("-version"))
                 # Check if a specific version is being viewed
                 ver_param = self.request.GET.get("version")
-                if ver_param and ver_param.isdigit():
+                if ver_param and is_id(ver_param):
                     viewing_version = selected.versions.filter(version=int(ver_param)).first()
                 if not viewing_version and versions:
                     viewing_version = versions[0]
                 if viewing_version:
+                    # Show everything the version contains (runs execute all of it);
+                    # deleted scenarios carry a badge rather than being hidden.
                     items = list(viewing_version.items.select_related("scenario", "revision"))
-                    # For the latest version, hide archived scenarios (they're still in historical versions)
-                    if viewing_version == versions[0]:
-                        items = [i for i in items if i.scenario.archived_at is None]
         prev_version = (viewing_version.version - 1) if viewing_version and viewing_version.version > 1 else None
         # Collect unique categories for filter dropdown
         categories = sorted({i.scenario.category for i in items if i.scenario.category}) if items else []
@@ -2113,6 +2238,20 @@ class ScenariosView(ProjectMixin, TemplateView):
                   viewing_is_latest=bool(versions) and viewing_version == versions[0],
                   prev_version=prev_version, categories=categories)
         return super().get_context_data(**kw)
+
+
+def _severity_ceiling(raw: str) -> str:
+    """The form's severity ceiling when it is a known level, else "" (no ceiling)."""
+    from scenarios.serializers import SEVERITY_CHOICES
+
+    value = (raw or "").strip().lower()
+    return value if value in SEVERITY_CHOICES else ""
+
+
+def _post_set_id(request) -> str:
+    """The form's ``set_id`` when it is a decimal id, else "" (checked before any write)."""
+    raw = request.POST.get("set_id", "").strip()
+    return raw if is_id(raw) else ""
 
 
 def _scenario_redirect(set_id: str | None):
@@ -2134,6 +2273,8 @@ def _parse_decision_field(raw: str) -> tuple[dict | None, str | None]:
         decision = json.loads(text)
     except json.JSONDecodeError as exc:
         return None, f"Decision question must be valid JSON: {exc.msg}"
+    except RecursionError:
+        return None, "Decision question JSON is nested too deeply."
     from infra.engine import validate_decision_block
 
     try:
@@ -2143,22 +2284,32 @@ def _parse_decision_field(raw: str) -> tuple[dict | None, str | None]:
     return decision, None
 
 
-def _publish_new_version(sset, user, extra_scenario_ids=None):
-    """Auto-publish a new version capturing all current (non-archived) scenarios in the set."""
+def _publish_new_version(sset, user, extra_scenario_ids=None, changed_ids=None, exclude_ids=None):
+    """Auto-publish a new version capturing all current (non-archived) scenarios in the set.
+
+    Scenarios this action did not touch keep the revision the latest version
+    froze (so a revert is not silently undone by an unrelated edit); the
+    changed and newly added ones take their newest revision.
+    """
     latest = sset.versions.order_by("-version").first()
+    pins = {}
     if latest:
-        scenario_ids = list(latest.items.values_list("scenario_id", flat=True))
+        latest_items = list(latest.items.select_related("revision").order_by("position"))
+        scenario_ids = [i.scenario_id for i in latest_items]
+        fresh = set(extra_scenario_ids or ()) | set(changed_ids or ())
+        pins = {i.scenario_id: i.revision for i in latest_items if i.scenario_id not in fresh}
     else:
         scenario_ids = []
     if extra_scenario_ids:
         for sid in extra_scenario_ids:
             if sid not in scenario_ids:
                 scenario_ids.append(sid)
-    # Exclude archived scenarios
+    # Exclude archived scenarios and the ones this action removes from the set
     archived_ids = set(Scenario.objects.filter(id__in=scenario_ids, archived_at__isnull=False).values_list("id", flat=True))
+    archived_ids |= set(exclude_ids or ())
     scenario_ids = [sid for sid in scenario_ids if sid not in archived_ids]
     if scenario_ids:
-        publish_scenario_set_version(scenario_set=sset, user=user, scenario_ids=scenario_ids)
+        publish_scenario_set_version(scenario_set=sset, user=user, scenario_ids=scenario_ids, revisions=pins)
 
 
 class ScenarioSetCreateView(ProjectMixin, View):
@@ -2166,9 +2317,11 @@ class ScenarioSetCreateView(ProjectMixin, View):
         blocked = _require_write_access(request)
         if blocked:
             return blocked
-        name = request.POST.get("name", "").strip()
+        name = request.POST.get("name", "").strip()[:250]   # ScenarioSet.name max_length
         desc = request.POST.get("description", "").strip()
-        if name:
+        if name and ScenarioSet.objects.filter(project=request.project, name=name).exists():
+            messages.error(request, f"A scenario set named '{name}' already exists.")
+        elif name:
             ScenarioSet.objects.create(
                 project=request.project, name=name, description=desc, created_by=request.user,
             )
@@ -2183,8 +2336,11 @@ class ScenarioSetRenameView(ProjectMixin, View):
             return blocked
         sset = ScenarioSet.objects.filter(pk=set_id, project=request.project).first()
         if sset:
-            name = request.POST.get("name", "").strip()
+            name = request.POST.get("name", "").strip()[:250]
             desc = request.POST.get("description", "").strip()
+            if name and ScenarioSet.objects.filter(project=request.project, name=name).exclude(pk=sset.pk).exists():
+                messages.error(request, f"A scenario set named '{name}' already exists.")
+                return redirect(f"/scenarios/?set={set_id}")
             if name:
                 sset.name = name
             sset.description = desc
@@ -2253,20 +2409,22 @@ class ScenarioCreateView(ProjectMixin, View):
         blocked = _require_write_access(request)
         if blocked:
             return blocked
-        name = request.POST.get("name", "").strip()
-        category = request.POST.get("category", "").strip()
+        name = request.POST.get("name", "").strip()[:300]   # Scenario.title max_length
+        category = request.POST.get("category", "").strip()[:120]
         desc = request.POST.get("description", "")
         expected_behavior_raw = request.POST.get("expected_behavior", "").strip()
         expected_behavior = [line.strip() for line in expected_behavior_raw.splitlines() if line.strip()] if expected_behavior_raw else []
         test_prompt = request.POST.get("test_prompt", "").strip()
-        severity_ceiling = request.POST.get("severity_ceiling", "").strip().lower()
+        severity_ceiling = _severity_ceiling(request.POST.get("severity_ceiling", ""))
         documents_raw = request.POST.get("documents", "").strip()
         documents_raw = request.POST.get("documents", "").strip()
         try:
             documents = json.loads(documents_raw) if documents_raw else []
-        except json.JSONDecodeError:
-            messages.error(request, "Documents and agentic metadata must be valid JSON.")
-            return _scenario_redirect(request.POST.get("set_id", "").strip() or None)
+            if not isinstance(documents, list):
+                raise TypeError("documents must be a list")
+        except (json.JSONDecodeError, TypeError, RecursionError):
+            messages.error(request, "Documents must be a JSON list, and agentic metadata valid JSON.")
+            return _scenario_redirect(_post_set_id(request) or None)
         # The raw metadata box is a read-only preview; the structured controls
         # are the single source of truth. A new scenario has no prior revision
         # to preserve, so unknown fields start empty.
@@ -2277,19 +2435,23 @@ class ScenarioCreateView(ProjectMixin, View):
                 metadata = _merge_structured_agentic_fields({}, request.POST)
             except (ValueError, json.JSONDecodeError) as exc:
                 messages.error(request, f"Structured agentic controls are invalid: {exc}")
-                return _scenario_redirect(request.POST.get("set_id", "").strip() or None)
+                return _scenario_redirect(_post_set_id(request) or None)
         file_uri_raw = request.POST.get("file_uri", "").strip()
         file_uri = file_uri_raw or None
         decision, decision_error = _parse_decision_field(request.POST.get("decision", ""))
         if decision_error:
             messages.error(request, decision_error)
-            return _scenario_redirect(request.POST.get("set_id", "").strip() or None)
+            return _scenario_redirect(_post_set_id(request) or None)
         if decision and request.POST.get("agentic_scenario"):
             messages.error(request, "A scenario cannot be both agentic and a decision model — pick one.")
-            return _scenario_redirect(request.POST.get("set_id", "").strip() or None)
-        set_id = request.POST.get("set_id", "").strip()
+            return _scenario_redirect(_post_set_id(request) or None)
+        set_id = _post_set_id(request)
         if name:
             key = hashlib.sha256(name.encode()).hexdigest()[:12]
+            # Keys are unique per workspace and survive archiving: the same title
+            # in another set, or re-added after a delete, gets a fresh key.
+            if Scenario.objects.filter(project=request.project, key=key).exists():
+                key = f"{key}-{uuid.uuid4().hex[:6]}"
             scenario = create_scenario(
                 project=request.project, user=request.user, key=key, title=name, category=category,
                 description=desc, expected_behavior=expected_behavior, test_prompt=test_prompt,
@@ -2311,20 +2473,22 @@ class ScenarioEditView(ProjectMixin, View):
         if blocked:
             return blocked
         scenario = Scenario.objects.filter(pk=scenario_id, project=request.project).first()
-        set_id = request.POST.get("set_id", "").strip()
+        set_id = _post_set_id(request)
         if scenario:
-            title = request.POST.get("title", "").strip()
-            category = request.POST.get("category", "").strip()
+            title = request.POST.get("title", "").strip()[:300]
+            category = request.POST.get("category", "").strip()[:120]
             desc = request.POST.get("description", "")
             expected_behavior_raw = request.POST.get("expected_behavior", "").strip()
             expected_behavior = [line.strip() for line in expected_behavior_raw.splitlines() if line.strip()] if expected_behavior_raw else []
             test_prompt = request.POST.get("test_prompt", "").strip()
-            severity_ceiling = request.POST.get("severity_ceiling", "").strip().lower()
+            severity_ceiling = _severity_ceiling(request.POST.get("severity_ceiling", ""))
             documents_raw = request.POST.get("documents", "").strip()
             try:
                 documents = json.loads(documents_raw) if documents_raw else []
-            except json.JSONDecodeError:
-                messages.error(request, "Documents and agentic metadata must be valid JSON.")
+                if not isinstance(documents, list):
+                    raise TypeError("documents must be a list")
+            except (json.JSONDecodeError, TypeError, RecursionError):
+                messages.error(request, "Documents must be a JSON list, and agentic metadata valid JSON.")
                 return _scenario_redirect(set_id or None)
             file_uri_raw = request.POST.get("file_uri", "").strip()
             file_uri = file_uri_raw or None
@@ -2342,11 +2506,25 @@ class ScenarioEditView(ProjectMixin, View):
 
             # update_scenario_content handles change detection (returns latest if unchanged)
             latest_rev_before = scenario.revisions.order_by("-revision").first()
+            # The revision this set currently runs can be older than the newest
+            # (a revert, or an edit made from another set sharing the scenario);
+            # compare against it so re-typing the newest text still publishes.
+            sset = ScenarioSet.objects.filter(pk=set_id, project=request.project).first() if set_id else None
+            set_latest = sset.versions.order_by("-version").first() if sset else None
+            pinned_item = set_latest.items.select_related("revision").filter(scenario=scenario).first() if set_latest else None
+            pinned_rev = pinned_item.revision if pinned_item else latest_rev_before
+            # The form carries the revision it was opened on: a form from an older
+            # version, or opened before someone else's edit, would republish
+            # stale text over the current one.
+            base_rev = request.POST.get("base_revision_id")
+            if base_rev and pinned_rev is not None and base_rev != str(pinned_rev.pk):
+                messages.error(request, "This scenario changed since the form was opened; reload and edit again.")
+                return _scenario_redirect(set_id or None)
             # The raw metadata box is a read-only preview; the structured controls
             # are the single source of truth. Unknown top-level fields survive an
             # edit because they are carried over from the previous revision rather
             # than re-read from the (now non-editable) textarea.
-            prior_metadata = dict(latest_rev_before.metadata or {}) if latest_rev_before else {}
+            prior_metadata = dict(pinned_rev.metadata or {}) if pinned_rev else {}
             if not request.POST.get("agentic_scenario"):
                 # The toggle disables agentic expectations, but must not erase
                 # unrelated metadata authored by older clients or imports.
@@ -2364,12 +2542,10 @@ class ScenarioEditView(ProjectMixin, View):
                 severity_ceiling=severity_ceiling, documents=documents, file_uri=file_uri,
                 decision=decision, metadata=metadata,
             )
-            content_changed = latest_rev_before is None or rev.revision > latest_rev_before.revision
+            content_changed = pinned_rev is None or rev.pk != pinned_rev.pk
             if content_changed:
-                if set_id:
-                    sset = ScenarioSet.objects.filter(pk=set_id, project=request.project).first()
-                    if sset:
-                        _publish_new_version(sset, request.user)
+                if sset:
+                    _publish_new_version(sset, request.user, changed_ids=[scenario.id])
                 messages.success(request, f"Scenario '{scenario.title}' updated (new version published).")
             else:
                 messages.info(request, f"Scenario '{scenario.title}' saved (no content change, version unchanged).")
@@ -2381,17 +2557,24 @@ class ScenarioDeleteView(ProjectMixin, View):
         blocked = _require_write_access(request)
         if blocked:
             return blocked
-        set_id = request.POST.get("set_id", "").strip()
+        set_id = _post_set_id(request)
         scenario = Scenario.objects.filter(pk=scenario_id, project=request.project).first()
         if scenario:
-            # Archive instead of delete (preserves historical versions)
-            scenario.archived_at = timezone.now()
-            scenario.save()
-            # Publish new version excluding archived scenarios
-            if set_id:
-                sset = ScenarioSet.objects.filter(pk=set_id, project=request.project).first()
-                if sset:
-                    _publish_new_version(sset, request.user)
+            sset = ScenarioSet.objects.filter(pk=set_id, project=request.project).first() if set_id else None
+            if sset:
+                # Remove it from this set only.
+                _publish_new_version(sset, request.user, exclude_ids=[scenario.id])
+            # Archive (never hard-delete: historical versions keep it) only when
+            # no other set's current version still uses it: a scenario shared
+            # by import must not vanish from the other sets' next versions.
+            still_used = any(
+                (latest := other.versions.order_by("-version").first()) is not None
+                and latest.items.filter(scenario=scenario).exists()
+                for other in ScenarioSet.objects.filter(project=request.project).exclude(pk=getattr(sset, "pk", None))
+            )
+            if not still_used:
+                scenario.archived_at = timezone.now()
+                scenario.save()
         return _scenario_redirect(set_id or None)
 
 
@@ -2421,9 +2604,17 @@ class ScenarioRevertView(ProjectMixin, View):
         target_ver = _int(request.POST.get("target_version"))
         old_version = sset.versions.filter(version=target_ver).first()
         if old_version:
-            scenario_ids = list(old_version.items.values_list("scenario_id", flat=True))
+            old_items = list(old_version.items.select_related("revision").order_by("position"))
+            scenario_ids = [i.scenario_id for i in old_items]
             if scenario_ids:
-                publish_scenario_set_version(scenario_set=sset, user=request.user, scenario_ids=scenario_ids)
+                # Restore exactly what the preview showed: the old version's frozen
+                # revisions, and its scenarios even if they were deleted since.
+                with transaction.atomic():
+                    Scenario.objects.filter(id__in=scenario_ids, archived_at__isnull=False).update(archived_at=None)
+                    publish_scenario_set_version(
+                        scenario_set=sset, user=request.user, scenario_ids=scenario_ids,
+                        revisions={i.scenario_id: i.revision for i in old_items},
+                    )
                 messages.success(request, f"Reverted to v{target_ver} (published as new version).")
             else:
                 messages.error(request, "Old version has no scenarios.")
@@ -2482,32 +2673,65 @@ class ScenarioImportView(ProjectMixin, View):
             return JsonResponse({"error": "Not found"}, status=404)
         try:
             data = json.loads(request.body)
+            if not isinstance(data, dict):
+                return JsonResponse({"error": "Expected a JSON object with a 'scenarios' list."}, status=400)
             if data.get("format_version") not in (None, 2):
                 return JsonResponse({"error": "Unsupported scenario import format_version; expected 2."}, status=400)
-            new_ids = []
-            for item in data.get("scenarios", []):
-                key = item.get("key", f"imported_{int(timezone.now().timestamp())}")
-                scenario, _ = Scenario.objects.get_or_create(
-                    project=request.project, key=key,
-                    defaults={"title": item.get("title", "Imported"), "category": item.get("category", "")},
-                )
-                update_scenario_content(
-                    scenario=scenario, user=request.user,
-                    description=item.get("description", ""),
-                    expected_behavior=item.get("expected_behavior") or [],
-                    test_prompt=item.get("test_prompt", ""),
-                    severity_ceiling=item.get("severity_ceiling", ""),
-                    documents=item.get("documents") or [],
-                    file_uri=item.get("file_uri"),
-                    decision=item.get("decision"),
-                    metadata=item.get("metadata")  # Import includes metadata if present
-                )
-                new_ids.append(scenario.id)
-            # Auto-publish after import (include newly imported scenarios)
-            _publish_new_version(sset, request.user, extra_scenario_ids=new_ids)
+            items = data.get("scenarios", [])
+            if not isinstance(items, list) or not all(isinstance(i, dict) for i in items):
+                return JsonResponse({"error": "'scenarios' must be a list of objects."}, status=400)
+            # Same per-item contract as the API importer (types, lengths, severity).
+            from scenarios.serializers import ScenarioImportItemSerializer
+
+            validated, problems = [], []
+            for n, item in enumerate(items, start=1):
+                key = str(item.get("key") or "").strip() or f"imported_{uuid.uuid4().hex[:12]}"
+                serializer = ScenarioImportItemSerializer(data={"title": "Imported", **item, "key": key})
+                if serializer.is_valid():
+                    data = dict(serializer.validated_data)
+                    if "metadata" not in item:
+                        data["metadata"] = None   # keep an existing scenario's metadata
+                    validated.append(data)
+                else:
+                    problems.append(f"scenario {n} ({key}): {serializer.errors}")
+            if problems:
+                return JsonResponse({"error": "Invalid scenarios: " + "; ".join(problems)}, status=400)
+            # All-or-nothing: a failure part-way must not leave half-imported content.
+            with transaction.atomic():
+                new_ids = self._import_items(request, validated)
+                # Auto-publish after import (include newly imported scenarios)
+                _publish_new_version(sset, request.user, extra_scenario_ids=new_ids)
         except Exception as e:  # noqa: BLE001 - surface any import/publish failure to the user
             return JsonResponse({"error": str(e)}, status=400)
         return redirect(f"/scenarios/?set={set_id}")
+
+    @staticmethod
+    def _import_items(request, items: list[dict]) -> list[int]:
+        new_ids = []
+        for item in items:   # validated by ScenarioImportItemSerializer
+            key = item["key"]
+            scenario, _ = Scenario.objects.get_or_create(
+                project=request.project, key=key,
+                defaults={"title": item["title"], "category": item.get("category", "")},
+            )
+            if scenario.archived_at is not None:
+                # Re-importing a deleted (archived) scenario restores it; otherwise
+                # the publish below drops it and the import silently adds nothing.
+                scenario.archived_at = None
+                scenario.save(update_fields=["archived_at"])
+            update_scenario_content(
+                scenario=scenario, user=request.user,
+                description=item["description"],
+                expected_behavior=item["expected_behavior"],
+                test_prompt=item["test_prompt"],
+                severity_ceiling=item["severity_ceiling"],
+                documents=item["documents"],
+                file_uri=item.get("file_uri"),
+                decision=item.get("decision"),
+                metadata=item.get("metadata"),  # None keeps an existing scenario's metadata
+            )
+            new_ids.append(scenario.id)
+        return new_ids
 
 
 # ─── Models ──────────────────────────────────────────────────────────────────
@@ -2526,7 +2750,6 @@ class ConnectionsView(ProjectMixin, TemplateView):
         from model_registry.services import (
             PROVIDER_PRESETS,
             admin_workspaces,
-            can_edit_connection,
             connection_share_label,
             is_internal_agent_connection,
             model_usage_counts,
@@ -2546,6 +2769,16 @@ class ConnectionsView(ProjectMixin, TemplateView):
                 project=p, connection_id__in=[c.id for c in connections]
             )
         }
+        # One query per relation instead of per connection.
+        from django.db.models import prefetch_related_objects
+
+        from accounts.models import ProjectMembership
+
+        prefetch_related_objects(connections, "models", "shared_with")
+        admin_project_ids = set(
+            ProjectMembership.objects.filter(user=user, role=ProjectMembership.Role.ADMIN)
+            .values_list("project_id", flat=True)
+        )
         # Attach each connection's models once (owner + shared alike).
         for conn in connections:
             conn.otlp_credential = otlp_credentials.get(conn.id)
@@ -2555,7 +2788,8 @@ class ConnectionsView(ProjectMixin, TemplateView):
             for m in conn.model_list:
                 m.usage = usage.get(m.id, 0)
             conn.in_use = any(m.usage for m in conn.model_list)
-            conn.can_edit = can_edit_connection(user, conn)
+            # Same rule as can_edit_connection, without a query per connection.
+            conn.can_edit = user.is_superuser or conn.project_id in admin_project_ids
             conn.share_label = connection_share_label(conn)
             conn.is_shared = not conn.is_owner
         # What the edit dialog needs (never the key itself). Only owner
@@ -2566,7 +2800,7 @@ class ConnectionsView(ProjectMixin, TemplateView):
                 "key_mode": "stored" if c.api_key_direct else "env" if c.secret_reference else "none",
                 "enabled": c.enabled,
                 "visibility": c.visibility,
-                "shared_with": [str(x) for x in c.shared_with.values_list("id", flat=True)],
+                "shared_with": [str(x.id) for x in c.shared_with.all()],
                 "can_edit": c.can_edit,
                 "share_label": c.share_label,
                 "otlp": {
@@ -2619,7 +2853,7 @@ class ConnectionsView(ProjectMixin, TemplateView):
             return redirect(reverse("connections") + anchor)
 
         if action in ("add_connection", "edit_connection"):
-            name = post.get("conn_name", "").strip()
+            name = post.get("conn_name", "").strip()[:250]
             base_url = post.get("conn_base_url", "").strip()
             error = _base_url_error(base_url) or (None if name else "Connection name is required.")
             if action == "add_connection":
@@ -2627,9 +2861,13 @@ class ConnectionsView(ProjectMixin, TemplateView):
             else:
                 # Editing is owner-workspace only: a shared connection's id must
                 # belong to this workspace, otherwise it's read-only for us.
-                conn = ModelConnection.objects.filter(pk=post.get("conn_id"), project=p).first()
+                conn = ModelConnection.objects.filter(pk=_int(post.get("conn_id")), project=p).first()
                 if conn is None:
                     return fail("Connection not found (or you can't edit a shared connection here).")
+                # Workspace admins only: an edit can re-point the stored key's URL.
+                from model_registry.services import can_edit_connection
+                if not can_edit_connection(request.user, conn):
+                    return fail("Only workspace admins can edit a connection.")
                 conn.enabled = post.get("conn_enabled") == "1"
                 anchor = f"#conn-{conn.pk}"
             if error:
@@ -2638,44 +2876,68 @@ class ConnectionsView(ProjectMixin, TemplateView):
                 return fail(f"A connection named “{name}” already exists.")
             conn.name, conn.base_url = name, base_url
             conn.description = post.get("conn_description", "").strip()[:DESCRIPTION_MAX]
-            conn.provider = post.get("conn_provider") or "openai"
-            # Sharing level + explicit workspaces (owner-only; ignored for adds
-            # that don't send them, defaulting to "this workspace only").
+            conn.provider = (post.get("conn_provider") or "openai").strip()[:120]   # max_length
+            # Sharing level (explicit workspace shares are applied after save).
             visibility = post.get("conn_visibility", ModelConnection.Visibility.WORKSPACE)
             if visibility not in dict(ModelConnection.Visibility.choices):
                 visibility = ModelConnection.Visibility.WORKSPACE
             conn.visibility = visibility
-            if action == "edit_connection":
-                shared_ids = [int(x) for x in post.getlist("conn_shared_with") if x.isdigit()]
-                conn.shared_with.set(shared_ids)
             # Where the key comes from: stored on the connection, an env var, or none.
             key_mode = post.get("key_mode", "stored")
             if key_mode == "env":
                 ref = post.get("conn_secret_ref", "").strip()
                 if not ref:
                     return fail("Enter the environment variable that holds the API key.")
+                from model_registry.services import is_platform_secret_name
+                if is_platform_secret_name(ref):
+                    return fail(f"{ref} holds a Studio platform secret and cannot be a model API key.")
+                if len(ref) > 250:   # ModelConnection.secret_reference max_length
+                    return fail("That environment variable name is too long (250 characters at most).")
                 conn.secret_reference, conn.api_key_direct = ref, ""
             elif key_mode == "none":
                 conn.secret_reference, conn.api_key_direct = "", ""
             else:
                 conn.secret_reference = ""
                 new_key = post.get("conn_api_key", "").strip()
+                if len(new_key) > 500:   # ModelConnection.api_key_direct max_length
+                    return fail("That API key is longer than 500 characters; store it in an environment variable instead.")
                 if new_key:   # blank keeps the stored key
                     conn.api_key_direct = new_key
             conn.save()
+            # Explicit workspace shares, applied after every check passed so a
+            # refused edit changes nothing; adds honour them too. Only the
+            # "workspaces where I'm admin" level shares (hidden checkboxes still
+            # submit after switching to "this workspace only"). At that level,
+            # workspaces the editor doesn't administer keep another admin's share.
+            from model_registry.services import admin_workspaces
+
+            allowed = {w.id for w in admin_workspaces(request.user)} - {p.id}
+            requested = (
+                {int(x) for x in post.getlist("conn_shared_with") if is_id(x)} & allowed
+                if conn.visibility == ModelConnection.Visibility.ADMINS else set()
+            )
+            # Any narrower level clears every share, including ones another admin
+            # made (else "this workspace only" kept leaking to their workspaces).
+            kept = (
+                set(conn.shared_with.exclude(pk__in=allowed).values_list("pk", flat=True))
+                if conn.visibility == ModelConnection.Visibility.ADMINS else set()
+            )
+            conn.shared_with.set(requested | kept)
             anchor = f"#conn-{conn.pk}"
             messages.success(request, f"Connection “{conn.name}” saved.")
         elif action == "add_models":
             # Adding models mutates the connection — owner workspace only.
-            conn = ModelConnection.objects.filter(pk=post.get("conn_id"), project=p).first()
+            conn = ModelConnection.objects.filter(pk=_int(post.get("conn_id")), project=p).first()
             if conn is None:
                 return fail("Connection not found (or you can't edit a shared connection here).")
             anchor = f"#conn-{conn.pk}"
             ids = [m.strip() for m in post.getlist("model_id") if m.strip()][:200]
             if not ids:
                 return fail("Enter a model ID or pick models to add.")
+            if any(len(m) > 250 for m in ids):   # RegisteredModel.model_id max_length
+                return fail("A model ID is longer than 250 characters.")
             single = len(ids) == 1
-            label = post.get("model_display_name", "").strip() if single else ""
+            label = post.get("model_display_name", "").strip()[:250] if single else ""
             desc = post.get("model_description", "").strip()[:DESCRIPTION_MAX] if single else ""
             existing = set(conn.models.values_list("model_id", flat=True))
             new_models = [m for m in dict.fromkeys(ids) if m not in existing]
@@ -2687,7 +2949,7 @@ class ConnectionsView(ProjectMixin, TemplateView):
                 flagged = post.get(f"decision:{m}") == "1"
                 caps = {"decision": True} if flagged else detect_model_capabilities(conn, m)
                 RegisteredModel.objects.create(
-                    connection=conn, project=p, model_id=m, display_name=label or m, description=desc,
+                    connection=conn, project=p, model_id=m, display_name=(label or m)[:250], description=desc,
                     capabilities=caps, enabled=True, created_by=request.user,
                 )
             new = new_models
@@ -2698,7 +2960,7 @@ class ConnectionsView(ProjectMixin, TemplateView):
             # Editing/removing a model mutates its connection — owner workspace only.
             rm = (
                 RegisteredModel.objects.select_related("connection")
-                .filter(pk=post.get("rm_id"), project=p, connection__project=p)
+                .filter(pk=_int(post.get("rm_id")), project=p, connection__project=p)
                 .first()
             )
             if rm is None:
@@ -2706,10 +2968,12 @@ class ConnectionsView(ProjectMixin, TemplateView):
             anchor = f"#conn-{rm.connection_id}"
             if action == "edit_model":
                 new_id = post.get("model_id_new", "").strip() or rm.model_id
+                if len(new_id) > 250:
+                    return fail("Model ID is too long (250 characters at most).")
                 if new_id != rm.model_id and RegisteredModel.objects.filter(connection=rm.connection, model_id=new_id).exists():
                     return fail(f"“{new_id}” is already registered on {rm.connection.name}.")
                 rm.model_id = new_id
-                rm.display_name = post.get("model_display_name", "").strip() or new_id
+                rm.display_name = (post.get("model_display_name", "").strip() or new_id)[:250]
                 rm.description = post.get("model_description", "").strip()[:DESCRIPTION_MAX]
                 rm.save(update_fields=["model_id", "display_name", "description"])
                 messages.success(request, f"Saved {rm.display_name}.")
@@ -2731,6 +2995,10 @@ class ConnectionDeleteView(ProjectMixin, View):
         if blocked:
             return blocked
         conn = ModelConnection.objects.filter(pk=conn_id, project=request.project).first()
+        from model_registry.services import can_edit_connection
+        if conn and not can_edit_connection(request.user, conn):
+            messages.error(request, "Only workspace admins can delete a connection.")
+            return redirect("connections")
         if conn:
             try:
                 conn.delete()
@@ -2755,6 +3023,8 @@ def _base_url_error(raw: str) -> str | None:
 
     if not raw.strip():
         return "Base URL is required."
+    if len(raw.strip()) > 200:   # ModelConnection.base_url max_length
+        return "Base URL is too long (200 characters at most)."
     try:
         EndpointURLField().to_internal_value(raw)
     except ValidationError:
@@ -3052,7 +3322,7 @@ class DiscoverModelsView(ProjectMixin, View):
 
         # Looked up server-side (scoped to the workspace) so the API key never
         # reaches the browser.
-        conn = ModelConnection.objects.filter(pk=request.POST.get("connection_id") or 0, project=request.project).first()
+        conn = ModelConnection.objects.filter(pk=_int(request.POST.get("connection_id")), project=request.project).first()
         if conn is None:
             return JsonResponse({"error": "Connection not found in this workspace."}, status=404)
         try:
@@ -3073,7 +3343,7 @@ class CompareView(ProjectMixin, TemplateView):
 
     @staticmethod
     def _parse_run_ids(raw_value: str) -> list[int]:
-        return [int(x) for x in (raw_value or "").split(",") if x.strip().isdigit()]
+        return [int(x) for x in (raw_value or "").split(",") if is_id(x.strip())]
 
     @staticmethod
     def _reshape_result(raw: dict) -> dict:
@@ -3134,7 +3404,7 @@ class CompareView(ProjectMixin, TemplateView):
         return super().get_context_data(**kw)
 
     def post(self, request, *args, **kwargs):
-        ids = [int(x) for x in request.POST.getlist("runs[]") if x.isdigit()]
+        ids = [int(x) for x in request.POST.getlist("runs[]") if is_id(x)]
         result = None
         error = None
         if len(ids) < 2:
@@ -3266,6 +3536,13 @@ class RunDetailView(PublicReadableMixin, DetailView):
         from audits.services import ROLES, frozen_agent, frozen_judge, frozen_model
 
         ctx["frozen_models"] = [frozen_model(run, role) for role in ROLES]
+        if not self.request.user.is_authenticated:
+            # Public run pages: endpoint URLs (frozen or live) and connection ids
+            # are internal infrastructure, not part of what was published.
+            ctx["frozen_models"] = [
+                {k: v for k, v in m.items() if k not in ("base_url", "connection_id", "changes")}
+                for m in ctx["frozen_models"]
+            ]
         from audits.target_metadata import metadata_rows
         ctx["target_metadata_rows"] = metadata_rows(run)
         ctx["judge"] = frozen_judge(run)
@@ -3273,6 +3550,12 @@ class RunDetailView(PublicReadableMixin, DetailView):
         ctx["system_prompt"] = snap.get("system_prompt", "")
         ctx["system_prompt_source"] = snap.get("system_prompt_source")
         ctx["frozen_agent"] = frozen_agent(run)
+        if not self.request.user.is_authenticated and isinstance(ctx["frozen_agent"], dict):
+            # Same rule as frozen_models: no endpoint URLs or connection ids publicly.
+            base = dict(ctx["frozen_agent"].get("base_model") or {})
+            for key in ("base_url", "connection_id", "connection"):
+                base.pop(key, None)
+            ctx["frozen_agent"] = {**ctx["frozen_agent"], "base_model": base}
         # Verdict split for the run-level agentic overview bar (percentages are
         # computed here — the template engine has no float arithmetic).
         agentic_metrics = (run.summary_metrics or {}).get("agentic_evaluation")
@@ -3347,14 +3630,18 @@ class ExperimentSetVisibilityView(LoginRequiredMixin, View):
     """
 
     def post(self, request, experiment_id):
-        from accounts.services import is_any_project_admin
+        from accounts.models import ProjectMembership
         from audits.models import Experiment
+        from infra.exceptions import StableAPIError
+        from scenarios.services import require_project_role
 
-        if not is_any_project_admin(request.user):
-            return HttpResponseForbidden("Admin access required.")
-        # Scope to the active workspace so an admin of one workspace can't flip
-        # another workspace's experiment.
+        # Scope to the active workspace and require ADMIN of THAT workspace:
+        # being admin of some other workspace is not enough.
         experiment = get_object_or_404(Experiment, pk=experiment_id, project=request.project)
+        try:
+            require_project_role(request.user, experiment.project, ProjectMembership.Role.ADMIN)
+        except StableAPIError:
+            return HttpResponseForbidden("Workspace admin access required.")
         value = request.POST.get("visibility")
         valid = dict(Experiment.Visibility.choices)
         if value not in valid:
@@ -3566,6 +3853,23 @@ _AGENTIC_SPAN_KIND_ICONS = {
 }
 
 
+def _llm_tool_call_names(attrs: dict) -> list[str]:
+    """Every tool name an LLM span's output message decided to call."""
+    out_msgs = attrs.get("gen_ai.output.messages")
+    try:
+        msgs = json.loads(out_msgs) if isinstance(out_msgs, str) else out_msgs
+    except (ValueError, TypeError):
+        return []
+    names = []
+    for m in msgs if isinstance(msgs, list) else []:
+        calls = m.get("tool_calls") if isinstance(m, dict) else None
+        for tc in calls if isinstance(calls, list) else []:
+            fn = tc.get("function") if isinstance(tc, dict) else None
+            if isinstance(fn, dict) and fn.get("name"):
+                names.append(str(fn["name"]))
+    return names
+
+
 def _llm_tool_decision(span: dict, attrs: dict) -> tuple[str, str] | None:
     """Extract the tool call(s) an LLM span decided on, if any.
 
@@ -3587,8 +3891,12 @@ def _llm_tool_decision(span: dict, attrs: dict) -> tuple[str, str] | None:
     for m in msgs:
         if not isinstance(m, dict):
             continue
-        for tc in m.get("tool_calls") or []:
-            fn = (tc.get("function") or {}) if isinstance(tc, dict) else {}
+        # Span attributes come from the audited system's OTLP export: untrusted shape.
+        calls = m.get("tool_calls")
+        for tc in calls if isinstance(calls, list) else []:
+            fn = tc.get("function") if isinstance(tc, dict) else None
+            if not isinstance(fn, dict):
+                continue
             nm = fn.get("name")
             if nm:
                 names.append(str(nm))
@@ -3908,10 +4216,8 @@ def _merge_synthesized_tool_spans(raw_spans: list[dict], synthetic: list[dict]) 
         # LLM span that decided to call a tool: pull the name(s) out of its
         # output so we don't re-synthesize those calls below.
         if kind == "LLM":
-            decision = _llm_tool_decision(s, attrs)
-            if decision:
-                for n in decision[0].split(","):
-                    covered.add(n.strip())
+            # All names, not the display label (which joins with " + " and truncates).
+            covered.update(_llm_tool_call_names(attrs))
     extra = [s for s in synthetic if s.get("kind") == "tool" and s.get("attributes", {}).get("tool_name") not in covered]
     if not extra:
         return list(raw_spans)
@@ -4493,6 +4799,8 @@ class RunExportView(ProjectMixin, View):
     def get(self, request, run_id):
         run = get_object_or_404(AuditRun, pk=run_id, project=request.project)
         fmt = request.GET.get("format", "json").lower()
+        if fmt not in ("json", "csv"):
+            fmt = "json"
 
         items = {str(vi.pk): vi for vi in ScenarioSetVersionItem.objects.filter(version=run.scenario_set_version).select_related("scenario")}
         rows = []
@@ -4502,8 +4810,9 @@ class RunExportView(ProjectMixin, View):
             rows.append({
                 "id": sr.id,
                 "scenario_name": item.scenario.title if item else str(sr.version_item_id),
-                "severity": r.get("severity", sr.status),
-                "summary": r.get("summary", ""),
+                "severity": result_severity(r, sr.status),
+                # Repeated scenarios keep their summary on the reps: use the modal rep's.
+                "summary": _repeated_export_entry(r).get("summary", "") if isinstance(r.get("reps"), list) and r["reps"] else r.get("summary", ""),
                 "result": r,
             })
 
@@ -4514,7 +4823,7 @@ class RunExportView(ProjectMixin, View):
             writer = csv.writer(buf)
             writer.writerow(["id", "scenario_name", "severity", "summary"])
             for row in rows:
-                writer.writerow([row["id"], row["scenario_name"], row["severity"], row["summary"]])
+                writer.writerow([row["id"], csv_safe(row["scenario_name"]), csv_safe(row["severity"]), csv_safe(row["summary"])])
             response = HttpResponse(buf.getvalue(), content_type="text/csv; charset=utf-8")
         else:
             payload = json.dumps(rows, indent=2, ensure_ascii=False)
@@ -4699,18 +5008,26 @@ def _sync_openwebui_resources(project, user):
                 project=project, external_id=external_id
             ).first()
             if existing is None:
+                # Only rows not yet linked: re-pointing a linked row would aim
+                # its later remote delete (run as its creator) at another KB.
                 existing = KnowledgeBase.objects.filter(
-                    project=project, name=name
+                    project=project, name=name, external_id=""
                 ).first()
+                if existing is not None:
+                    existing.created_by = user   # the user who linked it acts for it
             if existing is not None:
-                existing.name = name
+                # Keep the local name when another row already holds the remote one.
+                if not KnowledgeBase.objects.filter(project=project, name=name).exclude(pk=existing.pk).exists():
+                    existing.name = name
                 existing.external_id = external_id
                 existing.description = description
-                existing.save(update_fields=["name", "external_id", "description", "updated_at"])
+                existing.save(update_fields=["name", "external_id", "description", "created_by", "updated_at"])
+            elif KnowledgeBase.objects.filter(project=project, name=name).exists():
+                continue   # a different remote KB already holds this name here
             else:
                 KnowledgeBase.objects.create(
                     project=project, name=name,
-                    external_id=external_id, description=description,
+                    external_id=external_id, description=description, created_by=user,
                 )
             kb_count += 1
     except ChatAPIError:
@@ -4730,18 +5047,31 @@ def _sync_openwebui_resources(project, user):
             meta = item.get("meta") if isinstance(item.get("meta"), dict) else {}
             manifest = meta.get("manifest") if isinstance(meta.get("manifest"), dict) else {}
             external_id = item.get("id", "")
-            Tool.objects.update_or_create(
-                project=project,
-                name=name,
-                defaults={
-                    "external_id": external_id,
-                    # List items carry no top-level description; the toolkit
-                    # description lives in the frontmatter manifest.
-                    "description": manifest.get("description") or meta.get("description") or "",
-                    # Toolkit tools are custom Python; builtins have no row.
-                    "type": "custom",
-                },
-            )
+            fields = {
+                # List items carry no top-level description; the toolkit
+                # description lives in the frontmatter manifest.
+                "description": manifest.get("description") or meta.get("description") or "",
+                # Toolkit tools are custom Python; builtins have no row.
+                "type": "custom",
+            }
+            # Same identity rule as knowledge bases: external_id first, then an
+            # unlinked row by name (linked by this user), else a new row.
+            tool = Tool.objects.filter(project=project, external_id=external_id).first() if external_id else None
+            if tool is None:
+                tool = Tool.objects.filter(project=project, name=name, external_id="").first()
+                if tool is not None:
+                    tool.created_by = user
+            if tool is None:
+                if Tool.objects.filter(project=project, name=name).exists():
+                    continue   # a different remote tool already holds this name here
+                Tool.objects.create(project=project, name=name, external_id=external_id, created_by=user, **fields)
+            else:
+                if not Tool.objects.filter(project=project, name=name).exclude(pk=tool.pk).exists():
+                    tool.name = name
+                tool.external_id = external_id
+                for key, value in fields.items():
+                    setattr(tool, key, value)
+                tool.save()
             tool_count += 1
     except ChatAPIError:
         pass
@@ -4791,6 +5121,9 @@ class AgentSyncView(ProjectMixin, View):
     """POST /agents/sync/ — pull KBs and tools from OpenWebUI into local models."""
 
     def post(self, request):
+        reason = write_block_reason(request)
+        if reason:
+            return JsonResponse({"error": reason}, status=403)
         kb_count, tool_count = _sync_openwebui_resources(request.project, request.user)
         if kb_count is None:
             return JsonResponse({"error": "Chat is not enabled."}, status=400)
@@ -4929,6 +5262,9 @@ class AgentDetailView(ProjectMixin, TemplateView):
         return ctx
 
     def post(self, request, *args, **kwargs):
+        blocked = _require_write_access(request)
+        if blocked:
+            return blocked
         from model_registry.models import (
             Agent,
             KnowledgeBase,
@@ -4946,16 +5282,16 @@ class AgentDetailView(ProjectMixin, TemplateView):
         if "agent_id" in self.kwargs:
             agent = Agent.objects.filter(pk=self.kwargs["agent_id"], project=project).first()
 
-        name = request.POST.get("name", "").strip()
+        name = request.POST.get("name", "").strip()[:250]   # Agent.name max_length
         if not name:
             messages.error(request, "Name is required.")
             return self._render(request, agent)
 
+        from model_registry.models import RegisteredModel
         try:
             base_model_id = int(request.POST.get("base_model"))
-            from model_registry.models import RegisteredModel
             base_model = RegisteredModel.objects.get(pk=base_model_id, project=project)
-        except (ValueError, RegisteredModel.DoesNotExist):
+        except (TypeError, ValueError, RegisteredModel.DoesNotExist):
             messages.error(request, "Select a valid base model.")
             return self._render(request, agent)
 
@@ -4968,9 +5304,11 @@ class AgentDetailView(ProjectMixin, TemplateView):
         def _optional_float(name):
             raw = request.POST.get(name, "").strip()
             try:
-                return float(raw) if raw else None
+                value = float(raw) if raw else None
             except ValueError:
                 return None
+            # NaN/inf are not JSON (the column's JSON check rejects them).
+            return value if value is None or math.isfinite(value) else None
 
         retrieval = default_retrieval_settings()
         mode = request.POST.get("search_mode", "semantic")
@@ -4984,7 +5322,7 @@ class AgentDetailView(ProjectMixin, TemplateView):
         # Resolve the system prompt: a versioned prompt picker or a raw textarea.
         from prompts.models import SystemPromptVersion
         prompt_version_id = request.POST.get("system_prompt_version") or ""
-        if prompt_version_id:
+        if is_id(prompt_version_id):
             pv = SystemPromptVersion.objects.filter(
                 pk=prompt_version_id, prompt__project=project).first()
             system_prompt_text = pv.content if pv else ""
@@ -5001,11 +5339,11 @@ class AgentDetailView(ProjectMixin, TemplateView):
             agent.save()
             agent.knowledge_bases.set(
                 KnowledgeBase.objects.filter(
-                    pk__in=request.POST.getlist("knowledge_bases"), project=project
+                    pk__in=[v for v in request.POST.getlist("knowledge_bases") if is_id(v)], project=project
                 )
             )
             agent.tools.set(
-                Tool.objects.filter(pk__in=request.POST.getlist("tools"), project=project)
+                Tool.objects.filter(pk__in=[v for v in request.POST.getlist("tools") if is_id(v)], project=project)
             )
             caps = self._posted_capabilities(request)
             agent.capabilities = caps
@@ -5026,11 +5364,11 @@ class AgentDetailView(ProjectMixin, TemplateView):
             )
             agent.knowledge_bases.set(
                 KnowledgeBase.objects.filter(
-                    pk__in=request.POST.getlist("knowledge_bases"), project=project
+                    pk__in=[v for v in request.POST.getlist("knowledge_bases") if is_id(v)], project=project
                 )
             )
             agent.tools.set(
-                Tool.objects.filter(pk__in=request.POST.getlist("tools"), project=project)
+                Tool.objects.filter(pk__in=[v for v in request.POST.getlist("tools") if is_id(v)], project=project)
             )
             _sync_agent_form_result(request, agent)
             messages.success(request, f"Agent '{name}' created.")
@@ -5065,6 +5403,9 @@ class AgentDeleteView(ProjectMixin, View):
     """Delete an agent."""
 
     def post(self, request, agent_id):
+        blocked = _require_write_access(request)
+        if blocked:
+            return blocked
         from model_registry.models import Agent
         from model_registry.services import delete_agent_from_openwebui
 
@@ -5073,7 +5414,7 @@ class AgentDeleteView(ProjectMixin, View):
             messages.error(request, "Agent not found.")
             return redirect("agents")
         name = agent.name
-        delete_agent_from_openwebui(agent)
+        delete_agent_from_openwebui(agent, request.user)
         agent.delete()
         messages.success(request, f"Agent '{name}' deleted.")
         return redirect("agents")
