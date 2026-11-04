@@ -180,6 +180,10 @@
           ⟳ Sync
         </button>
       </div>
+      <div data-sync-report role="status" class="hidden text-xs text-gray-300 bg-surface-overlay border border-gray-700 rounded-lg px-2.5 py-2 space-y-0.5"></div>
+      {% if lost_kb_ids or lost_tool_ids %}
+      <p class="text-xs text-amber-400">Some knowledge bases or tools were deleted in Open WebUI. Click <strong>Sync</strong> to remove them and unlink them from agents.</p>
+      {% endif %}
       {% if knowledge_bases %}
       <div data-filter-list class="space-y-1.5 max-h-52 overflow-y-auto pr-1">
         {% for kb in knowledge_bases %}
@@ -188,6 +192,8 @@
                  {% if agent and kb in agent.knowledge_bases.all %}checked{% endif %}
                  class="rounded border-gray-600 bg-surface-overlay text-accent focus:ring-accent/50">
           <span>{{ kb.name }}</span>
+          {% if kb.name in duplicate_kb_names and kb.external_id %}<code class="text-[10px] text-gray-500" title="Open WebUI id {{ kb.external_id }}">{{ kb.external_id|truncatechars:9 }}</code>{% endif %}
+          {% if kb.id in lost_kb_ids %}<span class="text-[10px] text-amber-400" title="Open WebUI no longer has this knowledge base. Click Sync to remove it and unlink it from agents.">deleted in Open WebUI</span>{% endif %}
           {% if kb.description %}<span class="text-[10px] text-gray-500 truncate max-w-[12rem]">{{ kb.description }}</span>{% endif %}
         </label>
         {% endfor %}
@@ -275,6 +281,8 @@
                  {% if agent and tool in agent.tools.all %}checked{% endif %}
                  class="rounded border-gray-600 bg-surface-overlay text-accent focus:ring-accent/50">
           <span>{{ tool.name }}</span>
+          {% if tool.name in duplicate_tool_names and tool.external_id %}<code class="text-[10px] text-gray-500" title="Open WebUI id {{ tool.external_id }}">{{ tool.external_id|truncatechars:13 }}</code>{% endif %}
+          {% if tool.id in lost_tool_ids %}<span class="text-[10px] text-amber-400" title="Open WebUI no longer has this tool. Click Sync to remove it and unlink it from agents.">deleted in Open WebUI</span>{% endif %}
           <span class="text-[10px] text-gray-500">{{ tool.get_type_display }}</span>
           {% if tool.has_side_effects %}<span class="text-[10px] text-amber-400">⚡ side effects</span>{% endif %}
           {% if tool.external_network %}<span class="text-[10px] text-sky-400">🌐 network</span>{% endif %}
@@ -523,6 +531,17 @@
     syncAll();
   })();
 
+  // --- Sync report from the previous click (survives the reload) ---
+  try {
+    const report = JSON.parse(sessionStorage.getItem('agentSyncReport') || 'null');
+    sessionStorage.removeItem('agentSyncReport');
+    const box = document.querySelector('[data-sync-report]');
+    if (report && box) {
+      box.replaceChildren(...report.map(t => Object.assign(document.createElement('p'), { textContent: t })));
+      box.classList.remove('hidden');
+    }
+  } catch (_) {}
+
   // --- Sync button: POST to /agents/sync/ then reload ---
   document.querySelectorAll('[data-sync-btn]').forEach(btn => {
     btn.addEventListener('click', async () => {
@@ -539,6 +558,13 @@
         const data = await resp.json();
         if (resp.ok) {
           btn.textContent = `✓ ${data.knowledge_bases} KB, ${data.tools} tools`;
+          const label = e => `${e.kind === 'tool' ? 'tool' : 'knowledge base'} “${e.name}”`;
+          const lines = [
+            ...(data.added || []).map(e => `Added ${label(e)}.`),
+            ...(data.removed || []).map(e => `Removed ${label(e)}: deleted in Open WebUI` +
+              (e.agents.length ? `; unlinked from ${e.agents.join(', ')}.` : '.')),
+          ];
+          try { if (lines.length) sessionStorage.setItem('agentSyncReport', JSON.stringify(lines)); } catch (_) {}
           setTimeout(() => location.reload(), 800);
         } else {
           btn.textContent = '✗ ' + (data.error || 'Failed');

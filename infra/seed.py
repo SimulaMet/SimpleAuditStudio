@@ -647,36 +647,43 @@ def seed_demo_agent(project, user, log=logger.info) -> dict[str, str]:
 
     # --- local reference rows (always created; idempotent) ------------------
     kb_meta = DEMO_AGENT["knowledge_base"]
-    knowledge_base, created = KnowledgeBase.objects.get_or_create(
+    # Names may repeat (identity is Open WebUI's id), so prefer the row with
+    # the pushed id, then the oldest row of that name, before creating one.
+    knowledge_base = (
+        KnowledgeBase.objects.filter(project=project, external_id=kb_external_id).first()
+        if kb_external_id else None
+    ) or KnowledgeBase.objects.filter(project=project, name=kb_meta["name"]).order_by("pk").first()
+    created = knowledge_base is None
+    knowledge_base = knowledge_base or KnowledgeBase.objects.create(
         project=project,
         name=kb_meta["name"],
-        defaults={
-            "description": kb_meta["description"],
-            "trust_level": KnowledgeBase.TrustLevel.HIGH,
-            "sensitivity": KnowledgeBase.Sensitivity.INTERNAL,
-            "authority": "Acme Retail (fictional, sample fixture)",
-            "external_id": kb_external_id,
-            "created_by": user,
-        },
+        description=kb_meta["description"],
+        trust_level=KnowledgeBase.TrustLevel.HIGH,
+        sensitivity=KnowledgeBase.Sensitivity.INTERNAL,
+        authority="Acme Retail (fictional, sample fixture)",
+        external_id=kb_external_id,
+        created_by=user,
     )
     if not created and kb_external_id and not knowledge_base.external_id:
         knowledge_base.external_id = kb_external_id
         knowledge_base.save(update_fields=["external_id", "updated_at"])
 
     tool_meta = DEMO_AGENT["tool"]
-    tool, _ = Tool.objects.get_or_create(
+    tool = (
+        Tool.objects.filter(project=project, external_id=tool_external_id).first()
+        if tool_external_id else None
+    ) or Tool.objects.filter(project=project, name=tool_meta["name"]).order_by("pk").first()
+    tool = tool or Tool.objects.create(
         project=project,
         name=tool_meta["name"],
-        defaults={
-            "type": tool_meta["type"],
-            "description": tool_meta["description"],
-            "read_only": True,
-            "has_side_effects": False,
-            "external_network": False,
-            "handles_sensitive_data": False,
-            "external_id": tool_external_id,
-            "created_by": user,
-        },
+        type=tool_meta["type"],
+        description=tool_meta["description"],
+        read_only=True,
+        has_side_effects=False,
+        external_network=False,
+        handles_sensitive_data=False,
+        external_id=tool_external_id,
+        created_by=user,
     )
     if not tool.external_id and tool_external_id:
         tool.external_id = tool_external_id
@@ -779,10 +786,10 @@ def backfill_demo_chat_resources(project, user) -> dict[str, int]:
 
         kb = KnowledgeBase.objects.filter(
             project=project, name=DEMO_AGENT["knowledge_base"]["name"]
-        ).first()
+        ).order_by("pk").first()
         tool = Tool.objects.filter(
             project=project, name=DEMO_AGENT["tool"]["name"]
-        ).first()
+        ).order_by("pk").first()
         agent = Agent.objects.filter(
             project=project, name=DEMO_AGENT["name"]
         ).first()
