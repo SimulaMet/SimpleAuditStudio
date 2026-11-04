@@ -65,7 +65,7 @@ class OTLPIngestFilterTest(TestCase):
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(self._stored_names(), ["lookup_order"])
 
-    def test_auditable_spans_are_tagged_with_openinference_kind(self):
+    def test_auditable_spans_keep_genai_kind(self):
         otlp_views.clear_target_spans(self.target_id)
         body = _export([
             _span("05" * 8, "chat gpt", attributes={"gen_ai.operation.name": "chat"}),
@@ -74,6 +74,7 @@ class OTLPIngestFilterTest(TestCase):
             self.basic.credential.username, self.basic.secret)})
         rows = otlp_views.get_spans_for_trace_db(self.target_id, TRACE_ID)
         self.assertEqual(rows[0]["kind"], "LLM")
+        self.assertNotIn("openinference.span.kind", rows[0]["attributes"])
 
     def test_gzip_body_is_decoded(self):
         otlp_views.clear_target_spans(self.target_id)
