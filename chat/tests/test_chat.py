@@ -620,3 +620,18 @@ class AccessGroupAdoptionTest(TestCase):
         api.create_group.return_value = {"id": "g-new"}
         gid = _ensure_group(api, attacker, kind="workspace", field="openwebui_group_id", name="Studio — Acme — Admins")
         self.assertEqual(gid, "g-new")
+
+
+class ExplicitShareGrantTest(TestCase):
+    def test_admins_level_share_grants_the_shared_workspace_group(self):
+        from accounts.models import Project
+        from chat.access_sync import _connection_grants
+        from infra.tests.factories import ModelConnectionFactory
+
+        owner = Project.objects.create(name="O", slug="o-g", openwebui_group_id="g-owner")
+        shared = Project.objects.create(name="S", slug="s-g", openwebui_group_id="g-shared")
+        conn = ModelConnectionFactory(project=owner, visibility="admins")
+        conn.shared_with.set([shared])
+        projects = {p.id: p for p in Project.objects.prefetch_related("memberships")}
+        ids = {g["principal_id"] for g in _connection_grants(conn, projects)}
+        self.assertIn("g-shared", ids)

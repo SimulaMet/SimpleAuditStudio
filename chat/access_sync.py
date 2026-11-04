@@ -112,7 +112,9 @@ def _connection_grants(connection, projects: dict[int, object]) -> list[dict[str
         for project in projects.values():
             if any(m.role == "admin" for m in project.memberships.all()) and project.openwebui_admin_group_id:
                 grants.add(("group", project.openwebui_admin_group_id, "read"))
-    else:
+    if connection.visibility != ModelConnection.Visibility.PUBLIC:
+        # Explicit shares reach every member of the shared workspace, as in
+        # Studio's own pickers (visible_connections_for), at any non-public level.
         for project in connection.shared_with.all():
             if project.openwebui_group_id:
                 grants.add(("group", project.openwebui_group_id, "read"))
