@@ -200,6 +200,27 @@ class AgenticViewHelperTests(TestCase):
         self.assertTrue(row["is_error"])
         self.assertEqual(row["error_type"], "ValueError")
 
+    def test_model_calls_are_tagged_tool_call_or_reply_from_genai_output(self):
+        """Every turn's text answer is a reply (highlighted); a call that asks for a tool is a tool call."""
+        import json as _json
+
+        def chat(sid, start, parts, reasons):
+            return {"span_id": sid, "name": "chat", "kind": "LLM", "start_time": start, "end_time": start + 0.1,
+                    "attributes": {"gen_ai.operation.name": "chat",
+                                   "gen_ai.output.messages": _json.dumps([{"role": "assistant", "parts": parts}]),
+                                   "gen_ai.response.finish_reasons": reasons}}
+        call = [{"type": "text", "content": ""}, {"type": "tool_call", "id": "c1", "name": "lookup",
+                                                 "arguments": {"order_id": "A"}}]
+        spans = [chat("a", 1.0, call, ["tool_call"]),
+                 chat("b", 2.0, [{"type": "text", "content": "Turn 1 answer."}], ["stop"]),
+                 chat("c", 3.0, [{"type": "text", "content": "Turn 2 answer."}], ["stop"])]
+        rows = _agentic_timeline_view({"judgment": {"evidence_spans": spans}})["rows"]
+        self.assertEqual([r["llm_role"] for r in rows], ["tool call", "reply", "reply"])
+        self.assertEqual(rows[0]["name"], "agent → lookup")
+        self.assertEqual([bool(r.get("response")) for r in rows], [False, True, True])  # every turn's reply
+        self.assertIn("emerald", rows[1]["card_border_class"])
+        self.assertNotIn("emerald", rows[0]["card_border_class"])
+
     def test_timeline_none_without_spans(self):
         self.assertIsNone(_agentic_timeline_view({}))
         self.assertIsNone(_agentic_timeline_view({"judgment": {}}))

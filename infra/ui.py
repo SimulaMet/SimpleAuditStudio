@@ -3882,47 +3882,50 @@ def _llm_tool_call_names(attrs: dict) -> list[str]:
     return names
 
 
-def _llm_tool_decision(span: dict, attrs: dict) -> tuple[str, str] | None:
-    """Extract the tool call(s) an LLM span decided on, if any.
-
-    Returns ``(name, detail)`` for a single tool call, ``("a + b", ...)`` when
-    several were requested, or ``None`` when the span's output did not decide a
-    tool call (i.e. it produced a plain answer). Used to render Open WebUI-style
-    traces, where every model step is an ``LLM`` span and the tool-decision
-    steps carry the tool name/args in their output message rather than as a
-    separate TOOL span.
-    """
-    out_msgs = attrs.get("gen_ai.output.messages")
+def _output_parts(attrs: dict) -> list[dict]:
+    """The parts of a model call's ``gen_ai.output.messages`` (GenAI role/parts schema)."""
+    raw = attrs.get("gen_ai.output.messages")
     try:
-        msgs = json.loads(out_msgs) if isinstance(out_msgs, str) else out_msgs
+        msgs = json.loads(raw) if isinstance(raw, str) else raw
     except (ValueError, TypeError):
+        return []
+    # Span attributes come from the audited system's OTLP export: untrusted shape.
+    return [
+        part for m in (msgs if isinstance(msgs, list) else []) if isinstance(m, dict)
+        for part in (m.get("parts") if isinstance(m.get("parts"), list) else []) if isinstance(part, dict)
+    ]
+
+
+def _llm_role(attrs: dict) -> str | None:
+    """``"tool call"`` when a model call asked for a tool, ``"reply"`` when it answered in text.
+
+    Read only from GenAI attributes: tool-call parts in ``gen_ai.output.messages`` or a
+    ``tool_call`` finish reason, else a non-empty text part.
+    """
+    parts = _output_parts(attrs)
+    reasons = attrs.get("gen_ai.response.finish_reasons") or []
+    if any(p.get("type") == "tool_call" for p in parts) or any(
+            str(r) in ("tool_call", "tool_calls") for r in (reasons if isinstance(reasons, list) else [reasons])):
+        return "tool call"
+    if any(p.get("type") == "text" and p.get("content") for p in parts):
+        return "reply"
+    return None
+
+
+def _llm_tool_decision(span: dict, attrs: dict) -> tuple[str, str] | None:
+    """The tool call(s) a model call decided on, from its GenAI ``tool_call`` output parts.
+
+    Returns ``(name, detail)`` for one call, ``("a + b", ...)`` for several, or
+    ``None`` when the output holds no tool call (a plain reply).
+    """
+    calls = [p for p in _output_parts(attrs) if p.get("type") == "tool_call" and p.get("name")]
+    if not calls:
         return None
-    if not isinstance(msgs, list):
-        return None
-    names, args = [], []
-    for m in msgs:
-        if not isinstance(m, dict):
-            continue
-        # Span attributes come from the audited system's OTLP export: untrusted shape.
-        calls = m.get("tool_calls")
-        for tc in calls if isinstance(calls, list) else []:
-            fn = tc.get("function") if isinstance(tc, dict) else None
-            if not isinstance(fn, dict):
-                continue
-            nm = fn.get("name")
-            if nm:
-                names.append(str(nm))
-            ar = fn.get("arguments")
-            if ar:
-                args.append(ar if isinstance(ar, str) else json.dumps(ar))
-    if not names:
-        return None
+    names = [str(c["name"]) for c in calls]
     label = names[0] if len(names) == 1 else " + ".join(names[:2]) + ("…" if len(names) > 2 else "")
-    detail = ""
-    if args:
-        a = args[0]
-        detail = a if len(a) <= 96 else a[:93] + "..."
-    return label, detail
+    args = calls[0].get("arguments")
+    detail = "" if args is None else (args if isinstance(args, str) else json.dumps(args, ensure_ascii=False))
+    return label, (detail if len(detail) <= 96 else detail[:93] + "...")
 
 
 def _as_text_list(value) -> list[str]:
@@ -4010,6 +4013,7 @@ def _agentic_span_view(span: dict) -> dict | None:
     display_name = span.get("name") or tool_name or "step"
     is_tool_decision = False
     decision_detail = ""
+    llm_role = _llm_role(attrs) if kind == "LLM" else None
     if kind == "LLM" and not tool_name:
         decision = _llm_tool_decision(span, attrs)
         if decision:
@@ -4041,6 +4045,7 @@ def _agentic_span_view(span: dict) -> dict | None:
         "content_blocks": _trace_span_content_blocks(span),
         "raw_json": json.dumps(span, indent=2, ensure_ascii=False, default=str),
         "is_retrieval": kind == "RETRIEVER" or bool(kb_sources) or "retriev" in str(tool_name).lower(),
+        "llm_role": llm_role,
         "is_error": str(span.get("status") or "").upper() == "ERROR" or bool(attrs.get("error.type")),
         "error_type": str(attrs.get("exception.type") or attrs.get("error.type") or ""),
     }
@@ -4436,10 +4441,12 @@ def _agentic_timeline_view(rep: dict) -> dict | None:
         row["label"] = f"{prefix}-{counts[prefix]}"
         label_for.setdefault(row["span_id"], row["label"])
     _show_compact_content(rows, compacted, label_for)
-    # The last model call, after every tool call, is the one that writes the answer.
-    model_rows = [row for row in rows if str(row.get("kind") or "").upper() == "LLM"]
-    if model_rows:
-        model_rows[-1].update(icon=_RESPONSE_ICON, response=True)
+    # Every model call that answered in text is the assistant's reply to its turn.
+    for row in rows:
+        if row.get("llm_role") == "reply":
+            row.update(icon=_RESPONSE_ICON, response=True)
+            if not row.get("is_redundant_rerun"):
+                row["card_border_class"] = "border-emerald-700/70 bg-emerald-950/30"
     anchor_for: dict[str, str] = {}
     for row in rows:
         anchor_for.setdefault(row["span_id"], row["anchor"])

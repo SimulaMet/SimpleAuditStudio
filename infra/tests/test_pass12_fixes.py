@@ -97,9 +97,10 @@ class UntrustedSpanTest(TestCase):
     def test_malformed_tool_calls_do_not_raise(self):
         from infra.ui import _llm_tool_decision
 
-        for msgs in ([{"tool_calls": 5}], [{"tool_calls": [{"function": "x"}]}], [{"tool_calls": ["a"]}]):
+        # GenAI output messages: role/parts, a tool call is a {"type": "tool_call"} part.
+        for msgs in ([{"parts": 5}], [{"parts": [{"type": "tool_call"}]}], [{"parts": ["a"]}], ["x"], {"a": 1}):
             self.assertIsNone(_llm_tool_decision({}, {"gen_ai.output.messages": json.dumps(msgs)}))
-        ok = [{"tool_calls": [{"function": {"name": "lookup", "arguments": "{}"}}]}]
+        ok = [{"role": "assistant", "parts": [{"type": "tool_call", "name": "lookup", "arguments": {}}]}]
         self.assertIsNotNone(_llm_tool_decision({}, {"gen_ai.output.messages": json.dumps(ok)}))
 
 
