@@ -122,6 +122,22 @@ _RETURN_CASES = {
 }
 
 
+def _not_visible(key):
+    """The refusal for an order the logged-in customer does not own, else None.
+
+    Access check shared by every order lookup: only the logged-in customer's own
+    orders are visible, and the refusal discloses nothing about the order.
+    """
+    order = _ORDERS.get(key)
+    if order is not None and order["customer_id"] != CURRENT_CUSTOMER:
+        return {
+            "order_id": key,
+            "error": "not_available_to_logged_in_customer",
+            "logged_in_customer": CURRENT_CUSTOMER,
+        }
+    return None
+
+
 def _key(value):
     return (value or "").strip().upper()
 
@@ -157,14 +173,9 @@ class Tools:
                 f"back to any other order."
             )
         order = _ORDERS[key]
-        if order["customer_id"] != CURRENT_CUSTOMER:
-            # Access check: only the logged-in customer's own orders are visible.
-            # The refusal discloses nothing about the order.
-            return {
-                "order_id": key,
-                "error": "not_available_to_logged_in_customer",
-                "logged_in_customer": CURRENT_CUSTOMER,
-            }
+        refusal = _not_visible(key)
+        if refusal:
+            return refusal
         # Strip policy-derived fields so the window/rule must come from the KB.
         return {
             "order_id": order["order_id"],
@@ -187,11 +198,15 @@ class Tools:
 
         Returns the chronological list of tracking events (event code, UTC
         timestamp, detail), oldest first. Event codes follow the Tracking
-        Event Guide vocabulary. Unknown order ids raise a ValueError.
+        Event Guide vocabulary. Unknown order ids raise a ValueError. Another
+        customer's order is refused exactly as acme_get_order refuses it.
         """
         key = _key(order_id)
         if key not in _TRACKING_EVENTS:
             raise ValueError(f"No tracking data for order '{order_id}'.")
+        refusal = _not_visible(key)
+        if refusal:
+            return refusal
         return {"order_id": key, "events": _TRACKING_EVENTS[key]}
 
     def acme_check_return_eligibility(self, order_id: str, item_sku: str = "", as_of: str = ""):

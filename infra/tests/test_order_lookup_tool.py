@@ -29,3 +29,13 @@ def test_missing_documents_are_reported_not_raised(monkeypatch):
     results = LocalTools().acme_search_knowledge("refund")
     assert results[0]["source"] == "error"
     assert "Docs directory not found" in results[0]["passage"]
+
+
+def test_tracking_refuses_another_customers_order_like_the_order_lookup():
+    """ACME-1002 belongs to CUST-002: tracking must not disclose it to CUST-001."""
+    tools = Tools()
+    refusal = tools.acme_get_tracking_events("ACME-1002")
+    assert refusal == tools.acme_get_order("ACME-1002")
+    assert refusal["error"] == "not_available_to_logged_in_customer"
+    assert "events" not in refusal
+    assert tools.acme_get_tracking_events("ACME-1001")["events"]      # own order still visible
