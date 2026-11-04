@@ -11,7 +11,7 @@ from infra.tracing import TempoTraceProvider, enrich_trace_config
 def _tool_span(span_id):
     return {
         "trace_id": "ab" * 16, "span_id": span_id, "name": "lookup", "kind": "TOOL",
-        "attributes": {"openinference.span.kind": "TOOL", "gen_ai.tool.name": "acme_get_order"},
+        "attributes": {"gen_ai.operation.name": "execute_tool", "gen_ai.tool.name": "acme_get_order"},
     }
 
 

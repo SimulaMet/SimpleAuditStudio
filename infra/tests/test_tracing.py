@@ -72,7 +72,7 @@ class TempoProviderTest(TestCase):
     def test_fetch_returns_normalized_spans(self):
         tid = "a" * 32
         payload = _otlp_payload(tid, [
-            {"span_id": "1" * 16, "name": "retrieve", "attributes": {"openinference.span.kind": "RETRIEVER"}},
+            {"span_id": "1" * 16, "name": "retrieve", "attributes": {"gen_ai.operation.name": "retrieval"}},
             {"span_id": "2" * 16, "parent_span_id": "1" * 16, "name": "llm", "attributes": {}},
         ])
         provider = self._provider(_tempo_handler({tid: payload}))
@@ -186,7 +186,7 @@ class RunScenarioTracingWiringTest(TestCase):
 
         tid = "f" * 32
         payload = _otlp_payload(tid, [
-            {"span_id": "4" * 16, "name": "retrieve", "attributes": {"openinference.span.kind": "RETRIEVER"}},
+            {"span_id": "4" * 16, "name": "retrieve", "attributes": {"gen_ai.operation.name": "retrieval"}},
         ])
         transport = _tempo_handler({tid: payload})
 
@@ -237,7 +237,7 @@ class RunScenarioTracingWiringTest(TestCase):
         OtlpSpan.objects.create(
             target_id="sim_tgt", trace_id=tid, span_id="9" * 16,
             name="chat completion", kind="LLM",
-            attributes={"openinference.span.kind": "LLM", "simpleaudit.target_id": "sim_tgt"},
+            attributes={"gen_ai.operation.name": "chat", "simpleaudit.target_id": "sim_tgt"},
         )
         # A span the target exported under a *different* trace must not attach.
         OtlpSpan.objects.create(target_id="sim_tgt", trace_id="6" * 32, span_id="a" * 15 + "1", name="other", kind="LLM")
@@ -476,7 +476,7 @@ class StudioTraceProviderTest(TestCase):
 
         OtlpSpan.objects.bulk_create([
             OtlpSpan(target_id="tgt", trace_id=tid, span_id="a" * 16, name="llm chat", kind="LLM",
-                     start_time=1.0, end_time=2.0, attributes={"openinference.span.kind": "LLM"}),
+                     start_time=1.0, end_time=2.0, attributes={"gen_ai.operation.name": "chat"}),
             OtlpSpan(target_id="tgt", trace_id=tid, span_id="b" * 16, name="retrieval", kind="RETRIEVER",
                      start_time=0.5, end_time=1.0),
         ])

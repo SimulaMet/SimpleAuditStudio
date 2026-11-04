@@ -122,7 +122,7 @@ class OtlpSpan(models.Model):
     engine propagated on the run's requests) and ``target_id``.
 
     Spans are append-only (idempotent on ``span_id``); retention is a separate
-    sweep. ``attributes`` holds the raw OpenInference/OTel attribute map.
+    sweep. ``attributes`` holds the raw OpenTelemetry GenAI attribute map.
     """
 
     target_id = models.CharField(max_length=250, db_index=True)

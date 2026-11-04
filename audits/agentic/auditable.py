@@ -1,10 +1,4 @@
-"""Keep only the OTLP spans an agentic audit needs, labelled with their role.
-
-Targets export every span they produce (HTTP plumbing, DB calls, framework
-chains). Auditing only reads a small set of step kinds, so spans outside that
-set are dropped at ingestion, and the rest are tagged with an OpenInference
-``span.kind`` so the engine's evidence selection ranks them correctly.
-"""
+"""Select audit-relevant spans from OpenTelemetry GenAI attributes only."""
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
@@ -19,22 +13,18 @@ AUDITABLE_STEP_KINDS = frozenset({
     "approval", "handoff", "workflow", "state",
 })
 
-# Step kind -> OpenInference kind understood by the engine's select_spans.
-_OPENINFERENCE_KIND = {
+# Internal audit categories are not telemetry semantic-convention attributes.
+_INTERNAL_KIND = {
     "inference": "LLM",
     "tool": "TOOL",
     "retrieval": "RETRIEVER",
-    "rerank": "RETRIEVER",
+    "rerank": "RERANKER",
     "guardrail": "GUARDRAIL",
     "workflow": "AGENT",
     "handoff": "AGENT",
 }
-
-_TOOL_NAME_KEYS = ("gen_ai.tool.name", "openwebui.tool.name", "tool.name")
+_TOOL_NAME_KEYS = ("gen_ai.tool.name",)
 _RETRIEVAL_KEYS = ("gen_ai.retrieval.documents",)
-_EXPLICIT_KIND_KEYS = (
-    "gen_ai.operation.name", "openinference.span.kind", "openwebui.span.kind",
-)
 
 
 def classify_span(span: Mapping[str, Any]) -> str:
@@ -44,7 +34,7 @@ def classify_span(span: Mapping[str, Any]) -> str:
         return "tool"
     if any(attrs.get(key) for key in _RETRIEVAL_KEYS):
         return "retrieval"
-    if not any(attrs.get(key) for key in _EXPLICIT_KIND_KEYS):
+    if not attrs.get("gen_ai.operation.name"):
         # Transport spans ("POST /api/v1/chat/completions http send") mention
         # model words in their names. Without an explicit kind attribute a span
         # is not an audit step, so the name is never used to classify it.
@@ -53,7 +43,7 @@ def classify_span(span: Mapping[str, Any]) -> str:
 
 
 def select_auditable_spans(spans: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
-    """Drop non-audit spans and tag the rest with their OpenInference kind."""
+    """Keep GenAI audit spans, retaining source attributes unchanged."""
     kept: list[dict[str, Any]] = []
     for raw in spans:
         span = dict(raw)
@@ -61,11 +51,8 @@ def select_auditable_spans(spans: Iterable[Mapping[str, Any]]) -> list[dict[str,
         if step_kind not in AUDITABLE_STEP_KINDS:
             continue
         attrs = dict(span.get("attributes") or {})
-        openinference = _OPENINFERENCE_KIND.get(step_kind)
-        if openinference and not attrs.get("openinference.span.kind"):
-            attrs["openinference.span.kind"] = openinference
         span["attributes"] = attrs
-        if openinference:
-            span["kind"] = attrs.get("openinference.span.kind", openinference)
+        if step_kind in _INTERNAL_KIND:
+            span["kind"] = _INTERNAL_KIND[step_kind]
         kept.append(span)
     return kept
