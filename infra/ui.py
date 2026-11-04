@@ -4267,6 +4267,12 @@ def _duplicate_inference_flags(spans: list[dict]) -> dict[int, str]:
     return flags
 
 
+def _is_workflow_wrapper(span: dict) -> bool:
+    """Whether ``span`` is a GenAI ``invoke_workflow`` turn wrapper."""
+    attrs = span.get("attributes") if isinstance(span.get("attributes"), dict) else {}
+    return str(attrs.get("gen_ai.operation.name") or "").lower() == "invoke_workflow"
+
+
 def _agentic_timeline_view(rep: dict) -> dict | None:
     """Chronological full-width trajectory timeline for one rep's spans.
 
@@ -4277,7 +4283,9 @@ def _agentic_timeline_view(rep: dict) -> dict | None:
     Rows are never reconstructed from the conversation.
     """
     raw_spans = ((rep.get("judgment") or {}).get("evidence_spans") or []) if isinstance(rep.get("judgment"), dict) else []
-    raw_spans = [s for s in raw_spans if isinstance(s, dict)]
+    # ``invoke_workflow`` is the chat server's wrapper around one user turn; its
+    # input/output repeat the conversation shown above, so it is not a step.
+    raw_spans = [s for s in raw_spans if isinstance(s, dict) and not _is_workflow_wrapper(s)]
     if not raw_spans:
         # No captured spans: no trajectory to show.
         return None
@@ -4332,7 +4340,10 @@ def _agentic_timeline_view(rep: dict) -> dict | None:
     anchor_for: dict[str, str] = {}
     for row in rows:
         anchor_for.setdefault(row["span_id"], row["anchor"])
-    all_spans = (rep.get("trace_evidence") or {}).get("all_spans") or []
+    all_spans = [
+        s for s in (rep.get("trace_evidence") or {}).get("all_spans") or []
+        if isinstance(s, dict) and not _is_workflow_wrapper(s)
+    ]
     return {
         "rows": rows,
         "total": len(rows),

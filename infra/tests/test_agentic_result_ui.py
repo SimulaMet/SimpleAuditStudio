@@ -108,6 +108,24 @@ class AgenticViewHelperTests(TestCase):
         self.assertEqual(tl["rows"][0]["kb_sources"], ["Acme Retail Policy"])
         self.assertTrue(tl["rows"][0]["is_retrieval"])
 
+    def test_timeline_omits_invoke_workflow_turn_wrappers(self):
+        """The per-turn ``invoke_workflow`` span repeats the conversation, so it
+        is not a timeline step; its children (model and tool calls) stay."""
+        def span(sid, op, start, **attrs):
+            return {"span_id": sid, "name": op, "start_time": start, "end_time": start + 1,
+                    "attributes": {"gen_ai.operation.name": op, **attrs}}
+        spans = [
+            span("wf1", "invoke_workflow", 1.0, **{"gen_ai.input.messages": "hi"}),
+            span("llm1", "chat", 1.1),
+            span("tool1", "execute_tool", 1.2, **{"gen_ai.tool.name": "lookup"}),
+            span("wf2", "invoke_workflow", 5.0),
+        ]
+        tl = _agentic_timeline_view({"judgment": {"evidence_spans": spans},
+                                     "trace_evidence": {"all_spans": spans}})
+        self.assertEqual([r["span_id"] for r in tl["rows"]], ["llm1", "tool1"])
+        self.assertEqual((tl["total"], tl["captured"]), (2, 2))   # wrappers are not "elided"
+        self.assertIsNone(_agentic_timeline_view({"judgment": {"evidence_spans": spans[3:]}}))
+
     def test_timeline_none_without_spans(self):
         self.assertIsNone(_agentic_timeline_view({}))
         self.assertIsNone(_agentic_timeline_view({"judgment": {}}))
