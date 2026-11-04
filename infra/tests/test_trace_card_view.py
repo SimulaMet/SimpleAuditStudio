@@ -148,8 +148,9 @@ class TraceCardViewTest(TestCase):
         self.assertEqual(
             blocks["lookup"],
             [
-                ("Tool arguments", '{"order_id": "ACME-1001"}'),
-                ("Tool result", '{"status": "shipped"}'),
+                # JSON content is shown indented.
+                ("Tool arguments", '{\n  "order_id": "ACME-1001"\n}'),
+                ("Tool result", '{\n  "status": "shipped"\n}'),
             ],
         )
         self.assertEqual(blocks["llm"], [("Input", "hi"), ("Output", "hello")])

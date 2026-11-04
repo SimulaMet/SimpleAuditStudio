@@ -3762,6 +3762,8 @@ _TRACE_SPAN_CONTENT_BLOCKS = (
     ("Tool result", ("gen_ai.tool.call.result", "tool.result")),
     ("Input", ("input.value", "gen_ai.prompt", "gen_ai.input.messages")),
     ("Output", ("output.value", "gen_ai.completion", "gen_ai.output.messages")),
+    ("Retrieval query", ("gen_ai.retrieval.query.text",)),
+    ("Retrieved documents", ("gen_ai.retrieval.documents",)),
 )
 
 
@@ -3776,10 +3778,14 @@ def _trace_span_content_blocks(span: dict) -> list[tuple[str, str]]:
             value = attrs.get(key)
             if value is None:
                 continue
+            # GenAI content attributes are JSON text; show them indented.
+            if isinstance(value, str) and value.lstrip()[:1] in ("{", "["):
+                try:
+                    value = json.loads(value)
+                except (TypeError, ValueError):
+                    pass
             if not isinstance(value, str):
-                import json as _json
-
-                value = _json.dumps(value, indent=2, default=str)
+                value = json.dumps(value, indent=2, ensure_ascii=False, default=str)
             blocks.append((label, value))
             break
     return blocks
@@ -4018,7 +4024,8 @@ def _agentic_span_view(span: dict) -> dict | None:
         "tone": tone,
         "name": display_name,
         "tool_name": tool_name,
-        "arguments": _arguments_preview(attrs.get("gen_ai.tool.call.arguments")),
+        "arguments": _arguments_preview(attrs.get("gen_ai.tool.call.arguments"))
+        or _arguments_preview(attrs.get("gen_ai.retrieval.query.text")),
         "redundant_reason": str(attrs.get("redundant_reason") or ""),
         "decision_detail": decision_detail,
         "is_tool_decision": is_tool_decision,
@@ -4273,6 +4280,78 @@ def _is_workflow_wrapper(span: dict) -> bool:
     return str(attrs.get("gen_ai.operation.name") or "").lower() == "invoke_workflow"
 
 
+_REFERENCE_ATTRIBUTE_NAMES = {
+    "gen_ai.input.messages": "input",
+    "gen_ai.output.messages": "output",
+    "gen_ai.tool.call.result": "tool result",
+    "gen_ai.tool.call.arguments": "tool arguments",
+    "gen_ai.retrieval.documents": "retrieved documents",
+    "gen_ai.system_instructions": "system instructions",
+}
+
+
+def _reference_marker(reference: dict, label_for: dict[str, str], role: str | None = None) -> str:
+    """One readable line for a compact-content reference (see audits.agentic.compact)."""
+    span_id = str(reference.get("span_id") or "")
+    where = label_for.get(span_id) or _span_label(span_id)
+    what = _REFERENCE_ATTRIBUTE_NAMES.get(str(reference.get("attribute")), str(reference.get("attribute")))
+    if isinstance(reference.get("index"), int):
+        what = f"{what} message {reference['index'] + 1}"
+    return f"↩ same as {where} · {what}" + (f" ({role})" if role else "")
+
+
+def _with_reference_markers(value, label_for: dict[str, str]):
+    """``value`` with every compact-content reference replaced by its marker line."""
+    from audits.agentic.compact import is_reference, message_reference
+
+    reference = message_reference(value)
+    if reference:
+        return _reference_marker(reference, label_for, value.get("role"))
+    if is_reference(value):
+        return _reference_marker(value, label_for)
+    if isinstance(value, list):
+        return [_with_reference_markers(item, label_for) for item in value]
+    if isinstance(value, dict):
+        return {key: _with_reference_markers(item, label_for) for key, item in value.items()}
+    return value
+
+
+def _show_compact_content(rows: list[dict], compacted: dict[str, dict], label_for: dict[str, str]) -> None:
+    """Show each step's content stored once per trace: repeats become marker lines.
+
+    Steps are computed from the full (expanded) spans; only what is displayed
+    comes from the compacted spans, whose raw JSON is what Studio stores.
+    """
+    for row in rows:
+        span = compacted.get(row["span_id"])
+        if span is None:
+            continue
+        blocks = []
+        for label, text in _trace_span_content_blocks(span):
+            try:
+                value = json.loads(text)
+            except (TypeError, ValueError):
+                blocks.append((label, text))
+                continue
+            shown = _with_reference_markers(value, label_for)
+            blocks.append((label, shown if isinstance(shown, str)
+                           else json.dumps(shown, indent=2, ensure_ascii=False, default=str)))
+        row["content_blocks"] = blocks
+        row["raw_json"] = json.dumps(span, indent=2, ensure_ascii=False, default=str)
+        args = (span.get("attributes") or {}).get("gen_ai.tool.call.arguments")
+        if args is not None and isinstance(_with_reference_markers(_json_list_or_value(args), label_for), str):
+            row["arguments"] = _with_reference_markers(_json_list_or_value(args), label_for)
+
+
+def _json_list_or_value(value):
+    if isinstance(value, str):
+        try:
+            return json.loads(value)
+        except (TypeError, ValueError):
+            return value
+    return value
+
+
 def _agentic_timeline_view(rep: dict) -> dict | None:
     """Chronological full-width trajectory timeline for one rep's spans.
 
@@ -4282,6 +4361,8 @@ def _agentic_timeline_view(rep: dict) -> dict | None:
     Returns ``None`` when the rep carries no captured spans (the block hides itself).
     Rows are never reconstructed from the conversation.
     """
+    from audits.agentic.compact import compact_spans, expand_spans
+
     raw_spans = ((rep.get("judgment") or {}).get("evidence_spans") or []) if isinstance(rep.get("judgment"), dict) else []
     # ``invoke_workflow`` is the chat server's wrapper around one user turn; its
     # input/output repeat the conversation shown above, so it is not a step.
@@ -4289,6 +4370,19 @@ def _agentic_timeline_view(rep: dict) -> dict | None:
     if not raw_spans:
         # No captured spans: no trajectory to show.
         return None
+    # Content is stored once per trace (references to earlier spans). Steps are
+    # computed on full content; display shows the compact form, so results stored
+    # before compaction look the same.
+    pool = [s for s in (rep.get("trace_evidence") or {}).get("all_spans") or [] if isinstance(s, dict)]
+    raw_spans = expand_spans(raw_spans, pool=pool)
+    full_pool = expand_spans(pool, pool=pool)
+    pooled = {s.get("span_id") for s in full_pool}
+    shown = {s.get("span_id") for s in raw_spans}
+    compacted = {
+        str(s.get("span_id")): s
+        for s in compact_spans(full_pool + [s for s in raw_spans if s.get("span_id") not in pooled])
+        if s.get("span_id") in shown
+    }
     for idx, reason in _duplicate_inference_flags(raw_spans).items():
         attrs = raw_spans[idx].get("attributes") if isinstance(raw_spans[idx].get("attributes"), dict) else {}
         raw_spans[idx]["attributes"] = {**attrs, "redundant_reason": reason}
@@ -4333,6 +4427,7 @@ def _agentic_timeline_view(rep: dict) -> dict | None:
         counts[prefix] = counts.get(prefix, 0) + 1
         row["label"] = f"{prefix}-{counts[prefix]}"
         label_for.setdefault(row["span_id"], row["label"])
+    _show_compact_content(rows, compacted, label_for)
     # The last model call, after every tool call, is the one that writes the answer.
     model_rows = [row for row in rows if str(row.get("kind") or "").upper() == "LLM"]
     if model_rows:

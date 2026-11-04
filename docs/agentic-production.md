@@ -110,7 +110,10 @@ await hatchet.task.trigger_run(
 
 ### Data Cleanup
 
-Agentic runs create large `AuditEvent` and `trace_evidence` rows.
+Agentic runs create large `AuditEvent` and `trace_evidence` rows. Span content is
+stored once per trace (repeats become references; see "Compact trace content" in
+`docs/chat.md`), which keeps `trace_evidence` roughly a third smaller for single-turn runs and
+much smaller for multi-turn ones.
 
 **Retention policy** (PostgreSQL)
 
