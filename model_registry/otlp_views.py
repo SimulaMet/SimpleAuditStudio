@@ -31,7 +31,7 @@ from django.views.decorators.csrf import csrf_exempt
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
-from simpleaudit.tracing.store import _OTLP_SPAN_KIND_NAMES, SpanStore, normalize_span
+from simpleaudit.tracing.store import SpanStore, normalize_span
 
 from audits.agentic.auditable import select_auditable_spans
 from infra.exceptions import StableAPIError
@@ -526,7 +526,7 @@ def round_trip_test(cred: OTLPCredential, user=None) -> dict:
     body = {"resourceSpans": [{"scopeSpans": [{"spans": [{
         "traceId": trace_id, "spanId": span_id, "name": "studio.otlp.test",
         "startTimeUnixNano": str(now - 1_000_000), "endTimeUnixNano": str(now),
-        "attributes": [{"key": "openinference.span.kind", "value": {"stringValue": "LLM"}}],
+        "attributes": [{"key": "gen_ai.operation.name", "value": {"stringValue": "chat"}}],
     }]}]}]}
     prior = last_export(cred.target_id)
     before = (prior or {}).get("kept", 0)

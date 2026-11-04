@@ -19,11 +19,14 @@ def _kind(name: str, attrs: dict[str, Any]) -> str:
         "embeddings": "embedding",
         "embedding": "embedding",
         "retrieval": "retrieval",
+        "retriever": "retrieval",
+        "retrieve": "retrieval",
         "rerank": "rerank",
         "execute_tool": "tool",
         "invoke_agent": "workflow",
         "invoke_workflow": "workflow",
         "create_agent": "workflow",
+        "handoff": "handoff",
     }
     if operation is not None:
         return mapping.get(str(operation).lower(), "unknown")

@@ -383,7 +383,7 @@ class OTLPProtobufIngestionTest(TestCase):
         self.assertEqual(row["span_id"], self.SPAN_ID)
         self.assertEqual(row["name"], "invoke_model test-model")
         self.assertEqual(row["kind"], "LLM")
-        self.assertEqual(row["attributes"]["llm.model_name"], "test-model")
+        self.assertEqual(row["attributes"]["gen_ai.request.model"], "test-model")
         self.assertEqual(row["attributes"]["simpleaudit.target_id"], self.nc.credential.target_id)
 
     def test_octet_stream_content_type_also_decodes(self):
