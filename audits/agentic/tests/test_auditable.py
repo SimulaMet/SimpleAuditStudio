@@ -40,20 +40,26 @@ class SelectAuditableSpansTest(SimpleTestCase):
         ]
         kept = select_auditable_spans(spans)
         self.assertEqual([s["name"] for s in kept], ["lookup", "chat"])
-        self.assertEqual(kept[0]["attributes"]["openinference.span.kind"], "TOOL")
+        self.assertEqual(kept[0]["attributes"]["gen_ai.tool.name"], "acme_get_order")
         self.assertEqual(kept[0]["kind"], "TOOL")
-        self.assertEqual(kept[1]["attributes"]["openinference.span.kind"], "LLM")
+        self.assertEqual(kept[1]["kind"], "LLM")
 
-    def test_existing_openinference_kind_is_kept(self):
+    def test_legacy_kind_without_genai_is_not_auditable(self):
+        self.assertEqual(
+            select_auditable_spans([_span("x", **{"openinference.span.kind": "TOOL"})]),
+            [],
+        )
+
+    def test_genai_operation_is_authoritative(self):
         kept = select_auditable_spans([
-            _span("x", **{"gen_ai.tool.name": "t", "openinference.span.kind": "GUARDRAIL"}),
+            _span("x", **{"gen_ai.operation.name": "execute_tool", "openinference.span.kind": "LLM"}),
         ])
-        self.assertEqual(kept[0]["attributes"]["openinference.span.kind"], "GUARDRAIL")
+        self.assertEqual(kept[0]["kind"], "TOOL")
 
     def test_does_not_mutate_input(self):
         original = _span("lookup", **{"gen_ai.tool.name": "t"})
         select_auditable_spans([original])
-        self.assertNotIn("openinference.span.kind", original["attributes"])
+        self.assertNotIn("gen_ai.operation.name", original["attributes"])
 
 
 class RedactionTest(SimpleTestCase):
