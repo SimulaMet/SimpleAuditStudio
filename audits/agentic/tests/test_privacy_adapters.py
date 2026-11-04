@@ -1,6 +1,5 @@
 import json
 
-from audits.agentic.adapters.openinference import normalize as normalize_openinference
 from audits.agentic.adapters.openwebui import normalize as normalize_openwebui
 from audits.agentic.adapters.otel_genai import normalize as normalize_otel
 from audits.agentic.privacy import apply_content_capture_level, serialize_for_judge
@@ -41,22 +40,13 @@ def test_capture_levels_are_additive_and_redact_before_persistence_or_judge():
 
 def test_provider_adapters_return_common_trajectory_and_preserve_missing_content():
     otel = normalize_otel([_span()])
-    openinference = normalize_openinference([{
-        "span_id": "i1", "name": "tool", "attributes": {
-            "openinference.span.kind": "TOOL",
-            "tool.name": "lookup",
-            "tool.parameters": {"order": "123"},
-        },
-    }])
     openwebui = normalize_openwebui([{
         "span_id": "w1", "name": "owui tool",
-        "attributes": {"openwebui.span.kind": "TOOL", "openwebui.tool.name": "search"},
+        "attributes": {"gen_ai.operation.name": "execute_tool", "gen_ai.tool.name": "search"},
     }])
 
     assert otel.tools()[0].name == "lookup"
     assert otel.tools()[0].result == {"email": "user@example.test"}
-    assert openinference.tools()[0].kind == "tool"
-    assert openinference.tools()[0].arguments == {"order": "123"}
     assert openwebui.tools()[0].name == "search"
     assert openwebui.tools()[0].arguments is None
 

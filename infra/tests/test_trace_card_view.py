@@ -1,10 +1,8 @@
 """The result page's Target trace card: _rep_view surfaces the rep's trace ids
 and the captured evidence spans.
 
-The card must stay readable for both flavors of target instrumentation:
-OpenInference-style spans (semantic kinds: LLM, RETRIEVER, ...) and plain OTel
-auto-instrumentation (raw SPAN_KIND_*, connect/GET noise around one long model
-call).
+The card displays internal audit kinds derived from GenAI semantic attributes,
+and filters unrelated transport spans (raw SPAN_KIND_*).
 """
 from django.test import SimpleTestCase, TestCase
 

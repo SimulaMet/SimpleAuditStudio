@@ -205,7 +205,7 @@ class OTLPRoundTripTest(_DialogBase):
         def send(traceparent):
             trace_id = traceparent.split("-")[1] if linked else "ab" * 16
             span = {"traceId": trace_id, "spanId": "cd" * 8, "name": "llm", "startTimeUnixNano": "1",
-                    "endTimeUnixNano": "2", "attributes": [{"key": "openinference.span.kind", "value": {"stringValue": "LLM"}}]}
+                    "endTimeUnixNano": "2", "attributes": [{"key": "gen_ai.operation.name", "value": {"stringValue": "chat"}}]}
             resp = Client(SERVER_NAME="localhost").post(
                 "/otlp/v1/traces", data=jsonlib.dumps({"resourceSpans": [{"scopeSpans": [{"spans": [span]}]}]}),
                 content_type="application/json", HTTP_AUTHORIZATION=f"Bearer {secret}",

@@ -10,45 +10,35 @@ def _attrs(span: dict[str, Any]) -> dict[str, Any]:
 
 
 def _kind(name: str, attrs: dict[str, Any]) -> str:
-    value = (
-        attrs.get("gen_ai.operation.name")
-        or attrs.get("openinference.span.kind")
-        or attrs.get("openwebui.span.kind")
-    )
-    if value:
-        value = str(value).lower()
-        mapping = {
-            "chat": "inference",
-            "llm": "inference",
-            "text_completion": "inference",
-            "embedding": "embedding",
-            "embeddings": "embedding",
-            "retriever": "retrieval",
-            "retrieve": "retrieval",
-            "reranker": "rerank",
-            "rerank": "rerank",
-            "tool": "tool",
-            "execute_tool": "tool",
-            "agent": "workflow",
-            "create_agent": "workflow",
-            "invoke_agent": "workflow",
-            "invoke_workflow": "workflow",
-            "chain": "workflow",
-            "handoff": "handoff",
-            "transfer": "handoff",
-        }
-        return mapping.get(value, value)
-    lowered = name.lower()
-    for token, kind in (("embed", "embedding"), ("rerank", "rerank"), ("retriev", "retrieval"),
-                        ("tool", "tool"), ("chat", "inference"), ("llm", "inference"),
-                        ("workflow", "workflow"), ("agent", "workflow")):
-        if token in lowered:
-            return kind
+    """Classify exclusively from OpenTelemetry GenAI semantic attributes."""
+    operation = attrs.get("gen_ai.operation.name")
+    mapping = {
+        "chat": "inference",
+        "generate_content": "inference",
+        "text_completion": "inference",
+        "embeddings": "embedding",
+        "embedding": "embedding",
+        "retrieval": "retrieval",
+        "retriever": "retrieval",
+        "retrieve": "retrieval",
+        "rerank": "rerank",
+        "execute_tool": "tool",
+        "invoke_agent": "workflow",
+        "invoke_workflow": "workflow",
+        "create_agent": "workflow",
+        "handoff": "handoff",
+    }
+    if operation is not None:
+        return mapping.get(str(operation).lower(), "unknown")
+    if attrs.get("gen_ai.tool.name"):
+        return "tool"
+    if attrs.get("gen_ai.retrieval.documents"):
+        return "retrieval"
     return "unknown"
 
 
 def _tool_arguments(attrs: dict[str, Any]) -> Any:
-    raw = attrs.get("gen_ai.tool.call.arguments") or attrs.get("tool.arguments")
+    raw = attrs.get("gen_ai.tool.call.arguments")
     if isinstance(raw, str):
         import json
         try:
@@ -84,7 +74,7 @@ def normalize(all_spans: list[dict[str, Any]]) -> AgentTrajectory:
         step_name = name
         tool_name = None
         if kind == "tool":
-            tool_name = str(attrs.get("gen_ai.tool.name") or attrs.get("tool.name") or name)
+            tool_name = str(attrs.get("gen_ai.tool.name") or name)
             step_name = tool_name
 
         steps.append(TrajectoryStep(
@@ -106,16 +96,14 @@ def normalize(all_spans: list[dict[str, Any]]) -> AgentTrajectory:
             actor=(
                 attrs.get("gen_ai.agent.name")
                 or attrs.get("agent.name")
-                or attrs.get("openinference.agent.name")
             ),
             tool_name=tool_name,
             tool_call_id=attrs.get("gen_ai.tool.call.id"),
             arguments=_tool_arguments(attrs) if kind == "tool" else None,
-            result=_content(attrs, "gen_ai.tool.call.result", "tool.result") if kind == "tool" else None,
+            result=_content(attrs, "gen_ai.tool.call.result") if kind == "tool" else None,
             handoff_to=(
                 attrs.get("gen_ai.handoff.to")
                 or attrs.get("handoff.to")
-                or attrs.get("openinference.handoff.destination")
             ),
             attributes=attrs,
             events=span.get("events") or [],

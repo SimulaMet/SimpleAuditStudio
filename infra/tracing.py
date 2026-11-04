@@ -160,6 +160,9 @@ class TempoTraceProvider:
         raw_spans = parse_otlp_json(payload)
         if not raw_spans:
             return []
+        from model_registry.otlp_views import _stamp_refined_kind
+
+        _stamp_refined_kind(raw_spans)
         store = SpanStore()
         store.add_many(raw_spans)
         return store.all()
