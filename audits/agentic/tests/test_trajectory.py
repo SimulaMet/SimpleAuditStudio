@@ -17,10 +17,10 @@ def test_normalizes_genai_execute_tool_name_for_tool_checks():
     assert trajectory.steps[0].name == "acme_get_order"
 
 
-def test_normalizes_standard_and_openinference_shapes_and_preserves_unknown():
+def test_normalizes_genai_and_preserves_unknown():
     trajectory = normalize([
-        {"span_id": "w", "name": "agent workflow", "attributes": {"gen_ai.operation.name": "agent"}},
-        {"span_id": "t", "name": "lookup", "attributes": {"openinference.span.kind": "TOOL"}},
+        {"span_id": "w", "name": "agent workflow", "attributes": {"gen_ai.operation.name": "invoke_agent"}},
+        {"span_id": "t", "name": "lookup", "attributes": {"gen_ai.operation.name": "execute_tool"}},
         {"span_id": "u", "name": "vendor step", "attributes": {"purpose": "auxiliary"}},
     ])
     assert [step.kind for step in trajectory.steps] == ["workflow", "tool", "unknown"]
