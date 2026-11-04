@@ -500,6 +500,46 @@ class TargetTracePropagationTest(TestCase):
         self.assertNotIn("chat_id", posts[2])
         self.assertIsNone(posts[2]["parent_id"])
 
+    @mock.patch("chat.config.UPSTREAM", "http://127.0.0.1:8080/chat")
+    @mock.patch("chat.config.ENABLED", True)
+    def test_model_not_found_reloads_open_webui_models_and_retries_once(self):
+        """Right after Open WebUI starts its model registry may miss the agent: reload, retry once."""
+        import asyncio
+        from types import SimpleNamespace
+
+        from infra import trace_target
+        from infra.trace_target import TraceContextModelTarget
+
+        trace_target._owui_conversations.clear()
+        posts, refreshes = [], []
+
+        class RawClient:
+            base_url = "http://127.0.0.1:8080/chat/api/v1/"
+            api_key = "jwt"
+
+            async def post(self, path, *, cast_to, body, options):
+                posts.append(body)
+                self.message_id = body["message_ids"][0]["message_id"]
+                if len(posts) == 1:
+                    raise RuntimeError("Error code: 400 - {'detail': 'Model not found'}")
+                return {"status": True, "chat_id": "chat-1"}
+
+            async def get(self, path, *, cast_to, options):
+                return {"chat": {"history": {"messages": {self.message_id: {
+                    "id": self.message_id, "role": "assistant", "done": True, "content": "ok"}}}}}
+
+        async def refresh(origin, token, *, every=60.0):
+            refreshes.append((origin, token, every))
+
+        target = TraceContextModelTarget(client=SimpleNamespace(client=RawClient(), acompletion=None),
+                                         model="studio.agent-1")
+        with mock.patch.object(trace_target, "_owui_refresh_models", refresh), \
+                mock.patch.object(trace_target, "_owui_get_jwt", mock.AsyncMock(return_value="jwt")):
+            response = asyncio.run(target.send(user="hi", history=[{"role": "user", "content": "hi"}]))
+        self.assertEqual(response.content, "ok")
+        self.assertEqual(len(posts), 2)
+        self.assertEqual(refreshes, [("http://127.0.0.1:8080/chat", "jwt", 0.0)])
+
     def test_streaming_call_never_forwards_studio_only_params_to_openai_client(self):
         """extra_headers (W3C trace context) must not leak into the OpenAI request."""
         import asyncio
