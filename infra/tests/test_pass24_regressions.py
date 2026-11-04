@@ -193,3 +193,16 @@ class PublicRunAgentUrlTest(TestCase):
         AuditRun.objects.filter(pk=run.pk).update(experiment=experiment, agent_config_snapshot=agent_snapshot)
         html = self.client.get(f"/runs/{run.id}/").content.decode()
         self.assertNotIn("agent-base.corp", html)
+
+
+class RepeatedResultErrorTextTest(TestCase):
+    def test_error_read_from_reps(self):
+        from infra.worker import _is_permanent_error, result_error_text
+
+        payload = {"reps": [{"severity": "ERROR", "judgment": {"error": "BadRequestError: Error code: 400 invalid model"}},
+                            {"severity": "ERROR", "summary": "x"}], "aggregated_severity": "ERROR"}
+        text = result_error_text(payload)
+        self.assertIn("400", text)
+        self.assertTrue(_is_permanent_error(text))
+        self.assertEqual(result_error_text({"judgment": {"error": "boom"}}), "boom")
+        self.assertEqual(result_error_text(None), "")
