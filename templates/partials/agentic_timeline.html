@@ -27,6 +27,7 @@ The "Focus" button toggles a wide mode that pushes the app chrome aside.
       <details class="agentic-tl-card min-w-0 flex-1 rounded-lg border {{ s.card_border_class }} bg-surface-overlay/40 group-open:border-violet-800/50">
         <summary class="cursor-pointer select-none flex flex-wrap items-center gap-x-2 gap-y-1 px-3 py-2">
           <span class="shrink-0 px-1.5 py-0.5 rounded bg-surface-overlay/60 border border-gray-800 text-[10px] uppercase tracking-wide {{ s.tone }}" title="{{ s.kind }}{% if s.is_redundant_rerun %} — redundant re-run by Open WebUI (identical input, no tool call){% endif %}">{{ s.label|default:s.kind|default:"STEP" }}</span>
+          {% if s.is_error %}<span class="shrink-0 px-1.5 py-0.5 rounded bg-red-950 border border-red-800/60 text-[10px] uppercase tracking-wide text-red-300" title="This step failed{% if s.error_type %}: {{ s.error_type }}{% endif %}">error</span>{% endif %}
           {% if s.response %}<span class="shrink-0 px-1.5 py-0.5 rounded bg-emerald-950 border border-emerald-800/60 text-[10px] uppercase tracking-wide text-emerald-300" title="The model call that writes the answer">response</span>{% endif %}
           <span class="min-w-0 truncate text-sm text-gray-200 {{ s.name_class }}" title="{{ s.name }}{% if s.is_redundant_rerun %} (duplicate of an earlier identical call){% endif %}">{{ s.name }}</span>
           {% if s.is_redundant_rerun %}

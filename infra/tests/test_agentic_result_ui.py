@@ -197,6 +197,8 @@ class AgenticViewHelperTests(TestCase):
                     "exception.type": "ValueError", "exception.message": "No order found for 'ACME-9999'."}}
         (row,) = _agentic_timeline_view({"judgment": {"evidence_spans": [span]}})["rows"]
         self.assertEqual(dict(row["content_blocks"])["Error"], "ValueError: No order found for 'ACME-9999'.")
+        self.assertTrue(row["is_error"])
+        self.assertEqual(row["error_type"], "ValueError")
 
     def test_timeline_none_without_spans(self):
         self.assertIsNone(_agentic_timeline_view({}))

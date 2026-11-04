@@ -4041,6 +4041,8 @@ def _agentic_span_view(span: dict) -> dict | None:
         "content_blocks": _trace_span_content_blocks(span),
         "raw_json": json.dumps(span, indent=2, ensure_ascii=False, default=str),
         "is_retrieval": kind == "RETRIEVER" or bool(kb_sources) or "retriev" in str(tool_name).lower(),
+        "is_error": str(span.get("status") or "").upper() == "ERROR" or bool(attrs.get("error.type")),
+        "error_type": str(attrs.get("exception.type") or attrs.get("error.type") or ""),
     }
 
 
