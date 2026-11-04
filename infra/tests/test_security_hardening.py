@@ -808,3 +808,17 @@ class SecondAdminWorkspaceOnlyTest(TestCase):
         conn.refresh_from_db()
         self.assertEqual(conn.visibility, "workspace")
         self.assertFalse(conn.shared_with.exists())
+
+
+class SharedConnectionListedOnceTest(TestCase):
+    def test_connection_shared_with_two_workspaces_appears_once(self):
+        from infra.tests.factories import ModelConnectionFactory
+        from model_registry.services import visible_connections_for
+
+        admin = User.objects.create_user(username="dup", password="pass12345")
+        owner, a, b = (Project.objects.create(name=n, slug=n) for n in ("own-d", "a-d", "b-d"))
+        for p in (owner, a, b):
+            ProjectMembership.objects.create(project=p, user=admin, role=ProjectMembership.Role.ADMIN)
+        conn = ModelConnectionFactory(project=owner, visibility="admins")
+        conn.shared_with.set([a, b])
+        self.assertEqual([c.pk for c in visible_connections_for(admin, a)].count(conn.pk), 1)

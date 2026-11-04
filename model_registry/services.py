@@ -300,7 +300,7 @@ def visible_connections_for(user, project):
     shared_filter = Q(visibility=ModelConnection.Visibility.PUBLIC) | Q(shared_with=project)
     if _user_is_admin_of(user, project):
         shared_filter |= Q(visibility=ModelConnection.Visibility.ADMINS)
-    shared_qs = base.exclude(project=project).filter(shared_filter)
+    shared_qs = base.exclude(project=project).filter(shared_filter).distinct()   # one row per connection, not per share
     result = list(owner_qs.order_by("name")) + list(shared_qs.order_by("name"))
     for conn in result:
         conn.is_owner = conn.project_id == project.id
