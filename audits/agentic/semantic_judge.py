@@ -167,6 +167,19 @@ def _json_attribute(value: Any) -> Any:
     return value
 
 
+def _user_question(text: str) -> tuple[str, bool]:
+    """The user's own words, and whether a RAG prompt template wrapped them.
+
+    Open WebUI's RAG template puts a fixed instruction block and a ``<context>``
+    list of sources before the user's message. The sources are on the retrieval
+    steps already, so the judge gets the message after ``</context>``.
+    """
+    head, marker, tail = text.rpartition("</context>")
+    if marker and "<context>" in head and tail.strip():
+        return tail.strip(), True
+    return text, False
+
+
 def _trace_turns(trajectory: Any) -> list[dict[str, str]]:
     """The conversation as the trace records it: each user turn and the agent's reply.
 
@@ -195,8 +208,11 @@ def _trace_turns(trajectory: Any) -> list[dict[str, str]]:
         users = [m for m in inputs or [] if isinstance(m, dict) and m.get("role") == "user"]
         reply = "".join(_message_text(m) for m in outputs or [] if isinstance(m, dict))
         if users:
-            turns.append({"role": "user", "content": _bounded(_message_text(users[-1]), _MAX_RESPONSE_CHARS),
-                          "span_id": step.span_id})
+            question, wrapped = _user_question(_message_text(users[-1]))
+            turn = {"role": "user", "content": _bounded(question, _MAX_RESPONSE_CHARS), "span_id": step.span_id}
+            if wrapped:
+                turn["rag_template_removed"] = True
+            turns.append(turn)
         if reply:
             turns.append({"role": "assistant", "content": _bounded(reply, _MAX_RESPONSE_CHARS),
                           "span_id": step.span_id})
@@ -229,17 +245,23 @@ def build_evidence_packet(
             "status": step.status,
         })
     retrieval_sources = _retrieved_sources(trajectory)
-    return {
+    turns = _trace_turns(trajectory)
+    packet = {
         "task": _bounded(task),
         "expectations": list(expectations or []),
         "final_response": _bounded(final_response, _MAX_RESPONSE_CHARS),
         # Multi-turn scenarios answer the task across turns: every turn, from the trace.
-        "conversation": _trace_turns(trajectory),
+        "conversation": turns,
         "tool_steps": tool_steps,
         "retrieval_source_ids": retrieval_sources,
         "span_ids": [step.span_id for step in steps],
         "truncated": len(steps) > _MAX_TOOL_STEPS,
     }
+    # The last assistant turn already is the final response: do not send it twice.
+    last = next((t for t in reversed(turns) if t["role"] == "assistant"), None)
+    if last and final_response and last["content"] == packet["final_response"]:
+        del packet["final_response"]
+    return packet
 
 
 def build_agentic_semantic_prompt(packet: dict[str, Any], criteria: list[str]) -> str:
@@ -251,7 +273,8 @@ def build_agentic_semantic_prompt(packet: dict[str, Any], criteria: list[str]) -
         "For each dimension respond PASS, FAIL, or INCONCLUSIVE (insufficient observation).",
         "Cite span_ids from the packet as evidence. Never assume unobserved behavior.",
         ("`task` is the first user message; `conversation` holds every user turn and agent reply"
-         " as recorded on the trace's model-call spans, and `final_response` is the agent's last turn. Judge task completion on the whole"
+         " as recorded on the trace's model-call spans; the agent's final response is its last"
+         " assistant turn (or `final_response` when given separately). Judge task completion on the whole"
          " conversation: an earlier turn may already answer the task, and later turns answer"
          " follow-ups."),
         ('Respond with JSON only: {"dimensions": {"<name>": {"status": "PASS|FAIL|INCONCLUSIVE",'

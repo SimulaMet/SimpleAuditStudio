@@ -184,8 +184,8 @@ def test_packet_takes_every_turn_from_the_trace_and_keeps_long_answers():
         chat("c2", "wf2", 5.1, [first, message("assistant", "15 days."), second], answer),
     ]
     packet = build_evidence_packet(normalize(spans), task="How long do I have?", final_response=answer)
-    assert packet["final_response"] == answer                       # 1,200+ chars, not truncated
     turns = packet["conversation"]
+    assert "final_response" not in packet                           # same as the last turn: sent once
     assert [(t["role"], t["span_id"]) for t in turns] == [
         ("user", "c1"), ("assistant", "c1"), ("user", "c2"), ("assistant", "c2")]
     assert turns[2]["content"] == "Is there a high-value exception?"
@@ -206,3 +206,11 @@ def test_retrieval_sources_read_the_standard_json_documents_attribute():
             "attributes": {"gen_ai.operation.name": "retrieval", "gen_ai.retrieval.documents": json.dumps(docs)}}
     packet = build_evidence_packet(normalize([span]))
     assert packet["retrieval_source_ids"] == ["f1", "matrix.md", "refunds.md"]
+
+
+def test_user_turn_drops_the_rag_template_but_keeps_the_question():
+    from audits.agentic.semantic_judge import _user_question
+
+    wrapped = "### Task:\nRespond using the context.\n<context>\n<source id=1>…</source>\n</context>\n\nIs it 15 days?"
+    assert _user_question(wrapped) == ("Is it 15 days?", True)
+    assert _user_question("Is it 15 days?") == ("Is it 15 days?", False)
