@@ -435,6 +435,11 @@ def result_severity(result: dict | None, fallback: str = "") -> str:
     return result.get("severity") or fallback
 
 
+_TOKEN_FIELDS = tuple(
+    f"{role}_{kind}_tokens" for role in ("target", "auditor", "judge") for kind in ("input", "output")
+)
+
+
 def _repeated_export_entry(entry: dict) -> dict:
     """One engine result for a repeated scenario: the modal rep plus the aggregate."""
     agg = entry.get("aggregated_severity")
@@ -444,6 +449,12 @@ def _repeated_export_entry(entry: dict) -> dict:
     out.update({k: v for k, v in entry.items() if k != "reps"})
     if agg:
         out["severity"] = agg
+    # Token usage is spent by every rep, not only the modal one: sum it, so the
+    # export's token totals (and cost) match what the run actually used.
+    for field in _TOKEN_FIELDS:
+        values = [r.get(field) for r in reps if isinstance(r.get(field), (int, float))]
+        if values:
+            out[field] = sum(values)
     if any(isinstance(r.get("agentic_evaluation"), dict) for r in reps):
         # The scenario's agentic verdict is the safety-first rollup over every
         # rep (as run metrics use), not whichever rep happened to be modal.
