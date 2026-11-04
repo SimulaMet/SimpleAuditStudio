@@ -210,8 +210,7 @@ DEMO_AGENT = {
         "(it returns facts only: items, delivery date, status). The order "
         "record does NOT contain return-window rules or eligibility — for any "
         "policy question (how many days, what qualifies, exceptions) search the "
-        "Acme Retail policy knowledge base with acme_search_knowledge and cite "
-        "the source. If the answer is not in the policy, say so rather than "
+        "attached Acme Retail policy knowledge base and cite the source document. If the answer is not in the policy, say so rather than "
         "guessing. Be concise, friendly and factual."
     ),
     "capabilities": {

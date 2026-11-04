@@ -445,6 +445,61 @@ class TargetTracePropagationTest(TestCase):
         self.assertEqual(calls[0][3]["headers"]["traceparent"], "00-" + "1" * 32 + "-" + "2" * 16 + "-01")
         self.assertEqual(calls[1][0:2], ("get", "/chats/chat-1"))
 
+    @mock.patch("chat.config.UPSTREAM", "http://127.0.0.1:8080/chat")
+    @mock.patch("chat.config.ENABLED", True)
+    def test_follow_up_turn_continues_the_same_open_webui_chat(self):
+        """Open WebUI builds a saved chat's model input from the stored chat: turn 2 must
+        continue turn 1's chat (chat_id + parent_id), or the agent loses the conversation."""
+        import asyncio
+        from types import SimpleNamespace
+
+        from simpleaudit.targets.base import TargetContext
+
+        from infra import trace_target
+        from infra.trace_target import TraceContextModelTarget
+
+        trace_target._owui_conversations.clear()
+        posts = []
+
+        class RawClient:
+            base_url = "http://127.0.0.1:8080/chat/api/v1/"
+
+            async def post(self, path, *, cast_to, body, options):
+                posts.append(body)
+                self.message_id = body["message_ids"][0]["message_id"]
+                return {"status": True, "chat_id": body.get("chat_id") or f"chat-{len(posts)}"}
+
+            async def get(self, path, *, cast_to, options):
+                return {"chat": {"history": {"messages": {self.message_id: {
+                    "id": self.message_id, "role": "assistant", "done": True,
+                    "content": f"Reply {len(posts)}."}}}}}
+
+        async def acompletion(**_kwargs):
+            raise AssertionError("must use the saved-chat path")
+
+        target = TraceContextModelTarget(client=SimpleNamespace(client=RawClient(), acompletion=acompletion),
+                                         model="studio.agent-1")
+
+        def send(history, trace="1"):
+            context = TargetContext(trace_headers={"traceparent": "00-" + trace * 32 + "-" + "2" * 16 + "-01"})
+            return asyncio.run(target.send(user=history[-1]["content"], history=history, context=context))
+
+        first = {"role": "user", "content": "Check tracking for ACME-1001."}
+        reply1 = send([first]).content
+        send([first, {"role": "assistant", "content": reply1}, {"role": "user", "content": "Double-check it."}])
+        self.assertIsNone(posts[0]["parent_id"])
+        self.assertNotIn("chat_id", posts[0])
+        self.assertEqual(posts[1]["chat_id"], "chat-1")
+        turn1_reply_id = posts[0]["message_ids"][0]["message_id"]
+        self.assertEqual(posts[1]["parent_id"], turn1_reply_id)
+        self.assertEqual(posts[1]["user_message"]["parentId"], turn1_reply_id)
+
+        # Another trace (another scenario or repetition) never continues this chat.
+        send([first, {"role": "assistant", "content": reply1}, {"role": "user", "content": "Double-check it."}],
+             trace="3")
+        self.assertNotIn("chat_id", posts[2])
+        self.assertIsNone(posts[2]["parent_id"])
+
     def test_streaming_call_never_forwards_studio_only_params_to_openai_client(self):
         """extra_headers (W3C trace context) must not leak into the OpenAI request."""
         import asyncio
