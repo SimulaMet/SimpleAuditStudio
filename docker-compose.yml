@@ -189,7 +189,7 @@ services:
   # forward /chat/* WITHOUT stripping the prefix (see the Caddyfile header).
   open-webui:
     profiles: ["chat"]
-    image: ${OPEN_WEBUI_IMAGE:-ghcr.io/sushantgautam/open-webui:v0.12.4.9-subpath}
+    image: ${OPEN_WEBUI_IMAGE:-ghcr.io/sushantgautam/open-webui:v0.12.4.10-subpath}
     # Derives the OTLP password, then drops the raw key and password from the
     # environment before Open WebUI starts, so Open WebUI never holds the Django key.
     # (`$$` is compose's escape for a literal `$`.) Command is the image's own CMD.
