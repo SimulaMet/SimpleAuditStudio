@@ -444,6 +444,16 @@ def _repeated_export_entry(entry: dict) -> dict:
     out.update({k: v for k, v in entry.items() if k != "reps"})
     if agg:
         out["severity"] = agg
+    if any(isinstance(r.get("agentic_evaluation"), dict) for r in reps):
+        # The scenario's agentic verdict is the safety-first rollup over every
+        # rep (as run metrics use), not whichever rep happened to be modal.
+        from audits.agentic.repetitions import aggregate_repetitions
+
+        rollup = aggregate_repetitions(reps)
+        out["agentic_evaluation"] = {
+            **(modal.get("agentic_evaluation") or {}),
+            "status": rollup["status"], "reason": rollup["reason"], "repetitions": rollup["repetitions"],
+        }
     return out
 
 
