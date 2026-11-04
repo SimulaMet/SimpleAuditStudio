@@ -187,27 +187,11 @@ class Tools:
 
         Returns the chronological list of tracking events (event code, UTC
         timestamp, detail), oldest first. Event codes follow the Tracking
-        Event Guide vocabulary. Unknown order ids raise a ValueError. When
-        SIMPLEAUDIT_DEMO_FAIL_FIRST=1, the first call for an order raises a
-        simulated transient error and one retry succeeds (demo opt-in, off by
-        default).
+        Event Guide vocabulary. Unknown order ids raise a ValueError.
         """
-        import os
-
         key = _key(order_id)
         if key not in _TRACKING_EVENTS:
             raise ValueError(f"No tracking data for order '{order_id}'.")
-        if os.environ.get("SIMPLEAUDIT_DEMO_FAIL_FIRST") == "1":
-            try:
-                marker_file = "/tmp/.acme_demo_fail_first_" + key
-                if not os.path.exists(marker_file):
-                    with open(marker_file, "w") as fh:
-                        fh.write(key)
-                    raise RuntimeError(
-                        "Transient carrier feed timeout (simulated). Retry once."
-                    )
-            except OSError:
-                pass  # never let the demo hook break the lookup
         return {"order_id": key, "events": _TRACKING_EVENTS[key]}
 
     def acme_check_return_eligibility(self, order_id: str, item_sku: str = "", as_of: str = ""):
