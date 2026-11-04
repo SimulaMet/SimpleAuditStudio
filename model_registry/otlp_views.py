@@ -627,9 +627,18 @@ def _active_project(request):
 
 
 def _require_admin(request, project) -> None:
-    from accounts.services import _require_workspace_admin
+    """Workspace ADMIN of an unarchived workspace (every caller changes credentials)."""
+    from accounts.services import _require_workspace_admin, require_project_writable
 
     _require_workspace_admin(request.user, project)
+    require_project_writable(request.user, project)
+
+
+def _request_origin(request) -> str:
+    """The browser-supplied ``origin`` field, or "" when absent or not a string."""
+    data = request.data if isinstance(request.data, dict) else {}
+    origin = data.get("origin")
+    return origin.strip() if isinstance(origin, str) else ""
 
 
 def _endpoint_url(request, origin: str | None = None) -> str:
@@ -679,20 +688,26 @@ def create_credential(request):
     """
     project = _active_project(request)
     _require_admin(request, project)
-    data = request.data or {}
+    data = request.data if isinstance(request.data, dict) else {}
     conn_id = data.get("connection_id")
-    auth_mode = (data.get("auth_mode") or "basic").strip().lower()
-    if not conn_id or not str(conn_id).isdigit():
+    auth_mode = data.get("auth_mode") or "basic"
+    if not isinstance(auth_mode, str):
+        raise StableAPIError(detail="auth_mode must be 'basic' or 'bearer'.", code="invalid_auth_mode")
+    auth_mode = auth_mode.strip().lower()
+    if not conn_id or not str(conn_id).isdecimal():
         raise StableAPIError(detail="connection_id is required.", code="invalid_connection_id")
     conn = ModelConnection.objects.filter(pk=int(conn_id), project=project).first()
     if conn is None:
         raise StableAPIError(detail="Connection not found in this workspace.", code="conn_not_found", http_status=404)
 
-    new_cred = otlp.create_credential(
-        project=project, connection=conn, auth_mode=auth_mode, user=request.user,
-        capture_level=data.get("capture_level", "structural"),
-    )
-    endpoint = _endpoint_url(request, origin=(request.data.get("origin") or "").strip())
+    try:
+        new_cred = otlp.create_credential(
+            project=project, connection=conn, auth_mode=auth_mode, user=request.user,
+            capture_level=data.get("capture_level", "structural"),
+        )
+    except ValueError as exc:
+        raise StableAPIError(detail=str(exc), code="invalid_auth_mode") from exc
+    endpoint = _endpoint_url(request, origin=_request_origin(request))
     payload = {
         "credential": _serialize_cred(new_cred.credential, request),
         "secret": new_cred.secret,
@@ -727,7 +742,7 @@ def rotate_credential(request, cred_id):
         new_cred = otlp.rotate_credential(cred)
     except ValueError as e:
         raise StableAPIError(detail=str(e), code="cannot_rotate", http_status=400)
-    endpoint = _endpoint_url(request, origin=(request.data.get("origin") or "").strip())
+    endpoint = _endpoint_url(request, origin=_request_origin(request))
     payload = {
         "credential": _serialize_cred(new_cred.credential, request),
         "secret": new_cred.secret,
@@ -753,5 +768,5 @@ def revoke_credential(request, cred_id):
         raise StableAPIError(detail="Credential not found.", code="cred_not_found", http_status=404)
     cred.enabled = False
     cred.save(update_fields=["enabled", "updated_at"])
-    otlp.clear_target_spans(cred.target_id)
+    clear_target_spans(cred.target_id)
     return Response({"ok": True, "credential": _serialize_cred(cred, request)})

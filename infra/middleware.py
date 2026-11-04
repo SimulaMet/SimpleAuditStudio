@@ -139,10 +139,16 @@ class ProjectMiddleware(MiddlewareMixin):
         if not hasattr(request, "user") or not request.user.is_authenticated:
             return
         from accounts.models import Project
+        from accounts.services import ensure_project_access
 
         project_id = request.session.get("active_project_id")
         if project_id:
             request.project = Project.objects.filter(pk=project_id).first()
+            # A session can outlive the membership it was granted under (the
+            # user was removed); never keep serving that workspace.
+            if request.project is not None and not ensure_project_access(request.user, request.project):
+                request.project = None
+                request.session.pop("active_project_id", None)
         if not request.project:
             membership = request.user.memberships.select_related("project").first()
             if membership:

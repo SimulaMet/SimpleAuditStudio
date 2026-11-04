@@ -117,6 +117,16 @@ class ChatEnabledTests(TestCase):
         self._sign_in(username="anon", email="")
         self.assertEqual(self.client.get("/chat/authz")[EMAIL_HEADER], "anon@studio.local")
 
+    def test_reserved_fallback_domain_cannot_impersonate(self):
+        self._sign_in(username="mallory", email="alice@studio.local")
+        self.assertEqual(self.client.get("/chat/authz")[EMAIL_HEADER], "mallory@studio.local")
+
+    def test_service_account_identity_is_never_issued(self):
+        from chat.config import SERVICE_EMAIL
+
+        user = self._sign_in(username=SERVICE_EMAIL.split("@")[0], email="")
+        self.assertEqual(self.client.get("/chat/authz")[EMAIL_HEADER], f"user-{user.pk}@svc.studio.local")
+
     def test_page_requires_sign_in(self):
         response = self.client.get("/playground/")
         self.assertEqual(response.status_code, 302)
@@ -589,3 +599,24 @@ class ChatAgentModelPickerTests(TestCase):
                                    external_id="studio.agent-99")
         page = self.client.get("/playground/")
         self.assertNotContains(page, f'value="{other_agent.external_id}"')
+
+
+class AccessGroupAdoptionTest(TestCase):
+    """A workspace never adopts another workspace's Open WebUI group by name."""
+
+    def test_group_named_like_another_admin_group_is_not_adopted(self):
+        from unittest import mock
+
+        from accounts.models import Project
+        from chat.access_sync import _ensure_group
+
+        acme = Project.objects.create(name="Acme", slug="acme", openwebui_admin_group_id="g-acme-admins")
+        attacker = Project.objects.create(name="Acme — Admins", slug="acme-admins")
+        api = mock.Mock()
+        api.list_groups.return_value = [
+            {"id": "g-acme-admins", "name": "Studio — Acme — Admins",
+             "data": {"simpleaudit": {"kind": "workspace_admins", "studio_project_id": str(acme.id), "schema": 1}}},
+        ]
+        api.create_group.return_value = {"id": "g-new"}
+        gid = _ensure_group(api, attacker, kind="workspace", field="openwebui_group_id", name="Studio — Acme — Admins")
+        self.assertEqual(gid, "g-new")

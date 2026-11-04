@@ -36,3 +36,8 @@ def test_result_ui_groups_checks_and_normalizes_missing_verdict():
     assert result["verdict"] == {"status": "INCONCLUSIVE", "summary": "No verdict explanation available."}
     assert list(result["checks"]) == ["tools", "other"]
     assert group_checks_by_category([None, {"category": "trace"}]) == {"trace": [{"category": "trace"}]}
+
+
+def test_pass_rate_counts_only_pass_and_excludes_no_verdict_rows():
+    results = [{"result": {"severity": s}} for s in ("low", "low", "ERROR", "pass")]
+    assert compute_run_metrics(results)["pass_rate"] == 1 / 3

@@ -8,6 +8,7 @@ The spec requires:
 """
 from __future__ import annotations
 
+import json
 import math
 
 from audits.events import ScenarioResult
@@ -76,6 +77,7 @@ def compare_runs(project, run_ids: list[int]) -> dict:
       - intersection: scenarios present in ALL runs (by scenario_key)
       - results: per-scenario comparison across runs
     """
+    run_ids = list(dict.fromkeys(run_ids))  # duplicates must not read as "not found"
     runs = list(AuditRun.objects.filter(id__in=run_ids, project=project).select_related(
         "scenario_set_version", "target_model", "judge_model", "auditor_model"
     ))
@@ -198,6 +200,10 @@ def compare_runs(project, run_ids: list[int]) -> dict:
     ]
     # Build cell data with optional URLs for linkable entities
     def _cell(text, url=None):
+        # Generation config values are free JSON: render lists/dicts as text so
+        # cells stay hashable for the "differs" check.
+        if isinstance(text, (list, dict)):
+            text = json.dumps(text, sort_keys=True)
         return {"text": text or "—", "url": url}
 
     for label, getter in param_defs:

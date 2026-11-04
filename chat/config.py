@@ -203,10 +203,20 @@ def identity(user) -> dict[str, str]:
     is_admin = user.is_superuser or ProjectMembership.objects.filter(
         user=user, role=ProjectMembership.Role.ADMIN,
     ).exists()
-    return {
+    email = (user.email or "").strip()
+    lowered = email.lower()
+    if not email or lowered.endswith(("@studio.local", ".studio.local")):
         # Open WebUI keys accounts by email, so a user without one still needs a
-        # stable, unique value.
-        EMAIL_HEADER: user.email or f"{user.username}@studio.local",
+        # stable, unique value. The synthetic domain is reserved: a typed email
+        # on it could otherwise impersonate another user's fallback identity.
+        email = f"{user.username}@studio.local"
+    if email.lower() == SERVICE_EMAIL.lower():
+        # Never hand out the runner's own admin account (e.g. a user named
+        # "studio-audit" with no email); the pk keeps the value unique.
+        # Its subdomain is reserved above and no username fallback ends in it.
+        email = f"user-{user.pk}@svc.studio.local"
+    return {
+        EMAIL_HEADER: email,
         NAME_HEADER: user.get_full_name() or user.username,
         ROLE_HEADER: "admin" if is_admin else "user",
     }

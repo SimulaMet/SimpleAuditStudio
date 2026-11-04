@@ -10,6 +10,7 @@ from scenarios.models import Scenario, ScenarioRevision, ScenarioSet, ScenarioSe
 from scenarios.serializers import (
     PublishScenarioSetVersionSerializer,
     ScenarioCreateSerializer,
+    ScenarioImportItemSerializer,
     ScenarioListSerializer,
     ScenarioRevisionSerializer,
     ScenarioSetCreateSerializer,
@@ -53,7 +54,10 @@ def create_scenario_view(request, project_id):
     _require_project_access(request.user, project)
     serializer = ScenarioCreateSerializer(data=request.data)
     serializer.is_valid(raise_exception=True)
-    scenario = create_scenario(project=project, user=request.user, **serializer.validated_data)
+    try:
+        scenario = create_scenario(project=project, user=request.user, **serializer.validated_data)
+    except (TypeError, ValueError) as exc:   # agentic metadata validation: a client error
+        raise StableAPIError(detail=str(exc), code="invalid_metadata", http_status=400) from exc
     return Response(ScenarioListSerializer(scenario).data, status=status.HTTP_201_CREATED)
 
 
@@ -80,7 +84,10 @@ def update_scenario_view(request, project_id, scenario_id):
         raise StableAPIError(detail="Scenario not found.", code="scenario_not_found", http_status=404) from exc
     serializer = ScenarioUpdateSerializer(data=request.data)
     serializer.is_valid(raise_exception=True)
-    revision = update_scenario_content(scenario=scenario, user=request.user, **serializer.validated_data)
+    try:
+        revision = update_scenario_content(scenario=scenario, user=request.user, **serializer.validated_data)
+    except (TypeError, ValueError) as exc:   # agentic metadata validation: a client error
+        raise StableAPIError(detail=str(exc), code="invalid_metadata", http_status=400) from exc
     return Response(ScenarioRevisionSerializer(revision).data, status=status.HTTP_201_CREATED)
 
 
@@ -212,30 +219,22 @@ def import_scenarios(request, project_id):
     skipped = 0
     errors = []
     for item in items:
-        key = item.get("key", "").strip()
+        key = item.get("key") if isinstance(item, dict) else None
+        key = key.strip() if isinstance(key, str) else ""
         if not key:
             errors.append({"item": item, "error": "missing key"})
             continue
         if Scenario.objects.filter(project=project, key=key).exists():
             skipped += 1
             continue
+        # Same validation as the create endpoint: types, lengths, severity,
+        # decision and agentic metadata.
+        item_serializer = ScenarioImportItemSerializer(data={"title": key, **item, "key": key})
+        if not item_serializer.is_valid():
+            errors.append({"key": key, "error": item_serializer.errors})
+            continue
         try:
-            create_scenario(
-                project=project,
-                user=request.user,
-                key=key,
-                title=item.get("title", key),
-                description=item.get("description", ""),
-                expected_behavior=item.get("expected_behavior", []),
-                test_prompt=item.get("test_prompt", ""),
-                severity_ceiling=item.get("severity_ceiling", ""),
-                documents=item.get("documents", []),
-                file_uri=item.get("file_uri"),
-                decision=item.get("decision"),
-                metadata=item.get("metadata", {}),
-                category=item.get("category", ""),
-                tags=item.get("tags", []),
-            )
+            create_scenario(project=project, user=request.user, **item_serializer.validated_data)
             created += 1
         except Exception as exc:  # noqa: BLE001 - collect per-scenario import errors
             errors.append({"key": key, "error": str(exc)})

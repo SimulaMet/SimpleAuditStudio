@@ -31,6 +31,7 @@ from django.http import Http404, HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404
 from django.views.generic import View
 
+from audits.services import result_severity
 from infra.ui import ProjectMixin
 
 logger = logging.getLogger(__name__)
@@ -597,7 +598,7 @@ class ScenarioViewerView(LoginRequiredMixin, View):
         return HttpResponse(html, content_type="text/html; charset=utf-8")
 
 
-class VisualizerFilesView(View):
+class VisualizerFilesView(LoginRequiredMixin, View):
     """``GET /api/visualizer/api/files/`` → bounded file tree of the results dir.
 
     Response shape:
@@ -683,7 +684,7 @@ class VisualizerFilesView(View):
         )
 
 
-class VisualizerJsonView(View):
+class VisualizerJsonView(LoginRequiredMixin, View):
     """``GET /api/visualizer/json/<path>`` → the JSON content of a result file."""
 
     def get(self, request, file_path: str):
@@ -703,10 +704,10 @@ class VisualizerJsonView(View):
             return JsonResponse({"error": "Error reading file"}, status=500)
         if not is_valid_audit_data(data):
             return JsonResponse({"error": "Not an audit results file"}, status=403)
-        return JsonResponse(data)
+        return JsonResponse(data, safe=False)   # a result file may be a top-level list
 
 
-class VisualizerImageView(View):
+class VisualizerImageView(LoginRequiredMixin, View):
     """``GET /api/visualizer/image?uri=...`` → ``{"data_uri": ...}`` for previews.
 
     Reuses the audit's own ``image_data_uri`` loader so local paths, http(s) and
@@ -721,6 +722,17 @@ class VisualizerImageView(View):
         uri = request.GET.get("uri", "")
         if not uri:
             return JsonResponse({"error": "Missing uri"}, status=400)
+        # Only http(s) URLs and files inside the results directory: fsspec would
+        # otherwise open any server path or protocol (s3://, file://, ...).
+        scheme = uri.split("://", 1)[0].lower() if "://" in uri else ""
+        if scheme not in ("http", "https"):
+            if scheme:
+                return JsonResponse({"error": "Not a previewable image"}, status=415)
+            local = _resolve_results_path(uri.lstrip("/")) if not os.path.isabs(uri) else _resolve_results_path(
+                os.path.relpath(uri, results_dir() or "/"))
+            if local is None:
+                return JsonResponse({"error": "Access denied"}, status=403)
+            uri = local
         try:
             data_uri = image_data_uri(uri)
         except ValueError:
@@ -773,7 +785,7 @@ class RunExportHtmlView(ProjectMixin, View):
             results.append(
                 {
                     "scenario_name": item.scenario.title if item else str(sr.version_item_id),
-                    "severity": r.get("severity", sr.status),
+                    "severity": result_severity(r, sr.status),
                     "summary": r.get("summary", ""),
                     "result": r,
                 }

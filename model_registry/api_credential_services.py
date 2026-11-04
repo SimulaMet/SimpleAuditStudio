@@ -27,6 +27,7 @@ from simpleaudit.tracing.auth import (
     verify_secret,
 )
 
+from accounts.services import ensure_project_access
 from model_registry.models import ApiCredential
 
 #: Distinct from OTLP's "sa_otlp_" so the two credential spaces never overlap.
@@ -104,7 +105,11 @@ def verify_bearer(token: str, *, project=None) -> ApiCredential | None:
     qs = ApiCredential.objects.filter(token_prefix=token_lookup_prefix(token), enabled=True)
     if project is not None:
         qs = qs.filter(project=project)
-    for cred in qs.select_related("user"):
+    for cred in qs.select_related("user", "project"):
         if verify_secret(token, cred.salt, cred.secret_hash):
+            # A key stops working once its owner is deactivated or loses
+            # access to the workspace it was issued for.
+            if not cred.user.is_active or not ensure_project_access(cred.user, cred.project):
+                return None
             return cred
     return None

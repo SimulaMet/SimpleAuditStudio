@@ -36,12 +36,21 @@ def _ensure_group(api: ChatAPI, project, *, kind: str, field: str, name: str) ->
         except ChatAPIError:
             logger.info("Open WebUI group %s disappeared; recreating it", group_id)
 
+    from accounts.models import Project
+
     marker = _meta(project, kind)[MARKER]
+    # Adopt only by Studio's own marker, never by name: a workspace named
+    # "Acme — Admins" would otherwise capture Acme's admin group. Never adopt a
+    # group another project already holds.
+    claimed = set(
+        Project.objects.exclude(pk=project.pk).values_list("openwebui_group_id", flat=True)
+    ) | set(Project.objects.exclude(pk=project.pk).values_list("openwebui_admin_group_id", flat=True))
     for group in api.list_groups():
+        if group.get("id") in claimed:
+            continue
         if (
             (group.get("meta") or {}).get(MARKER) == marker
             or (group.get("data") or {}).get(MARKER) == marker
-            or group.get("name") == name
         ):
             group_id = group.get("id")
             break

@@ -34,11 +34,16 @@ def send_magic_auth_code(email: str, *, ip_address: str | None = None, user_agen
     )
 
 
-def authenticate_magic_auth(code: str, email: str, *, ip_address: str | None = None, user_agent: str | None = None):
+def authenticate_magic_auth(
+    code: str, email: str, *, ip_address: str | None = None, user_agent: str | None = None,
+    allow_create: bool = True,
+):
     """Verify a Magic Auth code and return the local Django user.
 
     Returns ``(user, created)`` where ``created`` is True when the account was
-    provisioned by this sign-in.
+    provisioned by this sign-in. Raises ``ValueError`` when a new account would
+    be needed but ``allow_create`` is False (registration disabled), or when
+    the email already belongs to another local user (emails are chat identity).
     """
     response = _client().user_management.authenticate_with_magic_auth(
         code=code,
@@ -51,6 +56,11 @@ def authenticate_magic_auth(code: str, email: str, *, ip_address: str | None = N
         raise ValueError("WorkOS returned no user for the magic auth code.")
 
     username = _derive_username(wo_user.email or wo_user.id)
+    if not User.objects.filter(workos_user_id=wo_user.id).exists():
+        if not allow_create:
+            raise ValueError("New sign-ups are disabled on this deployment.")
+        if wo_user.email and User.objects.filter(email__iexact=wo_user.email).exists():
+            raise ValueError("An account with this email already exists; sign in with it instead.")
     user, created = User.objects.get_or_create(
         workos_user_id=wo_user.id,
         defaults={
@@ -64,7 +74,9 @@ def authenticate_magic_auth(code: str, email: str, *, ip_address: str | None = N
     # Keep profile fields fresh on subsequent sign-ins.
     if not created:
         changed = False
-        if wo_user.email and user.email != wo_user.email:
+        if (wo_user.email and user.email != wo_user.email
+                and not User.objects.filter(email__iexact=wo_user.email).exclude(pk=user.pk).exists()):
+            # Skipped on a collision: two users with one email share a chat account.
             user.email = wo_user.email
             changed = True
         if wo_user.first_name and user.first_name != wo_user.first_name:

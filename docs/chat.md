@@ -102,6 +102,11 @@ Django remains the only authority on identity; nothing outside it reads sessions
 or user tables. Open WebUI creates its account on the first request per user and
 keeps its own database of chats and settings.
 
+Identity (`X-Studio-Email`): the user's email, or `<username>@studio.local`
+when they have none. The `studio.local` domain and its subdomains are reserved
+for these fallbacks, so a typed email on them is ignored, and no user is ever
+given the runner's own service email (`SIMPLEAUDIT_CHAT_SERVICE_EMAIL`).
+
 Role mapping (`X-Studio-Role`, applied on every sign-in):
 
 | Studio                                   | Open WebUI |

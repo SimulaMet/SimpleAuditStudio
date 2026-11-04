@@ -38,3 +38,32 @@ class AgentTargetModelTest(TestCase):
         # engine can resolve it against the live OpenWebUI endpoint.
         # (its primary key), which resolves to a live endpoint.
         self.assertEqual(target.model_id, agent.external_id)
+
+
+class AgentReferencePerAgentTest(TestCase):
+    def test_each_agent_keeps_its_own_reference_row(self):
+        from infra.tests.factories import ProjectFactory
+
+        project = ProjectFactory()
+        a = AgentFactory(project=project, external_id="studio.a")
+        b = AgentFactory(project=project, external_id="studio.b")
+        ref_a = agent_target_model(a)
+        ref_b = agent_target_model(b)
+        self.assertNotEqual(ref_a.pk, ref_b.pk)
+        ref_a.refresh_from_db()
+        self.assertEqual(ref_a.model_id, "studio.a")
+        self.assertEqual(ref_a.display_name, a.name)
+
+    def test_deleted_agents_row_pinned_by_a_run_is_not_reused(self):
+        from infra.tests.factories import AuditRunFactory, ProjectFactory
+
+        project = ProjectFactory()
+        a = AgentFactory(project=project, external_id="studio.a")
+        ref_a = agent_target_model(a)
+        AuditRunFactory(project=project, target_model=ref_a)
+        a.delete()
+        b = AgentFactory(project=project, external_id="studio.b")
+        ref_b = agent_target_model(b)
+        self.assertNotEqual(ref_a.pk, ref_b.pk)
+        ref_a.refresh_from_db()
+        self.assertEqual(ref_a.model_id, "studio.a")

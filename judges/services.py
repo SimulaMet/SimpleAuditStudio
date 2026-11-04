@@ -159,6 +159,9 @@ def make_spec(*, base: str = "", output: str = "", criteria: str = "", probe_pro
     default probe) is stored blank, so it follows the base and switching base
     later doesn't carry stale copies along. Raises ``ValueError``."""
     criteria, probe_prompt = (criteria or "").strip(), (probe_prompt or "").strip()
+    # Agentic guidance is Studio's own option (read by the engine bridge for
+    # agentic scenarios), valid for any format; keep it through normalisation.
+    guidance = str((options or {}).get("agentic_guidance") or "").strip()
     if base:
         if base not in bases():
             raise ValueError(f"Unknown SimpleAudit judge “{base}”.")
@@ -178,6 +181,8 @@ def make_spec(*, base: str = "", output: str = "", criteria: str = "", probe_pro
         default_probe = default_probe_prompt()
     if probe_prompt == default_probe:
         probe_prompt = ""
+    if guidance:
+        options = {**options, "agentic_guidance": guidance}
     spec = {"base": base, "output": output, "criteria": criteria, "probe_prompt": probe_prompt, "options": options}
     library_judge(spec)   # SimpleAudit's own checks: dimension names, the question, ...
     return spec
@@ -266,11 +271,19 @@ def parse_start(value: str) -> dict:
     return {"base": value, "output": ""}
 
 
-def save_version(judge: Judge, *, note: str = "", user=None, **fields) -> tuple[JudgeVersion, bool]:
+class StaleVersionError(ValueError):
+    """A save based on a version that is no longer the latest."""
+
+
+def save_version(
+    judge: Judge, *, note: str = "", user=None, base_version_id: int | None = None, **fields,
+) -> tuple[JudgeVersion, bool]:
     """Save a new version of ``judge`` when the versioned content changed.
 
     ``fields`` are ``make_spec`` arguments. Returns ``(version, created)``;
-    unchanged content returns the latest version.
+    unchanged content returns the latest version. ``base_version_id`` is the
+    version the editor was opened on: when another save landed since, a
+    changed save is refused (``ValueError``) rather than reverting it.
     """
     content = make_spec(**fields)
     with transaction.atomic():
@@ -279,6 +292,8 @@ def save_version(judge: Judge, *, note: str = "", user=None, **fields) -> tuple[
         latest = judge.versions.order_by("-version").first()
         if latest is not None and latest.content() == content:
             return latest, False
+        if base_version_id is not None and latest is not None and base_version_id != latest.pk:
+            raise StaleVersionError("This judge changed since the form was opened; reload and edit again.")
         number = (judge.versions.aggregate(n=Max("version"))["n"] or 0) + 1
         version = JudgeVersion.objects.create(
             judge=judge, version=number, **content, note=note.strip()[:250], created_by=user,

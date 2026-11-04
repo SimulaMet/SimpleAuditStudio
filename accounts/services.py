@@ -44,6 +44,17 @@ def has_local_password(user) -> bool:
 
 
 @transaction.atomic
+def revoke_auth_tokens(user) -> None:
+    """Drop the user's DRF auth tokens (call after a password change or reset).
+
+    Django sessions are tied to the password hash and end on their own; tokens
+    never expire, so without this an old token keeps full access.
+    """
+    from rest_framework.authtoken.models import Token
+
+    Token.objects.filter(user=user).delete()
+
+
 def bootstrap_admin_and_default_project(
     *,
     username: str,
@@ -63,6 +74,7 @@ def bootstrap_admin_and_default_project(
     if created or not user.check_password(password):
         user.set_password(password)
         user.save(update_fields=["password"])
+        revoke_auth_tokens(user)
     if not user.is_active:
         user.is_active = True
         user.save(update_fields=["is_active"])
@@ -236,6 +248,7 @@ def delete_workspace(*, user, project: Project) -> None:
     """Delete an EMPTY workspace. Refuses while any audit content exists so a
     mistaken click can never destroy experiment history."""
     _require_workspace_admin(user, project)
+    require_project_writable(user, project)   # archived workspaces are read-only
 
     from audits.models import AuditRun
     from model_registry.models import ModelConnection
@@ -358,6 +371,8 @@ def admin_update_user(
         _validate_password_or_raise(password)
         target.set_password(password)
     target.save()
+    if password:
+        revoke_auth_tokens(target)
     return target
 
 

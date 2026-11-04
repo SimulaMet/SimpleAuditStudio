@@ -175,4 +175,15 @@ def nav(request):
             best is not None and item is best and score(best) > 0
             and not has_active_child
         )
-    return {"nav_items": items}
+    # What the top bar shows: the section (and sub-page) for this path. A child
+    # page un-highlights its parent in the sidebar, but the title still needs it.
+    current = None
+    if best is not None and score(best) > 0:
+        current = {"label": best["label"], "url": best["url"], "child": best["active_child"]}
+    elif path in _UNLISTED_PAGES:
+        current = {"label": _UNLISTED_PAGES[path], "url": path, "child": None}
+    return {"nav_items": items, "nav_current": current}
+
+
+# Pages reached from the user menu rather than the sidebar.
+_UNLISTED_PAGES = {"/profile/": "Profile", "/admin-settings/": "Admin settings", "/workspaces/": "Workspaces"}

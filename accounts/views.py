@@ -81,8 +81,11 @@ def obtain_token(request):
     The SPA uses token auth (``Authorization: Token <key>``) so it works across
     origins and without CSRF handling. Returns the token plus the user payload.
     """
-    username = request.data.get("username", "")
-    password = request.data.get("password", "")
+    data = request.data if isinstance(request.data, dict) else {}
+    username = data.get("username", "")
+    password = data.get("password", "")
+    if not isinstance(username, str) or not isinstance(password, str):
+        raise StableAPIError(detail="Invalid credentials.", code="invalid_credentials", http_status=401)
     user = authenticate(request, username=username, password=password)
     if user is None:
         raise StableAPIError(detail="Invalid credentials.", code="invalid_credentials", http_status=401)
@@ -237,8 +240,9 @@ def workspace_detail(request, project_id):
 @permission_classes([IsAuthenticated])
 def switch_workspace(request):
     """Set the session's active workspace so all UI pages scope to it."""
-    raw_id = request.data.get("project_id") or request.data.get("workspace_id")
-    if not raw_id or not str(raw_id).isdigit():
+    data = request.data if isinstance(request.data, dict) else {}
+    raw_id = data.get("project_id") or data.get("workspace_id")
+    if not raw_id or not str(raw_id).isascii() or not str(raw_id).isdecimal() or len(str(raw_id)) > 18:
         raise StableAPIError(detail="project_id is required.", code="invalid_workspace_id")
     project = _get_project_or_404(int(raw_id))
     if not ensure_project_access(request.user, project):
@@ -314,8 +318,12 @@ def add_member(request, project_id):
         defaults={"role": role, "created_by": request.user},
     )
     if not created and membership.role != role:
-        membership.role = role
-        membership.save(update_fields=["role"])
+        # Role changes go through update_or_remove_member, which keeps the last
+        # admin and refuses to touch superusers.
+        raise StableAPIError(
+            detail="Already a member; change the role with the member update endpoint.",
+            code="already_member", http_status=409,
+        )
     return Response(ProjectMembershipSerializer(membership).data, status=status.HTTP_201_CREATED)
 
 

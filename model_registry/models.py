@@ -538,6 +538,11 @@ class Agent(models.Model):
                 "display_name": self.base_model.display_name,
                 "model_id": self.base_model.model_id,
                 "connection_id": self.base_model.connection_id,
+                # Frozen endpoint so execution never reads live registry rows;
+                # only the API key is resolved at execution time.
+                "provider": self.base_model.connection.provider,
+                "base_url": self.base_model.connection.base_url,
+                "default_parameters": dict(self.base_model.default_parameters or {}),
             },
             "system_prompt": self.system_prompt,
             "knowledge_bases": [

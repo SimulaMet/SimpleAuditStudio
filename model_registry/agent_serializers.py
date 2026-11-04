@@ -19,6 +19,12 @@ class KnowledgeBaseSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ["id"]
 
+    def update(self, instance, validated_data):
+        # ``external_id`` links a new row to an existing Open WebUI KB on create;
+        # re-pointing an existing row would aim its remote delete at another KB.
+        validated_data.pop("external_id", None)
+        return super().update(instance, validated_data)
+
 
 class ToolSerializer(serializers.ModelSerializer):
     # Open WebUI owns the tool's Python source; Studio never stores it.
@@ -66,6 +72,21 @@ class AgentSerializer(serializers.ModelSerializer):
             "capabilities", "metadata", "enabled", "external_id",
         ]
         read_only_fields = ["id", "external_id"]
+
+    def _object(self, value, name):
+        # Stored JSON is read as a dict (e.g. ``{**defaults, **retrieval_settings}``).
+        if value is not None and not isinstance(value, dict):
+            raise serializers.ValidationError(f"{name} must be a JSON object.")
+        return value
+
+    def validate_retrieval_settings(self, value):
+        return self._object(value, "retrieval_settings")
+
+    def validate_capabilities(self, value):
+        return self._object(value, "capabilities")
+
+    def validate_metadata(self, value):
+        return self._object(value, "metadata")
 
     def validate(self, attrs):
         project = self.context.get("project")

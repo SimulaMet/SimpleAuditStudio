@@ -116,20 +116,18 @@
             <a href="/" class="hover:opacity-80 transition-opacity md:hidden" title="Go to homepage">
               <img src="{% static 'logo.svg' %}?v=3" alt="SimpleAudit" class="h-4 w-4 object-contain rounded shrink-0">
             </a>
-            <a href="/" class="hover:text-accent transition-colors">{% for item in nav_items %}{% if item.active %}{{ item.label }}{% if item.active_child %} / {{ item.active_child }}{% endif %}{% endif %}{% empty %}SimpleAudit{% endfor %}<span class="sr-only">Studio home</span></a>
+            <a href="/" class="hover:text-accent transition-colors">{% if nav_current %}{{ nav_current.label }}{% if nav_current.child %} / {{ nav_current.child }}{% endif %}{% else %}SimpleAudit{% endif %}<span class="sr-only">Studio home</span></a>
           </div>
           <nav class="text-xs text-gray-500 leading-tight hidden sm:flex items-center gap-1 truncate" aria-label="Breadcrumb">
             <a href="/" class="hover:text-gray-300 transition-colors">Studio</a>
-            {% for item in nav_items %}
-              {% if item.active and item.url != '/' %}
+            {% if nav_current and nav_current.url != '/' %}
+              <span class="text-gray-600">/</span>
+              <a href="{{ nav_current.url }}" class="hover:text-gray-300 transition-colors">{{ nav_current.label }}</a>
+              {% if nav_current.child %}
                 <span class="text-gray-600">/</span>
-                <a href="{{ item.url }}" class="hover:text-gray-300 transition-colors">{{ item.label }}</a>
-                {% if item.active_child %}
-                  <span class="text-gray-600">/</span>
-                  <span class="text-gray-400">{{ item.active_child }}</span>
-                {% endif %}
+                <span class="text-gray-400">{{ nav_current.child }}</span>
               {% endif %}
-            {% endfor %}
+            {% endif %}
             {% block breadcrumb_extra %}{% endblock %}
           </nav>
         </div>
@@ -224,11 +222,22 @@
     try { localStorage.setItem('sa-sidebar-collapsed', collapsed ? '1' : '0'); } catch (err) { /* private mode */ }
   }
 
+  const sidebar = document.getElementById('sidebar');
+  // On mobile the closed drawer is only translated off-screen; make it inert so
+  // Tab can't land on invisible links. Desktop keeps it interactive.
+  function syncDrawerInert() {
+    if (!sidebar) return;
+    sidebar.inert = !isDesktop() && !root.classList.contains('sidebar-open');
+  }
+
   function setDrawer(open) {
+    const wasOpen = root.classList.contains('sidebar-open');
     root.classList.toggle('sidebar-open', open);
     if (backdrop) backdrop.hidden = !open;
     openBtn?.setAttribute('aria-expanded', open);
+    syncDrawerInert();
     if (open) document.querySelector('#sidebar a, #sidebar button')?.focus();
+    else if (wasOpen) openBtn?.focus();
   }
 
   // Header hamburger: collapse on desktop, open drawer on mobile.
@@ -254,7 +263,11 @@
   }
   
   document.addEventListener('keydown', e => { if (e.key === 'Escape' && root.classList.contains('sidebar-open')) setDrawer(false); });
-  matchMedia('(min-width: 768px)').addEventListener('change', e => { if (e.matches) setDrawer(false); });
+  matchMedia('(min-width: 768px)').addEventListener('change', e => { if (e.matches) setDrawer(false); else syncDrawerInert(); });
+  // Pages that reuse this sidebar (the visualizer) toggle html.sidebar-open
+  // themselves; follow the class so the drawer is never open but inert.
+  new MutationObserver(syncDrawerInert).observe(root, { attributes: true, attributeFilter: ['class'] });
+  syncDrawerInert();
 })();
 </script>
 <script>

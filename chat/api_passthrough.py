@@ -118,7 +118,7 @@ def _resolve_target(user, project, model_field: str):
     if "." not in model_field:
         raise _ApiAuthError("Model id must be '<connection id>.<model id>' or an agent id.", "invalid_model_id", 404)
     conn_part, _, bare_id = model_field.partition(".")
-    if not conn_part.isdigit():
+    if not (conn_part.isascii() and conn_part.isdecimal() and len(conn_part) <= 18):
         raise _ApiAuthError("Unknown model.", "unknown_model", 404)
 
     conn = next(
@@ -218,7 +218,7 @@ def api_chat_completions(request):
 
     model_field = body.get("model")
     messages = body.get("messages")
-    if not model_field or not isinstance(messages, list):
+    if not model_field or not isinstance(model_field, str) or not isinstance(messages, list):
         raise _ApiAuthError(
             "'model' (a '<connection id>.<model id>' string) and 'messages' (a list) are required.",
             "bad_body", 400,

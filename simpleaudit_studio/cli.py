@@ -213,10 +213,9 @@ def main() -> None:
         _update_model_endpoints(mock_url)
         print("✅ Model endpoints configured (mock).\n")
     else:
-        # Repair any connection an earlier version left pointing at the mock,
-        # then make sure all connections point at OpenAI's real base URL.
+        # Restore connections a previous --mock run pointed at the mock server.
         _restore_real_model_endpoints()
-        print("✅ Model endpoints point at OpenAI (add your API key in the UI).\n")
+        print("✅ Model endpoints restored (add your API key in the UI if needed).\n")
 
     # --- Step 6: Start Django web server in a daemon thread ---
     port = args.port
@@ -566,38 +565,63 @@ def _seed_demo_data() -> None:
     call_command("seed_agentic_scenarios", project=project.id, verbosity=0)
 
 
+_MOCK_BACKUP_KEY = "mock_endpoint_backup"
+
+
 def _update_model_endpoints(mock_url: str) -> None:
-    """Point all seeded model connections at the local mock server.
+    """Point model connections at the local mock server for this run.
 
-    The mock server ignores auth entirely, so no API key is set — the
-    connection stays keyless (shown as "⚠ no key" in the UI).
+    The original base URLs are saved first (once: a second ``--mock`` run must
+    not save the mock URL as the "original") and restored on the next normal
+    start. API keys are left alone; the mock ignores auth. Studio's own agent
+    connection is never touched.
     """
+    from accounts.services import get_site_setting, set_site_setting
     from model_registry.models import ModelConnection
+    from model_registry.services import INTERNAL_AGENT_CONNECTION_NAMES
 
-    ModelConnection.objects.filter(enabled=True).update(
-        base_url=mock_url,
-        api_key_direct="",
-        secret_reference="",
-    )
+    conns = ModelConnection.objects.filter(enabled=True).exclude(name__in=INTERNAL_AGENT_CONNECTION_NAMES)
+    backup = dict(get_site_setting(_MOCK_BACKUP_KEY) or {})
+    urls = dict(backup.get("urls") or {})
+    # Every mock URL used so far (each run binds a new port): the restore skips
+    # rows the user re-pointed meanwhile, and a URL edited between mock runs
+    # (anything not a previous mock URL) becomes the one to restore.
+    mock_urls = list(backup.get("mock_urls") or [])
+    for conn in conns:
+        if str(conn.pk) not in urls or conn.base_url not in mock_urls:
+            urls[str(conn.pk)] = conn.base_url
+    set_site_setting(_MOCK_BACKUP_KEY, {"urls": urls, "mock_urls": [*mock_urls, mock_url]})
+    conns.update(base_url=mock_url)
 
 
 def _restore_real_model_endpoints() -> None:
-    """Make sure model connections point at OpenAI's real base URL.
+    """Undo a previous ``--mock`` run: restore each connection's saved base URL.
 
-    Seeding already creates the default connection at https://api.openai.com/v1.
-    This repairs any connection an earlier version left pointing at the local
-    mock server (http://127.0.0.1:PORT/v1) so future runs target OpenAI.
-    User-configured custom endpoints (non-local hosts) are left untouched.
+    Only connections the mock run changed are touched. Legacy repair (versions
+    that wiped keys and saved no backup): a keyless connection whose URL is
+    exactly the old mock shape ``http://127.0.0.1:<ephemeral port>/v1`` goes back to
+    OpenAI. Local endpoints such as Ollama/vLLM on localhost are left alone.
     """
-    from model_registry.models import ModelConnection
+    import re
 
-    OPENAI_BASE_URL = "https://api.openai.com/v1"
-    for conn in ModelConnection.objects.filter(enabled=True):
-        # Extract hostname (strip scheme, path, and port)
-        netloc = (conn.base_url or "").split("//", 1)[-1].split("/", 1)[0]
-        host = netloc.rsplit(":", 1)[0] if ":" in netloc else netloc
-        if host in ("127.0.0.1", "localhost", "0.0.0.0"):
-            conn.base_url = OPENAI_BASE_URL
+    from accounts.services import get_site_setting, set_site_setting
+    from model_registry.models import ModelConnection
+    from model_registry.services import INTERNAL_AGENT_CONNECTION_NAMES
+
+    backup = get_site_setting(_MOCK_BACKUP_KEY) or {}
+    mock_urls = backup.get("mock_urls") or []
+    for pk, base_url in (backup.get("urls") or {}).items():
+        # Only rows still on a mock URL: a URL edited during a mock run stays.
+        ModelConnection.objects.filter(pk=int(pk), base_url__in=mock_urls).update(base_url=base_url)
+    if backup:
+        set_site_setting(_MOCK_BACKUP_KEY, {})
+        return
+    # The old mock bound an OS-assigned (ephemeral, >= 32768) port.
+    legacy_mock = re.compile(r"^http://127\.0\.0\.1:(\d+)/v1/?$")
+    for conn in ModelConnection.objects.filter(enabled=True).exclude(name__in=INTERNAL_AGENT_CONNECTION_NAMES):
+        match = legacy_mock.match(conn.base_url or "")
+        if match and int(match.group(1)) >= 32768 and not conn.api_key_direct and not conn.secret_reference:
+            conn.base_url = "https://api.openai.com/v1"
             conn.save(update_fields=["base_url"])
 
 

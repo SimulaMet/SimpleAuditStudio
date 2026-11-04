@@ -81,7 +81,9 @@ The full stack, each piece in its own container (`docker-compose.yml`):
 
 - `postgres` — the database; `deploy/postgres-init.sql` adds the queue's
   database on first start.
-- `hatchet-server` — the job queue.
+- `hatchet-server` — the job queue. Its dashboard (8888) and gRPC (7077) ports
+  are published on 127.0.0.1 only: the default `hatchet-lite-dev` image has
+  authentication disabled, so never expose them on a public interface.
 - `worker` — background jobs: audit runs, the stuck-run sweeper, monitor
   ticks.
 - `web` — the app at <http://localhost:8000> (gunicorn). On start it applies
@@ -169,6 +171,7 @@ override them when you deliberately need to.
 | `DJANGO_ALLOWED_HOSTS` | Comma-separated; default `*` (see security notes). |
 | `SIMPLEAUDIT_SECURE_COOKIES` | Session and CSRF cookies are `Secure` by default (production). Set `false` only for a plain-HTTP local replica, e.g. `http://127.0.0.1`, where the browser would otherwise drop the login cookie. |
 | `DJANGO_CSRF_TRUSTED_ORIGINS` | Extra trusted origins (full URLs). |
+| `GUNICORN_BIND`, `GUNICORN_WORKERS`, `GUNICORN_THREADS`, `GUNICORN_TIMEOUT`, `GUNICORN_GRACEFUL_TIMEOUT`, `GUNICORN_KEEPALIVE` | Gunicorn tuning (`gunicorn.conf.py`). Defaults: `0.0.0.0:8000`, 2, 16, 60, 30, 5. |
 | `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_HOST`, `POSTGRES_PORT`, `POSTGRES_CONN_MAX_AGE` | PostgreSQL connection (`compose` mode). |
 | `SIMPLEAUDIT_LOCAL_SQLITE` **internal** | `1` = local SQLite database at the repository's `dev.sqlite3`. Set automatically by the `dev` entry point and by the test suite. |
 | `SIMPLEAUDIT_SQLITE_PATH` | Override where the local dev SQLite file lives. Default: `<repo>/dev.sqlite3`. Relative paths resolve from the repo root; absolute paths are used as-is. Ignored unless `SIMPLEAUDIT_LOCAL_SQLITE=1`. |

@@ -532,7 +532,7 @@ def plan_openai_config(current: dict[str, Any], connections: list[dict[str, Any]
 
     indices = set(range(len(urls))) | set(range(len(keys)))
     for config_key in configs:
-        if config_key.isdigit() and str(int(config_key)) == config_key:
+        if config_key.isdecimal() and str(int(config_key)) == config_key:
             indices.add(int(config_key))
 
     kept = []

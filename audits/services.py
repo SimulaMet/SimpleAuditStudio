@@ -113,7 +113,7 @@ def frozen_agent(run: AuditRun) -> dict | None:
     if not snap:
         return None
     agent_id = snap.get("agent_id")
-    detail_url = f"/agents/{agent_id}/" if str(agent_id or "").isdigit() else ""
+    detail_url = f"/agents/{agent_id}/" if str(agent_id or "").isdecimal() else ""
     return {
         "id": agent_id,
         "detail_url": detail_url,
@@ -338,7 +338,7 @@ def create_audit_run(
 
     return AuditRun.objects.create(
         project=project,
-        name=name.strip(),
+        name=name.strip()[:250],   # AuditRun.name max_length (monitor names add a timestamp)
         status=AuditRun.Status.QUEUED,
         scenario_set_version=scenario_set_version,
         target_model=target_model,
@@ -402,24 +402,49 @@ def submit_audit_run(run: AuditRun) -> str | None:
     # step, so the run cannot be marked completed until every scenario has a
     # result. wait_for_result=False enqueues and returns immediately; the worker
     # executes the steps asynchronously.
-    run.refresh_from_db()
-    meta = dict(run.runtime_metadata or {})
-    meta["submission"] = {
+    _set_submission(run, {
         "status": "submitted",
         "at": timezone.now().isoformat(),
         "scenarios": len(items),
         "workflow_run": getattr(ref, "id", None) or str(ref),
-    }
-    AuditRun.objects.filter(id=run.id).update(runtime_metadata=meta)
+    })
     logger.info("Audit %s submitted to Hatchet with %d scenarios", run.id, len(items))
     return None
 
 
+def _set_submission(run: AuditRun, submission: dict) -> None:
+    # Row lock: the worker's resume path also rewrites runtime_metadata, and a
+    # plain read-modify-write would drop the other writer's keys.
+    with transaction.atomic():
+        locked = AuditRun.objects.select_for_update().get(pk=run.pk)
+        meta = dict(locked.runtime_metadata or {})
+        meta["submission"] = submission
+        AuditRun.objects.filter(pk=run.pk).update(runtime_metadata=meta)
+    run.runtime_metadata = meta
+
+
 def _record_submission_failure(run: AuditRun, reason: str) -> None:
-    run.refresh_from_db()
-    meta = dict(run.runtime_metadata or {})
-    meta["submission"] = {"status": "pending", "reason": reason, "at": timezone.now().isoformat()}
-    AuditRun.objects.filter(id=run.id).update(runtime_metadata=meta)
+    _set_submission(run, {"status": "pending", "reason": reason, "at": timezone.now().isoformat()})
+
+
+def result_severity(result: dict | None, fallback: str = "") -> str:
+    """A stored result's severity; repeated scenarios carry ``aggregated_severity``."""
+    result = result if isinstance(result, dict) else {}
+    if isinstance(result.get("reps"), list):
+        return result.get("aggregated_severity") or fallback
+    return result.get("severity") or fallback
+
+
+def _repeated_export_entry(entry: dict) -> dict:
+    """One engine result for a repeated scenario: the modal rep plus the aggregate."""
+    agg = entry.get("aggregated_severity")
+    reps = [r for r in entry["reps"] if isinstance(r, dict)]
+    modal = next((r for r in reps if r.get("severity") == agg), reps[0] if reps else {})
+    out = {k: v for k, v in modal.items() if not str(k).startswith("_")}
+    out.update({k: v for k, v in entry.items() if k != "reps"})
+    if agg:
+        out["severity"] = agg
+    return out
 
 
 def cancel_run(run: AuditRun, user) -> bool:
@@ -430,11 +455,22 @@ def cancel_run(run: AuditRun, user) -> bool:
     """
     from audits.events import append_event
 
+    require_project_role(user, run.project, ProjectMembership.Role.ADMIN, ProjectMembership.Role.AUDITOR)
     if not run.is_active:
         return False
+    # Conditional update: the worker may finalize the run between the caller
+    # loading it and this write; a finished run must stay finished.
+    now = timezone.now()
+    changed = (
+        AuditRun.objects.filter(pk=run.pk)
+        .exclude(status__in=AuditRun.TERMINAL_STATUSES)
+        .update(status=AuditRun.Status.CANCELLED, finished_at=now)
+    )
+    if not changed:
+        run.refresh_from_db()
+        return False
     run.status = AuditRun.Status.CANCELLED
-    run.finished_at = run.finished_at or timezone.now()
-    run.save(update_fields=["status", "finished_at"])
+    run.finished_at = run.finished_at or now
     append_event(run.pk, "_run", "run_cancelled", {"by": user.username})
     return True
 
@@ -494,6 +530,10 @@ def build_simpleaudit_export(run: AuditRun) -> dict:
         raw = row.result if isinstance(row.result, dict) else {}
         # Drop Studio-internal underscore keys; the engine reconstructs the rest.
         entry = {k: v for k, v in raw.items() if not k.startswith("_")}
+        if isinstance(entry.get("reps"), list) and entry["reps"] and "severity" not in entry:
+            # A repeated scenario stores {reps, aggregated_severity, ...}: export
+            # the modal rep's body under the aggregated severity, not ERROR.
+            entry = _repeated_export_entry(entry)
         if row.status == "failed" or "severity" not in entry:
             entry.setdefault("severity", "ERROR")
         # Guard fields the engine requires but a stored payload may omit. The

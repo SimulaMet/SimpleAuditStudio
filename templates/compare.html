@@ -18,8 +18,8 @@
       {% for run in runs %}
       <label class="flex items-center gap-3 px-3 py-2 rounded-lg bg-surface-overlay/50 cursor-pointer hover:bg-surface-overlay">
         <input type="checkbox" name="runs[]" value="{{ run.id }}" class="accent-[#6c8cff]" {% if run.id in selected_ids %}checked{% endif %}>
-        <a href="/runs/{{ run.id }}/" onclick="event.preventDefault()" class="text-sm text-gray-200 hover:text-accent transition-colors">{{ run.name }} <span class="text-gray-500">(#{{ run.id }})</span></a>
-        <a href="/scenarios/?set={{ run.scenario_set_version.scenario_set_id }}" onclick="event.preventDefault()" class="text-xs text-gray-500 hover:text-accent transition-colors">{{ run.scenario_set_version.scenario_set.name|default:"—" }}</a>
+        <span class="text-sm text-gray-200">{{ run.name }} <span class="text-gray-500">(#{{ run.id }})</span></span>
+        <span class="text-xs text-gray-500">{{ run.scenario_set_version.scenario_set.name|default:"—" }}</span>
         <span class="text-xs text-gray-600 ml-auto">{{ run.created_at|date:"M j" }}</span>
       </label>
       {% endfor %}
@@ -102,7 +102,7 @@
         {% endfor %}
         <td class="px-3 py-2 text-xs text-gray-400">
           {% if row.fragility %}
-            <span title="Mode frequency across runs">{{ row.fragility.agreement|floatformat:0 }}% agree</span>
+            <span title="Mode frequency across runs">{% widthratio row.fragility.agreement 1 100 %}% agree</span>
             <span class="text-gray-600">·</span>
             <span title="Normalized Shannon entropy (0 = unanimous, 1 = maximally mixed)">H {{ row.fragility.entropy|floatformat:2 }}</span>
             <span class="text-gray-600">·</span>
@@ -160,7 +160,12 @@ function exportCompareCSV() {
   const table = document.getElementById('compare-results-table');
   if (!table) return;
   const rows = Array.from(table.querySelectorAll('tr')).map(tr =>
-    Array.from(tr.querySelectorAll('th, td')).map(cell => '"' + cell.textContent.trim().replace(/\s+/g, ' ').replace(/"/g, '""') + '"').join(',')
+    Array.from(tr.querySelectorAll('th, td')).map(cell => {
+      // Neutralise spreadsheet formulas (run names are user-written), as csv_safe does server-side.
+      let t = cell.textContent.trim().replace(/\s+/g, ' ');
+      if (/^[=+\-@\t\r]/.test(t)) t = "'" + t;
+      return '"' + t.replace(/"/g, '""') + '"';
+    }).join(',')
   );
   const csv = rows.join('\n');
   const blob = new Blob([csv], {type: 'text/csv;charset=utf-8'});

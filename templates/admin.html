@@ -113,7 +113,7 @@
               <a href="/admin-settings/?tab=workspaces&manage={{ ws.id }}" class="px-2 py-1 rounded-lg text-xs bg-surface-overlay border border-gray-700 text-gray-300 hover:border-accent/40">Members</a>
               <button type="button" onclick="adminToggleRename({{ ws.id }}, this)" class="px-2 py-1 rounded-lg text-xs bg-surface-overlay border border-gray-700 text-gray-300 hover:border-accent/40">Rename</button>
               <span data-rename-form="{{ ws.id }}" class="hidden items-center gap-1">
-                <input data-rename-input="{{ ws.id }}" type="text" value="{{ ws.name }}" class="px-2 py-1 rounded-lg text-xs bg-surface border border-gray-700 text-gray-200 focus:outline-none focus:border-accent/50 w-32">
+                <input data-rename-input="{{ ws.id }}" type="text" aria-label="Workspace name" value="{{ ws.name }}" class="px-2 py-1 rounded-lg text-xs bg-surface border border-gray-700 text-gray-200 focus:outline-none focus:border-accent/50 w-32">
                 <button type="button" onclick="adminRenameWorkspace({{ ws.id }}, this)" class="px-2 py-1 rounded-lg text-xs bg-accent/15 border border-accent/30 text-accent hover:bg-accent/25">Save</button>
                 <button type="button" onclick="adminToggleRename({{ ws.id }}, this)" class="px-2 py-1 rounded-lg text-xs bg-surface-overlay border border-gray-700 text-gray-400 hover:border-gray-500">Cancel</button>
               </span>
@@ -166,7 +166,7 @@
         <td class="px-3 py-2 text-gray-200">{{ m.user.username }}</td>
         <td class="px-3 py-2 text-gray-400 text-xs">{{ m.user.email }}</td>
         <td class="px-3 py-2">
-          <select data-member-role="{{ m.user_id }}" class="px-2 py-1 rounded-lg text-xs bg-surface border border-gray-700 text-gray-300 focus:outline-none focus:border-accent/50">
+          <select data-member-role="{{ m.user_id }}" aria-label="Role for {{ m.user.email }}" class="px-2 py-1 rounded-lg text-xs bg-surface border border-gray-700 text-gray-300 focus:outline-none focus:border-accent/50">
             <option value="viewer" {% if m.role == 'viewer' %}selected{% endif %}>Viewer</option>
             <option value="auditor" {% if m.role == 'auditor' %}selected{% endif %}>Auditor</option>
             <option value="admin" {% if m.role == 'admin' %}selected{% endif %}>Admin</option>
@@ -259,9 +259,9 @@
             <div class="flex justify-end gap-1.5 flex-wrap">
               <button type="button" onclick="adminToggleEdit({{ u.id }}, this)" class="px-2 py-1 rounded-lg text-xs bg-surface-overlay border border-gray-700 text-gray-300 hover:border-accent/40">Edit</button>
               <span data-edit-form="{{ u.id }}" class="hidden items-center gap-1">
-                <input data-edit-first="{{ u.id }}" type="text" placeholder="First" value="{{ u.first_name }}" class="px-2 py-1 rounded-lg text-xs bg-surface border border-gray-700 text-gray-200 focus:outline-none focus:border-accent/50 w-20">
-                <input data-edit-last="{{ u.id }}" type="text" placeholder="Last" value="{{ u.last_name }}" class="px-2 py-1 rounded-lg text-xs bg-surface border border-gray-700 text-gray-200 focus:outline-none focus:border-accent/50 w-20">
-                <input data-edit-email="{{ u.id }}" type="email" placeholder="Email" value="{{ u.email }}" class="px-2 py-1 rounded-lg text-xs bg-surface border border-gray-700 text-gray-200 focus:outline-none focus:border-accent/50 w-40">
+                <input data-edit-first="{{ u.id }}" type="text" aria-label="First name" placeholder="First" value="{{ u.first_name }}" class="px-2 py-1 rounded-lg text-xs bg-surface border border-gray-700 text-gray-200 focus:outline-none focus:border-accent/50 w-20">
+                <input data-edit-last="{{ u.id }}" type="text" aria-label="Last name" placeholder="Last" value="{{ u.last_name }}" class="px-2 py-1 rounded-lg text-xs bg-surface border border-gray-700 text-gray-200 focus:outline-none focus:border-accent/50 w-20">
+                <input data-edit-email="{{ u.id }}" type="email" aria-label="Email" placeholder="Email" value="{{ u.email }}" class="px-2 py-1 rounded-lg text-xs bg-surface border border-gray-700 text-gray-200 focus:outline-none focus:border-accent/50 w-40">
                 <button type="button" onclick="adminEditUser({{ u.id }}, this)" class="px-2 py-1 rounded-lg text-xs bg-accent/15 border border-accent/30 text-accent hover:bg-accent/25">Save</button>
                 <button type="button" onclick="adminToggleEdit({{ u.id }}, this)" class="px-2 py-1 rounded-lg text-xs bg-surface-overlay border border-gray-700 text-gray-400 hover:border-gray-500">Cancel</button>
               </span>

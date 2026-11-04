@@ -95,6 +95,13 @@ class SeedDemoAgentLocalTests(TestCase):
         self.assertEqual(Tool.objects.filter(project=self.project).count(), 1)
         self.assertEqual(Agent.objects.get(project=self.project).retrieval_settings["top_k"], 5)
 
+    def test_reseed_keeps_links_the_user_changed(self):
+        seed_demo_agent(self.project, self.user)
+        agent = Agent.objects.get(project=self.project)
+        agent.tools.clear()
+        seed_demo_agent(self.project, self.user)
+        self.assertEqual(agent.tools.count(), 0)
+
     def test_seeds_a_versioned_prompt_the_agent_uses(self):
         from prompts.models import SystemPrompt
 

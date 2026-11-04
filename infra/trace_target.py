@@ -40,23 +40,38 @@ def _saved_chat_content(message: dict[str, Any]) -> str:
     return content or ""
 
 
-# Cached OWUI JWT token (avoid re-authenticating on every turn).
-_owui_jwt_cache: dict[str, Any] = {"token": None, "expires": 0.0}
+# Cached OWUI JWT tokens per origin (avoid re-authenticating on every turn).
+_owui_jwt_cache: dict[str, tuple[str, float]] = {}
+
+
+def _is_studio_owui(base_url: str) -> bool:
+    """Whether ``base_url`` is Studio's own Open WebUI (exact origin match).
+
+    Only that server may receive the trusted-header admin JWT; a user-chosen
+    connection URL that merely contains ``/chat/api/v1`` must never get it.
+    """
+    from chat import config as chat_config
+    from model_registry.services import _same_origin
+
+    return bool(chat_config.ENABLED and base_url and _same_origin(base_url, chat_config.UPSTREAM))
 
 
 async def _owui_get_jwt(base_url: str) -> str | None:
     """Obtain a JWT from OWUI's trusted-header signin endpoint."""
     import time
 
-    now = time.monotonic()
-    if _owui_jwt_cache["token"] and _owui_jwt_cache["expires"] > now:
-        return _owui_jwt_cache["token"]
-
-    import httpx
-
+    if not _is_studio_owui(base_url):
+        return None
     # The base_url is like http://127.0.0.1:8080/api/v1 or
     # http://127.0.0.1:8080/chat/api/v1 — we need the origin for /api/v1/auths/signin
     origin = base_url.rsplit("/api/v1", 1)[0].rstrip("/")
+    now = time.monotonic()
+    cached = _owui_jwt_cache.get(origin)
+    if cached and cached[1] > now:
+        return cached[0]
+
+    import httpx
+
     url = f"{origin}/api/v1/auths/signin"
     headers = {
         "Content-Type": "application/json",
@@ -71,9 +86,8 @@ async def _owui_get_jwt(base_url: str) -> str | None:
             data = resp.json()
             token = data.get("token")
             if token:
-                _owui_jwt_cache["token"] = token
                 # OWUI default JWT expiry is 4 weeks; cache for 1 hour to be safe.
-                _owui_jwt_cache["expires"] = now + 3600.0
+                _owui_jwt_cache[origin] = (token, now + 3600.0)
             return token
     except Exception:
         logging.getLogger(__name__).warning("Failed to obtain OWUI JWT from %s", url, exc_info=True)
@@ -220,7 +234,7 @@ async def _openwebui_saved_chat_call(
     raw_client = getattr(client, "client", None)
     base_url = str(getattr(raw_client, "base_url", ""))
     extra_body = kwargs.get("extra_body") or {}
-    if raw_client is None or "/chat/api/v1" not in base_url:
+    if raw_client is None or "/chat/api/v1" not in base_url or not _is_studio_owui(base_url):
         return None
 
     import asyncio
@@ -609,7 +623,7 @@ class TraceContextModelTarget(ModelTarget):
         # through OWUI (the only path that exports OTLP spans).
         raw_client = getattr(self._client, "client", None)
         base_url = str(getattr(raw_client, "base_url", "") or "")
-        if "/chat/api/v1" in base_url:
+        if "/chat/api/v1" in base_url and _is_studio_owui(base_url):
             jwt = await _owui_get_jwt(base_url)
             if jwt:
                 raw_client.api_key = jwt

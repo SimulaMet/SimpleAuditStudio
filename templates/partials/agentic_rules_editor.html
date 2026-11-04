@@ -95,6 +95,9 @@
     try { rules = JSON.parse(store.value || '[]'); } catch (_) { rules = []; }
     if (!Array.isArray(rules)) rules = [];
 
+    // Rule values come from saved (possibly imported) scenario JSON: escape
+    // everything interpolated into innerHTML.
+    const esc = (v) => String(v ?? '').replace(/[&<>"']/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]));
     const option = (value, label) => {
       const el = document.createElement('option');
       el.value = value;
@@ -117,11 +120,11 @@
     }
 
     function renderCustom(card, fields, rule, index) {
-      const select = (value, options) => `<select class="w-full px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs text-gray-200">${options.map(([v, l]) => `<option value="${v}" ${v === value ? 'selected' : ''}>${l}</option>`).join('')}</select>`;
+      const select = (value, options) => `<select class="w-full px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs text-gray-200">${options.map(([v, l]) => `<option value="${esc(v)}" ${v === value ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select>`;
       const kindOptions = Object.entries(KIND_LABELS).map(([v, l]) => [v, l]);
       const checkOptions = Object.entries(CHECK_LABELS).map(([v, l]) => [v, l]);
       const expectOptions = Object.entries(EXPECT_LABELS).map(([v, l]) => [v, l]);
-      const datalist = `<datalist id="fields-${Math.random().toString(36).slice(2)}">${CATALOG.map(f => `<option value="${f.name}">`).join('')}</datalist>`;
+      const datalist = `<datalist id="fields-${Math.random().toString(36).slice(2)}">${CATALOG.map(f => `<option value="${esc(f.name)}">`).join('')}</datalist>`;
       fields.innerHTML = `
         <label class="block text-[11px] text-gray-400">Look at<span data-k>${select(rule.select.kind, kindOptions)}</span></label>
         <label class="block text-[11px] text-gray-400">Check<span data-c>${select(rule.check, checkOptions)}</span></label>
@@ -129,18 +132,18 @@
         <button type="button" data-add-cond class="justify-self-start text-[11px] text-gray-400 hover:text-gray-200 underline">+ Add condition</button>
         <div class="grid grid-cols-2 gap-2 md:col-span-2" data-expect>
           <label class="block text-[11px] text-gray-400">Expect<span data-eo>${select(rule.expect?.op || 'at_least', expectOptions)}</span></label>
-          <label class="block text-[11px] text-gray-400">Value<input data-ev class="w-full px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs text-gray-200" value="${Array.isArray(rule.expect?.value) ? rule.expect.value.join(',') : (rule.expect?.value ?? '')}" placeholder="a number, or two numbers for between"></label>
+          <label class="block text-[11px] text-gray-400">Value<input data-ev class="w-full px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs text-gray-200" value="${esc(Array.isArray(rule.expect?.value) ? rule.expect.value.join(',') : (rule.expect?.value ?? ''))}" placeholder="a number, or two numbers for between"></label>
         </div>
-        <label class="block text-[11px] text-gray-400 md:col-span-2" data-field-wrap>Field to count (distinct only)<input data-fd class="w-full px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs text-gray-200" list="${datalist.match(/id="([^"]+)"/)[1]}" value="${rule.field || ''}">${datalist}</label>`;
+        <label class="block text-[11px] text-gray-400 md:col-span-2" data-field-wrap>Field to count (distinct only)<input data-fd class="w-full px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs text-gray-200" list="${datalist.match(/id="([^"]+)"/)[1]}" value="${esc(rule.field || '')}">${datalist}</label>`;
       const where = fields.querySelector('[data-where]');
       const drawWhere = () => {
         where.innerHTML = '';
         (rule.select.where || []).forEach((cond, i) => {
           const row = document.createElement('div');
-          row.className = 'grid grid-cols-[1fr_auto_1fr_auto] gap-1 items-center';
-          row.innerHTML = `<input data-cf list="${fields.querySelector('datalist')?.id || ''}" value="${cond.field || ''}" placeholder="field, e.g. tool.name" class="px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs text-gray-200">
-            <select data-co class="px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs text-gray-200">${opsFor(cond.field || '').map(o => `<option value="${o}" ${o === cond.op ? 'selected' : ''}>${OP_LABELS[o]}</option>`).join('')}</select>
-            <input data-cv value="${cond.value ?? ''}" placeholder="value" class="px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs text-gray-200">
+          row.className = 'grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)_auto] gap-1 items-center';
+          row.innerHTML = `<input data-cf aria-label="Condition field" list="${fields.querySelector('datalist')?.id || ''}" value="${esc(cond.field || '')}" placeholder="field, e.g. tool.name" class="min-w-0 w-full px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs text-gray-200">
+            <select data-co aria-label="Condition operator" class="min-w-0 px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs text-gray-200">${opsFor(cond.field || '').map(o => `<option value="${esc(o)}" ${o === cond.op ? 'selected' : ''}>${esc(OP_LABELS[o])}</option>`).join('')}</select>
+            <input data-cv aria-label="Condition value" value="${esc(Array.isArray(cond.value) ? cond.value.join(',') : (cond.value ?? ''))}" placeholder="value" class="min-w-0 w-full px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs text-gray-200">
             <button type="button" data-cremove class="text-[11px] text-gray-500 hover:text-red-300">Remove</button>`;
           row.querySelector('[data-cremove]').addEventListener('click', () => { rule.select.where.splice(i, 1); drawWhere(); commitCustom(); });
           where.appendChild(row);

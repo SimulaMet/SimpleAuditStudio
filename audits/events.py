@@ -199,6 +199,11 @@ def upsert_scenario_result(
         except IntegrityError:
             existing = ScenarioResult.objects.select_for_update().get(run_id=run_id, version_item_id=version_item_id)
     existing.attempts = max(existing.attempts, attempts)
+    if existing.status == "completed" and status != "completed":
+        # A duplicate execution (retry, sweeper resubmission) that failed must
+        # never replace a success another copy already stored.
+        existing.save(update_fields=["attempts", "updated_at"])
+        return
     existing.status = status
     if result is not None:
         existing.result = result

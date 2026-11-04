@@ -100,7 +100,7 @@ def _hatchet_probe() -> dict[str, Any]:
 
         grpc_address = json.loads(handshake_raw).get("grpc_address", "")
         host, _, port = grpc_address.rpartition(":")
-        if not host or not port.isdigit():
+        if not host or not port.isdecimal():
             return {"status": "unknown", "detail": "embedded handshake has no gRPC address"}
         with socket.create_connection((host, int(port)), timeout=3):
             pass
@@ -220,8 +220,12 @@ def _engine_probe() -> dict[str, Any]:
     }
 
 
-def _model_endpoints_probe() -> dict[str, Any]:
-    """Ping each registered model endpoint's base_url, grouped by connection."""
+def _model_endpoints_probe(user=None) -> dict[str, Any]:
+    """Ping each registered model endpoint's base_url, grouped by connection.
+
+    ``user`` limits the probe to connections of workspaces the user administers
+    (superusers and callers without a user see every connection).
+    """
     from django.db.models import Prefetch
 
     from model_registry.models import ModelConnection, RegisteredModel
@@ -232,6 +236,10 @@ def _model_endpoints_probe() -> dict[str, Any]:
         "models", queryset=RegisteredModel.objects.filter(enabled=True).order_by("display_name"), to_attr="enabled_models"
     )
     conns = ModelConnection.objects.filter(enabled=True).prefetch_related(enabled_models).order_by("id")
+    if user is not None and not user.is_superuser:
+        from accounts.models import ProjectMembership
+
+        conns = conns.filter(project__memberships__user=user, project__memberships__role=ProjectMembership.Role.ADMIN)
     for conn in conns:
         base = (conn.base_url or "").strip()
         if not base:
@@ -403,7 +411,7 @@ def _queue_throughput_probe() -> dict[str, Any]:
 
 # ─── Aggregate ───────────────────────────────────────────────────────────────
 
-def collect_health() -> dict[str, Any]:
+def collect_health(user=None) -> dict[str, Any]:
     """Collect the full health snapshot for the panel.
 
     Returns a dict with two top-level sections:
@@ -419,7 +427,7 @@ def collect_health() -> dict[str, Any]:
         "hatchet": _probe(_hatchet_probe),
         "worker": _probe(_worker_probe),
         "engine": _probe(_engine_probe),
-        "model_endpoints": _probe(_model_endpoints_probe),
+        "model_endpoints": _probe(lambda: _model_endpoints_probe(user)),
     }
     resources = {
         "memory": _probe(_memory_probe),

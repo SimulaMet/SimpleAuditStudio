@@ -244,18 +244,21 @@
           ['Gated', m.gated ? 'Yes' : 'No'],
         ];
         const tagChips = (m.tags || []).slice(0, 8).map(t =>
-          `<span class="inline-block px-1.5 py-0.5 rounded bg-surface-raised text-xs text-gray-400 mr-1 mb-1">${t}</span>`
+          `<span class="inline-block px-1.5 py-0.5 rounded bg-surface-raised text-xs text-gray-400 mr-1 mb-1">${esc(t)}</span>`
         ).join('');
         detailContent.innerHTML = `
-          <p class="font-mono text-accent text-sm break-all">${m.id}</p>
+          <p class="font-mono text-accent text-sm break-all">${esc(m.id)}</p>
           <dl class="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-sm">
-            ${rows.map(([k, v]) => `<dt class="text-gray-500">${k}</dt><dd class="text-gray-200">${v}</dd>`).join('')}
+            ${rows.map(([k, v]) => `<dt class="text-gray-500">${esc(k)}</dt><dd class="text-gray-200">${esc(v)}</dd>`).join('')}
           </dl>
           ${tagChips ? `<div class="mt-2">${tagChips}</div>` : ''}`;
       } catch (err) {
         detailContent.innerHTML = '<p class="text-xs text-red-400">Could not load model details.</p>';
       }
     }
+
+    // Hugging Face model metadata is third-party content: escape it.
+    const esc = (v) => String(v ?? '').replace(/[&<>"']/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]));
 
     function renderResults(models) {
       if (!models.length) {
@@ -264,13 +267,13 @@
       }
       resultsDiv.innerHTML = models.map(m => `
         <div class="model-row flex items-center gap-2 px-3 py-2 hover:bg-surface-raised transition-colors">
-          <button type="button" data-select="${m.id}" class="model-select flex-1 text-left min-w-0">
+          <button type="button" data-select="${esc(m.id)}" class="model-select flex-1 text-left min-w-0">
             <div class="flex items-center justify-between gap-2">
-              <span class="text-sm text-gray-100 font-mono truncate hover:text-accent">${m.id}</span>
-              <span class="text-xs text-gray-500 whitespace-nowrap">${(m.downloads / 1e6).toFixed(1)}M dl · ${m.likes} ★</span>
+              <span class="text-sm text-gray-100 font-mono truncate hover:text-accent">${esc(m.id)}</span>
+              <span class="text-xs text-gray-500 whitespace-nowrap">${(m.downloads / 1e6).toFixed(1)}M dl · ${esc(m.likes)} ★</span>
             </div>
           </button>
-          <button type="button" data-info="${m.id}" class="btn btn-xs btn-ghost text-gray-500 hover:text-accent shrink-0" title="View details">ℹ</button>
+          <button type="button" data-info="${esc(m.id)}" class="btn btn-xs btn-ghost text-gray-500 hover:text-accent shrink-0" title="View details">ℹ</button>
         </div>`).join('');
       resultsDiv.querySelectorAll('[data-select]').forEach(btn => {
         btn.addEventListener('click', () => {
