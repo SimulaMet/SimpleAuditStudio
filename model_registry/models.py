@@ -419,7 +419,6 @@ class KnowledgeBase(models.Model):
     class Meta:
         db_table = "core_knowledge_base"
         constraints = [
-            models.UniqueConstraint(fields=["project", "name"], name="unique_knowledge_base_name_per_project"),
             models.UniqueConstraint(
                 fields=["project", "external_id"],
                 condition=~models.Q(external_id=""),
@@ -467,9 +466,6 @@ class Tool(models.Model):
 
     class Meta:
         db_table = "core_tool"
-        constraints = [
-            models.UniqueConstraint(fields=["project", "name"], name="unique_tool_name_per_project"),
-        ]
         ordering = ["project__name", "name"]
 
     def __str__(self) -> str:

@@ -814,6 +814,15 @@ def _scenario_execute_impl(workflow_input: ScenarioInput, ctx: Context) -> dict:
                         evaluation["status"] = new_verdict["status"]
                         evaluation["reason"] = new_verdict["reason"]
                         evaluation["verdict"] = new_verdict
+                # A target call that failed exports no spans; say why instead of
+                # blaming the target's tracing.
+                completeness = evaluation.get("trace_completeness")
+                if (str(target.get("severity", "")).upper() == "ERROR" and isinstance(completeness, dict)
+                        and not completeness.get("complete")):
+                    reason = f"The target call failed, so no trace was produced: {result_error_text(target)[:300]}"
+                    completeness["missing_reason"] = reason
+                    if isinstance(evaluation.get("verdict"), dict):
+                        evaluation["verdict"]["reason"] = reason
                 target["agentic_evaluation"] = evaluation
         except Exception as exc:  # noqa: BLE001 - optional analysis cannot break persistence
             result_payload["agentic_evaluation"] = {

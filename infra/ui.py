@@ -4267,6 +4267,12 @@ def _duplicate_inference_flags(spans: list[dict]) -> dict[int, str]:
     return flags
 
 
+def _is_workflow_wrapper(span: dict) -> bool:
+    """Whether ``span`` is a GenAI ``invoke_workflow`` turn wrapper."""
+    attrs = span.get("attributes") if isinstance(span.get("attributes"), dict) else {}
+    return str(attrs.get("gen_ai.operation.name") or "").lower() == "invoke_workflow"
+
+
 def _agentic_timeline_view(rep: dict) -> dict | None:
     """Chronological full-width trajectory timeline for one rep's spans.
 
@@ -4277,7 +4283,9 @@ def _agentic_timeline_view(rep: dict) -> dict | None:
     Rows are never reconstructed from the conversation.
     """
     raw_spans = ((rep.get("judgment") or {}).get("evidence_spans") or []) if isinstance(rep.get("judgment"), dict) else []
-    raw_spans = [s for s in raw_spans if isinstance(s, dict)]
+    # ``invoke_workflow`` is the chat server's wrapper around one user turn; its
+    # input/output repeat the conversation shown above, so it is not a step.
+    raw_spans = [s for s in raw_spans if isinstance(s, dict) and not _is_workflow_wrapper(s)]
     if not raw_spans:
         # No captured spans: no trajectory to show.
         return None
@@ -4332,7 +4340,10 @@ def _agentic_timeline_view(rep: dict) -> dict | None:
     anchor_for: dict[str, str] = {}
     for row in rows:
         anchor_for.setdefault(row["span_id"], row["anchor"])
-    all_spans = (rep.get("trace_evidence") or {}).get("all_spans") or []
+    all_spans = [
+        s for s in (rep.get("trace_evidence") or {}).get("all_spans") or []
+        if isinstance(s, dict) and not _is_workflow_wrapper(s)
+    ]
     return {
         "rows": rows,
         "total": len(rows),
@@ -4971,112 +4982,137 @@ def _sync_agent_form_result(request, agent):
         )
 
 
-def _sync_openwebui_resources(project, user):
-    """Pull knowledge bases and tools from OpenWebUI into local models.
+def _openwebui_resource_missing(fetch, external_id: str) -> bool:
+    """True only when Open WebUI answers 404 for ``external_id``.
 
-    Returns (kb_count, tool_count) or (None, None) if chat is disabled.
+    A resource the user may not read answers 401/403, so an ACL-hidden KB or
+    tool is never mistaken for a deleted one.
+    """
+    from chat.api import ChatAPIError
+
+    try:
+        fetch(external_id)
+    except ChatAPIError as exc:
+        return "(404)" in str(exc)
+    return False
+
+
+def _duplicate_names(rows) -> set[str]:
+    """Names held by more than one row, so the picker can tell them apart."""
+    from collections import Counter
+
+    counts = Counter(row.name for row in rows)
+    return {name for name, n in counts.items() if n > 1}
+
+
+def _sync_openwebui_resources(project, user, *, prune: bool = False) -> dict | None:
+    """Mirror Open WebUI knowledge bases and tools into this workspace.
+
+    Identity is Open WebUI's id; names may repeat. Each remote resource updates
+    the row with its id, else claims a never-linked seeded row of the same name
+    (empty id), else becomes a new row. A row whose id Open WebUI
+    answers 404 for is *lost*: it is reported, and with ``prune`` it is removed,
+    which unlinks it from every agent (those agents are re-synced to Open
+    WebUI). ACL-hidden rows (401/403) are left alone.
+
+    Returns ``None`` when chat is disabled, else a summary dict.
     """
     from chat import config as chat_config
 
     if not chat_config.ENABLED:
-        return None, None
+        return None
 
     from chat.api import ChatAPI, ChatAPIError
     from model_registry.models import KnowledgeBase, Tool
+    from model_registry.services import sync_agent_to_openwebui
 
     try:
         api = ChatAPI.as_user(user)
     except Exception:
         logger.exception("Chat API setup failed for user %s", user)
-        return None, None
+        return None
 
-    kb_count = 0
-    try:
-        remote_kbs = api.knowledge_bases()
-        for item in remote_kbs:
-            external_id = item.get("id", "")
+    summary: dict = {"knowledge_bases": 0, "tools": 0, "added": [], "lost": [], "removed": []}
+
+    def mirror(model, kind: str, remote: list[dict], fields_for, fetch) -> None:
+        remote_ids = set()
+        for item in remote:
+            external_id = item.get("id") or ""
             if not external_id:
                 continue
-            name = item.get("name") or external_id
-            description = item.get("description") or ""
-            # Two-step upsert: external_id is OWUI's stable identity; name is
-            # the local identity used by the seed before external_id is known.
-            # 1) match on external_id (handles renames in OWUI),
-            # 2) match on name (handles seeded rows with external_id=""),
-            # 3) create.
-            existing = KnowledgeBase.objects.filter(
-                project=project, external_id=external_id
-            ).first()
-            if existing is None:
-                # Only rows not yet linked: re-pointing a linked row would aim
-                # its later remote delete (run as its creator) at another KB.
-                existing = KnowledgeBase.objects.filter(
-                    project=project, name=name, external_id=""
-                ).first()
-                if existing is not None:
-                    existing.created_by = user   # the user who linked it acts for it
-            if existing is not None:
-                # Keep the local name when another row already holds the remote one.
-                if not KnowledgeBase.objects.filter(project=project, name=name).exclude(pk=existing.pk).exists():
-                    existing.name = name
-                existing.external_id = external_id
-                existing.description = description
-                existing.save(update_fields=["name", "external_id", "description", "created_by", "updated_at"])
-            elif KnowledgeBase.objects.filter(project=project, name=name).exists():
-                continue   # a different remote KB already holds this name here
+            remote_ids.add(external_id)
+            fields = fields_for(item)
+            row = model.objects.filter(project=project, external_id=external_id).first()
+            if row is None:
+                # A seeded row that was never linked (empty id) has no identity
+                # yet; claim it so the chat-ready backfill cannot later collide.
+                row = model.objects.filter(project=project, name=fields["name"], external_id="").order_by("pk").first()
+                if row is not None:
+                    row.external_id = external_id
+                    row.created_by = user
+            if row is None:
+                model.objects.create(project=project, external_id=external_id, created_by=user, **fields)
+                summary["added"].append({"kind": kind, "name": fields["name"]})
             else:
-                KnowledgeBase.objects.create(
-                    project=project, name=name,
-                    external_id=external_id, description=description, created_by=user,
-                )
-            kb_count += 1
-    except ChatAPIError:
-        pass
+                for key, value in fields.items():
+                    setattr(row, key, value)
+                row.save()
+            summary[f"{kind}s"] += 1
+        stale = (
+            model.objects.filter(project=project)
+            .exclude(external_id="")
+            .exclude(external_id__in=remote_ids)
+            .prefetch_related("agents")
+        )
+        for row in stale:
+            if not _openwebui_resource_missing(fetch, row.external_id):
+                continue
+            entry = {
+                "kind": kind, "id": row.pk, "name": row.name,
+                "agents": [a.name for a in row.agents.all()],
+            }
+            summary["lost"].append(entry)
+            if prune:
+                agents = list(row.agents.all())
+                row.delete()
+                summary["removed"].append(entry)
+                for agent in agents:
+                    if agent.external_id:
+                        try:
+                            sync_agent_to_openwebui(agent, user)
+                        except ChatAPIError:
+                            logger.warning("Could not re-sync agent %s after removing %s", agent.pk, entry["name"])
 
-    tool_count = 0
+    def kb_fields(item: dict) -> dict:
+        return {
+            "name": item.get("name") or item.get("id"),
+            "description": item.get("description") or "",
+        }
+
+    def tool_fields(item: dict) -> dict:
+        meta = item.get("meta") if isinstance(item.get("meta"), dict) else {}
+        manifest = meta.get("manifest") if isinstance(meta.get("manifest"), dict) else {}
+        return {
+            "name": item.get("name") or item.get("id"),
+            # List items carry no top-level description; the toolkit
+            # description lives in the frontmatter manifest.
+            "description": manifest.get("description") or meta.get("description") or "",
+            # Toolkit tools are custom Python; builtins have no row.
+            "type": "custom",
+        }
+
+    try:
+        mirror(KnowledgeBase, "knowledge_base", api.knowledge_bases(), kb_fields, api.knowledge_base)
+    except ChatAPIError:
+        logger.warning("Could not sync Open WebUI knowledge bases for %s", user, exc_info=True)
     try:
         # Tools (the /agents/tools/ page) are Open WebUI toolkit entries,
         # served by /api/v1/tools — /api/v1/functions is for pipes/filters.
-        items = api.tools()
-        for item in items:
-            if not isinstance(item, dict):
-                continue
-            name = item.get("name", "")
-            if not name:
-                continue
-            meta = item.get("meta") if isinstance(item.get("meta"), dict) else {}
-            manifest = meta.get("manifest") if isinstance(meta.get("manifest"), dict) else {}
-            external_id = item.get("id", "")
-            fields = {
-                # List items carry no top-level description; the toolkit
-                # description lives in the frontmatter manifest.
-                "description": manifest.get("description") or meta.get("description") or "",
-                # Toolkit tools are custom Python; builtins have no row.
-                "type": "custom",
-            }
-            # Same identity rule as knowledge bases: external_id first, then an
-            # unlinked row by name (linked by this user), else a new row.
-            tool = Tool.objects.filter(project=project, external_id=external_id).first() if external_id else None
-            if tool is None:
-                tool = Tool.objects.filter(project=project, name=name, external_id="").first()
-                if tool is not None:
-                    tool.created_by = user
-            if tool is None:
-                if Tool.objects.filter(project=project, name=name).exists():
-                    continue   # a different remote tool already holds this name here
-                Tool.objects.create(project=project, name=name, external_id=external_id, created_by=user, **fields)
-            else:
-                if not Tool.objects.filter(project=project, name=name).exclude(pk=tool.pk).exists():
-                    tool.name = name
-                tool.external_id = external_id
-                for key, value in fields.items():
-                    setattr(tool, key, value)
-                tool.save()
-            tool_count += 1
+        tools = [t for t in api.tools() if isinstance(t, dict)]
+        mirror(Tool, "tool", tools, tool_fields, api.get_tool)
     except ChatAPIError:
-        pass
-
-    return kb_count, tool_count
+        logger.warning("Could not sync Open WebUI tools for %s", user, exc_info=True)
+    return summary
 
 
 def _visible_openwebui_resource_ids(user):
@@ -5124,14 +5160,10 @@ class AgentSyncView(ProjectMixin, View):
         reason = write_block_reason(request)
         if reason:
             return JsonResponse({"error": reason}, status=403)
-        kb_count, tool_count = _sync_openwebui_resources(request.project, request.user)
-        if kb_count is None:
+        summary = _sync_openwebui_resources(request.project, request.user, prune=True)
+        if summary is None:
             return JsonResponse({"error": "Chat is not enabled."}, status=400)
-        return JsonResponse({
-            "ok": True,
-            "knowledge_bases": kb_count,
-            "tools": tool_count,
-        })
+        return JsonResponse({"ok": True, **summary})
 
 
 class AgentDetailView(ProjectMixin, TemplateView):
@@ -5162,8 +5194,12 @@ class AgentDetailView(ProjectMixin, TemplateView):
                 "base_model", "base_model__connection"
             ).prefetch_related("knowledge_bases", "tools").first()
 
-        # Auto-sync from OpenWebUI so the picker lists are always fresh.
-        _sync_openwebui_resources(project, self.request.user)
+        # Auto-sync from OpenWebUI so the picker lists are always fresh. Page
+        # loads only report lost resources; the Sync button removes them.
+        sync_summary = _sync_openwebui_resources(project, self.request.user) or {}
+        lost = sync_summary.get("lost", [])
+        ctx["lost_kb_ids"] = {e["id"] for e in lost if e["kind"] == "knowledge_base"}
+        ctx["lost_tool_ids"] = {e["id"] for e in lost if e["kind"] == "tool"}
 
         # The local rows are metadata references, not an authorization source.
         # Filter Open WebUI-backed rows using the current user's actual list
@@ -5179,14 +5215,18 @@ class AgentDetailView(ProjectMixin, TemplateView):
             project=project, enabled=True
         )
         ctx["tools"] = Tool.objects.filter(project=project, enabled=True)
+        # Lost rows (deleted in Open WebUI) stay listed, flagged, so a dead
+        # link is never hidden; ACL-hidden rows are filtered out.
         if visible_kb_ids is not None:
             ctx["knowledge_bases"] = ctx["knowledge_bases"].filter(
-                Q(external_id="") | Q(external_id__in=visible_kb_ids)
+                Q(external_id="") | Q(external_id__in=visible_kb_ids) | Q(pk__in=ctx["lost_kb_ids"])
             )
         if visible_tool_ids is not None:
             ctx["tools"] = ctx["tools"].filter(
-                Q(external_id="") | Q(external_id__in=visible_tool_ids)
+                Q(external_id="") | Q(external_id__in=visible_tool_ids) | Q(pk__in=ctx["lost_tool_ids"])
             )
+        ctx["duplicate_kb_names"] = _duplicate_names(ctx["knowledge_bases"])
+        ctx["duplicate_tool_names"] = _duplicate_names(ctx["tools"])
         # Gate the "+ New" deep links: without the chat proxy there is no
         # embedded workspace to create in.
         ctx["chat_enabled"] = chat_enabled()

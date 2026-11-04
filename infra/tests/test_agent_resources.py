@@ -99,7 +99,9 @@ class AgentResourcesViewTest(TestCase):
         with a still-empty external_id. When the ⟳ Sync then lists the same KB
         from OWUI, it must UPDATE that row (filling external_id), not CREATE a
         second one whose name already exists — that raised
-        ``UNIQUE constraint failed: project_id, name`` (a 500 on /agents/sync/)."""
+        ``UNIQUE constraint failed: project_id, name`` (a 500 on /agents/sync/).
+        Names may now repeat, but a never-linked row must still not be
+        duplicated: the backfill would later collide on its external_id."""
         from infra.ui import _sync_openwebui_resources
 
         user = _member(self.project)
@@ -114,9 +116,9 @@ class AgentResourcesViewTest(TestCase):
         api.tools.return_value = []
 
         with mock.patch("chat.api.ChatAPI.as_user", return_value=api):
-            kb_count, tool_count = _sync_openwebui_resources(self.project, user)
+            summary = _sync_openwebui_resources(self.project, user)
 
-        self.assertEqual((kb_count, tool_count), (1, 0))
+        self.assertEqual((summary["knowledge_bases"], summary["tools"]), (1, 0))
         # Same row updated, not duplicated.
         self.assertEqual(KnowledgeBase.objects.count(), 1)
         self.assertEqual(KnowledgeBase.objects.get(pk=seeded.pk).external_id, "owui-kb-1")
@@ -160,14 +162,83 @@ class AgentResourcesViewTest(TestCase):
         api.tools.return_value = []
 
         with mock.patch("chat.api.ChatAPI.as_user", return_value=api):
-            kb_count, tool_count = _sync_openwebui_resources(self.project, user)
+            summary = _sync_openwebui_resources(self.project, user)
 
-        self.assertEqual((kb_count, tool_count), (1, 0))
+        self.assertEqual((summary["knowledge_bases"], summary["tools"]), (1, 0))
         # Same row renamed, not duplicated.
         self.assertEqual(KnowledgeBase.objects.count(), 1)
         kb = KnowledgeBase.objects.get(pk=seeded.pk)
         self.assertEqual(kb.name, "New Name")
         self.assertEqual(kb.external_id, "owui-kb-1")
+
+    def test_sync_imports_same_named_resource_as_its_own_row(self):
+        """Identity is Open WebUI's id: a remote KB/tool sharing a linked row's
+        name becomes a second row; the linked row keeps its id."""
+        from infra.ui import _sync_openwebui_resources
+
+        user = _member(self.project)
+        kb = KnowledgeBase.objects.create(project=self.project, name="Policy", external_id="kb-a")
+        api = mock.Mock()
+        api.knowledge_bases.return_value = [
+            {"id": "kb-a", "name": "Policy", "description": ""},
+            {"id": "kb-b", "name": "Policy", "description": ""},
+        ]
+        api.tools.return_value = []
+        with mock.patch("chat.api.ChatAPI.as_user", return_value=api):
+            summary = _sync_openwebui_resources(self.project, user)
+
+        self.assertEqual(
+            sorted(KnowledgeBase.objects.filter(name="Policy").values_list("external_id", flat=True)),
+            ["kb-a", "kb-b"],
+        )
+        kb.refresh_from_db()
+        self.assertEqual(kb.external_id, "kb-a")
+        self.assertEqual(summary["added"], [{"kind": "knowledge_base", "name": "Policy"}])
+
+    def _lost_setup(self):
+        from chat.api import ChatAPIError
+        from infra.tests.factories import AgentFactory
+
+        user = _member(self.project)
+        lost_kb = KnowledgeBase.objects.create(project=self.project, name="Policy", external_id="kb-gone")
+        hidden_tool = Tool.objects.create(project=self.project, name="Lookup", external_id="tool-hidden")
+        agent = AgentFactory(project=self.project, external_id="studio.agent-x")
+        agent.knowledge_bases.add(lost_kb)
+        api = mock.Mock()
+        api.knowledge_bases.return_value = [{"id": "kb-new", "name": "Policy", "description": ""}]
+        api.tools.return_value = []
+        api.knowledge_base.side_effect = ChatAPIError("GET /api/v1/knowledge/kb-gone failed (404): {}")
+        api.get_tool.side_effect = ChatAPIError("GET /api/v1/tools/id/tool-hidden failed (403): {}")
+        return user, lost_kb, hidden_tool, agent, api
+
+    def test_page_load_reports_lost_resource_without_removing_it(self):
+        user, lost_kb, hidden_tool, _agent, api = self._lost_setup()
+        self._login(user)
+        with mock.patch("chat.api.ChatAPI.as_user", return_value=api):
+            response = self.client.get("/agents/new/")
+
+        self.assertTrue(KnowledgeBase.objects.filter(pk=lost_kb.pk).exists())
+        self.assertIn(lost_kb, response.context["knowledge_bases"])   # flagged, not hidden
+        self.assertEqual(response.context["lost_kb_ids"], {lost_kb.pk})
+        self.assertContains(response, "deleted in Open WebUI")
+        self.assertNotIn(hidden_tool, response.context["tools"])        # ACL-hidden stays hidden
+
+    def test_sync_button_removes_lost_resource_and_reports_it(self):
+        user, lost_kb, hidden_tool, agent, api = self._lost_setup()
+        self._login(user)
+        with mock.patch("chat.api.ChatAPI.as_user", return_value=api), \
+                mock.patch("model_registry.services.sync_agent_to_openwebui") as resync:
+            response = self.client.post("/agents/sync/")
+
+        data = response.json()
+        self.assertEqual(list(agent.knowledge_bases.all()), [])
+        resync.assert_called_once_with(agent, user)
+        self.assertEqual(data["removed"][0]["agents"], [agent.name])
+        self.assertFalse(KnowledgeBase.objects.filter(pk=lost_kb.pk).exists())
+        self.assertTrue(Tool.objects.filter(pk=hidden_tool.pk).exists())   # 403 is not "gone"
+        self.assertEqual([e["name"] for e in data["removed"]], ["Policy"])
+        self.assertEqual(data["added"], [{"kind": "knowledge_base", "name": "Policy"}])
+        self.assertTrue(KnowledgeBase.objects.filter(external_id="kb-new").exists())
 
     def test_agent_picker_uses_openwebui_resource_visibility(self):
         """Private OWUI resources do not leak through Studio's local rows."""
