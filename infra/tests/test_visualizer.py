@@ -216,6 +216,9 @@ class RunExportHtmlTests(_VisualizerBase):
         })
         html = self.client.get(f"/runs/{self.run.id}/export-html/").content.decode()
         self.assertIn("UNIQUE-TURN-TEXT", html)
+        item = self.run.scenario_set_version.items.select_related("scenario").first()
+        if item is not None:   # rows are labelled with titles, not engine keys
+            self.assertIn(json.dumps(item.scenario.title)[1:-1], html)
         self.assertIn('"conversation"', html)
 
     def test_export_html_404_for_other_project(self):

@@ -773,8 +773,18 @@ class RunExportHtmlView(ProjectMixin, View):
         # conversation, issues and summary (repeated runs: the modal rep), which
         # is what the offline viewer renders.
         from audits.services import build_simpleaudit_export
+        from scenarios.models import ScenarioSetVersionItem
 
         data = build_simpleaudit_export(run)
+        # The engine names a scenario by its key; people read its title.
+        titles = {
+            vi.scenario.key: vi.scenario.title
+            for vi in ScenarioSetVersionItem.objects.filter(version=run.scenario_set_version).select_related("scenario")
+        }
+        for entry in data.get("results") or []:
+            name = entry.get("scenario_name")
+            if name in titles:
+                entry["scenario_name"] = titles[name]
         name = f"{run.name} (run {run.id})"
         try:
             html = build_standalone_html(data, name)

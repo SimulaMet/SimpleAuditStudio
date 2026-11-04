@@ -206,3 +206,31 @@ class RepeatedResultErrorTextTest(TestCase):
         self.assertTrue(_is_permanent_error(text))
         self.assertEqual(result_error_text({"judgment": {"error": "boom"}}), "boom")
         self.assertEqual(result_error_text(None), "")
+
+
+class RepeatedRunExportSummaryTest(TestCase):
+    def test_json_export_carries_modal_rep_summary(self):
+        import json
+
+        from infra.tests.factories import (
+            AuditRunFactory,
+            ProjectFactory,
+            ScenarioResultFactory,
+        )
+
+        user = User.objects.create_user(username="rs", password="pass12345")
+        project = ProjectFactory()
+        ProjectMembership.objects.create(project=project, user=user, role=ProjectMembership.Role.ADMIN)
+        run = AuditRunFactory(project=project, status="completed")
+        ScenarioResultFactory(run_id=run.id, result={
+            "reps": [{"severity": "pass", "summary": "Modal summary"}, {"severity": "high", "summary": "Other"},
+                     {"severity": "pass", "summary": "Modal summary 2"}],
+            "aggregated_severity": "pass",
+        })
+        self.client.force_login(user)
+        session = self.client.session
+        session["active_project_id"] = project.id
+        session.save()
+        rows = json.loads(self.client.get(f"/runs/{run.id}/export/?format=json").content)
+        self.assertEqual(rows[0]["summary"], "Modal summary")
+        self.assertEqual(rows[0]["severity"], "pass")

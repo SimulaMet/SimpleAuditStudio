@@ -33,6 +33,7 @@ from audits.comparison import compare_runs
 from audits.events import ScenarioResult
 from audits.models import AuditRun
 from audits.services import (
+    _repeated_export_entry,
     create_audit_run,
     frozen_name,
     result_severity,
@@ -4810,7 +4811,8 @@ class RunExportView(ProjectMixin, View):
                 "id": sr.id,
                 "scenario_name": item.scenario.title if item else str(sr.version_item_id),
                 "severity": result_severity(r, sr.status),
-                "summary": r.get("summary", ""),
+                # Repeated scenarios keep their summary on the reps: use the modal rep's.
+                "summary": _repeated_export_entry(r).get("summary", "") if isinstance(r.get("reps"), list) and r["reps"] else r.get("summary", ""),
                 "result": r,
             })
 
