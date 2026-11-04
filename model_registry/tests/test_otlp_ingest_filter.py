@@ -76,6 +76,50 @@ class OTLPIngestFilterTest(TestCase):
         self.assertEqual(rows[0]["kind"], "LLM")
         self.assertNotIn("openinference.span.kind", rows[0]["attributes"])
 
+    def test_openwebui_genai_workflow_ingests_complete_audit_trajectory(self):
+        """GenAI-only Open WebUI workflow, chat, retrieval and tool spans."""
+        otlp_views.clear_target_spans(self.target_id)
+        spans = [
+            _span("11" * 8, "invoke_workflow open-webui.chat",
+                  attributes={"gen_ai.operation.name": "invoke_workflow"}),
+            _span("12" * 8, "chat qwen3",
+                  attributes={"gen_ai.operation.name": "chat",
+                              "gen_ai.request.model": "qwen3",
+                              "gen_ai.usage.input_tokens": "120"}),
+            _span("13" * 8, "retrieval",
+                  attributes={"gen_ai.operation.name": "retrieval",
+                              "gen_ai.data_source.id": "knowledge-base"}),
+            _span("14" * 8, "execute_tool acme_get_order",
+                  attributes={"gen_ai.operation.name": "execute_tool",
+                              "gen_ai.tool.name": "acme_get_order",
+                              "gen_ai.tool.call.id": "call-1"}),
+            _span("15" * 8, "GET /api/v1/chat/completions", kind=3),
+        ]
+        spans[1]["parentSpanId"] = "11" * 8
+        spans[2]["parentSpanId"] = "11" * 8
+        spans[3]["parentSpanId"] = "12" * 8
+        resp = self._post(
+            _export(spans),
+            headers={"HTTP_AUTHORIZATION": _basic_header(self.basic.credential.username, self.basic.secret)},
+        )
+        self.assertEqual(resp.status_code, 200)
+        rows = otlp_views.get_spans_for_trace_db(self.target_id, TRACE_ID)
+        self.assertEqual(
+            {row["name"]: row["kind"] for row in rows},
+            {
+                "invoke_workflow open-webui.chat": "AGENT",
+                "chat qwen3": "LLM",
+                "retrieval": "RETRIEVER",
+                "execute_tool acme_get_order": "TOOL",
+            },
+        )
+        by_name = {row["name"]: row for row in rows}
+        self.assertEqual(by_name["chat qwen3"]["parent_span_id"], "11" * 8)
+        self.assertEqual(by_name["execute_tool acme_get_order"]["parent_span_id"], "12" * 8)
+        self.assertTrue(all(
+            "openinference.span.kind" not in row["attributes"] for row in rows
+        ))
+
     def test_gzip_body_is_decoded(self):
         otlp_views.clear_target_spans(self.target_id)
         body = gzip.compress(_export([
