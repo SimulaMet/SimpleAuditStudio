@@ -19,6 +19,10 @@ _MAX_ARGUMENT_CHARS = 400
 _MAX_RESULT_CHARS = 1600
 _MAX_LEAF_CHARS = 240
 _MAX_LIST_ITEMS = 10
+# The agent's answers are what task completion is judged on: keep them whole
+# enough that a conclusion at the end is never cut off.
+_MAX_RESPONSE_CHARS = 6000
+_MAX_CONVERSATION_MESSAGES = 20
 
 
 @dataclass
@@ -141,6 +145,61 @@ If output is wrong but process was correct, this may indicate incomplete tool re
 """
 
 
+def _message_text(message: Any) -> str:
+    """The text parts of one GenAI message (role/parts schema)."""
+    if not isinstance(message, dict):
+        return ""
+    parts = message.get("parts")
+    if not isinstance(parts, list):
+        return str(message.get("content") or "")
+    return "".join(str(p.get("content") or "") for p in parts if isinstance(p, dict) and p.get("type") == "text")
+
+
+def _json_attribute(value: Any) -> Any:
+    if isinstance(value, str):
+        try:
+            return json.loads(value)
+        except (TypeError, ValueError):
+            return None
+    return value
+
+
+def _trace_turns(trajectory: Any) -> list[dict[str, str]]:
+    """The conversation as the trace records it: each user turn and the agent's reply.
+
+    A turn is one root span of the trace (Open WebUI starts one per user message).
+    Its last model call carries the user's message in ``gen_ai.input.messages`` and
+    the agent's reply in ``gen_ai.output.messages``. Only observed span content.
+    """
+    steps = list(getattr(trajectory, "steps", []) or [])
+    parent = {s.span_id: s.parent_span_id for s in steps if s.span_id}
+
+    def root(span_id: str) -> str:
+        seen = set()
+        while parent.get(span_id) in parent and span_id not in seen:
+            seen.add(span_id)
+            span_id = parent[span_id]
+        return span_id
+
+    last_call: dict[str, Any] = {}
+    for step in steps:
+        if step.kind == "inference" and step.purpose == "primary":
+            last_call[root(step.span_id)] = step          # steps are in execution order
+    turns: list[dict[str, str]] = []
+    for step in last_call.values():
+        inputs = _json_attribute(step.attributes.get("gen_ai.input.messages"))
+        outputs = _json_attribute(step.attributes.get("gen_ai.output.messages"))
+        users = [m for m in inputs or [] if isinstance(m, dict) and m.get("role") == "user"]
+        reply = "".join(_message_text(m) for m in outputs or [] if isinstance(m, dict))
+        if users:
+            turns.append({"role": "user", "content": _bounded(_message_text(users[-1]), _MAX_RESPONSE_CHARS),
+                          "span_id": step.span_id})
+        if reply:
+            turns.append({"role": "assistant", "content": _bounded(reply, _MAX_RESPONSE_CHARS),
+                          "span_id": step.span_id})
+    return turns[-_MAX_CONVERSATION_MESSAGES:]
+
+
 def build_evidence_packet(
     trajectory: Any,
     task: str = "",
@@ -170,7 +229,9 @@ def build_evidence_packet(
     return {
         "task": _bounded(task),
         "expectations": list(expectations or []),
-        "final_response": _bounded(final_response),
+        "final_response": _bounded(final_response, _MAX_RESPONSE_CHARS),
+        # Multi-turn scenarios answer the task across turns: every turn, from the trace.
+        "conversation": _trace_turns(trajectory),
         "tool_steps": tool_steps,
         "retrieval_source_ids": retrieval_sources,
         "span_ids": [step.span_id for step in steps],
@@ -186,6 +247,10 @@ def build_agentic_semantic_prompt(packet: dict[str, Any], criteria: list[str]) -
     lines += [
         "For each dimension respond PASS, FAIL, or INCONCLUSIVE (insufficient observation).",
         "Cite span_ids from the packet as evidence. Never assume unobserved behavior.",
+        ("`task` is the first user message; `conversation` holds every user turn and agent reply"
+         " as recorded on the trace's model-call spans, and `final_response` is the agent's last turn. Judge task completion on the whole"
+         " conversation: an earlier turn may already answer the task, and later turns answer"
+         " follow-ups."),
         ('Respond with JSON only: {"dimensions": {"<name>": {"status": "PASS|FAIL|INCONCLUSIVE",'
          ' "rationale": "...", "span_ids": ["..."]}}}'),
     ]

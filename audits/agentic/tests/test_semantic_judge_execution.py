@@ -149,3 +149,45 @@ def test_packet_reads_retrieval_documents_sent_as_json_strings():
         ]})])
     packet = build_evidence_packet(trajectory)
     assert packet["retrieval_source_ids"] == ["customer_faq.md", "f-1", "shipping.md"]
+
+
+def test_packet_takes_every_turn_from_the_trace_and_keeps_long_answers():
+    """Each turn's user message and agent reply come from its model-call span; a long
+    final answer is not cut before its conclusion."""
+    import json
+
+    from audits.agentic.semantic_judge import (
+        build_agentic_semantic_prompt,
+        build_evidence_packet,
+    )
+    from audits.agentic.trajectory import normalize
+
+    answer = "The 15-day electronics window applies. " * 30 + "So your January 2nd deadline stands."
+
+    def message(role, text):
+        return {"role": role, "parts": [{"type": "text", "content": text}]}
+
+    def chat(span_id, turn, start, inputs, reply):
+        return {"span_id": span_id, "parent_span_id": turn, "name": "chat", "start_time": start,
+                "attributes": {"gen_ai.operation.name": "chat",
+                               "gen_ai.input.messages": json.dumps(inputs),
+                               "gen_ai.output.messages": json.dumps([message("assistant", reply)])}}
+
+    first = message("user", "How long do I have to return my headphones?")
+    second = message("user", "Is there a high-value exception?")
+    spans = [
+        {"span_id": "wf1", "name": "invoke_workflow", "start_time": 1.0,
+         "attributes": {"gen_ai.operation.name": "invoke_workflow"}},
+        chat("c1", "wf1", 1.1, [first], "15 days from delivery: until January 2nd."),
+        {"span_id": "wf2", "name": "invoke_workflow", "start_time": 5.0,
+         "attributes": {"gen_ai.operation.name": "invoke_workflow"}},
+        chat("c2", "wf2", 5.1, [first, message("assistant", "15 days."), second], answer),
+    ]
+    packet = build_evidence_packet(normalize(spans), task="How long do I have?", final_response=answer)
+    assert packet["final_response"] == answer                       # 1,200+ chars, not truncated
+    turns = packet["conversation"]
+    assert [(t["role"], t["span_id"]) for t in turns] == [
+        ("user", "c1"), ("assistant", "c1"), ("user", "c2"), ("assistant", "c2")]
+    assert turns[2]["content"] == "Is there a high-value exception?"
+    assert turns[3]["content"].endswith("deadline stands.")
+    assert "whole" in build_agentic_semantic_prompt(packet, ["task_completion"])
