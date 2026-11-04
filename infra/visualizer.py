@@ -31,7 +31,6 @@ from django.http import Http404, HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404
 from django.views.generic import View
 
-from audits.services import result_severity
 from infra.ui import ProjectMixin
 
 logger = logging.getLogger(__name__)
@@ -766,32 +765,16 @@ class RunExportHtmlView(ProjectMixin, View):
     """
 
     def get(self, request, run_id):
-        from audits.events import ScenarioResult
         from audits.models import AuditRun
-        from scenarios.models import ScenarioSetVersionItem
 
         run = get_object_or_404(AuditRun, pk=run_id, project=request.project)
 
-        items = {
-            str(vi.pk): vi
-            for vi in ScenarioSetVersionItem.objects.filter(
-                version=run.scenario_set_version
-            ).select_related("scenario")
-        }
-        results = []
-        for sr in ScenarioResult.objects.filter(run_id=run.id).order_by("id"):
-            item = items.get(sr.version_item_id)
-            r = sr.result or {}
-            results.append(
-                {
-                    "scenario_name": item.scenario.title if item else str(sr.version_item_id),
-                    "severity": result_severity(r, sr.status),
-                    "summary": r.get("summary", ""),
-                    "result": r,
-                }
-            )
+        # The canonical SimpleAudit export: each scenario carries its own
+        # conversation, issues and summary (repeated runs: the modal rep), which
+        # is what the offline viewer renders.
+        from audits.services import build_simpleaudit_export
 
-        data = {"results": results}
+        data = build_simpleaudit_export(run)
         name = f"{run.name} (run {run.id})"
         try:
             html = build_standalone_html(data, name)

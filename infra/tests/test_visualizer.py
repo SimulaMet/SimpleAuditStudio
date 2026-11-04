@@ -207,6 +207,17 @@ class RunExportHtmlTests(_VisualizerBase):
         self.assertIn("window.__inlinedData", resp.content.decode())
         self.assertIn("scenario_name", resp.content.decode())
 
+    def test_export_html_carries_conversations(self):
+        """The offline viewer renders each scenario's top-level conversation."""
+        self.run = AuditRunFactory(project=self.project, status="completed")
+        ScenarioResultFactory(run_id=self.run.id, result={
+            "severity": "pass", "summary": "ok", "scenario_name": "s",
+            "conversation": [{"role": "user", "content": "UNIQUE-TURN-TEXT"}],
+        })
+        html = self.client.get(f"/runs/{self.run.id}/export-html/").content.decode()
+        self.assertIn("UNIQUE-TURN-TEXT", html)
+        self.assertIn('"conversation"', html)
+
     def test_export_html_404_for_other_project(self):
         other = AuditRunFactory(status="completed")
         resp = self.client.get(f"/runs/{other.id}/export-html/")
