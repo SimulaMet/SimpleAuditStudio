@@ -56,6 +56,36 @@ def _is_studio_owui(base_url: str) -> bool:
     return bool(chat_config.ENABLED and base_url and _same_origin(base_url, chat_config.UPSTREAM))
 
 
+# When each Open WebUI origin last had its model registry refreshed.
+_owui_models_refreshed: dict[str, float] = {}
+
+
+async def _owui_refresh_models(origin: str, token: str, *, every: float = 60.0) -> None:
+    """Make Open WebUI (re)load its in-memory model registry.
+
+    Open WebUI answers a completion only for models in ``app.state.MODELS``,
+    which it fills only when its model list is fetched (``GET /api/models``).
+    After Open WebUI restarts, that registry is empty until someone opens the
+    chat UI, so a traced agent run would fail with "Model not found" (and then
+    report that the target exported no spans). Throttled per origin; never raises.
+    """
+    import time
+
+    import httpx
+
+    now = time.monotonic()
+    if now - _owui_models_refreshed.get(origin, float("-inf")) < every:
+        return
+    _owui_models_refreshed[origin] = now
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.get(f"{origin}/api/models", headers={"Authorization": f"Bearer {token}"})
+            resp.raise_for_status()
+    except Exception:
+        _owui_models_refreshed.pop(origin, None)   # retry on the next call
+        logging.getLogger(__name__).warning("Could not refresh Open WebUI models at %s", origin, exc_info=True)
+
+
 async def _owui_get_jwt(base_url: str) -> str | None:
     """Obtain a JWT from OWUI's trusted-header signin endpoint."""
     import time
@@ -68,6 +98,7 @@ async def _owui_get_jwt(base_url: str) -> str | None:
     now = time.monotonic()
     cached = _owui_jwt_cache.get(origin)
     if cached and cached[1] > now:
+        await _owui_refresh_models(origin, cached[0])
         return cached[0]
 
     import httpx
@@ -88,6 +119,7 @@ async def _owui_get_jwt(base_url: str) -> str | None:
             if token:
                 # OWUI default JWT expiry is 4 weeks; cache for 1 hour to be safe.
                 _owui_jwt_cache[origin] = (token, now + 3600.0)
+                await _owui_refresh_models(origin, token)
             return token
     except Exception:
         logging.getLogger(__name__).warning("Failed to obtain OWUI JWT from %s", url, exc_info=True)

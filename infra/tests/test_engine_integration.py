@@ -1545,3 +1545,51 @@ def test_repeated_run_uses_judge_agentic_guidance(monkeypatch):
             trace_config={"mode": "studio"}, metadata={"agentic": {"schema_version": 2, "enforcement": {}}},
         )
     assert got and got[0]["agentic_guidance"] == "Judge says"
+
+
+class OpenWebUIModelRegistryRefreshTest(TestCase):
+    """Studio refreshes Open WebUI's in-memory model registry before traced calls."""
+
+    @mock.patch("chat.config.UPSTREAM", "http://127.0.0.1:8080/chat")
+    @mock.patch("chat.config.ENABLED", True)
+    def test_jwt_fetch_refreshes_models_once_per_interval(self):
+        import asyncio
+
+        from infra import trace_target
+
+        trace_target._owui_jwt_cache.clear()
+        trace_target._owui_models_refreshed.clear()
+        calls = []
+
+        class FakeClient:
+            def __init__(self, *a, **k):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *a):
+                return False
+
+            async def post(self, url, **kw):
+                return mock.Mock(raise_for_status=lambda: None, json=lambda: {"token": "jwt-1"})
+
+            async def get(self, url, **kw):
+                calls.append(url)
+                return mock.Mock(raise_for_status=lambda: None)
+
+        with mock.patch("httpx.AsyncClient", FakeClient):
+            base = "http://127.0.0.1:8080/chat/api/v1"
+            self.assertEqual(asyncio.run(trace_target._owui_get_jwt(base)), "jwt-1")
+            asyncio.run(trace_target._owui_get_jwt(base))   # cached token, within the interval
+        self.assertEqual(calls, ["http://127.0.0.1:8080/chat/api/models"])
+
+    def test_refresh_failure_never_raises(self):
+        import asyncio
+
+        from infra import trace_target
+
+        trace_target._owui_models_refreshed.clear()
+        with mock.patch("httpx.AsyncClient", side_effect=RuntimeError("down")):
+            asyncio.run(trace_target._owui_refresh_models("http://127.0.0.1:8080/chat", "t"))
+        self.assertNotIn("http://127.0.0.1:8080/chat", trace_target._owui_models_refreshed)
