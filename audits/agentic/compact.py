@@ -169,7 +169,16 @@ def compact_spans(spans: list[dict]) -> list[dict]:
     """Spans (copies, same order) with content already recorded in the trace replaced by references."""
     out = [copy.deepcopy(s) if isinstance(s, dict) else s for s in spans]
     registries: dict[str, dict[str, dict]] = {}   # trace id -> content key -> location
-    for span in _ordered([s for s in out if isinstance(s, dict)]):
+    ordered = _ordered([s for s in out if isinstance(s, dict)])
+    # Retrieval documents are the standard home of retrieved chunks: register them
+    # first, so the enclosing tool's result and the later tool response refer to
+    # them (the tool span starts before its retrieval child).
+    for span in ordered:
+        attrs = _attrs(span)
+        if span.get("span_id") and DOCUMENTS in attrs and not is_reference(_parsed(attrs[DOCUMENTS])):
+            registry = registries.setdefault(str(span.get("trace_id") or ""), {})
+            _remember(registry, _parsed(attrs[DOCUMENTS]), {"span_id": str(span["span_id"]), "attribute": DOCUMENTS})
+    for span in ordered:
         span_id = str(span.get("span_id") or "")
         if not span_id:
             continue
@@ -240,3 +249,135 @@ def expand_spans(spans: list[dict], pool: list[dict] | None = None) -> list[dict
                 _store(attrs, attribute, attrs[attribute], [resolve_message(m, 0) for m in messages])
         out.append(span)
     return out
+
+
+# OpenTelemetry's error fields: what failed, and the exception message.
+_JUDGE_ERROR_KEYS = {"error.type", "exception.type", "exception.message"}
+# What a judge must see first: a judge prompt bounds each span, so the agent's
+# decisions and observations go before the (long) input history.
+_JUDGE_FIRST = (
+    "gen_ai.operation.name", "gen_ai.tool.name", "gen_ai.tool.call.arguments", "gen_ai.tool.call.result",
+    "gen_ai.retrieval.query.text", "gen_ai.retrieval.documents", "gen_ai.output.messages",
+    "gen_ai.response.finish_reasons", "error.type", "exception.message",
+)
+
+
+def _judge_marker(reference: dict, role: str | None = None) -> str:
+    where = str(reference.get("span_id") or "")[:8]
+    what = str(reference.get("attribute") or "").removeprefix("gen_ai.")
+    if isinstance(reference.get("index"), int):
+        what += f" message {reference['index'] + 1}"
+    return f"(same as span {where} {what}" + (f", {role})" if role else ")")
+
+
+def _judge_markers(value: Any) -> Any:
+    reference = message_reference(value)
+    if reference:
+        return _judge_marker(reference, value.get("role"))
+    if is_reference(value):
+        return _judge_marker(value)
+    if isinstance(value, list):
+        return [_judge_markers(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _judge_markers(item) for key, item in value.items()}
+    return value
+
+
+def _without_rag_template(messages: Any) -> Any:
+    """User messages without a RAG prompt template (fixed instructions + ``<context>``).
+
+    Open WebUI rewrites the user's message with its RAG template on every model
+    call; the retrieved sources are on the retrieval spans already.
+    """
+    if not isinstance(messages, list):
+        return messages
+    out = []
+    for message in messages:
+        parts = message.get("parts") if isinstance(message, dict) else None
+        if isinstance(message, dict) and message.get("role") == "user" and isinstance(parts, list):
+            new_parts = []
+            for part in parts:
+                text = part.get("content") if isinstance(part, dict) and part.get("type") == "text" else None
+                head, marker, tail = text.rpartition("</context>") if isinstance(text, str) else ("", "", "")
+                if marker and "<context>" in head and tail.strip():
+                    part = {**part, "content": f"{tail.strip()} (RAG template and <context> sources omitted)"}
+                new_parts.append(part)
+            message = {**message, "parts": new_parts}
+        out.append(message)
+    return out
+
+
+def _store_value(original: Any, value: Any) -> Any:
+    return json.dumps(value, ensure_ascii=False, default=str) if isinstance(original, str) else value
+
+
+def _pointing_to_conversation(messages: Any, said: dict[str, set[str]]) -> Any:
+    """Messages whose text the judge already reads in the conversation, as a short note.
+
+    Tool calls (and any non-text part) stay: only the repeated text is replaced.
+    """
+    if not isinstance(messages, list):
+        return messages
+    out = []
+    for message in messages:
+        parts = message.get("parts") if isinstance(message, dict) else None
+        role = message.get("role") if isinstance(message, dict) else None
+        if isinstance(parts, list) and role in said:
+            text = "".join(p.get("content") or "" for p in parts if isinstance(p, dict) and p.get("type") == "text")
+            if text.strip() and text.strip() in said[role]:
+                note = {"type": "text", "content": f"(the {role} turn shown in the conversation)"}
+                message = {**message, "parts": [note] + [p for p in parts
+                                                         if not (isinstance(p, dict) and p.get("type") == "text")]}
+        out.append(message)
+    return out
+
+
+def judge_view(spans: list[dict], pool: list[dict] | None = None,
+               conversation: list[dict] | None = None) -> list[dict]:
+    """Spans as a trace-reading judge should see them: each piece of content once.
+
+    Only ``gen_ai.*`` attributes and the error fields (``error.type``,
+    ``exception.type``, ``exception.message``) are kept; workflow wrappers
+    (their input is the conversation the judge already has) are dropped; content
+    repeated from an earlier span becomes a short "(same as span …)" note, and a
+    message the judge already reads in ``conversation`` a "(… shown in the
+    conversation)" note; decisions, tool results and documents come before the input
+    history so a per-span length bound never cuts them off.
+    """
+    said: dict[str, set[str]] = {}
+    for turn in conversation or []:
+        if isinstance(turn, dict) and turn.get("role") in ("user", "assistant") and isinstance(turn.get("content"), str):
+            said.setdefault(turn["role"], set()).add(turn["content"].strip())
+    pool = list(pool or [])
+    shown = {s.get("span_id") for s in spans if isinstance(s, dict)}
+    pooled = {s.get("span_id") for s in pool if isinstance(s, dict)}
+    full = expand_spans(pool + [s for s in spans if isinstance(s, dict) and s.get("span_id") not in pooled], pool=pool)
+    for span in full:
+        attrs = _attrs(span)
+        if INPUT in attrs:
+            _store(attrs, INPUT, attrs[INPUT], _without_rag_template(_parsed(attrs[INPUT])))
+    compacted = {s.get("span_id"): s for s in compact_spans(full)}
+    out = []
+    for span in spans:
+        if not isinstance(span, dict):
+            continue
+        span = copy.deepcopy(compacted.get(span.get("span_id"), span))
+        attrs = _attrs(span)
+        if str(attrs.get("gen_ai.operation.name") or "").lower() in _WRAPPER_OPERATIONS:
+            continue
+        # Only the GenAI semantic attributes and the standard error fields reach a judge.
+        kept = {key: value for key, value in attrs.items() if key.startswith("gen_ai.") or key in _JUDGE_ERROR_KEYS}
+        for key in (INPUT, OUTPUT):
+            if key in kept and said:
+                kept[key] = _store_value(kept[key], _pointing_to_conversation(_parsed(kept[key]), said))
+        for key, value in list(kept.items()):
+            parsed = _parsed(value)
+            if isinstance(parsed, (list, dict)):
+                marked = _judge_markers(parsed)
+                if marked != parsed:
+                    kept[key] = json.dumps(marked, ensure_ascii=False, default=str) if isinstance(value, str) else marked
+        ordered = {key: kept[key] for key in _JUDGE_FIRST if key in kept}
+        ordered.update({key: value for key, value in kept.items() if key not in ordered})
+        span["attributes"] = ordered
+        out.append(span)
+    return [s for s in out if s.get("span_id") in shown]

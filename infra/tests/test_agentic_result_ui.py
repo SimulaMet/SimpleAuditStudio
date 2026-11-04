@@ -188,6 +188,16 @@ class AgenticViewHelperTests(TestCase):
         self.assertEqual(shown[3]["parts"][0]["response"], "↩ same as TOOL-1 · tool result")
         self.assertIn('reference', rows[2]["raw_json"])                      # raw JSON is what is stored
 
+    def test_failed_tool_step_shows_its_error(self):
+        """A tool call that raised has no result: the step shows the exception instead."""
+        span = {"span_id": "t1", "name": "execute_tool acme_get_order", "status": "ERROR", "start_time": 1.0,
+                "end_time": 1.1, "attributes": {
+                    "gen_ai.operation.name": "execute_tool", "gen_ai.tool.name": "acme_get_order",
+                    "gen_ai.tool.call.arguments": '{"order_id": "ACME-9999"}', "error.type": "ValueError",
+                    "exception.type": "ValueError", "exception.message": "No order found for 'ACME-9999'."}}
+        (row,) = _agentic_timeline_view({"judgment": {"evidence_spans": [span]}})["rows"]
+        self.assertEqual(dict(row["content_blocks"])["Error"], "ValueError: No order found for 'ACME-9999'.")
+
     def test_timeline_none_without_spans(self):
         self.assertIsNone(_agentic_timeline_view({}))
         self.assertIsNone(_agentic_timeline_view({"judgment": {}}))

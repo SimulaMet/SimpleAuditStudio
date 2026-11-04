@@ -97,3 +97,44 @@ def test_workflow_wrapper_is_never_the_referenced_copy():
     spans = compact_spans([wrapper, *_turn()])
     assert json.loads(spans[0]["attributes"]["gen_ai.input.messages"]) == [QUESTION]
     assert _input(spans[1])[1] == QUESTION          # LLM-1 keeps the user message in full
+
+
+def test_knowledge_tool_result_refers_to_the_retrieval_documents():
+    """Retrieved chunks are kept once, as the retrieval documents, though the tool span starts first."""
+    docs = [{"source": "a.md", "content": "Electronics keep the 15-day refund window from the policy."}]
+    tool = _span("tool", "execute_tool", 1.0, **{"gen_ai.tool.call.result": {"content": docs}})
+    retrieval = _span("ret", "retrieval", 1.1, **{"gen_ai.retrieval.documents": docs})
+    tool_out, retrieval_out = compact_spans([tool, retrieval])
+    assert json.loads(tool_out["attributes"]["gen_ai.tool.call.result"]) == {
+        "type": "reference", "span_id": "ret", "attribute": "gen_ai.retrieval.documents"}
+    assert json.loads(retrieval_out["attributes"]["gen_ai.retrieval.documents"]) == docs
+
+
+def test_judge_view_keeps_gen_ai_content_once():
+    from audits.agentic.compact import judge_view
+
+    wrapper = _span("wf", "invoke_workflow", 0.5, **{"gen_ai.input.messages": [QUESTION]})
+    spans = [wrapper, *_turn()]
+    for s in spans:
+        s["attributes"].update({"telemetry.sdk.name": "opentelemetry", "service.name": "open-webui"})
+    answer_text = ANSWER["parts"][0]["content"]
+    view = judge_view(spans, pool=spans, conversation=[{"role": "assistant", "content": answer_text}])
+    assert [s["span_id"] for s in view] == ["l1-1.0", "t1-1.0", "l2-1.0"]          # no wrapper
+    assert all(k.startswith("gen_ai.") for s in view for k in s["attributes"])
+    second = view[2]["attributes"]
+    assert list(second)[:2] == ["gen_ai.operation.name", "gen_ai.output.messages"]  # decisions first
+    messages = json.loads(second["gen_ai.input.messages"])
+    assert messages[0] == "(same as span l1-1.0 input.messages message 1, system)"
+    out = json.loads(second["gen_ai.output.messages"])
+    assert out[0]["parts"][0]["content"] == "(the assistant turn shown in the conversation)"
+
+
+def test_judge_view_keeps_the_exception_message():
+    from audits.agentic.compact import judge_view
+
+    span = _span("t9", "execute_tool", 1.0, **{"gen_ai.tool.name": "acme_get_order"})
+    span["attributes"].update({"error.type": "ValueError", "exception.type": "ValueError",
+                               "exception.message": "No order found for 'ACME-9999'.", "service.name": "x"})
+    (view,) = judge_view([span])
+    assert view["attributes"]["exception.message"] == "No order found for 'ACME-9999'."
+    assert "service.name" not in view["attributes"]

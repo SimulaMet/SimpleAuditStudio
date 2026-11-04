@@ -1032,6 +1032,12 @@ def run_scenario(
                     structured=True,
                 )
                 selected = (evidence or {}).get("selected_spans") if evidence else None
+                if selected:
+                    # What the trace-reading judge sees: each piece of content once.
+                    from audits.agentic.compact import judge_view
+
+                    selected = judge_view(selected, pool=(evidence or {}).get("all_spans") or [],
+                                          conversation=getattr(execution, "conversation", None))
                 if not _agentic_meta:
                     return selected
                 # Agentic scenario: run deterministic checks on the captured
@@ -1393,6 +1399,12 @@ def run_scenario_repeated(
                 structured=True,
             )
             selected = (evidence or {}).get("selected_spans") if evidence else None
+            if selected:
+                # What the trace-reading judge sees: each piece of content once.
+                from audits.agentic.compact import judge_view
+
+                selected = judge_view(selected, pool=(evidence or {}).get("all_spans") or [],
+                                      conversation=getattr(execution, "conversation", None))
             try:
                 from audits.agentic.evaluate import evaluate as evaluate_agentic
                 from audits.agentic.expectations import validate_agentic_metadata

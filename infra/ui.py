@@ -3762,6 +3762,7 @@ _TRACE_SPAN_CONTENT_BLOCKS = (
     ("Tool result", ("gen_ai.tool.call.result", "tool.result")),
     ("Input", ("input.value", "gen_ai.prompt", "gen_ai.input.messages")),
     ("Output", ("output.value", "gen_ai.completion", "gen_ai.output.messages")),
+    ("Error", ("exception.message", "error.message", "error.type")),
     ("Retrieval query", ("gen_ai.retrieval.query.text",)),
     ("Retrieved documents", ("gen_ai.retrieval.documents",)),
 )
@@ -3786,6 +3787,11 @@ def _trace_span_content_blocks(span: dict) -> list[tuple[str, str]]:
                     pass
             if not isinstance(value, str):
                 value = json.dumps(value, indent=2, ensure_ascii=False, default=str)
+            if label == "Error":
+                # "ValueError: No order found for …": what failed and why.
+                kind = attrs.get("exception.type") or attrs.get("error.type")
+                if kind and key != "error.type" and not str(value).startswith(str(kind)):
+                    value = f"{kind}: {value}"
             blocks.append((label, value))
             break
     return blocks
