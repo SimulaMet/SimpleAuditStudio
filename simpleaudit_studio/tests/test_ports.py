@@ -243,3 +243,30 @@ class FindFreePortTests(SimpleTestCase):
         port = ports.find_free_port(_free_port())
         self.assertIsNotNone(port)
         self.assertTrue(ports._port_free(port))
+
+
+class PortProbeAfterStopTests(SimpleTestCase):
+    """A restart right after `dev down` must not see TIME_WAIT leftovers as a busy port."""
+
+    def test_time_wait_leftovers_do_not_block_but_a_live_listener_does(self):
+        import os
+        import socket
+        import unittest
+
+        from simpleaudit_studio import lifecycle
+
+        if os.name == "nt":
+            raise unittest.SkipTest("Windows binds without SO_REUSEADDR")
+        server = socket.socket()
+        server.bind(("127.0.0.1", 0))
+        server.listen(1)
+        port = server.getsockname()[1]
+        self.assertFalse(lifecycle._port_free(port))          # live listener: busy
+        client = socket.create_connection(("127.0.0.1", port))
+        conn, _ = server.accept()
+        conn.close()                                          # server side closes first: TIME_WAIT
+        client.close()
+        server.close()
+        self.assertTrue(lifecycle._port_free(port))           # only TIME_WAIT left: free
+        self.assertFalse(lifecycle._port_free(0))
+        self.assertFalse(lifecycle._port_free(70000))

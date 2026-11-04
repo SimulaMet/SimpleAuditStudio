@@ -207,8 +207,26 @@ def _pid_alive(pid: int) -> bool:
 
 
 def _port_free(port: int) -> bool:
+    """Whether a server could listen on ``port`` now.
+
+    ``SO_REUSEADDR`` lets the probe ignore connections still in TIME_WAIT from a
+    server that just stopped (as uvicorn and Django's runserver do when they bind),
+    while a live listener (any address, including loopback only) is still seen as
+    busy. On Windows the option lets a
+    socket take over a port in use, so the probe binds without it there.
+    """
+    if port < 1 or port > 65535:
+        return False
+    # With SO_REUSEADDR a wildcard bind can succeed beside a loopback-only
+    # listener (macOS), so first ask whether anything accepts on the port.
+    try:
+        with socket.create_connection(("127.0.0.1", port), timeout=0.3):
+            return False
+    except OSError:
+        pass
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        if os.name != "nt":
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         try:
             s.bind(("0.0.0.0", port))
         except OSError:

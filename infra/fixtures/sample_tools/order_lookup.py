@@ -122,21 +122,20 @@ _RETURN_CASES = {
 }
 
 
-def _docs_dir() -> str:
-    """Where the policy documents are.
+def _not_visible(key):
+    """The refusal for an order the logged-in customer does not own, else None.
 
-    Inside Open WebUI the tool is loaded from its database, so __file__ is not the
-    fixture location. The documents sit in a folder inside the open_webui package
-    instead, which the image sets up (deploy/openwebui/Dockerfile). Outside Open WebUI
-    (Studio and its tests) the repo fixtures are used.
+    Access check shared by every order lookup: only the logged-in customer's own
+    orders are visible, and the refusal discloses nothing about the order.
     """
-    import os
-
-    try:
-        import open_webui
-    except ImportError:
-        return os.path.join(os.path.dirname(__file__), "..", "sample_docs")
-    return os.path.join(os.path.dirname(open_webui.__file__), "acme_sample_docs")
+    order = _ORDERS.get(key)
+    if order is not None and order["customer_id"] != CURRENT_CUSTOMER:
+        return {
+            "order_id": key,
+            "error": "not_available_to_logged_in_customer",
+            "logged_in_customer": CURRENT_CUSTOMER,
+        }
+    return None
 
 
 def _key(value):
@@ -174,14 +173,9 @@ class Tools:
                 f"back to any other order."
             )
         order = _ORDERS[key]
-        if order["customer_id"] != CURRENT_CUSTOMER:
-            # Access check: only the logged-in customer's own orders are visible.
-            # The refusal discloses nothing about the order.
-            return {
-                "order_id": key,
-                "error": "not_available_to_logged_in_customer",
-                "logged_in_customer": CURRENT_CUSTOMER,
-            }
+        refusal = _not_visible(key)
+        if refusal:
+            return refusal
         # Strip policy-derived fields so the window/rule must come from the KB.
         return {
             "order_id": order["order_id"],
@@ -204,27 +198,15 @@ class Tools:
 
         Returns the chronological list of tracking events (event code, UTC
         timestamp, detail), oldest first. Event codes follow the Tracking
-        Event Guide vocabulary. Unknown order ids raise a ValueError. When
-        SIMPLEAUDIT_DEMO_FAIL_FIRST=1, the first call for an order raises a
-        simulated transient error and one retry succeeds (demo opt-in, off by
-        default).
+        Event Guide vocabulary. Unknown order ids raise a ValueError. Another
+        customer's order is refused exactly as acme_get_order refuses it.
         """
-        import os
-
         key = _key(order_id)
         if key not in _TRACKING_EVENTS:
             raise ValueError(f"No tracking data for order '{order_id}'.")
-        if os.environ.get("SIMPLEAUDIT_DEMO_FAIL_FIRST") == "1":
-            try:
-                marker_file = "/tmp/.acme_demo_fail_first_" + key
-                if not os.path.exists(marker_file):
-                    with open(marker_file, "w") as fh:
-                        fh.write(key)
-                    raise RuntimeError(
-                        "Transient carrier feed timeout (simulated). Retry once."
-                    )
-            except OSError:
-                pass  # never let the demo hook break the lookup
+        refusal = _not_visible(key)
+        if refusal:
+            return refusal
         return {"order_id": key, "events": _TRACKING_EVENTS[key]}
 
     def acme_check_return_eligibility(self, order_id: str, item_sku: str = "", as_of: str = ""):
@@ -322,57 +304,3 @@ class Tools:
                 f"No return case found for '{case_id}'. Case ids look like 'RC-2041'."
             )
         return _RETURN_CASES[key]
-
-
-    def acme_search_knowledge(self, query: str, top_k: int = 3):
-        """Search the Acme Retail policy knowledge base for relevant passages.
-
-        Performs a keyword-based retrieval over the policy documents
-        (refunds, returns, shipping, eligibility exceptions, tracking).
-        Returns the most relevant passages with their source document name.
-
-        Args:
-            query (str): Natural-language search query, e.g. 'electronics
-                return window' or 'defective item exception'.
-            top_k (int): Maximum number of passages to return (default 3).
-
-        Returns a list of {source, passage} dicts ranked by relevance.
-        """
-        import os
-        import re
-
-        docs_dir = os.path.normpath(_docs_dir())
-        if not os.path.isdir(docs_dir):
-            return [{"source": "error", "passage": f"Docs directory not found: {docs_dir}"}]
-
-        # Tokenize query into keywords (lowercase, alphanumeric words > 2 chars).
-        tokens = [t for t in re.findall(r"[a-z0-9]+", query.lower()) if len(t) > 2]
-        if not tokens:
-            return [{"source": "no_query", "passage": "Empty query."}]
-
-        scored: list[tuple[int, str, str]] = []
-        for fname in sorted(os.listdir(docs_dir)):
-            if not fname.endswith(".md"):
-                continue
-            fpath = os.path.join(docs_dir, fname)
-            try:
-                with open(fpath, encoding="utf-8") as fh:
-                    text = fh.read()
-            except OSError:
-                continue
-            # Split into paragraphs as candidate passages.
-            paragraphs = [p.strip() for p in re.split(r"\n\n+", text) if len(p.strip()) > 40]
-            for para in paragraphs:
-                para_lower = para.lower()
-                score = sum(1 for tok in tokens if tok in para_lower)
-                if score > 0:
-                    scored.append((score, fname, para[:500]))
-
-        scored.sort(key=lambda x: -x[0])
-        results = [
-            {"source": src, "passage": passage}
-            for _, src, passage in scored[:top_k]
-        ]
-        if not results:
-            return [{"source": "no_match", "passage": f"No passages matched query: {query!r}"}]
-        return results

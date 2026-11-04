@@ -126,6 +126,117 @@ class AgenticViewHelperTests(TestCase):
         self.assertEqual((tl["total"], tl["captured"]), (2, 2))   # wrappers are not "elided"
         self.assertIsNone(_agentic_timeline_view({"judgment": {"evidence_spans": spans[3:]}}))
 
+    def test_retrieval_span_shows_query_and_documents(self):
+        """A GenAI retrieval span's query and documents are its readable content."""
+        import json as _json
+
+        docs = [{"source": "refunds.md", "content": "Electronics keep the 15-day window."}]
+        span = {"span_id": "r1", "name": "retrieval", "start_time": 1.0, "end_time": 1.1,
+                "attributes": {"gen_ai.operation.name": "retrieval",
+                               "gen_ai.retrieval.query.text": "electronics window",
+                               "gen_ai.retrieval.documents": _json.dumps(docs)}}
+        (row,) = _agentic_timeline_view({"judgment": {"evidence_spans": [span]}})["rows"]
+        blocks = dict(row["content_blocks"])
+        self.assertEqual(blocks["Retrieval query"], "electronics window")
+        self.assertEqual(_json.loads(blocks["Retrieved documents"]), docs)
+        self.assertIn("\n", blocks["Retrieved documents"])          # indented, not one line
+        self.assertEqual(row["kb_sources"], ["refunds.md"])
+        self.assertEqual(row["arguments"], "electronics window")
+
+    def test_json_content_blocks_are_pretty_printed(self):
+        span = {"span_id": "t1", "name": "execute_tool lookup", "start_time": 1.0, "end_time": 1.1,
+                "attributes": {"gen_ai.operation.name": "execute_tool", "gen_ai.tool.name": "lookup",
+                               "gen_ai.tool.call.arguments": '{"order_id": "ACME-1001"}',
+                               "gen_ai.tool.call.result": '{"status": "Delivered", "items": [1, 2]}'}}
+        (row,) = _agentic_timeline_view({"judgment": {"evidence_spans": [span]}})["rows"]
+        blocks = dict(row["content_blocks"])
+        self.assertEqual(blocks["Tool arguments"], '{\n  "order_id": "ACME-1001"\n}')
+        self.assertIn('\n  "status": "Delivered"', blocks["Tool result"])
+        plain = dict(_agentic_timeline_view({"judgment": {"evidence_spans": [
+            {**span, "attributes": {**span["attributes"], "gen_ai.tool.call.result": "plain text"}}]}})["rows"][0]["content_blocks"])
+        self.assertEqual(plain["Tool result"], "plain text")
+
+    def test_repeated_content_shows_as_reference_markers(self):
+        """Content is shown once per trace; later spans point back to it (full spans in, compact shown)."""
+        import json as _json
+
+        system = {"role": "system", "parts": [{"type": "text", "content": "You are the Acme Retail assistant. " * 3}]}
+        user = {"role": "user", "parts": [{"type": "text", "content": "Which document sets the electronics window?"}]}
+        call = {"role": "assistant", "parts": [{"type": "tool_call", "id": "c1", "name": "search",
+                                                "arguments": {"query": "electronics return window"}}]}
+        chunks = [{"content": "Electronics keep the 15-day refund window from the policy.", "source": "a.md"}]
+        reply = {"role": "tool", "parts": [{"type": "tool_call_response", "id": "c1", "response": chunks}]}
+
+        def span(sid, op, start, kind, **attrs):
+            return {"trace_id": "t", "span_id": sid, "parent_span_id": "wf", "name": op, "kind": kind,
+                    "start_time": start, "end_time": start + 0.1,
+                    "attributes": {"gen_ai.operation.name": op, **{k: _json.dumps(v) for k, v in attrs.items()}}}
+        spans = [
+            span("l1", "chat", 1.0, "LLM", **{"gen_ai.input.messages": [system, user],
+                                               "gen_ai.output.messages": [call]}),
+            span("t1", "execute_tool", 2.0, "TOOL", **{"gen_ai.tool.call.id": "c1",
+                                                        "gen_ai.tool.call.result": {"content": chunks}}),
+            span("l2", "chat", 3.0, "LLM", **{"gen_ai.input.messages": [system, user, call, reply]}),
+        ]
+        rep = {"judgment": {"evidence_spans": spans}, "trace_evidence": {"all_spans": spans}}
+        rows = _agentic_timeline_view(rep)["rows"]
+        self.assertEqual(len(_json.loads(dict(rows[0]["content_blocks"])["Input"])), 2)   # first: in full
+        shown = _json.loads(dict(rows[2]["content_blocks"])["Input"])
+        self.assertEqual(shown[:3], ["↩ same as LLM-1 · input message 1 (system)",
+                                     "↩ same as LLM-1 · input message 2 (user)",
+                                     "↩ same as LLM-1 · output message 1 (assistant)"])
+        self.assertEqual(shown[3]["parts"][0]["response"], "↩ same as TOOL-1 · tool result")
+        self.assertIn('reference', rows[2]["raw_json"])                      # raw JSON is what is stored
+
+    def test_failed_tool_step_shows_its_error(self):
+        """A tool call that raised has no result: the step shows the exception instead."""
+        span = {"span_id": "t1", "name": "execute_tool acme_get_order", "status": "ERROR", "start_time": 1.0,
+                "end_time": 1.1, "attributes": {
+                    "gen_ai.operation.name": "execute_tool", "gen_ai.tool.name": "acme_get_order",
+                    "gen_ai.tool.call.arguments": '{"order_id": "ACME-9999"}', "error.type": "ValueError",
+                    "exception.type": "ValueError", "exception.message": "No order found for 'ACME-9999'."}}
+        (row,) = _agentic_timeline_view({"judgment": {"evidence_spans": [span]}})["rows"]
+        self.assertEqual(dict(row["content_blocks"])["Error"], "ValueError: No order found for 'ACME-9999'.")
+        self.assertTrue(row["is_error"])
+        self.assertEqual(row["error_type"], "ValueError")
+
+    def test_model_calls_are_tagged_tool_call_or_reply_from_genai_output(self):
+        """Every turn's text answer is a reply (highlighted); a call that asks for a tool is a tool call."""
+        import json as _json
+
+        def chat(sid, start, parts, reasons):
+            return {"span_id": sid, "name": "chat", "kind": "LLM", "start_time": start, "end_time": start + 0.1,
+                    "attributes": {"gen_ai.operation.name": "chat",
+                                   "gen_ai.output.messages": _json.dumps([{"role": "assistant", "parts": parts}]),
+                                   "gen_ai.response.finish_reasons": reasons}}
+        call = [{"type": "text", "content": ""}, {"type": "tool_call", "id": "c1", "name": "lookup",
+                                                 "arguments": {"order_id": "A"}}]
+        spans = [chat("a", 1.0, call, ["tool_call"]),
+                 chat("b", 2.0, [{"type": "text", "content": "Turn 1 answer."}], ["stop"]),
+                 chat("c", 3.0, [{"type": "text", "content": "Turn 2 answer."}], ["stop"])]
+        rows = _agentic_timeline_view({"judgment": {"evidence_spans": spans}})["rows"]
+        self.assertEqual([r["llm_role"] for r in rows], ["tool call", "reply", "reply"])
+        self.assertEqual([r["user_input"] for r in rows], [False, False, False])     # no input captured
+        self.assertEqual(rows[0]["name"], "agent → lookup")
+        self.assertEqual([bool(r.get("response")) for r in rows], [False, True, True])  # every turn's reply
+        self.assertIn("emerald", rows[1]["card_border_class"])
+        self.assertNotIn("emerald", rows[0]["card_border_class"])
+
+    def test_model_call_receiving_the_user_turn_is_marked(self):
+        import json as _json
+
+        def chat(sid, start, inputs):
+            return {"span_id": sid, "name": "chat", "kind": "LLM", "start_time": start, "end_time": start + 0.1,
+                    "attributes": {"gen_ai.operation.name": "chat", "gen_ai.input.messages": _json.dumps(inputs),
+                                   "gen_ai.output.messages": _json.dumps(
+                                       [{"role": "assistant", "parts": [{"type": "text", "content": "ok"}]}])}}
+        user = {"role": "user", "parts": [{"type": "reference", "span_id": "x", "attribute": "gen_ai.input.messages",
+                                          "index": 1}]}
+        tool = {"role": "tool", "parts": [{"type": "tool_call_response", "id": "c1", "response": "r"}]}
+        rows = _agentic_timeline_view({"judgment": {"evidence_spans": [chat("a", 1.0, [user]),
+                                                                        chat("b", 2.0, [user, tool])]}})["rows"]
+        self.assertEqual([r["user_input"] for r in rows], [True, False])
+
     def test_timeline_none_without_spans(self):
         self.assertIsNone(_agentic_timeline_view({}))
         self.assertIsNone(_agentic_timeline_view({"judgment": {}}))

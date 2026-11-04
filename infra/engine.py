@@ -833,6 +833,11 @@ def _collect_evidence_spans(
     # Redact once at the requested level; re-applying a stricter level is a
     # no-op over already-sanitized spans (content keys are simply absent).
     all_spans = apply_content_capture_level(_drop_connection_noise(all_spans), capture_level)
+    # A target may send compact content (Open WebUI's default): resolve its
+    # references so selection, rules and the judge see full content.
+    from audits.agentic.compact import expand_spans
+
+    all_spans = expand_spans(all_spans)
     # ``selector_version`` was added after the first public tracing release;
     # keep Studio compatible with both the released engine and newer git builds.
     try:
@@ -871,6 +876,21 @@ def _collect_evidence_spans(
         },
         "diagnostics": {},
     }
+
+
+def _stored_trace_evidence(evidence: dict[str, Any]) -> dict[str, Any]:
+    """Trace evidence as persisted: span content stored once per trace.
+
+    ``all_spans`` is compacted (repeats become references, see
+    ``audits.agentic.compact``); ``selected_spans`` are the same compacted spans,
+    so their references resolve against ``all_spans``.
+    """
+    from audits.agentic.compact import compact_spans
+
+    all_spans = compact_spans(evidence.get("all_spans") or [])
+    by_id = {s.get("span_id"): s for s in all_spans if isinstance(s, dict)}
+    selected = [by_id.get(s.get("span_id"), s) for s in evidence.get("selected_spans") or [] if isinstance(s, dict)]
+    return {**evidence, "all_spans": all_spans, "selected_spans": selected}
 
 
 def _drop_connection_noise(spans: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -1012,6 +1032,12 @@ def run_scenario(
                     structured=True,
                 )
                 selected = (evidence or {}).get("selected_spans") if evidence else None
+                if selected:
+                    # What the trace-reading judge sees: each piece of content once.
+                    from audits.agentic.compact import judge_view
+
+                    selected = judge_view(selected, pool=(evidence or {}).get("all_spans") or [],
+                                          conversation=getattr(execution, "conversation", None))
                 if not _agentic_meta:
                     return selected
                 # Agentic scenario: run deterministic checks on the captured
@@ -1111,6 +1137,7 @@ def run_scenario(
     if full_trace_evidence:
         # Persist full evidence tiers separately. For backward compatibility,
         # also populate judgment.evidence_spans with selected_spans.
+        full_trace_evidence = _stored_trace_evidence(full_trace_evidence)
         payload["trace_evidence"] = full_trace_evidence
         judgment = payload.get("judgment")
         if not isinstance(judgment, dict):
@@ -1372,6 +1399,12 @@ def run_scenario_repeated(
                 structured=True,
             )
             selected = (evidence or {}).get("selected_spans") if evidence else None
+            if selected:
+                # What the trace-reading judge sees: each piece of content once.
+                from audits.agentic.compact import judge_view
+
+                selected = judge_view(selected, pool=(evidence or {}).get("all_spans") or [],
+                                      conversation=getattr(execution, "conversation", None))
             try:
                 from audits.agentic.evaluate import evaluate as evaluate_agentic
                 from audits.agentic.expectations import validate_agentic_metadata
@@ -1452,6 +1485,7 @@ def run_scenario_repeated(
                     if full_trace_evidence:
                         # Persist full evidence tiers separately. For backward compatibility,
                         # also populate judgment.evidence_spans with selected_spans.
+                        full_trace_evidence = _stored_trace_evidence(full_trace_evidence)
                         rep["trace_evidence"] = full_trace_evidence
                         judgment = rep.get("judgment")
                         if not isinstance(judgment, dict):

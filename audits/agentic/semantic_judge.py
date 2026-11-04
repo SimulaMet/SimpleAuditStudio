@@ -19,6 +19,10 @@ _MAX_ARGUMENT_CHARS = 400
 _MAX_RESULT_CHARS = 1600
 _MAX_LEAF_CHARS = 240
 _MAX_LIST_ITEMS = 10
+# The agent's answers are what task completion is judged on: keep them whole
+# enough that a conclusion at the end is never cut off.
+_MAX_RESPONSE_CHARS = 6000
+_MAX_CONVERSATION_MESSAGES = 20
 
 
 @dataclass
@@ -77,6 +81,9 @@ def _retrieved_sources(trajectory: AgentTrajectory) -> list[str]:
     sources: set[str] = set()
     for step in trajectory.steps:
         documents = step.attributes.get("gen_ai.retrieval.documents")
+        if isinstance(documents, str):
+            # The standard attribute is JSON text: a list of documents, not a source name.
+            documents = _document(documents)
         if isinstance(documents, list):
             documents = [_document(item) for item in documents]
         sources.update(_source_values(documents))
@@ -141,6 +148,77 @@ If output is wrong but process was correct, this may indicate incomplete tool re
 """
 
 
+def _message_text(message: Any) -> str:
+    """The text parts of one GenAI message (role/parts schema)."""
+    if not isinstance(message, dict):
+        return ""
+    parts = message.get("parts")
+    if not isinstance(parts, list):
+        return str(message.get("content") or "")
+    return "".join(str(p.get("content") or "") for p in parts if isinstance(p, dict) and p.get("type") == "text")
+
+
+def _json_attribute(value: Any) -> Any:
+    if isinstance(value, str):
+        try:
+            return json.loads(value)
+        except (TypeError, ValueError):
+            return None
+    return value
+
+
+def _user_question(text: str) -> tuple[str, bool]:
+    """The user's own words, and whether a RAG prompt template wrapped them.
+
+    Open WebUI's RAG template puts a fixed instruction block and a ``<context>``
+    list of sources before the user's message. The sources are on the retrieval
+    steps already, so the judge gets the message after ``</context>``.
+    """
+    head, marker, tail = text.rpartition("</context>")
+    if marker and "<context>" in head and tail.strip():
+        return tail.strip(), True
+    return text, False
+
+
+def _trace_turns(trajectory: Any) -> list[dict[str, str]]:
+    """The conversation as the trace records it: each user turn and the agent's reply.
+
+    A turn is one root span of the trace (Open WebUI starts one per user message).
+    Its last model call carries the user's message in ``gen_ai.input.messages`` and
+    the agent's reply in ``gen_ai.output.messages``. Only observed span content.
+    """
+    steps = list(getattr(trajectory, "steps", []) or [])
+    parent = {s.span_id: s.parent_span_id for s in steps if s.span_id}
+
+    def root(span_id: str) -> str:
+        seen = set()
+        while parent.get(span_id) in parent and span_id not in seen:
+            seen.add(span_id)
+            span_id = parent[span_id]
+        return span_id
+
+    last_call: dict[str, Any] = {}
+    for step in steps:
+        if step.kind == "inference" and step.purpose == "primary":
+            last_call[root(step.span_id)] = step          # steps are in execution order
+    turns: list[dict[str, str]] = []
+    for step in last_call.values():
+        inputs = _json_attribute(step.attributes.get("gen_ai.input.messages"))
+        outputs = _json_attribute(step.attributes.get("gen_ai.output.messages"))
+        users = [m for m in inputs or [] if isinstance(m, dict) and m.get("role") == "user"]
+        reply = "".join(_message_text(m) for m in outputs or [] if isinstance(m, dict))
+        if users:
+            question, wrapped = _user_question(_message_text(users[-1]))
+            turn = {"role": "user", "content": _bounded(question, _MAX_RESPONSE_CHARS), "span_id": step.span_id}
+            if wrapped:
+                turn["rag_template_removed"] = True
+            turns.append(turn)
+        if reply:
+            turns.append({"role": "assistant", "content": _bounded(reply, _MAX_RESPONSE_CHARS),
+                          "span_id": step.span_id})
+    return turns[-_MAX_CONVERSATION_MESSAGES:]
+
+
 def build_evidence_packet(
     trajectory: Any,
     task: str = "",
@@ -167,15 +245,23 @@ def build_evidence_packet(
             "status": step.status,
         })
     retrieval_sources = _retrieved_sources(trajectory)
-    return {
+    turns = _trace_turns(trajectory)
+    packet = {
         "task": _bounded(task),
         "expectations": list(expectations or []),
-        "final_response": _bounded(final_response),
+        "final_response": _bounded(final_response, _MAX_RESPONSE_CHARS),
+        # Multi-turn scenarios answer the task across turns: every turn, from the trace.
+        "conversation": turns,
         "tool_steps": tool_steps,
         "retrieval_source_ids": retrieval_sources,
         "span_ids": [step.span_id for step in steps],
         "truncated": len(steps) > _MAX_TOOL_STEPS,
     }
+    # The last assistant turn already is the final response: do not send it twice.
+    last = next((t for t in reversed(turns) if t["role"] == "assistant"), None)
+    if last and final_response and last["content"] == packet["final_response"]:
+        del packet["final_response"]
+    return packet
 
 
 def build_agentic_semantic_prompt(packet: dict[str, Any], criteria: list[str]) -> str:
@@ -186,6 +272,11 @@ def build_agentic_semantic_prompt(packet: dict[str, Any], criteria: list[str]) -
     lines += [
         "For each dimension respond PASS, FAIL, or INCONCLUSIVE (insufficient observation).",
         "Cite span_ids from the packet as evidence. Never assume unobserved behavior.",
+        ("`task` is the first user message; `conversation` holds every user turn and agent reply"
+         " as recorded on the trace's model-call spans; the agent's final response is its last"
+         " assistant turn (or `final_response` when given separately). Judge task completion on the whole"
+         " conversation: an earlier turn may already answer the task, and later turns answer"
+         " follow-ups."),
         ('Respond with JSON only: {"dimensions": {"<name>": {"status": "PASS|FAIL|INCONCLUSIVE",'
          ' "rationale": "...", "span_ids": ["..."]}}}'),
     ]

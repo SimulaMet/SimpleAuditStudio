@@ -11,6 +11,7 @@ import contextvars
 import inspect
 import json
 import logging
+from collections import OrderedDict
 from typing import Any
 from uuid import uuid4
 
@@ -248,6 +249,38 @@ def _openwebui_saved_chat_params(params: dict[str, Any]) -> dict[str, Any]:
     return filtered
 
 
+# Open WebUI chat continued by each conversation: conversation key -> (chat id,
+# id of the last assistant message). Bounded; a missing entry starts a new chat.
+_owui_conversations: OrderedDict[str, tuple[str, str]] = OrderedDict()
+_OWUI_CONVERSATIONS_MAX = 2048
+
+
+def _conversation_key(model: str, trace_headers: dict[str, str] | None, messages: list[dict[str, Any]]) -> str:
+    """Identity of a conversation so far: the model, the trace, and its user/assistant turns.
+
+    Open WebUI builds a saved chat's model input from the chat it stores, so each
+    turn must continue the chat that holds the earlier turns. The W3C trace id
+    keeps concurrent scenarios (and repetitions) apart.
+    """
+    import hashlib
+
+    traceparent = (trace_headers or {}).get("traceparent", "")
+    trace_id = traceparent.split("-")[1] if traceparent.count("-") >= 2 else ""
+    turns = [
+        [m.get("role"), m.get("content") if isinstance(m.get("content"), str) else json.dumps(m.get("content"), default=str)]
+        for m in messages if isinstance(m, dict) and m.get("role") in ("user", "assistant")
+    ]
+    raw = json.dumps([model, trace_id, turns], ensure_ascii=False, sort_keys=True)
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _remember_conversation(key: str, chat_id: str, assistant_id: str) -> None:
+    _owui_conversations[key] = (chat_id, assistant_id)
+    _owui_conversations.move_to_end(key)
+    while len(_owui_conversations) > _OWUI_CONVERSATIONS_MAX:
+        _owui_conversations.popitem(last=False)
+
+
 async def _openwebui_saved_chat_call(
     client: Any,
     model: str,
@@ -274,10 +307,22 @@ async def _openwebui_saved_chat_call(
     user_id = str(uuid4())
     assistant_id = str(uuid4())
     messages = kwargs.get("messages") or []
-    user_message = next(
-        (message for message in reversed(messages) if message.get("role") == "user"),
-        {"role": "user", "content": ""},
+    user_index = next(
+        (i for i in range(len(messages) - 1, -1, -1) if messages[i].get("role") == "user"), None
     )
+    user_message = messages[user_index] if user_index is not None else {"role": "user", "content": ""}
+    earlier = messages[:user_index] if user_index is not None else []
+    # A follow-up turn continues the Open WebUI chat that holds the earlier turns;
+    # otherwise the agent would answer each turn without the conversation.
+    continued = (
+        _owui_conversations.get(_conversation_key(model, trace_headers, earlier))
+        if any(m.get("role") == "assistant" for m in earlier) else None
+    )
+    if continued is None and any(m.get("role") == "assistant" for m in earlier):
+        logging.getLogger(__name__).warning(
+            "No Open WebUI chat found for this conversation; the turn starts a new chat without history"
+        )
+    chat_id_to_continue, parent_id = continued or (None, None)
     body = _openwebui_saved_chat_params(kwargs)
     body.pop("extra_headers", None)
     body.pop("extra_body", None)
@@ -287,17 +332,19 @@ async def _openwebui_saved_chat_call(
     body.setdefault("session_id", str(uuid4()))
     body.update(
         {
-            "parent_id": None,
+            "parent_id": parent_id,
             "user_message": {
                 "id": user_id,
                 "role": "user",
                 "content": user_message.get("content", ""),
-                "parentId": None,
+                "parentId": parent_id,
             },
             "message_ids": [{"model_id": model, "message_id": assistant_id}],
             "stream": True,
         }
     )
+    if chat_id_to_continue:
+        body["chat_id"] = chat_id_to_continue
     options = {"headers": trace_headers} if trace_headers else {}
     created = await raw_client.post("/chat/completions", cast_to=dict, body=body, options=options)
     chat_id = created.get("chat_id") if isinstance(created, dict) else None
@@ -329,8 +376,14 @@ async def _openwebui_saved_chat_call(
             raise RuntimeError(f"Open WebUI chat failed: {message['error']}")
         if message.get("done"):
             usage = message.get("usage") or {}
+            reply = _saved_chat_content(message)
+            _remember_conversation(
+                _conversation_key(model, trace_headers, [*earlier, user_message,
+                                                         {"role": "assistant", "content": reply}]),
+                chat_id, message.get("id") or assistant_id,
+            )
             return (
-                _saved_chat_content(message),
+                reply,
                 usage.get("prompt_tokens", 0) or 0,
                 usage.get("completion_tokens", 0) or 0,
             )
@@ -598,8 +651,8 @@ def _build_tool_executor(tools_spec: list[dict[str, Any]]) -> Any | None:
                    "acme_check_return_eligibility", "acme_get_return_case",
                    "acme_search_knowledge", "search_knowledge"}
     if names & _acme_names:
-        from infra.fixtures.sample_tools.order_lookup import Tools
-        return Tools()
+        from infra.fixtures.local_knowledge import LocalTools
+        return LocalTools()
     return None
 
 

@@ -282,6 +282,23 @@ with two Open WebUI specifics:
   must be the **full** ingestion URL, e.g.
   `https://<studio>/otlp/v1/traces` (a base-only URL 404s).
 
+**Compact trace content.** GenAI spans are self-contained, so every model call
+repeats the system prompt, the history and earlier tool results. Open WebUI (from
+the Studio fork's compact mode, its default; `OTEL_GENAI_CONTENT_MODE=full` restores
+standard spans) records each piece of content once per trace. Later spans refer back to it
+with a reference that keeps the GenAI JSON shape: a repeated message becomes
+`{"role": …, "parts": [{"type": "reference", "span_id", "attribute", "index"}]}`, and a repeated
+value (e.g. a tool result) becomes `{"type": "reference", "span_id", "attribute"}`.
+Studio applies the same compaction to every trace it stores, whichever target sent it
+(`audits/agentic/compact.py`). It expands references back to full content before rules and the
+judge run, and the trajectory timeline shows each repeat as a "↩ same as LLM-1 · …" line.
+
+**Multi-turn agent runs.** A traced Agent run goes through Open WebUI's saved-chat
+path, which builds the model input from the chat it stores. Each later turn
+therefore continues the scenario's Open WebUI chat (`chat_id` plus the previous reply as
+`parent_id`), so the agent sees the whole conversation. Untraced runs call the
+agent's base model directly and send the full history themselves.
+
 So enabling it is one line:
 
 ```bash

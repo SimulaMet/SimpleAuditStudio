@@ -12,7 +12,6 @@ import json
 import os
 import shutil
 import signal
-import socket
 import subprocess
 import sys
 import time
@@ -344,14 +343,10 @@ def _lock(file: Path, blocking: bool = False):
 
 
 def _port_free(port: int) -> bool:
-    if port < 1 or port > 65535:
-        return False
-    with socket.socket() as s:
-        try:
-            s.bind(("0.0.0.0", port))
-            return True
-        except OSError:
-            return False
+    # One probe for every port check: it ignores TIME_WAIT leftovers of a stopped stack.
+    from simpleaudit_studio.ports import _port_free as probe
+
+    return probe(port)
 
 
 def _requested_ports(public: int) -> dict:

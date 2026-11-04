@@ -149,3 +149,68 @@ def test_packet_reads_retrieval_documents_sent_as_json_strings():
         ]})])
     packet = build_evidence_packet(trajectory)
     assert packet["retrieval_source_ids"] == ["customer_faq.md", "f-1", "shipping.md"]
+
+
+def test_packet_takes_every_turn_from_the_trace_and_keeps_long_answers():
+    """Each turn's user message and agent reply come from its model-call span; a long
+    final answer is not cut before its conclusion."""
+    import json
+
+    from audits.agentic.semantic_judge import (
+        build_agentic_semantic_prompt,
+        build_evidence_packet,
+    )
+    from audits.agentic.trajectory import normalize
+
+    answer = "The 15-day electronics window applies. " * 30 + "So your January 2nd deadline stands."
+
+    def message(role, text):
+        return {"role": role, "parts": [{"type": "text", "content": text}]}
+
+    def chat(span_id, turn, start, inputs, reply):
+        return {"span_id": span_id, "parent_span_id": turn, "name": "chat", "start_time": start,
+                "attributes": {"gen_ai.operation.name": "chat",
+                               "gen_ai.input.messages": json.dumps(inputs),
+                               "gen_ai.output.messages": json.dumps([message("assistant", reply)])}}
+
+    first = message("user", "How long do I have to return my headphones?")
+    second = message("user", "Is there a high-value exception?")
+    spans = [
+        {"span_id": "wf1", "name": "invoke_workflow", "start_time": 1.0,
+         "attributes": {"gen_ai.operation.name": "invoke_workflow"}},
+        chat("c1", "wf1", 1.1, [first], "15 days from delivery: until January 2nd."),
+        {"span_id": "wf2", "name": "invoke_workflow", "start_time": 5.0,
+         "attributes": {"gen_ai.operation.name": "invoke_workflow"}},
+        chat("c2", "wf2", 5.1, [first, message("assistant", "15 days."), second], answer),
+    ]
+    packet = build_evidence_packet(normalize(spans), task="How long do I have?", final_response=answer)
+    turns = packet["conversation"]
+    assert "final_response" not in packet                           # same as the last turn: sent once
+    assert [(t["role"], t["span_id"]) for t in turns] == [
+        ("user", "c1"), ("assistant", "c1"), ("user", "c2"), ("assistant", "c2")]
+    assert turns[2]["content"] == "Is there a high-value exception?"
+    assert turns[3]["content"].endswith("deadline stands.")
+    assert "whole" in build_agentic_semantic_prompt(packet, ["task_completion"])
+
+
+def test_retrieval_sources_read_the_standard_json_documents_attribute():
+    """gen_ai.retrieval.documents is JSON text: the packet lists source names, not the whole JSON."""
+    import json
+
+    from audits.agentic.semantic_judge import build_evidence_packet
+    from audits.agentic.trajectory import normalize
+
+    docs = [{"source": "refunds.md", "file_id": "f1", "content": "Electronics: 15 days."},
+            {"source": "matrix.md", "content": "Defective: 90 days."}]
+    span = {"span_id": "r1", "name": "retrieval", "start_time": 1.0,
+            "attributes": {"gen_ai.operation.name": "retrieval", "gen_ai.retrieval.documents": json.dumps(docs)}}
+    packet = build_evidence_packet(normalize([span]))
+    assert packet["retrieval_source_ids"] == ["f1", "matrix.md", "refunds.md"]
+
+
+def test_user_turn_drops_the_rag_template_but_keeps_the_question():
+    from audits.agentic.semantic_judge import _user_question
+
+    wrapped = "### Task:\nRespond using the context.\n<context>\n<source id=1>…</source>\n</context>\n\nIs it 15 days?"
+    assert _user_question(wrapped) == ("Is it 15 days?", True)
+    assert _user_question("Is it 15 days?") == ("Is it 15 days?", False)

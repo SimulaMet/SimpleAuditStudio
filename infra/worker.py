@@ -703,6 +703,7 @@ def _scenario_execute_impl(workflow_input: ScenarioInput, ctx: Context) -> dict:
     # scenarios (no spans available in the resolver), we do the full eval.
     if trace_on and (revision.metadata or {}).get("agentic"):
         try:
+            from audits.agentic.compact import expand_spans
             from audits.agentic.semantic_judge import run_semantic_judge
             from audits.agentic.trajectory import normalize
             from audits.agentic.verdict_policy import compute_overall_verdict
@@ -734,6 +735,8 @@ def _scenario_execute_impl(workflow_input: ScenarioInput, ctx: Context) -> dict:
                         fallback = (target.get("judgment") or {}).get("evidence_spans")
                         if isinstance(fallback, list):
                             all_spans = [s for s in fallback if isinstance(s, dict)]
+                    # Stored spans are compact (content once per trace): expand for evaluation.
+                    all_spans = expand_spans(all_spans)
 
                     from audits.agentic.evaluate import evaluate as evaluate_agentic
                     trajectory = normalize(all_spans)
@@ -769,6 +772,8 @@ def _scenario_execute_impl(workflow_input: ScenarioInput, ctx: Context) -> dict:
                         fallback = (target.get("judgment") or {}).get("evidence_spans")
                         if isinstance(fallback, list):
                             all_spans = [s for s in fallback if isinstance(s, dict)]
+                    # Stored spans are compact (content once per trace): expand for evaluation.
+                    all_spans = expand_spans(all_spans)
                     trajectory = normalize(all_spans)
                     if not trajectory.steps:
                         evaluation["semantic_judgement"] = {

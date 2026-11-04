@@ -3762,6 +3762,9 @@ _TRACE_SPAN_CONTENT_BLOCKS = (
     ("Tool result", ("gen_ai.tool.call.result", "tool.result")),
     ("Input", ("input.value", "gen_ai.prompt", "gen_ai.input.messages")),
     ("Output", ("output.value", "gen_ai.completion", "gen_ai.output.messages")),
+    ("Error", ("exception.message", "error.message", "error.type")),
+    ("Retrieval query", ("gen_ai.retrieval.query.text",)),
+    ("Retrieved documents", ("gen_ai.retrieval.documents",)),
 )
 
 
@@ -3776,10 +3779,19 @@ def _trace_span_content_blocks(span: dict) -> list[tuple[str, str]]:
             value = attrs.get(key)
             if value is None:
                 continue
+            # GenAI content attributes are JSON text; show them indented.
+            if isinstance(value, str) and value.lstrip()[:1] in ("{", "["):
+                try:
+                    value = json.loads(value)
+                except (TypeError, ValueError):
+                    pass
             if not isinstance(value, str):
-                import json as _json
-
-                value = _json.dumps(value, indent=2, default=str)
+                value = json.dumps(value, indent=2, ensure_ascii=False, default=str)
+            if label == "Error":
+                # "ValueError: No order found for …": what failed and why.
+                kind = attrs.get("exception.type") or attrs.get("error.type")
+                if kind and key != "error.type" and not str(value).startswith(str(kind)):
+                    value = f"{kind}: {value}"
             blocks.append((label, value))
             break
     return blocks
@@ -3870,47 +3882,65 @@ def _llm_tool_call_names(attrs: dict) -> list[str]:
     return names
 
 
-def _llm_tool_decision(span: dict, attrs: dict) -> tuple[str, str] | None:
-    """Extract the tool call(s) an LLM span decided on, if any.
-
-    Returns ``(name, detail)`` for a single tool call, ``("a + b", ...)`` when
-    several were requested, or ``None`` when the span's output did not decide a
-    tool call (i.e. it produced a plain answer). Used to render Open WebUI-style
-    traces, where every model step is an ``LLM`` span and the tool-decision
-    steps carry the tool name/args in their output message rather than as a
-    separate TOOL span.
-    """
-    out_msgs = attrs.get("gen_ai.output.messages")
+def _output_parts(attrs: dict) -> list[dict]:
+    """The parts of a model call's ``gen_ai.output.messages`` (GenAI role/parts schema)."""
+    raw = attrs.get("gen_ai.output.messages")
     try:
-        msgs = json.loads(out_msgs) if isinstance(out_msgs, str) else out_msgs
+        msgs = json.loads(raw) if isinstance(raw, str) else raw
     except (ValueError, TypeError):
+        return []
+    # Span attributes come from the audited system's OTLP export: untrusted shape.
+    return [
+        part for m in (msgs if isinstance(msgs, list) else []) if isinstance(m, dict)
+        for part in (m.get("parts") if isinstance(m.get("parts"), list) else []) if isinstance(part, dict)
+    ]
+
+
+def _llm_role(attrs: dict) -> str | None:
+    """``"tool call"`` when a model call asked for a tool, ``"reply"`` when it answered in text.
+
+    Read only from GenAI attributes: tool-call parts in ``gen_ai.output.messages`` or a
+    ``tool_call`` finish reason, else a non-empty text part.
+    """
+    parts = _output_parts(attrs)
+    reasons = attrs.get("gen_ai.response.finish_reasons") or []
+    if any(p.get("type") == "tool_call" for p in parts) or any(
+            str(r) in ("tool_call", "tool_calls") for r in (reasons if isinstance(reasons, list) else [reasons])):
+        return "tool call"
+    if any(p.get("type") == "text" and p.get("content") for p in parts):
+        return "reply"
+    return None
+
+
+def _input_ends_with_user(attrs: dict) -> bool:
+    """Whether a model call's ``gen_ai.input.messages`` ends with the user's message.
+
+    That call is the one that received the user's new turn (a referenced, compacted
+    message keeps its role, so this holds for compact traces too).
+    """
+    raw = attrs.get("gen_ai.input.messages")
+    try:
+        msgs = json.loads(raw) if isinstance(raw, str) else raw
+    except (ValueError, TypeError):
+        return False
+    last = msgs[-1] if isinstance(msgs, list) and msgs else None
+    return isinstance(last, dict) and last.get("role") == "user"
+
+
+def _llm_tool_decision(span: dict, attrs: dict) -> tuple[str, str] | None:
+    """The tool call(s) a model call decided on, from its GenAI ``tool_call`` output parts.
+
+    Returns ``(name, detail)`` for one call, ``("a + b", ...)`` for several, or
+    ``None`` when the output holds no tool call (a plain reply).
+    """
+    calls = [p for p in _output_parts(attrs) if p.get("type") == "tool_call" and p.get("name")]
+    if not calls:
         return None
-    if not isinstance(msgs, list):
-        return None
-    names, args = [], []
-    for m in msgs:
-        if not isinstance(m, dict):
-            continue
-        # Span attributes come from the audited system's OTLP export: untrusted shape.
-        calls = m.get("tool_calls")
-        for tc in calls if isinstance(calls, list) else []:
-            fn = tc.get("function") if isinstance(tc, dict) else None
-            if not isinstance(fn, dict):
-                continue
-            nm = fn.get("name")
-            if nm:
-                names.append(str(nm))
-            ar = fn.get("arguments")
-            if ar:
-                args.append(ar if isinstance(ar, str) else json.dumps(ar))
-    if not names:
-        return None
+    names = [str(c["name"]) for c in calls]
     label = names[0] if len(names) == 1 else " + ".join(names[:2]) + ("…" if len(names) > 2 else "")
-    detail = ""
-    if args:
-        a = args[0]
-        detail = a if len(a) <= 96 else a[:93] + "..."
-    return label, detail
+    args = calls[0].get("arguments")
+    detail = "" if args is None else (args if isinstance(args, str) else json.dumps(args, ensure_ascii=False))
+    return label, (detail if len(detail) <= 96 else detail[:93] + "...")
 
 
 def _as_text_list(value) -> list[str]:
@@ -3998,14 +4028,15 @@ def _agentic_span_view(span: dict) -> dict | None:
     display_name = span.get("name") or tool_name or "step"
     is_tool_decision = False
     decision_detail = ""
+    llm_role = _llm_role(attrs) if kind == "LLM" else None
     if kind == "LLM" and not tool_name:
         decision = _llm_tool_decision(span, attrs)
         if decision:
             # Render a model step that decided to call a tool as a distinct
-            # 🔧 "agent → tool" row rather than another generic 🧠 LLM row.
+            # "agent → tool" row. It keeps the model's 🧠 icon: 🔧 is the tool run itself.
             label, summary = decision
             is_tool_decision = True
-            icon, tone = "🔧", "text-amber-300"
+            icon, tone = "🧠", "text-sky-300"
             display_name = f"agent → {label}"
             tool_name = label
             decision_detail = summary
@@ -4018,7 +4049,8 @@ def _agentic_span_view(span: dict) -> dict | None:
         "tone": tone,
         "name": display_name,
         "tool_name": tool_name,
-        "arguments": _arguments_preview(attrs.get("gen_ai.tool.call.arguments")),
+        "arguments": _arguments_preview(attrs.get("gen_ai.tool.call.arguments"))
+        or _arguments_preview(attrs.get("gen_ai.retrieval.query.text")),
         "redundant_reason": str(attrs.get("redundant_reason") or ""),
         "decision_detail": decision_detail,
         "is_tool_decision": is_tool_decision,
@@ -4028,6 +4060,10 @@ def _agentic_span_view(span: dict) -> dict | None:
         "content_blocks": _trace_span_content_blocks(span),
         "raw_json": json.dumps(span, indent=2, ensure_ascii=False, default=str),
         "is_retrieval": kind == "RETRIEVER" or bool(kb_sources) or "retriev" in str(tool_name).lower(),
+        "llm_role": llm_role,
+        "user_input": llm_role is not None and _input_ends_with_user(attrs),
+        "is_error": str(span.get("status") or "").upper() == "ERROR" or bool(attrs.get("error.type")),
+        "error_type": str(attrs.get("exception.type") or attrs.get("error.type") or ""),
     }
 
 
@@ -4273,6 +4309,78 @@ def _is_workflow_wrapper(span: dict) -> bool:
     return str(attrs.get("gen_ai.operation.name") or "").lower() == "invoke_workflow"
 
 
+_REFERENCE_ATTRIBUTE_NAMES = {
+    "gen_ai.input.messages": "input",
+    "gen_ai.output.messages": "output",
+    "gen_ai.tool.call.result": "tool result",
+    "gen_ai.tool.call.arguments": "tool arguments",
+    "gen_ai.retrieval.documents": "retrieved documents",
+    "gen_ai.system_instructions": "system instructions",
+}
+
+
+def _reference_marker(reference: dict, label_for: dict[str, str], role: str | None = None) -> str:
+    """One readable line for a compact-content reference (see audits.agentic.compact)."""
+    span_id = str(reference.get("span_id") or "")
+    where = label_for.get(span_id) or _span_label(span_id)
+    what = _REFERENCE_ATTRIBUTE_NAMES.get(str(reference.get("attribute")), str(reference.get("attribute")))
+    if isinstance(reference.get("index"), int):
+        what = f"{what} message {reference['index'] + 1}"
+    return f"↩ same as {where} · {what}" + (f" ({role})" if role else "")
+
+
+def _with_reference_markers(value, label_for: dict[str, str]):
+    """``value`` with every compact-content reference replaced by its marker line."""
+    from audits.agentic.compact import is_reference, message_reference
+
+    reference = message_reference(value)
+    if reference:
+        return _reference_marker(reference, label_for, value.get("role"))
+    if is_reference(value):
+        return _reference_marker(value, label_for)
+    if isinstance(value, list):
+        return [_with_reference_markers(item, label_for) for item in value]
+    if isinstance(value, dict):
+        return {key: _with_reference_markers(item, label_for) for key, item in value.items()}
+    return value
+
+
+def _show_compact_content(rows: list[dict], compacted: dict[str, dict], label_for: dict[str, str]) -> None:
+    """Show each step's content stored once per trace: repeats become marker lines.
+
+    Steps are computed from the full (expanded) spans; only what is displayed
+    comes from the compacted spans, whose raw JSON is what Studio stores.
+    """
+    for row in rows:
+        span = compacted.get(row["span_id"])
+        if span is None:
+            continue
+        blocks = []
+        for label, text in _trace_span_content_blocks(span):
+            try:
+                value = json.loads(text)
+            except (TypeError, ValueError):
+                blocks.append((label, text))
+                continue
+            shown = _with_reference_markers(value, label_for)
+            blocks.append((label, shown if isinstance(shown, str)
+                           else json.dumps(shown, indent=2, ensure_ascii=False, default=str)))
+        row["content_blocks"] = blocks
+        row["raw_json"] = json.dumps(span, indent=2, ensure_ascii=False, default=str)
+        args = (span.get("attributes") or {}).get("gen_ai.tool.call.arguments")
+        if args is not None and isinstance(_with_reference_markers(_json_list_or_value(args), label_for), str):
+            row["arguments"] = _with_reference_markers(_json_list_or_value(args), label_for)
+
+
+def _json_list_or_value(value):
+    if isinstance(value, str):
+        try:
+            return json.loads(value)
+        except (TypeError, ValueError):
+            return value
+    return value
+
+
 def _agentic_timeline_view(rep: dict) -> dict | None:
     """Chronological full-width trajectory timeline for one rep's spans.
 
@@ -4282,6 +4390,8 @@ def _agentic_timeline_view(rep: dict) -> dict | None:
     Returns ``None`` when the rep carries no captured spans (the block hides itself).
     Rows are never reconstructed from the conversation.
     """
+    from audits.agentic.compact import compact_spans, expand_spans
+
     raw_spans = ((rep.get("judgment") or {}).get("evidence_spans") or []) if isinstance(rep.get("judgment"), dict) else []
     # ``invoke_workflow`` is the chat server's wrapper around one user turn; its
     # input/output repeat the conversation shown above, so it is not a step.
@@ -4289,6 +4399,19 @@ def _agentic_timeline_view(rep: dict) -> dict | None:
     if not raw_spans:
         # No captured spans: no trajectory to show.
         return None
+    # Content is stored once per trace (references to earlier spans). Steps are
+    # computed on full content; display shows the compact form, so results stored
+    # before compaction look the same.
+    pool = [s for s in (rep.get("trace_evidence") or {}).get("all_spans") or [] if isinstance(s, dict)]
+    raw_spans = expand_spans(raw_spans, pool=pool)
+    full_pool = expand_spans(pool, pool=pool)
+    pooled = {s.get("span_id") for s in full_pool}
+    shown = {s.get("span_id") for s in raw_spans}
+    compacted = {
+        str(s.get("span_id")): s
+        for s in compact_spans(full_pool + [s for s in raw_spans if s.get("span_id") not in pooled])
+        if s.get("span_id") in shown
+    }
     for idx, reason in _duplicate_inference_flags(raw_spans).items():
         attrs = raw_spans[idx].get("attributes") if isinstance(raw_spans[idx].get("attributes"), dict) else {}
         raw_spans[idx]["attributes"] = {**attrs, "redundant_reason": reason}
@@ -4333,10 +4456,13 @@ def _agentic_timeline_view(rep: dict) -> dict | None:
         counts[prefix] = counts.get(prefix, 0) + 1
         row["label"] = f"{prefix}-{counts[prefix]}"
         label_for.setdefault(row["span_id"], row["label"])
-    # The last model call, after every tool call, is the one that writes the answer.
-    model_rows = [row for row in rows if str(row.get("kind") or "").upper() == "LLM"]
-    if model_rows:
-        model_rows[-1].update(icon=_RESPONSE_ICON, response=True)
+    _show_compact_content(rows, compacted, label_for)
+    # Every model call that answered in text is the assistant's reply to its turn.
+    for row in rows:
+        if row.get("llm_role") == "reply":
+            row.update(icon=_RESPONSE_ICON, response=True)
+            if not row.get("is_redundant_rerun"):
+                row["card_border_class"] = "border-emerald-700/70 bg-emerald-950/30"
     anchor_for: dict[str, str] = {}
     for row in rows:
         anchor_for.setdefault(row["span_id"], row["anchor"])
