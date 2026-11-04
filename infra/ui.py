@@ -4033,10 +4033,10 @@ def _agentic_span_view(span: dict) -> dict | None:
         decision = _llm_tool_decision(span, attrs)
         if decision:
             # Render a model step that decided to call a tool as a distinct
-            # 🔧 "agent → tool" row rather than another generic 🧠 LLM row.
+            # "agent → tool" row. It keeps the model's 🧠 icon: 🔧 is the tool run itself.
             label, summary = decision
             is_tool_decision = True
-            icon, tone = "🔧", "text-amber-300"
+            icon, tone = "🧠", "text-sky-300"
             display_name = f"agent → {label}"
             tool_name = label
             decision_detail = summary
