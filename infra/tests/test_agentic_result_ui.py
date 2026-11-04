@@ -216,10 +216,26 @@ class AgenticViewHelperTests(TestCase):
                  chat("c", 3.0, [{"type": "text", "content": "Turn 2 answer."}], ["stop"])]
         rows = _agentic_timeline_view({"judgment": {"evidence_spans": spans}})["rows"]
         self.assertEqual([r["llm_role"] for r in rows], ["tool call", "reply", "reply"])
+        self.assertEqual([r["user_input"] for r in rows], [False, False, False])     # no input captured
         self.assertEqual(rows[0]["name"], "agent → lookup")
         self.assertEqual([bool(r.get("response")) for r in rows], [False, True, True])  # every turn's reply
         self.assertIn("emerald", rows[1]["card_border_class"])
         self.assertNotIn("emerald", rows[0]["card_border_class"])
+
+    def test_model_call_receiving_the_user_turn_is_marked(self):
+        import json as _json
+
+        def chat(sid, start, inputs):
+            return {"span_id": sid, "name": "chat", "kind": "LLM", "start_time": start, "end_time": start + 0.1,
+                    "attributes": {"gen_ai.operation.name": "chat", "gen_ai.input.messages": _json.dumps(inputs),
+                                   "gen_ai.output.messages": _json.dumps(
+                                       [{"role": "assistant", "parts": [{"type": "text", "content": "ok"}]}])}}
+        user = {"role": "user", "parts": [{"type": "reference", "span_id": "x", "attribute": "gen_ai.input.messages",
+                                          "index": 1}]}
+        tool = {"role": "tool", "parts": [{"type": "tool_call_response", "id": "c1", "response": "r"}]}
+        rows = _agentic_timeline_view({"judgment": {"evidence_spans": [chat("a", 1.0, [user]),
+                                                                        chat("b", 2.0, [user, tool])]}})["rows"]
+        self.assertEqual([r["user_input"] for r in rows], [True, False])
 
     def test_timeline_none_without_spans(self):
         self.assertIsNone(_agentic_timeline_view({}))

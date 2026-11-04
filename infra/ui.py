@@ -3912,6 +3912,21 @@ def _llm_role(attrs: dict) -> str | None:
     return None
 
 
+def _input_ends_with_user(attrs: dict) -> bool:
+    """Whether a model call's ``gen_ai.input.messages`` ends with the user's message.
+
+    That call is the one that received the user's new turn (a referenced, compacted
+    message keeps its role, so this holds for compact traces too).
+    """
+    raw = attrs.get("gen_ai.input.messages")
+    try:
+        msgs = json.loads(raw) if isinstance(raw, str) else raw
+    except (ValueError, TypeError):
+        return False
+    last = msgs[-1] if isinstance(msgs, list) and msgs else None
+    return isinstance(last, dict) and last.get("role") == "user"
+
+
 def _llm_tool_decision(span: dict, attrs: dict) -> tuple[str, str] | None:
     """The tool call(s) a model call decided on, from its GenAI ``tool_call`` output parts.
 
@@ -4046,6 +4061,7 @@ def _agentic_span_view(span: dict) -> dict | None:
         "raw_json": json.dumps(span, indent=2, ensure_ascii=False, default=str),
         "is_retrieval": kind == "RETRIEVER" or bool(kb_sources) or "retriev" in str(tool_name).lower(),
         "llm_role": llm_role,
+        "user_input": llm_role is not None and _input_ends_with_user(attrs),
         "is_error": str(span.get("status") or "").upper() == "ERROR" or bool(attrs.get("error.type")),
         "error_type": str(attrs.get("exception.type") or attrs.get("error.type") or ""),
     }
