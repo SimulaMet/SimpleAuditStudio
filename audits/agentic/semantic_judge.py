@@ -81,6 +81,9 @@ def _retrieved_sources(trajectory: AgentTrajectory) -> list[str]:
     sources: set[str] = set()
     for step in trajectory.steps:
         documents = step.attributes.get("gen_ai.retrieval.documents")
+        if isinstance(documents, str):
+            # The standard attribute is JSON text: a list of documents, not a source name.
+            documents = _document(documents)
         if isinstance(documents, list):
             documents = [_document(item) for item in documents]
         sources.update(_source_values(documents))

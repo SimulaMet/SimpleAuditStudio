@@ -191,3 +191,18 @@ def test_packet_takes_every_turn_from_the_trace_and_keeps_long_answers():
     assert turns[2]["content"] == "Is there a high-value exception?"
     assert turns[3]["content"].endswith("deadline stands.")
     assert "whole" in build_agentic_semantic_prompt(packet, ["task_completion"])
+
+
+def test_retrieval_sources_read_the_standard_json_documents_attribute():
+    """gen_ai.retrieval.documents is JSON text: the packet lists source names, not the whole JSON."""
+    import json
+
+    from audits.agentic.semantic_judge import build_evidence_packet
+    from audits.agentic.trajectory import normalize
+
+    docs = [{"source": "refunds.md", "file_id": "f1", "content": "Electronics: 15 days."},
+            {"source": "matrix.md", "content": "Defective: 90 days."}]
+    span = {"span_id": "r1", "name": "retrieval", "start_time": 1.0,
+            "attributes": {"gen_ai.operation.name": "retrieval", "gen_ai.retrieval.documents": json.dumps(docs)}}
+    packet = build_evidence_packet(normalize([span]))
+    assert packet["retrieval_source_ids"] == ["f1", "matrix.md", "refunds.md"]
