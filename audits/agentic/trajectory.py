@@ -60,10 +60,34 @@ def _content(attrs: dict[str, Any], *keys: str) -> Any:
     return raw
 
 
+def inside_retrieval(spans: list[dict[str, Any]]) -> set:
+    """Ids of the spans nested (at any depth) in a GenAI ``retrieval`` span.
+
+    A retrieval span is a retrieval pipeline (OTel GenAI conventions); a model call
+    the pipeline makes, such as rewriting the question into a search query, is its child.
+    """
+    parent = {s.get("span_id"): s.get("parent_span_id") for s in spans if isinstance(s, dict)}
+    retrievals = {
+        s.get("span_id") for s in spans
+        if isinstance(s, dict) and _kind(str(s.get("name") or ""), _attrs(s)) == "retrieval"
+    }
+    found = set()
+    for span_id in parent:
+        seen, current = set(), parent.get(span_id)
+        while current and current not in seen:
+            if current in retrievals:
+                found.add(span_id)
+                break
+            seen.add(current)
+            current = parent.get(current)
+    return found
+
+
 def normalize(all_spans: list[dict[str, Any]]) -> AgentTrajectory:
     """Normalize the captured OTLP spans. The trajectory is only what was observed:
     there is no reconstruction from conversation text."""
     steps = []
+    in_retrieval = inside_retrieval(all_spans)
     for index, span in enumerate(all_spans):
         attrs = _attrs(span)
         name = str(span.get("name") or span.get("span_name") or "unknown")
@@ -71,6 +95,10 @@ def normalize(all_spans: list[dict[str, Any]]) -> AgentTrajectory:
         if purpose not in {"primary", "auxiliary"}:
             purpose = "auxiliary"
         kind = _kind(name, attrs)
+        if kind == "inference" and span.get("span_id") in in_retrieval:
+            # A model call inside a retrieval span (query rewriting) is a step of the
+            # retrieval pipeline, not the agent's answer.
+            purpose = "auxiliary"
         step_name = name
         tool_name = None
         if kind == "tool":

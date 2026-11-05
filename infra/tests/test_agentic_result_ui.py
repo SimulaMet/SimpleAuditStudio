@@ -143,6 +143,30 @@ class AgenticViewHelperTests(TestCase):
         self.assertEqual(row["kb_sources"], ["refunds.md"])
         self.assertEqual(row["arguments"], "electronics window")
 
+    def test_model_call_inside_retrieval_is_part_of_that_step(self):
+        """A query rewrite nested in a retrieval span is shown inside that retrieval step, not as a reply."""
+        import json as _json
+
+        def chat(sid, parent, start, text):
+            return {"span_id": sid, "parent_span_id": parent, "name": "chat default", "kind": "LLM",
+                    "start_time": start, "end_time": start + 0.1,
+                    "attributes": {"gen_ai.operation.name": "chat", "gen_ai.output.messages": _json.dumps(
+                        [{"role": "assistant", "parts": [{"type": "text", "content": text}]}])}}
+        retrieval = {"span_id": "r", "parent_span_id": "w", "name": "retrieval", "kind": "RETRIEVER",
+                     "start_time": 1.0, "end_time": 2.0,
+                     "attributes": {"gen_ai.operation.name": "retrieval", "gen_ai.retrieval.query.text": "change GP"}}
+        tl = _agentic_timeline_view({"judgment": {"evidence_spans": [
+            retrieval, chat("q", "r", 1.1, "change GP"), chat("a", "w", 3.0, "Log in to helsenorge.no.")]}})
+        step, answer = tl["rows"]
+        # One retrieval step that reads in the order it ran: the model call, then the query.
+        self.assertEqual((step["label"], answer["label"]), ("RETRIEVAL-1", "LLM-1"))
+        self.assertEqual([label for label, _ in step["content_blocks"]], ["Model call · Output", "Retrieval query"])
+        self.assertEqual(step["model_calls"], 1)
+        self.assertEqual((answer["llm_role"], bool(answer.get("response"))), ("reply", True))
+        # Links to the model call land on the retrieval step.
+        self.assertEqual(tl["anchor_for"]["q"], step["anchor"])
+        self.assertEqual(tl["label_for"]["q"], "RETRIEVAL-1")
+
     def test_retrieval_inside_a_tool_call_is_one_step(self):
         """execute_tool with a retrieval span inside it is one row: arguments plus documents."""
         import json as _json

@@ -293,6 +293,13 @@ Studio applies the same compaction to every trace it stores, whichever target se
 (`audits/agentic/compact.py`). It expands references back to full content before rules and the
 judge run, and the trajectory timeline shows each repeat as a "↩ same as LLM-1 · …" line.
 
+**Model calls inside retrieval.** Studio follows the span structure of the OTel GenAI
+conventions, for any target. A `retrieval` span is a retrieval pipeline: a model call nested
+in it (for example rewriting the question into a search query) is a step of that pipeline,
+not the agent's answer. Rules and the semantic judge never take it as the reply, and the
+timeline tags it **retrieval step**. A retrieval span nested in an `execute_tool` span is
+shown as one step with that tool call.
+
 **Multi-turn agent runs.** A traced Agent run goes through Open WebUI's saved-chat
 path, which builds the model input from the chat it stores. Each later turn
 therefore continues the scenario's Open WebUI chat (`chat_id` plus the previous reply as

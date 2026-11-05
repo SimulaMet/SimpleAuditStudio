@@ -29,6 +29,7 @@ from django.views.generic import DetailView, TemplateView, View
 from accounts import workos_auth
 from accounts.models import User
 from audits.agentic.rules import validate_rules
+from audits.agentic.trajectory import inside_retrieval
 from audits.comparison import compare_runs
 from audits.events import ScenarioResult
 from audits.models import AuditRun
@@ -4381,23 +4382,41 @@ def _json_list_or_value(value):
     return value
 
 
-def _fold_tool_retrievals(raw_spans: list[dict], rows: list[dict]) -> dict[str, dict]:
-    """Retrieval rows nested in a tool row: ``{retrieval span id: tool row}``.
+#: Rows shown inside the row of the span they are nested in: (child kind, parent kind).
+_FOLDED_KINDS = {("RETRIEVER", "TOOL"), ("LLM", "RETRIEVER")}
 
-    A tool that reads content emits ``execute_tool`` with a ``retrieval`` span
-    inside it for the same call (GenAI semconv). Both describe one step, so the
-    timeline shows them as one row: the tool's arguments plus what it retrieved.
+
+def _fold_nested_steps(raw_spans: list[dict], rows: list[dict]) -> dict[str, dict]:
+    """Rows shown inside their parent's row: ``{child span id: parent row}``.
+
+    Following the OTel GenAI span structure, one step can be two spans:
+
+    * a tool that reads content emits ``execute_tool`` with a ``retrieval`` span
+      inside it for the same call: one row, the tool's arguments plus what it retrieved;
+    * a retrieval pipeline that calls a model (rewriting the question into a search
+      query) has that ``chat`` span inside its ``retrieval`` span: one row, the
+      model call and then the documents, so the step reads in the order it ran.
     """
     parent_of = {str(s.get("span_id")): str(s.get("parent_span_id") or "") for s in raw_spans}
-    tool_rows = {row["span_id"]: row for row in rows if str(row.get("kind") or "").upper() == "TOOL"}
+    by_id = {row["span_id"]: row for row in rows}
     folded = {}
     for row in rows:
-        if str(row.get("kind") or "").upper() != "RETRIEVER":
-            continue
-        tool_row = tool_rows.get(parent_of.get(row["span_id"], ""))
-        if tool_row is not None:
-            folded[row["span_id"]] = tool_row
+        parent = by_id.get(parent_of.get(row["span_id"], ""))
+        kinds = (str(row.get("kind") or "").upper(), str((parent or {}).get("kind") or "").upper())
+        if parent is not None and kinds in _FOLDED_KINDS:
+            folded[row["span_id"]] = parent
     return folded
+
+
+def _merge_model_call_into_retrieval(retrieval_row: dict, call_row: dict) -> None:
+    """Show a model call made by a retrieval pipeline inside its retrieval row."""
+    calls = [(f"Model call · {label}", value) for label, value in call_row["content_blocks"]]
+    retrieval_row["content_blocks"] = calls + retrieval_row["content_blocks"]
+    retrieval_row["raw_json"] = f"{retrieval_row['raw_json']}\n\n{call_row['raw_json']}"
+    retrieval_row["user_input"] = retrieval_row.get("user_input") or call_row.get("user_input")
+    retrieval_row["model_calls"] = retrieval_row.get("model_calls", 0) + 1
+    if call_row["is_error"] and not retrieval_row["is_error"]:
+        retrieval_row.update(is_error=True, error_type=call_row["error_type"])
 
 
 def _merge_retrieval_into_tool(tool_row: dict, retrieval_row: dict) -> None:
@@ -4483,7 +4502,12 @@ def _agentic_timeline_view(rep: dict) -> dict | None:
     _mark_redundant_reruns(raw_spans, rows)
     if not rows:
         return None
-    folded = _fold_tool_retrievals(raw_spans, rows)
+    # A model call inside a retrieval span (query rewriting) is a retrieval step, not a reply.
+    in_retrieval = inside_retrieval(raw_spans)
+    for row in rows:
+        if row["span_id"] in in_retrieval and row.get("llm_role"):
+            row["llm_role"] = "retrieval step"
+    folded = _fold_nested_steps(raw_spans, rows)
     # Readable references in execution order (LLM-1, TOOL-1 ...); the id stays the anchor.
     counts: dict[str, int] = {}
     label_for: dict[str, str] = {}
@@ -4495,12 +4519,24 @@ def _agentic_timeline_view(rep: dict) -> dict | None:
         counts[prefix] = counts.get(prefix, 0) + 1
         row["label"] = f"{prefix}-{counts[prefix]}"
         label_for.setdefault(row["span_id"], row["label"])
-    for span_id, tool_row in folded.items():
-        label_for.setdefault(span_id, tool_row["label"])
-    _show_compact_content(rows, compacted, label_for)
+    def host(row: dict) -> dict:
+        while row["span_id"] in folded:
+            row = folded[row["span_id"]]
+        return row
+
     for row in rows:
         if row["span_id"] in folded:
-            _merge_retrieval_into_tool(folded[row["span_id"]], row)
+            label_for.setdefault(row["span_id"], host(row)["label"])
+    _show_compact_content(rows, compacted, label_for)
+    # Innermost first: a model call goes into its retrieval row before that row goes into a tool row.
+    for row in reversed(rows):
+        parent = folded.get(row["span_id"])
+        if parent is None:
+            continue
+        if str(row.get("kind") or "").upper() == "LLM":
+            _merge_model_call_into_retrieval(parent, row)
+        else:
+            _merge_retrieval_into_tool(parent, row)
     rows = [row for row in rows if row["span_id"] not in folded]
     # Every model call that answered in text is the assistant's reply to its turn.
     for row in rows:
@@ -4511,8 +4547,11 @@ def _agentic_timeline_view(rep: dict) -> dict | None:
     anchor_for: dict[str, str] = {}
     for row in rows:
         anchor_for.setdefault(row["span_id"], row["anchor"])
-    for span_id, tool_row in folded.items():
-        anchor_for.setdefault(span_id, tool_row["anchor"])
+    by_id = {row["span_id"]: row for row in rows}
+    for span_id, parent in folded.items():
+        while parent["span_id"] not in by_id and parent["span_id"] in folded:
+            parent = folded[parent["span_id"]]
+        anchor_for.setdefault(span_id, parent["anchor"])
     all_spans = [
         s for s in (rep.get("trace_evidence") or {}).get("all_spans") or []
         if isinstance(s, dict) and not _is_workflow_wrapper(s)

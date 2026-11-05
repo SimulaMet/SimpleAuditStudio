@@ -73,3 +73,29 @@ def test_failed_order_lookup_discloses_no_scope():
         }
     ])
     assert trajectory.steps[0].attributes.get("data_scope") is None
+
+def test_a_model_call_inside_a_retrieval_span_is_not_an_answer():
+    """Query rewriting nested in a retrieval span (OTel GenAI) is a retrieval step, not the reply."""
+    import json as _json
+
+    from audits.agentic.checks.answer import final_answer
+    from audits.agentic.trajectory import normalize
+
+    def out(text):
+        return _json.dumps([{"role": "assistant", "parts": [{"type": "text", "content": text}]}])
+
+    spans = [
+        {"span_id": "w", "name": "invoke_workflow rag", "attributes": {"gen_ai.operation.name": "invoke_workflow"}},
+        {"span_id": "r", "parent_span_id": "w", "name": "retrieval",
+         "attributes": {"gen_ai.operation.name": "retrieval", "gen_ai.retrieval.query.text": "change GP"}},
+        {"span_id": "q", "parent_span_id": "r", "name": "chat default",
+         "attributes": {"gen_ai.operation.name": "chat", "gen_ai.output.messages": out("change GP")}},
+        {"span_id": "a", "parent_span_id": "w", "name": "chat default",
+         "attributes": {"gen_ai.operation.name": "chat", "gen_ai.output.messages": out("Log in to helsenorge.no.")}},
+    ]
+    trajectory = normalize(spans)
+    purposes = {step.span_id: step.purpose for step in trajectory.steps}
+    assert purposes["q"] == "auxiliary"
+    assert purposes["a"] == "primary"
+    # Even when the rewrite is the last model call, it is never taken as the answer.
+    assert "helsenorge" in final_answer(normalize([spans[0], spans[3], spans[1], spans[2]]))
