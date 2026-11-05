@@ -143,8 +143,29 @@ class AgenticViewHelperTests(TestCase):
         self.assertEqual(row["kb_sources"], ["refunds.md"])
         self.assertEqual(row["arguments"], "electronics window")
 
-    def test_model_call_inside_retrieval_is_part_of_that_step(self):
-        """A query rewrite nested in a retrieval span is shown inside that retrieval step, not as a reply."""
+    def test_user_message_marker_once_per_turn(self):
+        """Rewrite and answer both end with the user's message; only the turn's first call is marked."""
+        import json as _json
+
+        user = [{"role": "user", "parts": [{"type": "text", "content": "Hvordan bytter jeg fastlege?"}]}]
+
+        def chat(sid, parent, start):
+            return {"span_id": sid, "parent_span_id": parent, "name": "chat default", "kind": "LLM",
+                    "start_time": start, "end_time": start + 0.1,
+                    "attributes": {"gen_ai.operation.name": "chat", "gen_ai.input.messages": _json.dumps(user),
+                                   "gen_ai.output.messages": _json.dumps(
+                                       [{"role": "assistant", "parts": [{"type": "text", "content": "ok"}]}])}}
+        retrieval = {"span_id": "r1", "parent_span_id": "w1", "name": "retrieval", "kind": "RETRIEVER",
+                     "start_time": 1.0, "end_time": 2.0, "attributes": {"gen_ai.operation.name": "retrieval"}}
+        spans = [retrieval, chat("q1", "r1", 1.1), chat("a1", "w1", 3.0),
+                 {**retrieval, "span_id": "r2", "parent_span_id": "w2", "start_time": 5.0, "end_time": 6.0},
+                 chat("q2", "r2", 5.1), chat("a2", "w2", 7.0)]
+        rows = _agentic_timeline_view({"judgment": {"evidence_spans": spans}})["rows"]
+        self.assertEqual({r["span_id"]: r["user_input"] for r in rows if r["kind"] == "LLM"},
+                         {"q1": True, "a1": False, "q2": True, "a2": False})
+
+    def test_model_call_inside_retrieval_comes_before_it(self):
+        """A query rewrite nested in a retrieval span comes before that retrieval and is not a reply."""
         import json as _json
 
         def chat(sid, parent, start, text):
@@ -155,17 +176,13 @@ class AgenticViewHelperTests(TestCase):
         retrieval = {"span_id": "r", "parent_span_id": "w", "name": "retrieval", "kind": "RETRIEVER",
                      "start_time": 1.0, "end_time": 2.0,
                      "attributes": {"gen_ai.operation.name": "retrieval", "gen_ai.retrieval.query.text": "change GP"}}
-        tl = _agentic_timeline_view({"judgment": {"evidence_spans": [
-            retrieval, chat("q", "r", 1.1, "change GP"), chat("a", "w", 3.0, "Log in to helsenorge.no.")]}})
-        step, answer = tl["rows"]
-        # One retrieval step that reads in the order it ran: the model call, then the query.
-        self.assertEqual((step["label"], answer["label"]), ("RETRIEVAL-1", "LLM-1"))
-        self.assertEqual([label for label, _ in step["content_blocks"]], ["Model call · Output", "Retrieval query"])
-        self.assertEqual(step["model_calls"], 1)
-        self.assertEqual((answer["llm_role"], bool(answer.get("response"))), ("reply", True))
-        # Links to the model call land on the retrieval step.
-        self.assertEqual(tl["anchor_for"]["q"], step["anchor"])
-        self.assertEqual(tl["label_for"]["q"], "RETRIEVAL-1")
+        rows = _agentic_timeline_view({"judgment": {"evidence_spans": [
+            retrieval, chat("q", "r", 1.1, "change GP"), chat("a", "w", 3.0, "Log in to helsenorge.no.")]}})["rows"]
+        # In the order it ran: the model call writes the query, the retrieval uses it, then the answer.
+        self.assertEqual([r["span_id"] for r in rows], ["q", "r", "a"])
+        self.assertEqual([r["label"] for r in rows], ["LLM-1", "RETRIEVAL-1", "LLM-2"])
+        self.assertEqual([r["llm_role"] for r in rows], ["retrieval step", None, "reply"])
+        self.assertEqual([bool(r.get("response")) for r in rows], [False, False, True])
 
     def test_retrieval_inside_a_tool_call_is_one_step(self):
         """execute_tool with a retrieval span inside it is one row: arguments plus documents."""

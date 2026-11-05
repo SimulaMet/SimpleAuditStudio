@@ -4383,19 +4383,15 @@ def _json_list_or_value(value):
 
 
 #: Rows shown inside the row of the span they are nested in: (child kind, parent kind).
-_FOLDED_KINDS = {("RETRIEVER", "TOOL"), ("LLM", "RETRIEVER")}
+_FOLDED_KINDS = {("RETRIEVER", "TOOL")}
 
 
 def _fold_nested_steps(raw_spans: list[dict], rows: list[dict]) -> dict[str, dict]:
     """Rows shown inside their parent's row: ``{child span id: parent row}``.
 
-    Following the OTel GenAI span structure, one step can be two spans:
-
-    * a tool that reads content emits ``execute_tool`` with a ``retrieval`` span
-      inside it for the same call: one row, the tool's arguments plus what it retrieved;
-    * a retrieval pipeline that calls a model (rewriting the question into a search
-      query) has that ``chat`` span inside its ``retrieval`` span: one row, the
-      model call and then the documents, so the step reads in the order it ran.
+    A tool that reads content emits ``execute_tool`` with a ``retrieval`` span
+    inside it for the same call (OTel GenAI): one step, so one row with the tool's
+    arguments plus what it retrieved.
     """
     parent_of = {str(s.get("span_id")): str(s.get("parent_span_id") or "") for s in raw_spans}
     by_id = {row["span_id"]: row for row in rows}
@@ -4406,17 +4402,6 @@ def _fold_nested_steps(raw_spans: list[dict], rows: list[dict]) -> dict[str, dic
         if parent is not None and kinds in _FOLDED_KINDS:
             folded[row["span_id"]] = parent
     return folded
-
-
-def _merge_model_call_into_retrieval(retrieval_row: dict, call_row: dict) -> None:
-    """Show a model call made by a retrieval pipeline inside its retrieval row."""
-    calls = [(f"Model call · {label}", value) for label, value in call_row["content_blocks"]]
-    retrieval_row["content_blocks"] = calls + retrieval_row["content_blocks"]
-    retrieval_row["raw_json"] = f"{retrieval_row['raw_json']}\n\n{call_row['raw_json']}"
-    retrieval_row["user_input"] = retrieval_row.get("user_input") or call_row.get("user_input")
-    retrieval_row["model_calls"] = retrieval_row.get("model_calls", 0) + 1
-    if call_row["is_error"] and not retrieval_row["is_error"]:
-        retrieval_row.update(is_error=True, error_type=call_row["error_type"])
 
 
 def _merge_retrieval_into_tool(tool_row: dict, retrieval_row: dict) -> None:
@@ -4434,6 +4419,70 @@ def _merge_retrieval_into_tool(tool_row: dict, retrieval_row: dict) -> None:
     tool_row["icon"], tool_row["tone"] = _AGENTIC_SPAN_KIND_ICONS["RETRIEVER"]
     if retrieval_row["is_error"] and not tool_row["is_error"]:
         tool_row.update(is_error=True, error_type=retrieval_row["error_type"])
+
+
+def _mark_user_turn_once(raw_spans: list[dict], rows: list[dict]) -> None:
+    """Keep the user-message marker on the first model call of each turn only.
+
+    Every call of a turn can end with the user's message (a RAG app sends it to
+    the query rewrite and again to the answer), but the turn enters once. A turn
+    is the span tree under one root (the turn's workflow span, which the timeline
+    does not list).
+    """
+    parent_of = {str(s.get("span_id")): str(s.get("parent_span_id") or "") for s in raw_spans}
+
+    def turn(span_id: str) -> str:
+        seen = set()
+        while parent_of.get(span_id) and span_id not in seen:
+            seen.add(span_id)
+            span_id = parent_of[span_id]
+        return span_id
+
+    marked = set()
+    for row in rows:
+        if row.get("user_input"):
+            key = turn(row["span_id"])
+            if key in marked:
+                row["user_input"] = False
+            marked.add(key)
+
+
+def _retrieval_after_its_steps(raw_spans: list[dict], rows: list[dict]) -> list[dict]:
+    """Show a retrieval row after the steps nested in it.
+
+    A retrieval span covers its whole pipeline, so it starts before a model call it
+    makes (rewriting the question into a search query). That call ran first and the
+    search used its output, so the rewrite row comes first and the retrieval row
+    (query and documents) after it.
+    """
+    parent_of = {str(s.get("span_id")): str(s.get("parent_span_id") or "") for s in raw_spans}
+    retrieval_ids = {row["span_id"] for row in rows if str(row.get("kind") or "").upper() == "RETRIEVER"}
+
+    def retrieval_ancestor(span_id: str) -> str | None:
+        seen = set()
+        current = parent_of.get(span_id, "")
+        while current and current not in seen:
+            if current in retrieval_ids:
+                return current
+            seen.add(current)
+            current = parent_of.get(current, "")
+        return None
+
+    nested: dict[str, list[dict]] = {}
+    for row in rows:
+        ancestor = retrieval_ancestor(row["span_id"])
+        if ancestor:
+            nested.setdefault(ancestor, []).append(row)
+    if not nested:
+        return rows
+    moved = {row["span_id"] for steps in nested.values() for row in steps}
+    ordered = []
+    for row in rows:
+        if row["span_id"] in moved:
+            continue
+        ordered.extend(nested.get(row["span_id"], []))
+        ordered.append(row)
+    return ordered
 
 
 def _agentic_timeline_view(rep: dict) -> dict | None:
@@ -4499,6 +4548,8 @@ def _agentic_timeline_view(rep: dict) -> dict | None:
             else None
         )
         rows.append(row)
+    rows = _retrieval_after_its_steps(raw_spans, rows)
+    _mark_user_turn_once(raw_spans, rows)
     _mark_redundant_reruns(raw_spans, rows)
     if not rows:
         return None
@@ -4528,15 +4579,9 @@ def _agentic_timeline_view(rep: dict) -> dict | None:
         if row["span_id"] in folded:
             label_for.setdefault(row["span_id"], host(row)["label"])
     _show_compact_content(rows, compacted, label_for)
-    # Innermost first: a model call goes into its retrieval row before that row goes into a tool row.
-    for row in reversed(rows):
-        parent = folded.get(row["span_id"])
-        if parent is None:
-            continue
-        if str(row.get("kind") or "").upper() == "LLM":
-            _merge_model_call_into_retrieval(parent, row)
-        else:
-            _merge_retrieval_into_tool(parent, row)
+    for row in rows:
+        if row["span_id"] in folded:
+            _merge_retrieval_into_tool(folded[row["span_id"]], row)
     rows = [row for row in rows if row["span_id"] not in folded]
     # Every model call that answered in text is the assistant's reply to its turn.
     for row in rows:
