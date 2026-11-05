@@ -1506,19 +1506,24 @@ def test_concurrent_runs_keep_their_own_auditor_class(monkeypatch):
     classes = {"a": type("AuditorA", (), {}), "b": type("AuditorB", (), {})}
 
     def run(label):
-        with mock.patch("infra.engine.decision_target_for", return_value=object()), \
-             mock.patch("infra.trace_target.decision_auditor_class", return_value=classes[label]), \
-             mock.patch("infra.engine.snapshot_api_key", return_value=""):
-            engine.run_scenario_repeated(
-                name=label, description="d", expected_behavior=None, test_prompt=None,
-                target=_snap(label), auditor=_snap("x"), judge=_snap("y"), n_repetitions=2, trace_config=None,
-            )
+        engine.run_scenario_repeated(
+            name=label, description="d", expected_behavior=None, test_prompt=None,
+            target=_snap(label), auditor=_snap("x"), judge=_snap("y"), n_repetitions=2, trace_config=None,
+        )
 
-    threads = [threading.Thread(target=run, args=(k,)) for k in classes]
-    for t in threads:
-        t.start()
-    for t in threads:
-        t.join(timeout=30)
+    # Patched once, here: mock.patch is not thread-safe, and two threads patching
+    # and restoring the same attribute leave one thread's mock installed for every
+    # later test in this worker. Each thread's class follows from its own target.
+    with monkeypatch.context() as patched:
+        patched.setattr(engine, "decision_target_for",
+                        lambda target, **_kw: ("decision", target["model_id"]))
+        patched.setattr("infra.trace_target.decision_auditor_class", lambda factory: classes[factory()[1]])
+        patched.setattr(engine, "snapshot_api_key", lambda _snapshot: "")
+        threads = [threading.Thread(target=run, args=(k,)) for k in classes]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=30)
     assert {label.split(" ")[0] for label in seen} == {"a", "b"}
     for label, cls in seen.items():
         assert cls is classes[label.split(" ")[0]]
