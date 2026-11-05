@@ -78,6 +78,18 @@ def _public_experiment_filter(request) -> dict:
     return {"visibility": Experiment.Visibility.PUBLIC}
 
 
+def _can_edit_membership(user, project) -> bool:
+    """Whether ``user`` may add/remove experiment runs in ``project`` (admin/auditor).
+
+    UI hint only; audits.experiments.add_runs/remove_runs enforce it (and the
+    admin-plus-confirmation rule for public experiments).
+    """
+    from audits.monitors import has_write_role
+
+    return bool(user.is_authenticated and project and has_write_role(user, project)
+                and not (project.archived and not user.is_superuser))
+
+
 def _public_run_queryset(request):
     """An AuditRun queryset scoped to what ``request`` may read.
 
@@ -90,9 +102,9 @@ def _public_run_queryset(request):
     qs = AuditRun.objects.all()
     if request.user.is_authenticated:
         return qs.filter(project=request.project)
+    # A run is public when ANY experiment it belongs to is public.
     return qs.filter(
-        experiment__isnull=False,
-        experiment__visibility=Experiment.Visibility.PUBLIC,
+        pk__in=AuditRun.objects.filter(experiments__visibility=Experiment.Visibility.PUBLIC).values("pk")
     )
 
 
@@ -1518,7 +1530,7 @@ class NewExperimentView(ProjectMixin, TemplateView):
         """
         from django.db import transaction
 
-        from audits.experiments import factors_from_runs, spec_to_run
+        from audits.experiments import spec_to_run
         from audits.models import Experiment
         from audits.monitors import create_monitor
 
@@ -1531,7 +1543,6 @@ class NewExperimentView(ProjectMixin, TemplateView):
                 experiment = Experiment.objects.create(
                     project=p,
                     name=(custom_name or f"{spec['target'].display_name} · {spec['scenario_set'].label}")[:250],
-                    factors=factors_from_runs([run_spec]),
                     created_by=request.user,
                 )
                 if not repeat or repeat["start"] == "now":
@@ -1862,9 +1873,9 @@ def _experiment_summary(runs) -> dict:
 
 def _public_experiment_description(experiment, runs) -> str:
     """Meta description for a public experiment page (share-card friendly)."""
-    from audits.experiments import FACTORS, run_factor_values
+    from audits.experiments import FACTORS, factors_for_runs, run_factor_values
 
-    labels = [FACTORS.get(f, f) for f in experiment.factors]
+    labels = [FACTORS.get(f, f) for f in factors_for_runs(runs)]
     varied = [run_factor_values(r) for r in runs]
     targets = sorted({v["target"] for v in varied})[:3]
     bits = []
@@ -1894,17 +1905,22 @@ class ExperimentsView(PublicReadableMixin, TemplateView):
         return super().dispatch(request, *args, **kwargs)
 
     def get_context_data(self, **kw):
-        from audits.experiments import FACTORS
+        from audits.experiments import (
+            FACTORS,
+            factors_for_runs,
+            prefetch_experiment_runs,
+        )
         from audits.models import Experiment
 
         experiments = list(
             Experiment.objects.filter(**_public_experiment_filter(self.request))
             .select_related("created_by")
-            .prefetch_related("runs")
+            .prefetch_related(prefetch_experiment_runs())
         )
         for e in experiments:
-            e.summary = _experiment_summary(list(e.runs.all()))
-            e.factor_labels = [FACTORS.get(f, f) for f in e.factors]
+            runs = list(e.runs.all())
+            e.summary = _experiment_summary(runs)
+            e.factor_labels = [FACTORS.get(f, f) for f in factors_for_runs(runs)]
         kw["experiments"] = experiments
         kw["can_manage_visibility"] = self._is_admin()
         return super().get_context_data(**kw)
@@ -1919,7 +1935,12 @@ class ExperimentDetailView(PublicReadableMixin, TemplateView):
     template_name = "experiment_detail.html"
 
     def get_context_data(self, **kw):
-        from audits.experiments import FACTORS, experiment_pivot, run_factor_values
+        from audits.experiments import (
+            FACTORS,
+            experiment_pivot,
+            factors_for_runs,
+            run_factor_values,
+        )
         from audits.models import Experiment
         from audits.monitors import can_manage_monitor, drift_series, pass_counts
 
@@ -1931,7 +1952,7 @@ class ExperimentDetailView(PublicReadableMixin, TemplateView):
                 "scenario_set_version__scenario_set", "target_model", "auditor_model", "judge_model"
             ).order_by("created_at", "id")
         )
-        factors = [f for f in experiment.factors if f in FACTORS]
+        factors = factors_for_runs(runs)
         # Pivot axes from the query string, defaulting to the first two factors.
         row_factor = self.request.GET.get("rows") if self.request.GET.get("rows") in factors else None
         col_factor = self.request.GET.get("cols") if self.request.GET.get("cols") in factors else None
@@ -1991,7 +2012,30 @@ class ExperimentDetailView(PublicReadableMixin, TemplateView):
             public_header=True,
             **seo_kw,
         )
+        kw.update(self._membership_context(experiment, runs, monitors))
         return super().get_context_data(**kw)
+
+    def _membership_context(self, experiment, runs, monitors) -> dict:
+        """Add/remove-runs controls: admins/auditors; admins only when public."""
+        from accounts.models import ProjectMembership
+        from audits.experiments import MAX_RUNS_PER_EXPERIMENT
+
+        user = self.request.user
+        can_edit = _can_edit_membership(user, experiment.project)
+        if can_edit and experiment.is_public and not user.is_superuser:
+            can_edit = ProjectMembership.objects.filter(
+                project=experiment.project, user=user, role=ProjectMembership.Role.ADMIN
+            ).exists()
+        if not can_edit:
+            return {"can_edit_membership": False}
+        monitor_ids = {m.id for m in monitors}
+        return {
+            "can_edit_membership": True,
+            # The picker searches /runs/data/ (workspace-scoped) as you type.
+            "can_add_runs": len(runs) < MAX_RUNS_PER_EXPERIMENT,
+            "member_run_ids": [r.id for r in runs],
+            "monitored_run_ids": {r.id for r in runs if r.monitor_id in monitor_ids},
+        }
 
     def _is_admin(self) -> bool:
         from accounts.services import is_any_project_admin
@@ -3488,18 +3532,18 @@ class RunDetailView(PublicReadableMixin, DetailView):
     context_object_name = "run"
     pk_url_kwarg = "run_id"
     queryset = AuditRun.objects.select_related(
-        "scenario_set_version__scenario_set", "target_model", "auditor_model", "judge_model", "monitor", "experiment"
+        "scenario_set_version__scenario_set", "target_model", "auditor_model", "judge_model", "monitor"
     )
 
     def get_queryset(self):
         # Authenticated: active workspace. Anonymous: runs of public experiments.
         base = AuditRun.objects.select_related(
-            "scenario_set_version__scenario_set", "target_model", "auditor_model", "judge_model", "monitor", "experiment"
+            "scenario_set_version__scenario_set", "target_model", "auditor_model", "judge_model", "monitor"
         )
         if self.request.user.is_authenticated:
             return base.filter(project=self.request.project)
         return _public_run_queryset(self.request).select_related(
-            "scenario_set_version__scenario_set", "target_model", "auditor_model", "judge_model", "monitor", "experiment"
+            "scenario_set_version__scenario_set", "target_model", "auditor_model", "judge_model", "monitor"
         )
 
     def get_context_data(self, **kw):
@@ -3534,6 +3578,19 @@ class RunDetailView(PublicReadableMixin, DetailView):
         from audits.monitors import has_write_role
 
         ctx["can_schedule"] = has_write_role(self.request.user, self.request.project)
+        # Experiments this run belongs to (only public ones for anonymous
+        # visitors) and, for admins/auditors, the ones it could be added to.
+        from audits.models import Experiment
+
+        member_of = run.experiments.order_by("-created_at")
+        if not self.request.user.is_authenticated:
+            member_of = member_of.filter(visibility=Experiment.Visibility.PUBLIC)
+        ctx["run_experiments"] = list(member_of)
+        ctx["can_edit_membership"] = _can_edit_membership(self.request.user, self.request.project)
+        if ctx["can_edit_membership"]:
+            ctx["add_to_experiments"] = list(
+                Experiment.objects.filter(project=run.project).exclude(runs=run).order_by("-created_at")[:200]
+            )
         from audits.services import ROLES, frozen_agent, frozen_judge, frozen_model
 
         ctx["frozen_models"] = [frozen_model(run, role) for role in ROLES]
@@ -3655,6 +3712,88 @@ class ExperimentSetVisibilityView(LoginRequiredMixin, View):
         return redirect("experiment_detail", experiment_id)
 
 
+class _ExperimentMembershipView(LoginRequiredMixin, View):
+    """POST run_ids (repeated) [+ confirm_public=1] to change an experiment's runs.
+
+    Permissions (admin/auditor; admin + confirmation when public) are enforced
+    in audits.experiments.add_runs/remove_runs.
+    """
+
+    action = ""
+
+    def post(self, request, experiment_id):
+        from audits import experiments as svc
+        from audits.models import Experiment
+        from infra.exceptions import StableAPIError
+
+        experiment = get_object_or_404(Experiment, pk=experiment_id, project=request.project)
+        raw = request.POST.getlist("run_ids")
+        if not all(is_id(v) for v in raw):
+            messages.error(request, "Invalid run selection.")
+            return self._back(request, experiment_id)
+        fn = svc.add_runs if self.action == "add" else svc.remove_runs
+        try:
+            n = fn(
+                experiment=experiment,
+                user=request.user,
+                run_ids=[int(v) for v in raw],
+                confirm_public=request.POST.get("confirm_public") == "1",
+            )
+        except StableAPIError:
+            if experiment.is_public:
+                return HttpResponseForbidden("Workspace admin access required to change a public experiment.")
+            return HttpResponseForbidden("Workspace admin or auditor access required.")
+        except svc.MembershipError as e:
+            messages.error(request, str(e))
+            return self._back(request, experiment_id)
+        verb = "added to" if self.action == "add" else "removed from"
+        if n:
+            messages.success(request, f"{n} run{'s' if n != 1 else ''} {verb} “{experiment.name}”.")
+        else:
+            messages.info(request, f"No runs {verb} “{experiment.name}” (already up to date).")
+        return self._back(request, experiment_id)
+
+    @staticmethod
+    def _back(request, experiment_id):
+        nxt = request.POST.get("next", "")
+        if nxt and url_has_allowed_host_and_scheme(nxt, allowed_hosts={request.get_host()}, require_https=request.is_secure()):
+            return redirect(nxt)
+        return redirect("experiment_detail", experiment_id)
+
+
+class ExperimentDeleteView(LoginRequiredMixin, View):
+    """POST: delete an experiment (runs kept). Rules in audits.experiments.delete_experiment."""
+
+    def post(self, request, experiment_id):
+        from audits.experiments import MembershipError, delete_experiment
+        from audits.models import Experiment
+        from infra.exceptions import StableAPIError
+
+        experiment = get_object_or_404(Experiment, pk=experiment_id, project=request.project)
+        name = experiment.name
+        try:
+            delete_experiment(
+                experiment=experiment, user=request.user, confirm_public=request.POST.get("confirm_public") == "1"
+            )
+        except StableAPIError:
+            if experiment.is_public:
+                return HttpResponseForbidden("Workspace admin access required to delete a public experiment.")
+            return HttpResponseForbidden("Workspace admin or auditor access required.")
+        except MembershipError as e:
+            messages.error(request, str(e))
+            return redirect("experiment_detail", experiment_id)
+        messages.success(request, f"Experiment “{name}” deleted. Its runs are kept.")
+        return redirect("experiments")
+
+
+class ExperimentAddRunsView(_ExperimentMembershipView):
+    action = "add"
+
+
+class ExperimentRemoveRunsView(_ExperimentMembershipView):
+    action = "remove"
+
+
 class PublicExperimentsView(TemplateView):
     """Anonymous-readable list of all public experiments (no login required).
 
@@ -3666,17 +3805,22 @@ class PublicExperimentsView(TemplateView):
     template_name = "public_experiments.html"
 
     def get_context_data(self, **kw):
-        from audits.experiments import FACTORS
+        from audits.experiments import (
+            FACTORS,
+            factors_for_runs,
+            prefetch_experiment_runs,
+        )
         from audits.models import Experiment
 
         experiments = list(
             Experiment.objects.filter(visibility=Experiment.Visibility.PUBLIC)
             .select_related("created_by")
-            .prefetch_related("runs")
+            .prefetch_related(prefetch_experiment_runs())
         )
         for e in experiments:
-            e.summary = _experiment_summary(list(e.runs.all()))
-            e.factor_labels = [FACTORS.get(f, f) for f in e.factors]
+            runs = list(e.runs.all())
+            e.summary = _experiment_summary(runs)
+            e.factor_labels = [FACTORS.get(f, f) for f in factors_for_runs(runs)]
         kw["experiments"] = experiments
         kw["public_header"] = True
         # Indexable public page: full share-card metadata (og:image + dims).

@@ -77,8 +77,8 @@ def filtered_runs(project, params):
     """Runs of ``project`` matching the dashboard filters in ``params`` (a QueryDict)."""
     qs = AuditRun.objects.filter(project=project).select_related(
         "scenario_set_version__scenario_set", "target_model", "auditor_model", "judge_model",
-        "judge_version__judge", "experiment", "monitor", "created_by",
-    )
+        "judge_version__judge", "monitor", "created_by",
+    ).prefetch_related("experiments")
     status = params.get("status", "")
     if status == "archived":
         qs = qs.filter(archived=True)
@@ -101,10 +101,15 @@ def filtered_runs(project, params):
         qs = qs.filter(filt)
     for param, field in (("target", "target_model_id"), ("set", "scenario_set_version__scenario_set_id"),
                          ("judge", "judge_version__judge_id"),
-                         ("experiment", "experiment_id"), ("monitor", "monitor_id")):
+                         ("monitor", "monitor_id")):
         ids = [v for v in params.getlist(param) if is_id(v)]
         if ids:
             qs = qs.filter(**{f"{field}__in": ids})
+    exp_ids = [v for v in params.getlist("experiment") if is_id(v)]
+    if exp_ids:
+        # Many-to-many: a subquery keeps one row per run.
+        qs = qs.filter(pk__in=AuditRun.experiments.through.objects.filter(
+            experiment_id__in=exp_ids).values("run_id"))
     start, end = _date(params.get("from")), _date(params.get("to"), end=True)
     if start:
         qs = qs.filter(created_at__gte=start)
@@ -163,7 +168,10 @@ def run_row(run, counts: dict) -> dict:
         "engine": run.simpleaudit_version,
         "created_by": run.created_by.username if run.created_by else "",
         "created_at": run.created_at.isoformat(),
-        "experiment": {"id": run.experiment_id, "name": run.experiment.name} if run.experiment_id else None,
+        # A run can belong to several experiments; "experiment" (the first,
+        # oldest) feeds the single-link grid column.
+        "experiments": (exps := [{"id": e.id, "name": e.name} for e in sorted(run.experiments.all(), key=lambda e: e.id)]),
+        "experiment": exps[0] if exps else None,
         "monitor": {"id": run.monitor_id, "name": run.monitor.name} if run.monitor_id else None,
         "error": run.error_message or run.error_code,
     }

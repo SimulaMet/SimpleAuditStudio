@@ -24,6 +24,14 @@
       <button type="submit" class="px-3 py-1.5 rounded-lg bg-surface-overlay text-gray-300 text-xs font-medium hover:text-white">{% if experiment.is_public %}Make private{% else %}Make public{% endif %}</button>
     </form>
     {% endif %}
+    {% if can_edit_membership %}
+    <form method="post" action="{% url 'experiment_delete' experiment.id %}" class="inline" data-delete-experiment
+          data-confirm="{% if experiment.is_public %}This experiment is PUBLIC. Delete it? Its public page goes away, and runs not in another public experiment become private again. The runs and their results are kept.{% else %}Delete this experiment? The runs and their results are kept; only the grouping is removed.{% endif %}">
+      {% csrf_token %}
+      <input type="hidden" name="confirm_public" value="{% if experiment.is_public %}1{% endif %}">
+      <button type="submit" title="Delete this experiment (runs are kept)" class="px-3 py-1.5 rounded-lg bg-surface-overlay text-gray-400 text-xs font-medium hover:text-red-300">Delete</button>
+    </form>
+    {% endif %}
     {% if runs|length > 1 %}<a href="/compare/?runs={{ run_ids }}" class="px-3 py-1.5 rounded-lg bg-surface-overlay text-gray-300 text-xs font-medium hover:text-white">Compare scenarios</a>{% endif %}
   </div>
 </div>
@@ -175,11 +183,89 @@
 
 <!-- Runs table -->
 <div class="bg-surface-raised rounded-xl border border-gray-800 p-4">
-  <h2 class="text-sm font-semibold text-gray-300 mb-3">All runs <span class="font-normal text-gray-500">({{ runs|length }})</span></h2>
+  <div class="flex flex-wrap items-center justify-between gap-2 mb-3">
+    <h2 class="text-sm font-semibold text-gray-300">All runs <span class="font-normal text-gray-500">({{ runs|length }})</span></h2>
+    {% if can_edit_membership %}
+    <div class="flex items-center gap-2">
+      {% if runs %}
+      <form method="post" id="remove-runs-form" action="{% url 'experiment_remove_runs' experiment.id %}" data-membership-form data-action="remove" data-public="{% if experiment.is_public %}1{% endif %}" class="inline">
+        {% csrf_token %}
+        <input type="hidden" name="confirm_public" value="">
+        <button type="submit" title="Remove the checked runs from this experiment (the runs are kept)" class="px-3 py-1.5 rounded-lg bg-surface-overlay text-gray-300 text-xs font-medium hover:text-red-300">Remove selected</button>
+      </form>
+      {% endif %}
+      {% if can_add_runs %}
+      <details class="relative" data-run-picker data-popover>
+        <summary class="list-none cursor-pointer px-3 py-1.5 rounded-lg bg-accent text-white text-xs font-medium hover:bg-accent-hover">+ Add runs</summary>
+        <form method="post" action="{% url 'experiment_add_runs' experiment.id %}" data-membership-form data-action="add" data-public="{% if experiment.is_public %}1{% endif %}" class="absolute right-0 z-20 mt-1 w-96 max-w-[calc(100vw-2rem)] p-3 rounded-lg bg-surface-raised border border-gray-800 shadow-lg">
+          {% csrf_token %}
+          <input type="hidden" name="confirm_public" value="">
+          <input type="search" data-run-search placeholder="Search runs: name, #id, scenario set, target…" aria-label="Search runs" autocomplete="off" class="w-full mb-2 bg-surface-overlay border border-gray-700 rounded-lg px-2 py-1.5 text-xs text-gray-200">
+          <div data-run-selected class="flex flex-wrap gap-1 mb-2"></div>
+          <div data-run-results class="max-h-72 overflow-y-auto space-y-1 mb-2" aria-live="polite"></div>
+          <p class="text-[11px] text-gray-500 mb-2">Runs already in other experiments stay there too.</p>
+          <button type="submit" class="w-full px-3 py-1.5 rounded-lg bg-accent text-white text-xs font-medium hover:bg-accent-hover">Add selected runs</button>
+        </form>
+      </details>
+      {{ member_run_ids|json_script:"member-run-ids" }}
+      <script>
+      (() => {
+        const root = document.querySelector('[data-run-picker]');
+        if (!root) return;
+        const form = root.querySelector('form'), input = root.querySelector('[data-run-search]');
+        const list = root.querySelector('[data-run-results]'), chips = root.querySelector('[data-run-selected]');
+        const members = new Set(JSON.parse(document.getElementById('member-run-ids').textContent));
+        const picked = new Map();   // id -> label
+        const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+        const renderChips = () => {
+          chips.innerHTML = '';
+          for (const [id, label] of picked) {
+            const b = document.createElement('span');
+            b.className = 'inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-accent/20 text-accent text-[11px]';
+            b.innerHTML = `#${id} ${esc(label)} <button type="button" aria-label="Unselect run #${id}" class="hover:text-white">×</button><input type="hidden" name="run_ids" value="${id}">`;
+            b.querySelector('button').onclick = () => { picked.delete(id); renderChips(); search(); };
+            chips.appendChild(b);
+          }
+        };
+        let seq = 0, timer;
+        const search = async () => {
+          const mine = ++seq;
+          const params = new URLSearchParams({ q: input.value.trim(), size: '25', page: '1' });
+          list.innerHTML = '<p class="text-[11px] text-gray-500 px-2">Searching…</p>';
+          let data;
+          try { data = await (await fetch(`/runs/data/?${params}`, { headers: { Accept: 'application/json' } })).json(); }
+          catch { if (mine === seq) list.innerHTML = '<p class="text-[11px] text-red-400 px-2">Search failed.</p>'; return; }
+          if (mine !== seq) return;   // a newer search is in flight
+          const rows = (data.data || []).filter(r => !members.has(r.id));
+          if (!rows.length) { list.innerHTML = '<p class="text-[11px] text-gray-500 px-2">No matching runs.</p>'; return; }
+          list.innerHTML = rows.map(r => `
+            <label class="flex items-start gap-2 px-2 py-1 rounded hover:bg-surface-overlay text-xs text-gray-300 cursor-pointer">
+              <input type="checkbox" data-pick="${r.id}" data-label="${esc(r.name)}" class="mt-0.5" ${picked.has(r.id) ? 'checked' : ''}>
+              <span class="min-w-0"><span class="text-gray-200">#${r.id}</span> ${esc(r.name)}
+                <span class="block text-[11px] text-gray-500 truncate">${esc(r.scenario_set)} · ${esc(r.target)} · ${esc(r.status_label)}${(r.experiments || []).length ? ` · in ${r.experiments.length} experiment${r.experiments.length > 1 ? 's' : ''}` : ''}</span></span>
+            </label>`).join('');
+        };
+        list.addEventListener('change', e => {
+          const cb = e.target.closest('[data-pick]');
+          if (!cb) return;
+          const id = Number(cb.dataset.pick);
+          cb.checked ? picked.set(id, cb.dataset.label) : picked.delete(id);
+          renderChips();
+        });
+        input.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(search, 250); });
+        input.addEventListener('keydown', e => { if (e.key === 'Enter') e.preventDefault(); });
+        root.addEventListener('toggle', () => { if (root.open) { input.focus(); if (!list.childElementCount) search(); } });
+      })();
+      </script>
+      {% endif %}
+    </div>
+    {% endif %}
+  </div>
   <div class="overflow-x-auto">
     <table class="w-full text-sm">
       <thead>
         <tr class="border-b border-gray-800 text-xs text-gray-500 uppercase">
+          {% if can_edit_membership %}<th class="w-6 px-3 py-2"><span class="sr-only">Select</span></th>{% endif %}
           <th class="text-left px-3 py-2 font-medium">Run</th>
           {% for l in factor_labels %}<th class="text-left px-3 py-2 font-medium">{{ l }}</th>{% endfor %}
           <th class="text-left px-3 py-2 font-medium">Status</th>
@@ -189,6 +275,7 @@
       <tbody>
         {% for r in runs %}
         <tr class="border-b border-gray-800/50 hover:bg-surface-overlay/50 cursor-pointer" data-href="/runs/{{ r.id }}/">
+          {% if can_edit_membership %}<td class="px-3 py-2.5">{% if r.id in monitored_run_ids %}<span title="Repeated by this experiment's monitor — pause or delete the monitor instead" class="text-gray-600">·</span>{% else %}<input type="checkbox" name="run_ids" value="{{ r.id }}" form="remove-runs-form" aria-label="Select run #{{ r.id }}">{% endif %}</td>{% endif %}
           <td class="px-3 py-2.5 text-gray-200"><a href="/runs/{{ r.id }}/" class="hover:text-accent">#{{ r.id }}</a> <span class="text-xs text-gray-500">{{ r.name }}</span></td>
           {% for v in r.factor_values %}<td class="px-3 py-2.5 text-xs text-gray-300 whitespace-nowrap">{{ v }}</td>{% endfor %}
           <td class="px-3 py-2.5 text-xs text-gray-400">{{ r.get_status_display }}{% if r.status != 'completed' and r.total_scenarios %} · {{ r.completed_scenarios }}/{{ r.total_scenarios }}{% endif %}</td>

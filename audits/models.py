@@ -85,10 +85,6 @@ class AuditRun(models.Model):
     monitor = models.ForeignKey(
         "audits.Monitor", on_delete=models.SET_NULL, null=True, blank=True, related_name="runs"
     )
-    # Set when the run was launched as one cell of an Experiment grid.
-    experiment = models.ForeignKey(
-        "audits.Experiment", on_delete=models.SET_NULL, null=True, blank=True, related_name="runs"
-    )
     created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -189,11 +185,13 @@ class Monitor(models.Model):
 
 
 class Experiment(models.Model):
-    """A group of runs launched together from one design.
+    """A named set of runs compared together.
 
-    ``factors`` lists the inputs that vary across the runs (e.g. ["target",
-    "max_turns"]); every other input is the same in all of them. See
-    audits.experiments for the design, expansion and results logic.
+    Usually launched from one design, but membership is editable: runs can be
+    added (including runs already in other experiments) or removed later. The
+    inputs that vary across the member runs ("factors") are computed on read.
+    See audits.experiments for the design, expansion, membership and results
+    logic.
     """
 
     class Visibility(models.TextChoices):
@@ -202,7 +200,12 @@ class Experiment(models.Model):
 
     project = models.ForeignKey("accounts.Project", on_delete=models.CASCADE, related_name="experiments")
     name = models.CharField(max_length=250)
-    factors = models.JSONField(default=list, blank=True)
+    # Runs are members, not children: a run can belong to several experiments,
+    # and project admins/auditors can add or remove runs after launch. The
+    # varied factors are computed from the member runs (audits.experiments).
+    runs = models.ManyToManyField(
+        "audits.AuditRun", through="audits.ExperimentRun", related_name="experiments", blank=True
+    )
     # Who may view the experiment (and its runs/results). Private is scoped to
     # the owning workspace's members; public is readable without login. Only
     # admins may change this (see infra.ui.ExperimentSetVisibilityView).
@@ -221,5 +224,29 @@ class Experiment(models.Model):
         return self.name
 
     @property
+    def factors(self) -> list[str]:
+        """Inputs that differ across the member runs (computed; prefetch-aware)."""
+        from audits.experiments import experiment_runs_for_factors, factors_for_runs
+
+        return factors_for_runs(experiment_runs_for_factors(self))
+
+    @property
     def is_public(self) -> bool:
         return self.visibility == self.Visibility.PUBLIC
+
+
+class ExperimentRun(models.Model):
+    """Membership of one AuditRun in one Experiment (who added it, and when)."""
+
+    experiment = models.ForeignKey(Experiment, on_delete=models.CASCADE, related_name="memberships")
+    run = models.ForeignKey("audits.AuditRun", on_delete=models.CASCADE, related_name="experiment_memberships")
+    added_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True)
+    added_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "core_experiment_run"
+        constraints = [models.UniqueConstraint(fields=["experiment", "run"], name="uniq_experiment_run")]
+        ordering = ["added_at", "id"]
+
+    def __str__(self) -> str:
+        return f"{self.experiment_id}:{self.run_id}"

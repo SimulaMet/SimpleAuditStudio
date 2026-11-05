@@ -30,7 +30,8 @@ erDiagram
     REGISTERED_MODEL ||--o{ AUDIT_RUN : "target / auditor / judge model"
     JUDGE_VERSION ||--o{ AUDIT_RUN : grades
     SCENARIO_SET_VERSION ||--o{ AUDIT_RUN : pinned_by
-    EXPERIMENT ||--o{ AUDIT_RUN : groups
+    EXPERIMENT ||--o{ EXPERIMENT_RUN : has
+    AUDIT_RUN ||--o{ EXPERIMENT_RUN : "member of"
     EXPERIMENT ||--o{ MONITOR : groups
     MONITOR ||--o{ AUDIT_RUN : launches
     AUDIT_RUN ||--o{ SCENARIO_RESULT : produces
@@ -312,7 +313,7 @@ Fields:
 - `summary_metrics` — JSON
 - `error_code`
 - `error_message`
-- `experiment_id` — set when launched as part of an `Experiment`
+- experiments — many-to-many through `ExperimentRun` (a run can belong to several)
 - `monitor_id` — set when launched by a `Monitor`
 - `created_by`
 - `created_at`
@@ -345,22 +346,40 @@ Rules:
 
 ### 5.2 `Experiment`
 
-A group of runs launched together from one design on New Experiment
-(`/experiments/new/`). Every design input (scenario sets, target, auditor,
+A named set of runs compared together, usually launched from one design on New
+Experiment (`/experiments/new/`). Every design input (scenario sets, target, auditor,
 judge model, judges, max turns, language) takes one or more values; the cartesian product is
-the list of runs, each an ordinary `AuditRun` with `experiment_id` set. The
+the list of runs, each an ordinary `AuditRun` added as a member. The
 review step can drop, rename, edit (settings, system prompt and generation config) or
 duplicate runs before launch. A design that yields a single run still becomes
-an `Experiment`: a singleton with empty `factors`, so every launch from New
+an `Experiment`: a singleton with no factors, so every launch from New
 Experiment has its own shareable results page.
 
-Fields: `project_id`, `name`, `factors` (JSON list of the inputs that differ
-across its runs, computed from the final runs), `created_by`, timestamps.
+Membership is editable after launch. On the experiment page admins and auditors
+can add workspace runs (including runs already in other experiments, which
+stay there too) or remove runs (the runs themselves are kept); a run page can
+add the run to an existing experiment. Runs and their frozen inputs never
+change; only membership does.
+
+Fields: `project_id`, `name`, `visibility`, `created_by`, timestamps. `runs`
+is many-to-many through `ExperimentRun` (`experiment_id`, `run_id`,
+`added_by`, `added_at`; unique per pair). `factors` — the inputs that differ
+across the member runs — is computed on read, so it follows membership edits.
 
 Rules:
 
-- at most 50 runs per experiment
+- at most 50 runs per experiment (at launch and when adding)
 - runs are created atomically (all or none)
+- only runs of the experiment's own workspace can be added
+- adding/removing runs: workspace admins and auditors; on a **public**
+  experiment, admins only and with an explicit confirmation, since adding a
+  run publishes it (a run is publicly readable when any experiment it belongs
+  to is public)
+- deleting an experiment removes only the grouping: its runs, results and
+  monitors are kept (monitors are detached); same permissions as editing
+  membership
+- runs repeated by the experiment's own monitor are not removed one by one
+  (the next tick would add a new one); pause or delete the monitor instead
 - results compare the latest run of each run setup by default; pooling all
   runs is opt-in, since pooling hides drift
 
@@ -369,7 +388,7 @@ Rules:
 One run setup repeated on a schedule to track drift. Created from New
 Experiment when Repeat is not "Once" (one monitor per run setup, linked to the
 experiment if there is one). Each tick creates an ordinary `AuditRun` with
-`monitor_id` (and the monitor's `experiment_id`).
+`monitor_id`, added to the monitor's experiment.
 
 Fields: `project_id`, `name`, `enabled`, `scenario_set_id` with an optional
 pinned `scenario_set_version_id`, target, auditor and judge model ids, `judge_id` with
@@ -476,6 +495,8 @@ Permissions:
 | create/edit scenarios, publish versions | yes | yes | no |
 | manage model connections and models | yes | yes | no |
 | launch runs and experiments, create monitors | yes | yes | no |
+| add/remove runs of, or delete, a private experiment | yes | yes | no |
+| add/remove runs of, or delete, a public experiment (with confirmation) | yes | no | no |
 | cancel, archive, rename runs | yes | yes | no |
 | manage any monitor | yes | own only | no |
 | manage members, rename/delete workspace | yes | no | no |

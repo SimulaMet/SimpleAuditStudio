@@ -146,7 +146,7 @@ class ExperimentFlowTests(_ExperimentBase):
         self.assertRedirects(resp, f"/experiments/{exp.id}/", fetch_redirect_response=False)
         self.assertEqual(exp.factors, [])  # nothing varies across one run
         self.assertEqual(list(exp.runs.all()), [run])
-        self.assertEqual(run.experiment, exp)
+        self.assertEqual(list(run.experiments.all()), [exp])
         self.assertEqual(run.generation_parameters_snapshot["max_turns"], 3)
 
     def test_decision_target_launches_without_judge_and_forces_max_turns_one(self):

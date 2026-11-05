@@ -103,7 +103,9 @@ class Command(BaseCommand):
         if existing.exists():
             if options["force"]:
                 self.stdout.write(f"Deleting {existing.count()} existing demo run(s)...")
-                experiment_ids = set(existing.exclude(experiment=None).values_list("experiment_id", flat=True))
+                experiment_ids = set(
+                    Experiment.runs.through.objects.filter(run__in=existing).values_list("experiment_id", flat=True)
+                )
                 existing.delete()
                 # Demo experiments left without runs go too (never a user's own).
                 Experiment.objects.filter(pk__in=experiment_ids, runs__isnull=True).delete()
@@ -134,11 +136,9 @@ class Command(BaseCommand):
 
     @staticmethod
     def _group_into_experiments(project, user, runs_spec: list[dict], runs: list) -> int:
-        """Put demo runs into the experiments the fixture names ("experiment"),
-        with factors computed from what differs between each one's runs.
+        """Put demo runs into the experiments the fixture names ("experiment").
         Runs already in an experiment are left alone. Returns how many were made."""
-        from audits.experiments import FACTORS, run_factor_values
-        from audits.models import Experiment
+        from audits.models import Experiment, ExperimentRun
 
         by_label = {f"Demo: {spec.get('label', spec['pack'])}": spec.get("experiment") for spec in runs_spec}
         # Experiments flagged "public" in the fixture are visible without login.
@@ -146,20 +146,18 @@ class Command(BaseCommand):
         groups: dict[str, list] = {}
         for run in runs:
             name = by_label.get(run.name)
-            if name and run.experiment_id is None:
+            if name and not run.experiments.exists():
                 groups.setdefault(name, []).append(run)
         for name, members in groups.items():
-            values = [run_factor_values(r) for r in members]
-            factors = [key for key in FACTORS if len({v[key] for v in values}) > 1]
             visibility = (
                 Experiment.Visibility.PUBLIC if name in public_names else Experiment.Visibility.PRIVATE
             )
             experiment = Experiment.objects.create(
-                project=project, name=name, factors=factors, created_by=user, visibility=visibility
+                project=project, name=name, created_by=user, visibility=visibility
             )
-            for run in members:
-                run.experiment = experiment
-                run.save(update_fields=["experiment"])
+            ExperimentRun.objects.bulk_create(
+                [ExperimentRun(experiment=experiment, run=run, added_by=user) for run in members]
+            )
         return len(groups)
 
     @staticmethod

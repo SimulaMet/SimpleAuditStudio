@@ -62,7 +62,7 @@ flowchart LR
 
 1. **Launch.** New Experiment (`/experiments/new/`) expands the design into runs,
    shows a review step, then creates each `AuditRun` with frozen snapshots
-   (`audits/services.create_audit_run`). Runs of one design share an `Experiment`.
+   (`audits/services.create_audit_run`). Runs of one design join one `Experiment`; membership is editable later and a run may belong to several.
 2. **Submit.** Each scenario of the pinned `ScenarioSetVersion` becomes a Hatchet
    task (`submit_audit_run`).
 3. **Execute.** The worker runs the engine per scenario and writes `AuditEvent`

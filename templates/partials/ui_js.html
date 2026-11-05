@@ -18,6 +18,58 @@ document.addEventListener('submit', e => {
   const msg = e.target.dataset && e.target.dataset.confirm;
   if (msg && !confirm(msg)) e.preventDefault();
 }, true);
+// <form data-membership-form> adds/removes experiment runs. An optional
+// [data-experiment-select] picks the target URL; a public experiment
+// (option or form data-public="1") needs an explicit confirmation, which the
+// server also requires (confirm_public=1).
+document.addEventListener('submit', e => {
+  const form = e.target;
+  if (!form.matches || !form.matches('[data-membership-form]')) return;
+  const sel = form.querySelector('[data-experiment-select]');
+  const opt = sel && sel.selectedOptions[0];
+  if (opt) form.action = opt.value;
+  const isPublic = (opt ? opt.dataset.public : form.dataset.public) === '1';
+  if (![...form.elements].some(el => el.name === 'run_ids' && (el.type === 'hidden' || el.checked))) {
+    e.preventDefault(); alert('Select at least one run.'); return;
+  }
+  const field = form.querySelector('input[name="confirm_public"]');
+  if (isPublic) {
+    const removing = form.dataset.action === 'remove';
+    const msg = removing
+      ? 'This experiment is public. Remove the selected runs from it? They stay public if another public experiment includes them.'
+      : 'This experiment is public. Adding runs publishes them — transcripts and results included — to anyone with the URL. Continue?';
+    if (!confirm(msg)) { e.preventDefault(); return; }
+    if (field) field.value = '1';
+  }
+}, true);
+// <details data-popover> behaves like a popover: one open at a time, closed
+// by a click outside or Esc (focus returns to its summary). Esc inside a
+// search field first clears the text, as browsers do for type=search.
+(() => {
+  const open = () => [...document.querySelectorAll('details[data-popover][open]')];
+  document.addEventListener('click', e => {
+    // composedPath: a click handler may already have removed the target
+    // (e.g. a chip's × button), which must not count as "outside".
+    const path = e.composedPath();
+    for (const d of open()) if (!path.includes(d)) d.open = false;
+  });
+  document.addEventListener('toggle', e => {
+    const d = e.target;
+    if (d.matches && d.matches('details[data-popover]') && d.open) {
+      for (const other of open()) if (other !== d) other.open = false;
+    }
+  }, true);
+  document.addEventListener('keydown', e => {
+    if (e.key !== 'Escape') return;
+    const t = e.target;
+    if (t.matches && t.matches('input[type="search"]') && t.value) return;
+    const d = open().pop();
+    if (!d) return;
+    e.preventDefault();
+    d.open = false;
+    d.querySelector('summary')?.focus();
+  });
+})();
 // Clickable rows/cards: <tr|section data-href="/x/"> opens its detail page on click or Enter,
 // unless the click lands on a nested control. Ctrl/Cmd/middle-click opens a new tab.
 (() => {

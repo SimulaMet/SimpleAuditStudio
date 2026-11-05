@@ -14,7 +14,7 @@ import json
 
 from django.db import transaction
 
-from audits.models import AuditRun, Experiment
+from audits.models import AuditRun, Experiment, ExperimentRun
 from audits.monitors import pass_counts, wilson
 from audits.services import frozen_judge, frozen_name
 
@@ -461,28 +461,6 @@ def prompt_label(prompt: str | None) -> str:
     return first if len(first) <= 48 else first[:47] + "…"
 
 
-def factors_from_runs(runs: list[dict]) -> list[str]:
-    """Which inputs actually differ across the runs about to be launched.
-
-    Computed from the final runs (after review edits and duplicates), so a
-    duplicated run with another language makes "language" a factor.
-    """
-    def value(run, key):
-        if key == "scenario_set":
-            return (run["version"].pk, is_follow(run["version"]))
-        if key == "judge":
-            return (run["judge"].pk, is_follow(run["judge"]))
-        if key in _MODEL_ROLES:
-            return run[key].pk
-        if key == "system_prompt":
-            return (run["gen_config"] or {}).get("system_prompt") or ""
-        if key == "params":
-            return params_label(run["gen_config"])
-        return run[key]
-
-    return [key for key in FACTORS if len({value(r, key) for r in runs}) > 1]
-
-
 def spec_to_row(spec: dict) -> str:
     """Serialise the non-editable part of a spec for the review form."""
     row = {
@@ -528,7 +506,7 @@ def launch_experiment(*, project, user, name: str, runs: list[dict], repeat: dic
         raise DesignError("Repeating an agent experiment is not supported yet; launch it once instead.")
     with transaction.atomic():
         experiment = Experiment.objects.create(
-            project=project, name=name.strip()[:250] or "Experiment", factors=factors_from_runs(runs), created_by=user
+            project=project, name=name.strip()[:250] or "Experiment", created_by=user
         )
         run_now = not repeat or repeat["start"] == "now"
         created = [
@@ -587,6 +565,120 @@ def run_factor_values(run: AuditRun) -> dict:
         "system_prompt": prompt_label(params.get("system_prompt")),
         "params": params_label(params),
     }
+
+
+# Joins run_factor_values() reads; use with experiment.runs to avoid N+1.
+RUN_FACTOR_RELATED = ("scenario_set_version__scenario_set", "target_model", "auditor_model", "judge_model")
+
+
+def factors_for_runs(runs: list[AuditRun]) -> list[str]:
+    """Which inputs differ across these (frozen) runs, in FACTORS order.
+
+    Computed from the runs themselves, so it stays right when runs are added
+    to or removed from an experiment after launch.
+    """
+    values = [run_factor_values(r) for r in runs]
+    return [key for key in FACTORS if len({v[key] for v in values}) > 1]
+
+
+def experiment_runs_for_factors(experiment: Experiment) -> list[AuditRun]:
+    """The member runs, loaded with what factors_for_runs needs (prefetch-aware)."""
+    cache = getattr(experiment, "_prefetched_objects_cache", {})
+    if "runs" in cache:
+        return list(experiment.runs.all())
+    return list(experiment.runs.select_related(*RUN_FACTOR_RELATED))
+
+
+def prefetch_experiment_runs():
+    """Prefetch for Experiment querysets whose pages show factors and summaries."""
+    from django.db.models import Prefetch
+
+    return Prefetch("runs", queryset=AuditRun.objects.select_related(*RUN_FACTOR_RELATED))
+
+
+class MembershipError(ValueError):
+    """An add/remove-runs request that cannot be applied (shown to the user)."""
+
+
+def _require_membership_role(user, experiment: Experiment, *, confirm_public: bool) -> None:
+    """Admins/auditors edit membership; a public experiment needs an admin who confirmed.
+
+    Adding a run to a public experiment publishes it (transcripts included) to
+    anonymous visitors, so it is gated like changing visibility itself.
+    """
+    from accounts.models import ProjectMembership
+    from scenarios.services import require_project_role
+
+    if experiment.visibility == Experiment.Visibility.PUBLIC:
+        require_project_role(user, experiment.project, ProjectMembership.Role.ADMIN)
+        if not confirm_public:
+            raise MembershipError("This experiment is public. Confirm the change to apply it.")
+    else:
+        require_project_role(user, experiment.project, ProjectMembership.Role.ADMIN, ProjectMembership.Role.AUDITOR)
+
+
+def add_runs(*, experiment: Experiment, user, run_ids: list[int], confirm_public: bool = False) -> int:
+    """Add workspace runs to the experiment; returns how many were newly added.
+
+    Runs already in other experiments are allowed: they stay there too.
+    Runs already in this one are skipped.
+    """
+    _require_membership_role(user, experiment, confirm_public=confirm_public)
+    ids = {int(i) for i in run_ids}
+    if not ids:
+        raise MembershipError("Select at least one run to add.")
+    with transaction.atomic():
+        # Lock the experiment row so concurrent adds cannot exceed the cap.
+        Experiment.objects.select_for_update().filter(pk=experiment.pk).first()
+        found = set(AuditRun.objects.filter(pk__in=ids, project=experiment.project).values_list("pk", flat=True))
+        if found != ids:
+            raise MembershipError("Some runs were not found in this workspace.")
+        present = set(experiment.memberships.filter(run_id__in=ids).values_list("run_id", flat=True))
+        new = sorted(ids - present)
+        if experiment.memberships.count() + len(new) > MAX_RUNS_PER_EXPERIMENT:
+            raise MembershipError(f"At most {MAX_RUNS_PER_EXPERIMENT} runs per experiment.")
+        ExperimentRun.objects.bulk_create(
+            [ExperimentRun(experiment=experiment, run_id=rid, added_by=user) for rid in new]
+        )
+        if new:
+            experiment.save(update_fields=["updated_at"])
+    return len(new)
+
+
+def remove_runs(*, experiment: Experiment, user, run_ids: list[int], confirm_public: bool = False) -> int:
+    """Remove runs from the experiment (the runs themselves are kept); returns how many.
+
+    A run that a monitor of this experiment produced would be re-added by the
+    next tick's runs anyway, so those are refused: detach the monitor instead.
+    """
+    _require_membership_role(user, experiment, confirm_public=confirm_public)
+    ids = {int(i) for i in run_ids}
+    if not ids:
+        raise MembershipError("Select at least one run to remove.")
+    with transaction.atomic():
+        members = experiment.memberships.filter(run_id__in=ids).select_related("run__monitor")
+        monitored = [m.run_id for m in members if m.run.monitor_id and m.run.monitor.experiment_id == experiment.pk]
+        if monitored:
+            raise MembershipError(
+                "Runs repeated by this experiment's monitor cannot be removed one by one; "
+                "pause or delete the monitor instead."
+            )
+        removed, _ = members.delete()
+        if removed:
+            experiment.save(update_fields=["updated_at"])
+    return removed
+
+
+def delete_experiment(*, experiment: Experiment, user, confirm_public: bool = False) -> None:
+    """Delete the experiment and its memberships; its runs and results are kept.
+
+    Monitors that repeated a setup of it keep running, detached (their FK is
+    SET_NULL). Same permissions as editing membership: admins/auditors, and
+    admin plus confirmation for a public experiment (deleting it unpublishes
+    the runs that no other public experiment holds).
+    """
+    _require_membership_role(user, experiment, confirm_public=confirm_public)
+    experiment.delete()
 
 
 def experiment_pivot(runs: list[AuditRun], row_factor: str | None, col_factor: str | None) -> dict:

@@ -336,7 +336,7 @@ def create_audit_run(
     if discovery["metadata"] is not None:
         target_snapshot["remote_metadata"] = discovery["metadata"]
 
-    return AuditRun.objects.create(
+    run = AuditRun.objects.create(
         project=project,
         name=name.strip()[:250],   # AuditRun.name max_length (monitor names add a timestamp)
         status=AuditRun.Status.QUEUED,
@@ -357,8 +357,12 @@ def create_audit_run(
         total_scenarios=scenario_set_version.scenario_count,
         created_by=user,
         monitor=monitor,
-        experiment=experiment,
     )
+    if experiment is not None:
+        from audits.models import ExperimentRun
+
+        ExperimentRun.objects.create(experiment=experiment, run=run, added_by=user)
+    return run
 
 
 def submit_audit_run(run: AuditRun) -> str | None:

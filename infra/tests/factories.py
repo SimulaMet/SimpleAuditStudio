@@ -187,6 +187,14 @@ class AuditRunFactory(DjangoModelFactory):
     total_scenarios = 1
     completed_scenarios = 1
 
+    @factory.post_generation
+    def experiment(self, create, extracted, **kwargs):
+        """``AuditRunFactory(experiment=exp)`` adds the run to that experiment."""
+        if create and extracted is not None:
+            from audits.models import ExperimentRun
+
+            ExperimentRun.objects.create(experiment=extracted, run=self)
+
 
 class ScenarioResultFactory(DjangoModelFactory):
     class Meta:

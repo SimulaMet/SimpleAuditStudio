@@ -41,7 +41,6 @@ class DemoSeedExperimentsTests(TestCase):
 
     def test_older_seeds_are_grouped_on_the_next_boot(self):
         self._seed()
-        AuditRun.objects.update(experiment=None)
         Experiment.objects.all().delete()
         self._seed()   # runs exist: no new runs, just the experiments
         self.assertEqual(AuditRun.objects.filter(project=self.project).count(), 4)

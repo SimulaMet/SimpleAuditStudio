@@ -171,7 +171,8 @@ class PublicRunPageUrlTest(TestCase):
         experiment = Experiment.objects.create(project=project, name="Pub", visibility=Experiment.Visibility.PUBLIC)
         run = AuditRunFactory(project=project, status="completed")
         snap = {**(run.target_config_snapshot or {}), "base_url": "http://frozen-internal.corp/v1"}
-        AuditRun.objects.filter(pk=run.pk).update(experiment=experiment, target_config_snapshot=snap)
+        AuditRun.objects.filter(pk=run.pk).update(target_config_snapshot=snap)
+        experiment.runs.add(run)
         run.target_model.connection.base_url = "http://live-changed.corp/v1"
         run.target_model.connection.save()
         html = self.client.get(f"/runs/{run.id}/").content.decode()
@@ -190,7 +191,8 @@ class PublicRunAgentUrlTest(TestCase):
         agent_snapshot = {"name": "Ag", "base_model": {"model_id": "m", "display_name": "M", "connection_id": 1,
                                                        "base_url": "http://agent-base.corp/v1",
                                                        "connection": {"base_url": "http://agent-base.corp/v1"}}}
-        AuditRun.objects.filter(pk=run.pk).update(experiment=experiment, agent_config_snapshot=agent_snapshot)
+        AuditRun.objects.filter(pk=run.pk).update(agent_config_snapshot=agent_snapshot)
+        experiment.runs.add(run)
         html = self.client.get(f"/runs/{run.id}/").content.decode()
         self.assertNotIn("agent-base.corp", html)
 

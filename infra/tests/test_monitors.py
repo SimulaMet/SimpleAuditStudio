@@ -443,7 +443,7 @@ class RepeatFlowTests(_ClientMixin, MonitorTestBase):
         run = AuditRun.objects.get()
         m = Monitor.objects.get()
         # A single run is a singleton experiment; its results page is the target.
-        exp = run.experiment
+        exp = run.experiments.first()
         self.assertIsNotNone(exp)
         self.assertRedirects(resp, f"/experiments/{exp.id}/", fetch_redirect_response=False)
         self.assertEqual(m.experiment, exp)
