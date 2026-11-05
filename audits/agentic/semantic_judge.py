@@ -76,6 +76,18 @@ def _document(item: Any) -> Any:
     return item
 
 
+_NAME_FIELDS = ("source", "source_name")
+
+
+def _readable_sources(value: Any) -> list[str]:
+    """Source values of ``value``; a document with a source name gives only its name, not its ids."""
+    if isinstance(value, list):
+        return [item for part in value for item in _readable_sources(part)]
+    if isinstance(value, dict) and any(value.get(key) for key in _NAME_FIELDS):
+        return _source_values({key: value[key] for key in _NAME_FIELDS if value.get(key)})
+    return _source_values(value)
+
+
 def _retrieved_sources(trajectory: AgentTrajectory) -> list[str]:
     """Sources of every document the trace shows, whichever step returned it."""
     sources: set[str] = set()
@@ -86,9 +98,11 @@ def _retrieved_sources(trajectory: AgentTrajectory) -> list[str]:
             documents = _document(documents)
         if isinstance(documents, list):
             documents = [_document(item) for item in documents]
-        sources.update(_source_values(documents))
+        sources.update(_readable_sources(documents))
         if step.kind == "tool":
-            sources.update(_captured_tool_sources(step))
+            result = _document(step.attributes.get("gen_ai.tool.call.result"))
+            sources.update(_readable_sources(result) if isinstance(result, (dict, list))
+                           else _captured_tool_sources(step))
     return sorted(sources)
 
 
@@ -233,10 +247,9 @@ def build_evidence_packet(
     not observed stay empty.
     """
     steps = getattr(trajectory, "steps", []) or []
+    tools = [step for step in steps if getattr(step, "kind", None) == "tool"]
     tool_steps = []
-    for step in list(steps)[:_MAX_TOOL_STEPS]:
-        if getattr(step, "kind", None) != "tool":
-            continue
+    for step in tools[:_MAX_TOOL_STEPS]:
         tool_steps.append({
             "span_id": step.span_id,
             "name": step.tool_name or step.name,
@@ -255,7 +268,7 @@ def build_evidence_packet(
         "tool_steps": tool_steps,
         "retrieval_source_ids": retrieval_sources,
         "span_ids": [step.span_id for step in steps],
-        "truncated": len(steps) > _MAX_TOOL_STEPS,
+        "truncated": len(tools) > _MAX_TOOL_STEPS,
     }
     # The last assistant turn already is the final response: do not send it twice.
     last = next((t for t in reversed(turns) if t["role"] == "assistant"), None)

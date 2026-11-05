@@ -143,6 +143,36 @@ class AgenticViewHelperTests(TestCase):
         self.assertEqual(row["kb_sources"], ["refunds.md"])
         self.assertEqual(row["arguments"], "electronics window")
 
+    def test_retrieval_inside_a_tool_call_is_one_step(self):
+        """execute_tool with a retrieval span inside it is one row: arguments plus documents."""
+        import json as _json
+
+        docs = [{"source": "refunds.md", "content": "Electronics keep the 15-day window."}]
+        tool = {"trace_id": "t", "span_id": "t1", "name": "execute_tool query_knowledge_files", "kind": "TOOL",
+                "start_time": 1.0, "end_time": 1.3,
+                "attributes": {"gen_ai.operation.name": "execute_tool", "gen_ai.tool.name": "query_knowledge_files",
+                               "gen_ai.tool.call.arguments": '{"query": "electronics window"}',
+                               "gen_ai.tool.call.result": _json.dumps(docs)}}
+        retrieval = {"trace_id": "t", "span_id": "r1", "parent_span_id": "t1", "name": "retrieval knowledge",
+                     "kind": "RETRIEVER", "start_time": 1.1, "end_time": 1.2,
+                     "attributes": {"gen_ai.operation.name": "retrieval", "gen_ai.data_source.id": "knowledge",
+                                    "gen_ai.retrieval.query.text": "electronics window",
+                                    "gen_ai.retrieval.documents": _json.dumps(docs)}}
+        lone = {**retrieval, "span_id": "r2", "parent_span_id": "", "start_time": 2.0, "end_time": 2.1}
+        tl = _agentic_timeline_view({"judgment": {"evidence_spans": [tool, retrieval, lone]}})
+        row, other = tl["rows"]
+        self.assertEqual((row["label"], row["icon"]), ("TOOL-1", "📚"))
+        self.assertEqual([label for label, _ in row["content_blocks"]], ["Tool arguments", "Retrieved documents"])
+        self.assertEqual(_json.loads(dict(row["content_blocks"])["Retrieved documents"]), docs)
+        self.assertEqual(row["kb_sources"], ["refunds.md"])
+        self.assertIn('"span_id": "r1"', row["raw_json"])
+        # Links to the retrieval span land on the tool step.
+        self.assertEqual(tl["anchor_for"]["r1"], row["anchor"])
+        self.assertEqual(tl["label_for"]["r1"], "TOOL-1")
+        # A retrieval outside any tool call stays its own step.
+        self.assertEqual(other["label"], "RETRIEVAL-1")
+        self.assertEqual(tl["total"], 2)
+
     def test_json_content_blocks_are_pretty_printed(self):
         span = {"span_id": "t1", "name": "execute_tool lookup", "start_time": 1.0, "end_time": 1.1,
                 "attributes": {"gen_ai.operation.name": "execute_tool", "gen_ai.tool.name": "lookup",

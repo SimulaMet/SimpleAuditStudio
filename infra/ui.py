@@ -4381,6 +4381,42 @@ def _json_list_or_value(value):
     return value
 
 
+def _fold_tool_retrievals(raw_spans: list[dict], rows: list[dict]) -> dict[str, dict]:
+    """Retrieval rows nested in a tool row: ``{retrieval span id: tool row}``.
+
+    A tool that reads content emits ``execute_tool`` with a ``retrieval`` span
+    inside it for the same call (GenAI semconv). Both describe one step, so the
+    timeline shows them as one row: the tool's arguments plus what it retrieved.
+    """
+    parent_of = {str(s.get("span_id")): str(s.get("parent_span_id") or "") for s in raw_spans}
+    tool_rows = {row["span_id"]: row for row in rows if str(row.get("kind") or "").upper() == "TOOL"}
+    folded = {}
+    for row in rows:
+        if str(row.get("kind") or "").upper() != "RETRIEVER":
+            continue
+        tool_row = tool_rows.get(parent_of.get(row["span_id"], ""))
+        if tool_row is not None:
+            folded[row["span_id"]] = tool_row
+    return folded
+
+
+def _merge_retrieval_into_tool(tool_row: dict, retrieval_row: dict) -> None:
+    """Show ``retrieval_row`` inside ``tool_row`` (see ``_fold_tool_retrievals``)."""
+    retrieved = [b for b in retrieval_row["content_blocks"] if b[0] != "Retrieval query"]
+    blocks = tool_row["content_blocks"]
+    if any(label == "Retrieved documents" for label, _ in retrieved):
+        # The tool result is the same content the documents hold.
+        blocks = [b for b in blocks if b[0] != "Tool result"]
+    tool_row["content_blocks"] = blocks + retrieved
+    tool_row["raw_json"] = f"{tool_row['raw_json']}\n\n{retrieval_row['raw_json']}"
+    tool_row["kb_sources"] = list(dict.fromkeys(tool_row["kb_sources"] + retrieval_row["kb_sources"]))
+    tool_row["arguments"] = tool_row["arguments"] or retrieval_row["arguments"]
+    tool_row["is_retrieval"] = True
+    tool_row["icon"], tool_row["tone"] = _AGENTIC_SPAN_KIND_ICONS["RETRIEVER"]
+    if retrieval_row["is_error"] and not tool_row["is_error"]:
+        tool_row.update(is_error=True, error_type=retrieval_row["error_type"])
+
+
 def _agentic_timeline_view(rep: dict) -> dict | None:
     """Chronological full-width trajectory timeline for one rep's spans.
 
@@ -4447,16 +4483,25 @@ def _agentic_timeline_view(rep: dict) -> dict | None:
     _mark_redundant_reruns(raw_spans, rows)
     if not rows:
         return None
+    folded = _fold_tool_retrievals(raw_spans, rows)
     # Readable references in execution order (LLM-1, TOOL-1 ...); the id stays the anchor.
     counts: dict[str, int] = {}
     label_for: dict[str, str] = {}
     for row in rows:
+        if row["span_id"] in folded:
+            continue
         kind = str(row.get("kind") or "").upper()
         prefix = _AGENTIC_REF_PREFIX.get(kind, kind or "STEP")
         counts[prefix] = counts.get(prefix, 0) + 1
         row["label"] = f"{prefix}-{counts[prefix]}"
         label_for.setdefault(row["span_id"], row["label"])
+    for span_id, tool_row in folded.items():
+        label_for.setdefault(span_id, tool_row["label"])
     _show_compact_content(rows, compacted, label_for)
+    for row in rows:
+        if row["span_id"] in folded:
+            _merge_retrieval_into_tool(folded[row["span_id"]], row)
+    rows = [row for row in rows if row["span_id"] not in folded]
     # Every model call that answered in text is the assistant's reply to its turn.
     for row in rows:
         if row.get("llm_role") == "reply":
@@ -4466,6 +4511,8 @@ def _agentic_timeline_view(rep: dict) -> dict | None:
     anchor_for: dict[str, str] = {}
     for row in rows:
         anchor_for.setdefault(row["span_id"], row["anchor"])
+    for span_id, tool_row in folded.items():
+        anchor_for.setdefault(span_id, tool_row["anchor"])
     all_spans = [
         s for s in (rep.get("trace_evidence") or {}).get("all_spans") or []
         if isinstance(s, dict) and not _is_workflow_wrapper(s)
@@ -4473,7 +4520,8 @@ def _agentic_timeline_view(rep: dict) -> dict | None:
     return {
         "rows": rows,
         "total": len(rows),
-        "captured": max(len(all_spans), len(rows)),
+        # Captured steps: a retrieval inside a tool call is part of that step.
+        "captured": max(len(all_spans) - len(folded), len(rows)),
         "anchor_for": anchor_for,
         "label_for": label_for,
         "spans_json": json.dumps(raw_spans, indent=2, ensure_ascii=False, default=str),

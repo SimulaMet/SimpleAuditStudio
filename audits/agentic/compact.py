@@ -332,6 +332,28 @@ def _pointing_to_conversation(messages: Any, said: dict[str, set[str]]) -> Any:
     return out
 
 
+def _operation(span: dict) -> str:
+    return str(_attrs(span).get("gen_ai.operation.name") or "").lower()
+
+
+def _tool_retrievals(spans: list[dict], shown: set) -> dict:
+    """``{tool span id: retrieval span id}`` for a retrieval with documents inside a tool call.
+
+    A tool that reads content emits ``execute_tool`` with a ``retrieval`` span for
+    the same call inside it (GenAI semconv); the documents are what the tool returned.
+    """
+    tools = {s.get("span_id") for s in spans if _operation(s) == "execute_tool"}
+    found = {}
+    for span in spans:
+        parent = span.get("parent_span_id")
+        if _operation(span) != "retrieval" or parent not in tools or span.get("span_id") not in shown:
+            continue
+        documents = _parsed(_attrs(span).get(DOCUMENTS))
+        if isinstance(documents, list) and documents:
+            found.setdefault(parent, span.get("span_id"))
+    return found
+
+
 def judge_view(spans: list[dict], pool: list[dict] | None = None,
                conversation: list[dict] | None = None) -> list[dict]:
     """Spans as a trace-reading judge should see them: each piece of content once.
@@ -357,6 +379,7 @@ def judge_view(spans: list[dict], pool: list[dict] | None = None,
         if INPUT in attrs:
             _store(attrs, INPUT, attrs[INPUT], _without_rag_template(_parsed(attrs[INPUT])))
     compacted = {s.get("span_id"): s for s in compact_spans(full)}
+    retrieved_in = _tool_retrievals(full, shown)
     out = []
     for span in spans:
         if not isinstance(span, dict):
@@ -367,6 +390,10 @@ def judge_view(spans: list[dict], pool: list[dict] | None = None,
             continue
         # Only the GenAI semantic attributes and the standard error fields reach a judge.
         kept = {key: value for key, value in attrs.items() if key.startswith("gen_ai.") or key in _JUDGE_ERROR_KEYS}
+        retrieval_id = retrieved_in.get(span.get("span_id"))
+        if retrieval_id and TOOL_RESULT in kept:
+            # The tool returned what its retrieval span lists as documents.
+            kept[TOOL_RESULT] = f"(returned as the documents of retrieval span {str(retrieval_id)[:8]})"
         for key in (INPUT, OUTPUT):
             if key in kept and said:
                 kept[key] = _store_value(kept[key], _pointing_to_conversation(_parsed(kept[key]), said))

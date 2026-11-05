@@ -205,7 +205,7 @@ def test_retrieval_sources_read_the_standard_json_documents_attribute():
     span = {"span_id": "r1", "name": "retrieval", "start_time": 1.0,
             "attributes": {"gen_ai.operation.name": "retrieval", "gen_ai.retrieval.documents": json.dumps(docs)}}
     packet = build_evidence_packet(normalize([span]))
-    assert packet["retrieval_source_ids"] == ["f1", "matrix.md", "refunds.md"]
+    assert packet["retrieval_source_ids"] == ["matrix.md", "refunds.md"]      # named once, not also by id
 
 
 def test_user_turn_drops_the_rag_template_but_keeps_the_question():
@@ -214,3 +214,20 @@ def test_user_turn_drops_the_rag_template_but_keeps_the_question():
     wrapped = "### Task:\nRespond using the context.\n<context>\n<source id=1>…</source>\n</context>\n\nIs it 15 days?"
     assert _user_question(wrapped) == ("Is it 15 days?", True)
     assert _user_question("Is it 15 days?") == ("Is it 15 days?", False)
+
+
+def test_packet_names_documents_once_and_caps_tool_steps_only():
+    """A document with a source name is listed by name, not also by its file id; the cap counts tools."""
+    from audits.agentic.semantic_judge import _MAX_TOOL_STEPS
+
+    docs = json.dumps([{"source": "matrix.md", "file_id": "ea38", "content": "15 days"}])
+    steps = [TrajectoryStep(f"l{i}", "inference", "chat") for i in range(_MAX_TOOL_STEPS)]
+    steps += [
+        TrajectoryStep("t1", "tool", "query_knowledge_files", tool_name="query_knowledge_files",
+                       attributes={"gen_ai.tool.call.result": docs}),
+        TrajectoryStep("r1", "retrieval", "retrieval", attributes={"gen_ai.retrieval.documents": docs}),
+    ]
+    packet = build_evidence_packet(AgentTrajectory(steps))
+    assert packet["retrieval_source_ids"] == ["matrix.md"]
+    assert [s["span_id"] for s in packet["tool_steps"]] == ["t1"]
+    assert packet["truncated"] is False

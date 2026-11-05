@@ -138,3 +138,24 @@ def test_judge_view_keeps_the_exception_message():
     (view,) = judge_view([span])
     assert view["attributes"]["exception.message"] == "No order found for 'ACME-9999'."
     assert "service.name" not in view["attributes"]
+
+
+def test_judge_view_points_a_tool_result_to_its_nested_retrieval():
+    """execute_tool with a retrieval inside it: the documents are what the tool returned."""
+    from audits.agentic.compact import judge_view
+
+    tool = _span("t1", "execute_tool", 1.0, **{"gen_ai.tool.name": "kb_exec",
+                                              "gen_ai.tool.call.result": {"content": "43: Electronics 15 days"}})
+    retrieval = _span("r1", "retrieval", 1.1, **{"gen_ai.retrieval.documents": [{"content": "43: Electronics 15 days"}]})
+    retrieval["parent_span_id"] = "t1"
+    empty = _span("t2", "execute_tool", 2.0, **{"gen_ai.tool.call.result": "No matches for \"x\""})
+    no_docs = _span("r2", "retrieval", 2.1, **{"gen_ai.retrieval.query.text": "x"})
+    no_docs["parent_span_id"] = "t2"
+    view = {s["span_id"]: s["attributes"] for s in judge_view([tool, retrieval, empty, no_docs])}
+    assert view["t1"]["gen_ai.tool.call.result"] == "(returned as the documents of retrieval span r1)"
+    assert json.loads(view["r1"]["gen_ai.retrieval.documents"]) == [{"content": "43: Electronics 15 days"}]
+    # No documents: the tool result is the only record of what came back.
+    assert json.loads(view["t2"]["gen_ai.tool.call.result"]) == 'No matches for "x"'
+    # Retrieval not shown to the judge: keep the result.
+    (alone,) = judge_view([tool])
+    assert "Electronics" in alone["attributes"]["gen_ai.tool.call.result"]
