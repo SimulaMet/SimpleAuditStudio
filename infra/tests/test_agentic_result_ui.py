@@ -164,6 +164,23 @@ class AgenticViewHelperTests(TestCase):
         self.assertEqual({r["span_id"]: r["user_input"] for r in rows if r["kind"] == "LLM"},
                          {"q1": True, "a1": False, "q2": True, "a2": False})
 
+    def test_one_call_rag_turns_without_captured_input(self):
+        """A service that retrieves and answers in one call: retrieval first, no duplicate flag."""
+        def turn(n, start, llm_id, retrieval_id):
+            span = {"parent_span_id": f"w{n}", "start_time": start, "end_time": start + 3.0}
+            return [
+                {**span, "span_id": llm_id, "name": "chat nhi", "kind": "LLM", "attributes": {
+                    "gen_ai.operation.name": "chat", "gen_ai.response.finish_reasons": ["stop"]}},
+                {**span, "span_id": retrieval_id, "name": "retrieval", "kind": "RETRIEVER", "attributes": {
+                    "gen_ai.operation.name": "retrieval", "gen_ai.retrieval.query.text": f"query {n}"}},
+            ]
+        # Span ids sort the model call first, which must not decide the order.
+        spans = turn(1, 1.0, "1a", "9a") + turn(2, 5.0, "1b", "9b")
+        rows = _agentic_timeline_view({"judgment": {"evidence_spans": spans}})["rows"]
+        self.assertEqual([r["span_id"] for r in rows], ["9a", "1a", "9b", "1b"])
+        # Content capture off: no input to compare, so no call is a duplicate.
+        self.assertFalse(any(r.get("is_redundant_rerun") for r in rows))
+
     def test_model_call_inside_retrieval_comes_before_it(self):
         """A query rewrite nested in a retrieval span comes before that retrieval and is not a reply."""
         import json as _json

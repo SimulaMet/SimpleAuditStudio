@@ -4097,7 +4097,8 @@ def _mark_redundant_reruns(raw_spans: list[dict], rows: list[dict]) -> None:
         is_answer = is_llm and finish == ["stop"] and not row.get("is_tool_decision")
         if is_answer:
             inp = attrs.get("gen_ai.input.messages")
-            if prev_llm is not None and prev_llm.get("_input") == inp:
+            # Without captured input (content capture off) calls cannot be compared.
+            if prev_llm is not None and inp not in (None, "") and prev_llm.get("_input") == inp:
                 row["is_redundant_rerun"] = True
                 row["rerun_of"] = prev_llm.get("anchor")
             prev_llm = {"_input": inp, "anchor": row.get("anchor")}
@@ -4532,7 +4533,14 @@ def _agentic_timeline_view(rep: dict) -> dict | None:
         for s in raw_spans
     )
     if has_real_times:
-        ordered_spans = sorted(raw_spans, key=lambda x: (x.get("start_time") if isinstance(x.get("start_time"), (int, float)) else 0.0, str(x.get("span_id"))))
+        # Spans that start together (a RAG service that retrieves and answers in
+        # one call) keep a stable order: retrieval first, as its documents feed
+        # the model call.
+        ordered_spans = sorted(raw_spans, key=lambda x: (
+            x.get("start_time") if isinstance(x.get("start_time"), (int, float)) else 0.0,
+            str(x.get("kind") or "").upper() == "LLM",
+            str(x.get("span_id")),
+        ))
     else:
         ordered_spans = raw_spans
     for s in ordered_spans:
