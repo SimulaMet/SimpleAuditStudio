@@ -500,6 +500,46 @@ class TargetTracePropagationTest(TestCase):
         self.assertNotIn("chat_id", posts[2])
         self.assertIsNone(posts[2]["parent_id"])
 
+    @mock.patch("chat.config.UPSTREAM", "http://127.0.0.1:8080/chat")
+    @mock.patch("chat.config.ENABLED", True)
+    def test_model_not_found_reloads_open_webui_models_and_retries_once(self):
+        """Right after Open WebUI starts its model registry may miss the agent: reload, retry once."""
+        import asyncio
+        from types import SimpleNamespace
+
+        from infra import trace_target
+        from infra.trace_target import TraceContextModelTarget
+
+        trace_target._owui_conversations.clear()
+        posts, refreshes = [], []
+
+        class RawClient:
+            base_url = "http://127.0.0.1:8080/chat/api/v1/"
+            api_key = "jwt"
+
+            async def post(self, path, *, cast_to, body, options):
+                posts.append(body)
+                self.message_id = body["message_ids"][0]["message_id"]
+                if len(posts) == 1:
+                    raise RuntimeError("Error code: 400 - {'detail': 'Model not found'}")
+                return {"status": True, "chat_id": "chat-1"}
+
+            async def get(self, path, *, cast_to, options):
+                return {"chat": {"history": {"messages": {self.message_id: {
+                    "id": self.message_id, "role": "assistant", "done": True, "content": "ok"}}}}}
+
+        async def refresh(origin, token, *, every=60.0):
+            refreshes.append((origin, token, every))
+
+        target = TraceContextModelTarget(client=SimpleNamespace(client=RawClient(), acompletion=None),
+                                         model="studio.agent-1")
+        with mock.patch.object(trace_target, "_owui_refresh_models", refresh), \
+                mock.patch.object(trace_target, "_owui_get_jwt", mock.AsyncMock(return_value="jwt")):
+            response = asyncio.run(target.send(user="hi", history=[{"role": "user", "content": "hi"}]))
+        self.assertEqual(response.content, "ok")
+        self.assertEqual(len(posts), 2)
+        self.assertEqual(refreshes, [("http://127.0.0.1:8080/chat", "jwt", 0.0)])
+
     def test_streaming_call_never_forwards_studio_only_params_to_openai_client(self):
         """extra_headers (W3C trace context) must not leak into the OpenAI request."""
         import asyncio
@@ -1466,19 +1506,24 @@ def test_concurrent_runs_keep_their_own_auditor_class(monkeypatch):
     classes = {"a": type("AuditorA", (), {}), "b": type("AuditorB", (), {})}
 
     def run(label):
-        with mock.patch("infra.engine.decision_target_for", return_value=object()), \
-             mock.patch("infra.trace_target.decision_auditor_class", return_value=classes[label]), \
-             mock.patch("infra.engine.snapshot_api_key", return_value=""):
-            engine.run_scenario_repeated(
-                name=label, description="d", expected_behavior=None, test_prompt=None,
-                target=_snap(label), auditor=_snap("x"), judge=_snap("y"), n_repetitions=2, trace_config=None,
-            )
+        engine.run_scenario_repeated(
+            name=label, description="d", expected_behavior=None, test_prompt=None,
+            target=_snap(label), auditor=_snap("x"), judge=_snap("y"), n_repetitions=2, trace_config=None,
+        )
 
-    threads = [threading.Thread(target=run, args=(k,)) for k in classes]
-    for t in threads:
-        t.start()
-    for t in threads:
-        t.join(timeout=30)
+    # Patched once, here: mock.patch is not thread-safe, and two threads patching
+    # and restoring the same attribute leave one thread's mock installed for every
+    # later test in this worker. Each thread's class follows from its own target.
+    with monkeypatch.context() as patched:
+        patched.setattr(engine, "decision_target_for",
+                        lambda target, **_kw: ("decision", target["model_id"]))
+        patched.setattr("infra.trace_target.decision_auditor_class", lambda factory: classes[factory()[1]])
+        patched.setattr(engine, "snapshot_api_key", lambda _snapshot: "")
+        threads = [threading.Thread(target=run, args=(k,)) for k in classes]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=30)
     assert {label.split(" ")[0] for label in seen} == {"a", "b"}
     for label, cls in seen.items():
         assert cls is classes[label.split(" ")[0]]

@@ -346,7 +346,17 @@ async def _openwebui_saved_chat_call(
     if chat_id_to_continue:
         body["chat_id"] = chat_id_to_continue
     options = {"headers": trace_headers} if trace_headers else {}
-    created = await raw_client.post("/chat/completions", cast_to=dict, body=body, options=options)
+    try:
+        created = await raw_client.post("/chat/completions", cast_to=dict, body=body, options=options)
+    except Exception as exc:
+        # Right after Open WebUI starts, its model registry can still miss the agent
+        # (the throttled refresh may have run before its connections loaded). Reload
+        # the registry now and retry once.
+        if "not found" not in str(exc).lower() or "model" not in str(exc).lower():
+            raise
+        origin = base_url.rsplit("/api/v1", 1)[0].rstrip("/")
+        await _owui_refresh_models(origin, str(getattr(raw_client, "api_key", "") or ""), every=0.0)
+        created = await raw_client.post("/chat/completions", cast_to=dict, body=body, options=options)
     chat_id = created.get("chat_id") if isinstance(created, dict) else None
     if not chat_id:
         raise RuntimeError("Open WebUI saved-chat request returned no chat_id")
