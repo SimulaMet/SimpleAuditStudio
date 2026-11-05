@@ -352,7 +352,7 @@ def otlp_env_vars(*, endpoint: str, username: str, password: str) -> list[tuple[
     return [
         ("OTEL_OTLP_SPAN_EXPORTER", "http"),
         ("OTEL_EXPORTER_OTLP_ENDPOINT", endpoint),
-        ("OTEL_EXPORTER_OTLP_PROTOCOL", "http/json"),
+        ("OTEL_EXPORTER_OTLP_PROTOCOL", "http/protobuf"),
         ("OTEL_BASIC_AUTH_USERNAME", username),
         ("OTEL_BASIC_AUTH_PASSWORD", password),
     ]
@@ -362,7 +362,7 @@ def otlp_bearer_env_vars(*, endpoint: str, token: str) -> list[tuple[str, str]]:
     """Env vars for a generic OTel exporter using a Bearer token."""
     return [
         ("OTEL_EXPORTER_OTLP_ENDPOINT", endpoint),
-        ("OTEL_EXPORTER_OTLP_PROTOCOL", "http/json"),
+        ("OTEL_EXPORTER_OTLP_PROTOCOL", "http/protobuf"),
         ("OTEL_EXPORTER_OTLP_HEADERS", f"Authorization=Bearer {token}"),
     ]
 
@@ -371,7 +371,7 @@ def otlp_open_env_vars(*, endpoint: str) -> list[tuple[str, str]]:
     """Env vars for an unauthenticated (``none``) target — just the endpoint."""
     return [
         ("OTEL_EXPORTER_OTLP_ENDPOINT", endpoint),
-        ("OTEL_EXPORTER_OTLP_PROTOCOL", "http/json"),
+        ("OTEL_EXPORTER_OTLP_PROTOCOL", "http/protobuf"),
     ]
 
 

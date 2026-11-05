@@ -16,10 +16,12 @@ from __future__ import annotations
 
 import atexit
 import base64
+import binascii
 import gzip
 import io
 import json
 import logging
+import re
 import threading
 import time
 
@@ -349,7 +351,11 @@ def _otlp_body_to_dict(body: bytes, content_type: str | None) -> dict:
         # normalize to hex here.
         _hexify_id_fields(d)
         return d
-    return json.loads(body)
+    d = json.loads(body)
+    # Some exporters send protobuf's JSON mapping (base64 ids) as OTLP/JSON,
+    # which the spec defines with hex ids. Accept both so their spans link.
+    _hexify_base64_json_ids(d)
+    return d
 
 
 _STATUS_CODES = {"STATUS_CODE_UNSET": 0, "STATUS_CODE_OK": 1, "STATUS_CODE_ERROR": 2}
@@ -397,6 +403,33 @@ def _hexify_id_fields(node) -> None:
     elif isinstance(node, list):
         for item in node:
             _hexify_id_fields(item)
+
+
+_HEX_ID = re.compile(r"[0-9a-fA-F]{16}|[0-9a-fA-F]{32}")
+
+
+def _hexify_base64_json_ids(node) -> None:
+    """Convert base64 trace/span ids in an OTLP/JSON body to hex, leaving hex ids as they are.
+
+    A hex id is 16 or 32 characters; its base64 form is 12 or 24 characters
+    ending in ``=``, so the two cannot be confused.
+    """
+    if isinstance(node, dict):
+        for key, value in node.items():
+            if key in ("traceId", "spanId", "parentSpanId") and isinstance(value, str) and value:
+                if _HEX_ID.fullmatch(value):
+                    continue
+                try:
+                    raw = base64.b64decode(value, validate=True)
+                except (ValueError, binascii.Error):
+                    continue
+                if len(raw) in (8, 16):
+                    node[key] = raw.hex()
+            else:
+                _hexify_base64_json_ids(value)
+    elif isinstance(node, list):
+        for item in node:
+            _hexify_base64_json_ids(item)
 
 
 def _bounded_gunzip(body: bytes, limit: int) -> bytes | None:

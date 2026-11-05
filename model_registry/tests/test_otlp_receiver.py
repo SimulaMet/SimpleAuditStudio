@@ -566,3 +566,28 @@ class SpanKindRefinementTest(TestCase):
             _refine_span_kind({"kind": "CHAIN", "attributes": {"gen_ai.operation.name": "execute_tool"}}),
             "TOOL",
         )
+
+
+class OTLPJsonIdEncodingTest(TestCase):
+    """OTLP/JSON ids are hex; some exporters send protobuf's base64 form instead."""
+
+    def _decode(self, trace_id, span_id, parent_id=""):
+        body = {"resourceSpans": [{"scopeSpans": [{"spans": [
+            {"traceId": trace_id, "spanId": span_id, "parentSpanId": parent_id, "name": "x"},
+        ]}]}]}
+        out = otlp_views._otlp_body_to_dict(json.dumps(body).encode(), "application/json")
+        return out["resourceSpans"][0]["scopeSpans"][0]["spans"][0]
+
+    def test_base64_ids_become_hex(self):
+        trace_hex, span_hex, parent_hex = "e16305ea3aba0b1e4ca29b0cdbfdb077", "8987ec11ca698f06", "0102030405060708"
+        b64 = lambda h: base64.b64encode(bytes.fromhex(h)).decode()
+        span = self._decode(b64(trace_hex), b64(span_hex), b64(parent_hex))
+        self.assertEqual(
+            (span["traceId"], span["spanId"], span["parentSpanId"]), (trace_hex, span_hex, parent_hex)
+        )
+
+    def test_hex_ids_unchanged(self):
+        # A 16-character hex span id is also valid base64; it must stay hex.
+        span = self._decode("3255316a4a0b4a96be7e574eb18e085e", "a99359bd4636b7cd")
+        self.assertEqual((span["traceId"], span["spanId"]), ("3255316a4a0b4a96be7e574eb18e085e", "a99359bd4636b7cd"))
+        self.assertEqual(span["parentSpanId"], "")
