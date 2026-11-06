@@ -135,6 +135,9 @@
                        class="w-56 px-2 py-1 rounded bg-surface-overlay border border-gray-700 text-xs font-mono focus:outline-none focus:ring-1 focus:ring-accent/50">
                 <input type="url" name="identity_url" maxlength="500" value="{{ m.model_identity.url|default:'' }}" placeholder="Card URL (optional for Hugging Face)" aria-label="Model card URL"
                        class="flex-1 min-w-[12rem] px-2 py-1 rounded bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-1 focus:ring-accent/50">
+                <input type="text" name="identity_benchmark_id" maxlength="250" value="{{ m.model_identity.benchmark_id|default:'' }}" placeholder="Leaderboard name, if different (e.g. gpt-4.1-2025-04-14)" aria-label="Benchmark leaderboard name"
+                       title="The name the benchmark leaderboard uses for this model. Leave empty to use the identifier."
+                       class="w-72 px-2 py-1 rounded bg-surface-overlay border border-gray-700 text-xs font-mono focus:outline-none focus:ring-1 focus:ring-accent/50">
               </fieldset>
               <button class="px-2 py-1 rounded bg-accent/20 text-accent text-xs hover:bg-accent/30" title="Save changes">Save</button>
               <button type="button" data-edit-cancel class="px-2 py-1 rounded text-gray-500 text-xs hover:text-gray-300" title="Discard changes">Cancel</button>

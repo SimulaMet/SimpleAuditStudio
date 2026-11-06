@@ -61,9 +61,12 @@ def frozen_model(run: AuditRun, role: str) -> dict:
         "base_url": snap.get("base_url", ""),
         "provider": snap.get("provider", ""),
         "connection_id": snap.get("connection_id") or (live.connection_id if live else None),
-        # Snapshot only: runs frozen before identities existed show none rather
-        # than whatever the model is mapped to today.
-        "identity": identity_view(snap.get("model_identity")),
+        # The snapshot's identity when the run recorded one. Runs frozen before
+        # identities existed (no key at all) borrow the live model's: identity is
+        # descriptive metadata, never execution config.
+        "identity": identity_view(
+            snap.get("model_identity", live.model_identity if live else None)
+        ),
         "changes": [],
     }
     if live is not None and snap:

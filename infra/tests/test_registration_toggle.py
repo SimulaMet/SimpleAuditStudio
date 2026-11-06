@@ -56,7 +56,7 @@ class AdminSiteSettingsApiTest(TestCase):
     def test_get_defaults_to_enabled(self):
         resp = self.client.get("/api/admin/settings/")
         self.assertEqual(resp.status_code, 200)
-        self.assertEqual(resp.json(), {"registration_enabled": True})
+        self.assertIs(resp.json()["registration_enabled"], True)
 
     def test_patch_disables_and_reenables(self):
         resp = patch_json(self.client, "/api/admin/settings/", {"registration_enabled": False})

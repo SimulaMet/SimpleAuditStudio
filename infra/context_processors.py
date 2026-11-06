@@ -235,3 +235,18 @@ def extensions(request):
             "extensions": [e.slug for e in on_page],
         }
     return ctx
+
+
+def leaderboard(request):
+    """``leaderboard_url_template``: the admin's leaderboard link template ('' = off).
+
+    Lazy, so the site-setting query only runs on pages that show an identity chip.
+    """
+    from django.utils.functional import SimpleLazyObject
+
+    def _template() -> str:
+        from accounts.services import get_site_setting
+
+        return get_site_setting("leaderboard_url_template") or ""
+
+    return {"leaderboard_url_template": SimpleLazyObject(_template)}

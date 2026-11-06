@@ -756,6 +756,7 @@ class AdminView(SuperuserRequiredMixin, TemplateView):
             users=users,
             superuser_count=superuser_count,
             registration_enabled=get_site_setting("registration_enabled"),
+            leaderboard_url_setting=get_site_setting("leaderboard_url_template") or "",
             managed_members=managed_members,
             manage_id=int(manage_id) if manage_id and is_id(manage_id) else None,
         )
@@ -3021,6 +3022,7 @@ class ConnectionsView(ProjectMixin, TemplateView):
                 try:
                     identity = normalize_identity(
                         post.get("identity_kind", ""), post.get("identity_id", ""), post.get("identity_url", ""),
+                        post.get("identity_benchmark_id", ""),
                     )
                 except IdentityError as exc:
                     return fail(str(exc))
