@@ -265,11 +265,17 @@ class ModelModalTest(TestCase):
         target = self._modal_payloads(self.make_run(snap))[0]
         self.assertEqual(target["identityId"], "Qwen/Qwen3.8-27B")
 
-    def test_recorded_empty_identity_is_kept(self):
+    def test_recorded_empty_identity_borrows_live_identity(self):
+        # Frozen before the model's card was filled in: show today's card.
         snap = {**_endpoint_snapshot(self.model), "model_identity": {}}
         target = self._modal_payloads(self.make_run(snap))[0]
-        self.assertEqual(target["kind"], "")
-        self.assertEqual(target["leaderboardUrl"], "")
+        self.assertEqual(target["identityId"], "Qwen/Qwen3.8-27B")
+        self.assertIn("highlight=", target["leaderboardUrl"])
+
+    def test_recorded_identity_stays_frozen(self):
+        snap = {**_endpoint_snapshot(self.model), "model_identity": {"kind": "vendor", "id": "then-name"}}
+        target = self._modal_payloads(self.make_run(snap))[0]
+        self.assertEqual(target["identityId"], "then-name")
 
     def test_embed_url_only_for_euroeval(self):
         from infra.templatetags.identity_tags import embed_url
@@ -277,3 +283,26 @@ class ModelModalTest(TestCase):
         self.assertEqual(embed_url("https://euroeval.com/x?a=1"), "https://euroeval.com/x?a=1&embed=1")
         self.assertEqual(embed_url("https://example.org/x"), "https://example.org/x")
         self.assertEqual(embed_url(""), "")
+
+
+class FrozenAgentIdentityTest(TestCase):
+    def test_agent_base_model_borrows_live_identity_when_unrecorded(self):
+        from types import SimpleNamespace
+
+        from audits.services import frozen_agent
+        from infra.tests.factories import (
+            ModelConnectionFactory,
+            ProjectFactory,
+            RegisteredModelFactory,
+        )
+
+        model = RegisteredModelFactory(
+            connection=ModelConnectionFactory(project=ProjectFactory()),
+            model_identity={"kind": "hf", "id": "Qwen/Qwen3.8-27B"},
+        )
+        run = SimpleNamespace(agent_config_snapshot={
+            "agent_id": 1, "name": "A", "base_model": {"id": model.id, "model_id": "x", "model_identity": {}},
+        })
+        self.assertEqual(frozen_agent(run)["base_model"]["model_identity"]["id"], "Qwen/Qwen3.8-27B")
+        run.agent_config_snapshot["base_model"]["model_identity"] = {"kind": "vendor", "id": "then"}
+        self.assertEqual(frozen_agent(run)["base_model"]["model_identity"]["id"], "then")
