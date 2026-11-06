@@ -1,0 +1,3 @@
+{% comment %}head_end slot: operator extension stylesheets (infra.extensions).{% endcomment %}
+{% for a in ext_css %}<link rel="stylesheet" href="{{ a.url }}"{% if a.integrity %} integrity="{{ a.integrity }}" crossorigin="anonymous"{% endif %} data-studio-extension>
+{% endfor %}

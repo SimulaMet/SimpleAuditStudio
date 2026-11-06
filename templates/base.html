@@ -95,7 +95,7 @@
     @media (prefers-reduced-motion: reduce) { *, ::before, ::after { transition-duration: .01ms !important; animation-duration: .01ms !important; } }
   </style>
 {% include "partials/ui_js.html" %}
-</head>
+{% if ext_css %}{% include "partials/ext_head.html" %}{% endif %}</head>
 <body class="h-full bg-surface text-gray-200 antialiased"{% if user.is_authenticated and not can_write %} data-readonly{% endif %}>
 {% if user.is_authenticated %}
 <div class="flex h-screen overflow-hidden">
@@ -300,5 +300,5 @@
   } catch (e) {}
 })();
 </script>
-</body>
+{% if ext_js %}{% include "partials/ext_body.html" %}{% endif %}</body>
 </html>

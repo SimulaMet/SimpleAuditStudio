@@ -187,3 +187,51 @@ def nav(request):
 
 # Pages reached from the user menu rather than the sidebar.
 _UNLISTED_PAGES = {"/profile/": "Profile", "/admin-settings/": "Admin settings", "/workspaces/": "Workspaces"}
+
+
+def extensions(request):
+    """Operator extensions (``infra.extensions``): menu items, CSS/JS, page context.
+
+    Returns nothing at all when no extension is configured or visible, so
+    pages render exactly as they would without the feature.
+    """
+    from infra.extensions import visible_extensions
+
+    visible = visible_extensions(getattr(request, "user", None))
+    if not visible:
+        return {}
+    path = request.path
+    sections: dict[str, list] = {}
+    for ext in visible:
+        if ext.url:
+            sections.setdefault(ext.section, []).append({
+                "slug": ext.slug, "url": ext.url, "label": ext.label, "icon": ext.icon,
+                "active": path.startswith(f"/x/{ext.slug}/") or ext.url == path,
+            })
+    on_page = [e for e in visible if (e.css or e.js) and e.applies_to(path)]
+    css = [{"url": u, "integrity": e.integrity.get(u, "")} for e in on_page for u in e.css]
+    js = [{"url": u, "integrity": e.integrity.get(u, "")} for e in on_page for u in e.js]
+    ctx = {
+        "ext_nav": [{"section": s, "items": items} for s, items in sections.items()],
+        "ext_css": css,
+        "ext_js": js,
+    }
+    if js:
+        from django.middleware.csrf import get_token
+
+        from infra.extensions import ROLE_LADDER, user_level
+        from infra.health import _studio_version
+
+        project = getattr(request, "project", None)
+        user = request.user
+        ctx["studio_page_context"] = {
+            "version": _studio_version() or "",
+            "user": {"id": user.pk, "username": user.username, "name": user.get_full_name() or user.username,
+                     "email": user.email or ""},
+            "role": ROLE_LADDER[user_level(user)],
+            "workspace": {"id": project.pk, "name": project.name} if project is not None else None,
+            "csrfToken": get_token(request),
+            "path": path,
+            "extensions": [e.slug for e in on_page],
+        }
+    return ctx

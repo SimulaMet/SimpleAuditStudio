@@ -57,7 +57,7 @@ set before paint in base.html). Mobile: an off-canvas drawer opened from the top
       <span class="sb-icon text-sm w-4 text-center shrink-0" aria-hidden="true">{{ child.icon }}</span><span class="sidebar-label">{{ child.label }}</span>
     </a>
     {% endfor %}
-    {% endfor %}
+    {% endfor %}{% if ext_nav %}{% include "partials/ext_nav.html" %}{% endif %}
   </nav>
 
   <div class="shrink-0 p-2 border-t border-gray-800 space-y-0.5">

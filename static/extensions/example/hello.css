@@ -1,0 +1,9 @@
+/* Example Studio extension stylesheet (docs/extensions.md). */
+.studio-example-badge {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 9999px;
+  border: 1px solid rgb(108 140 255 / .4);
+  color: #8da4ff;
+  white-space: nowrap;
+}

@@ -1,0 +1,12 @@
+{% comment %}Operator extension menu items, already filtered by role on the server (infra.extensions).{% endcomment %}
+{% for group in ext_nav %}
+    <div class="pt-2 mt-2 border-t border-gray-800/70" data-studio-extension-section="{{ group.section }}">
+      {% if group.section %}<p class="sidebar-label px-3 pb-1 text-[10px] uppercase tracking-wide text-gray-600">{{ group.section }}</p>{% endif %}
+      {% for item in group.items %}
+      <a href="{{ item.url }}" aria-label="{{ item.label }}"{% if item.active %} aria-current="page"{% endif %} data-studio-extension="{{ item.slug }}"
+         class="sb-item flex items-center gap-3 px-3 py-2 rounded-lg text-sm whitespace-nowrap {% if item.active %}bg-accent/15 text-accent font-medium{% else %}text-gray-400 hover:text-gray-200 hover:bg-surface-overlay{% endif %}">
+        <span class="sb-icon text-base w-5 text-center shrink-0" aria-hidden="true">{{ item.icon }}</span><span class="sidebar-label">{{ item.label }}</span>
+      </a>
+      {% endfor %}
+    </div>
+{% endfor %}

@@ -1,0 +1,6 @@
+{% extends "base.html" %}
+{% block title %}{{ extension.label }} · SimpleAudit Studio{% endblock %}
+{% block content %}
+<iframe src="{{ extension.embed }}" title="{{ extension.label }}" data-studio-extension-embed="{{ extension.slug }}"
+        class="block w-full rounded-xl border border-gray-800 bg-surface-raised" style="height: calc(100vh - 9rem); min-height: 24rem;"></iframe>
+{% endblock %}

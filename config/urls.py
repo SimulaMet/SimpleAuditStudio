@@ -323,3 +323,12 @@ if otlp_config.ENABLED:
         path("api/otlp/credentials/create/", otlp_views.create_credential, name="otlp-credentials-create"),
         path("api/otlp/credentials/<int:cred_id>/revoke/", otlp_views.revoke_credential, name="otlp-credentials-revoke"),
     ]
+
+# Operator extensions (issue #83): embed pages and forward-auth for companion
+# apps. Both 404 unless SIMPLEAUDIT_EXTENSIONS is set. See docs/extensions.md.
+from infra import extension_views
+
+urlpatterns += [
+    path("x/<slug:slug>/", extension_views.embed_page, name="extension_embed"),
+    path("ext/authz", extension_views.authz, name="extension_authz"),
+]

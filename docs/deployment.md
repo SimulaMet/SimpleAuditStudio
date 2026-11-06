@@ -199,6 +199,7 @@ override them when you deliberately need to.
 | `DEMO_BANNER_HTML` | Optional custom HTML for the demo-mode login banner. Empty = built-in banner. Trusted operator content only. |
 | `WORKOS_CLIENT_ID`, `WORKOS_API_KEY` | Optional passwordless email sign-in. |
 | `SIMPLEAUDIT_GRAVATAR` | `true` = show Gravatar avatars (the browser sends the MD5 hash of the user's email to gravatar.com). Default off: the user's initial is shown. |
+| `SIMPLEAUDIT_EXTENSIONS` | Operator extensions: inline JSON or the path of a JSON manifest adding menu items, CSS/JS, embed pages and `/ext/authz`. Scripts run with full same-origin privileges. Empty = off. See [extensions.md](extensions.md). |
 | `SENTRY_DSN`, `SENTRY_ENVIRONMENT` | Optional error tracking. |
 | `LOG_LEVEL`, `PORT` | Logging level; web port for the CLI. |
 | any name in a connection's `secret_reference` | Model API key read at execution time. |

@@ -1,0 +1,28 @@
+{
+  "extensions": [
+    {
+      "slug": "hello",
+      "roles": ["viewer"],
+      "css": "/static/extensions/example/hello.css",
+      "js": "/static/extensions/example/hello.js",
+      "pages": ["/runs/*"]
+    },
+    {
+      "slug": "feedback",
+      "label": "Feedback",
+      "icon": "👍",
+      "section": "Companion apps",
+      "embed": "/feedback/",
+      "roles": ["admin"]
+    },
+    {
+      "slug": "handbook",
+      "label": "Audit handbook",
+      "icon": "📘",
+      "section": "Companion apps",
+      "href": "https://example.org/handbook",
+      "roles": ["viewer"],
+      "order": 20
+    }
+  ]
+}

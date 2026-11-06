@@ -1,0 +1,25 @@
+{% comment %}body_end slot: window.Studio, operator extension scripts, then studio:ready (infra.extensions).{% endcomment %}
+{{ studio_page_context|json_script:"studio-page-context" }}
+<script>
+(function () {
+  // Deferred scripts run before DOMContentLoaded, so dispatching studio:ready
+  // there means every extension script has loaded and registered its listeners.
+  var ctx = JSON.parse(document.getElementById('studio-page-context').textContent);
+  var ready = false;
+  function globToRegExp(glob) {
+    return new RegExp('^' + glob.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.') + '$');
+  }
+  ctx.onPage = function (pattern, fn) {
+    var patterns = Array.isArray(pattern) ? pattern : [pattern];
+    if (!patterns.some(function (p) { return globToRegExp(p).test(location.pathname); })) return;
+    if (ready) fn(ctx); else document.addEventListener('studio:ready', function () { fn(ctx); }, { once: true });
+  };
+  window.Studio = ctx;
+  document.addEventListener('DOMContentLoaded', function () {
+    ready = true;
+    document.dispatchEvent(new CustomEvent('studio:ready', { detail: ctx }));
+  });
+})();
+</script>
+{% for a in ext_js %}<script src="{{ a.url }}" defer{% if a.integrity %} integrity="{{ a.integrity }}" crossorigin="anonymous"{% endif %} data-studio-extension></script>
+{% endfor %}

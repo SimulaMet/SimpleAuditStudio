@@ -190,6 +190,7 @@ TEMPLATES = [
                 "infra.context_processors.workspaces",
                 "infra.context_processors.write_access",
                 "infra.context_processors.nav",
+                "infra.context_processors.extensions",
             ],
         },
     },
@@ -321,6 +322,10 @@ WORKOS_ENABLED = bool(WORKOS_CLIENT_ID and WORKOS_API_KEY)
 # Gravatar avatars: off by default, since loading one sends the MD5 hash of the
 # user's email to gravatar.com. When off, templates show the user's initial.
 SIMPLEAUDIT_GRAVATAR = env_bool("SIMPLEAUDIT_GRAVATAR", False)
+# Operator extensions (issue #83): inline JSON manifest or the path of a JSON
+# file. Empty = off. Scripts in it run with full same-origin privileges, so it
+# is configuration-only by design. See docs/extensions.md.
+SIMPLEAUDIT_EXTENSIONS = os.environ.get("SIMPLEAUDIT_EXTENSIONS", "")
 
 # Demo mode: prefill the login form with demo credentials and show a hint banner
 # (public demos / HF Spaces).
