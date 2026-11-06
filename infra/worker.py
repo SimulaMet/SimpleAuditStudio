@@ -1165,6 +1165,12 @@ def _register_tasks(client: Hatchet) -> None:
         # handled by per-request HTTP timeouts, engine retries, and the
         # stuck-run sweeper instead.
         execution_timeout=timedelta(days=365),
+        # How long a scenario may wait in the queue for a worker slot. Hatchet's
+        # default (5 minutes) silently failed every scenario of a large run that
+        # was not started within 5 minutes of submission (issue #82): a run with
+        # more scenarios than slots stalled part-way. Queued tasks are cheap, and
+        # the concurrency key above already drops a duplicate resubmission.
+        schedule_timeout=timedelta(days=365),
     )(with_fresh_connection(_scenario_execute_impl))
     # Legacy: no longer submitted (runs finalize inline when their last scenario
     # lands, with the sweeper as backstop). Kept registered so finalize tasks
