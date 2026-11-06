@@ -3017,10 +3017,18 @@ class ConnectionsView(ProjectMixin, TemplateView):
                     return fail("Model ID is too long (250 characters at most).")
                 if new_id != rm.model_id and RegisteredModel.objects.filter(connection=rm.connection, model_id=new_id).exists():
                     return fail(f"“{new_id}” is already registered on {rm.connection.name}.")
+                from model_registry.identity import IdentityError, normalize_identity
+                try:
+                    identity = normalize_identity(
+                        post.get("identity_kind", ""), post.get("identity_id", ""), post.get("identity_url", ""),
+                    )
+                except IdentityError as exc:
+                    return fail(str(exc))
                 rm.model_id = new_id
                 rm.display_name = (post.get("model_display_name", "").strip() or new_id)[:250]
                 rm.description = post.get("model_description", "").strip()[:DESCRIPTION_MAX]
-                rm.save(update_fields=["model_id", "display_name", "description"])
+                rm.model_identity = identity
+                rm.save(update_fields=["model_id", "display_name", "description", "model_identity"])
                 messages.success(request, f"Saved {rm.display_name}.")
             else:
                 try:

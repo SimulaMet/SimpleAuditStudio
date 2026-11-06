@@ -9,6 +9,7 @@ from audits.events import append_event
 from audits.models import AuditRun
 from infra.exceptions import StableAPIError
 from infra.simpleaudit_package import resolve_engine_provenance
+from model_registry.identity import identity_view
 from model_registry.models import RegisteredModel
 from model_registry.remote_metadata import discover_target_metadata
 from scenarios.models import ScenarioSetVersion
@@ -35,6 +36,7 @@ def _endpoint_snapshot(model: RegisteredModel) -> dict:
         "model_revision": model.model_revision,
         "capabilities": model.capabilities,
         "default_parameters": model.default_parameters,
+        "model_identity": dict(model.model_identity or {}),
         "secret_reference": conn.secret_reference,
         "enabled": model.enabled and conn.enabled,
     }
@@ -59,6 +61,9 @@ def frozen_model(run: AuditRun, role: str) -> dict:
         "base_url": snap.get("base_url", ""),
         "provider": snap.get("provider", ""),
         "connection_id": snap.get("connection_id") or (live.connection_id if live else None),
+        # Snapshot only: runs frozen before identities existed show none rather
+        # than whatever the model is mapped to today.
+        "identity": identity_view(snap.get("model_identity")),
         "changes": [],
     }
     if live is not None and snap:

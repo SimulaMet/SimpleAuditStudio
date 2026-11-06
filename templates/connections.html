@@ -108,6 +108,7 @@
               {% if m.is_decision %}
               <span class="ml-1.5 align-middle text-[10px] font-medium text-violet-300 bg-violet-900/30 border border-violet-700/50 rounded px-1.5 py-0.5" title="Decision model: answers fixed-option questions with probabilities (System One).">decision</span>
               {% endif %}
+              {% include "partials/model_identity_chip.html" with identity=m.identity %}
               {% if m.description %}<p class="text-[11px] text-gray-500 mt-0.5 line-clamp-2 whitespace-pre-line" title="{{ m.description }}">{{ m.description }}</p>{% endif %}
             </div>
             <form method="post" class="model-edit hidden flex flex-wrap gap-2 items-start max-w-2xl">
@@ -120,6 +121,21 @@
                      class="w-48 px-2 py-1 rounded bg-surface-overlay border border-gray-700 text-xs font-mono focus:outline-none focus:ring-1 focus:ring-accent/50">
               <textarea name="model_description" rows="2" maxlength="1000" placeholder="Description (optional): what it is, when to use it" aria-label="Description"
                         class="basis-full px-2 py-1 rounded bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-1 focus:ring-accent/50">{{ m.description }}</textarea>
+              <fieldset class="basis-full flex flex-wrap gap-2 items-center" title="What this model is, so runs can link to its model card">
+                <legend class="sr-only">Model identity</legend>
+                <span class="text-[11px] text-gray-500">Model card</span>
+                <select name="identity_kind" aria-label="Model identity type"
+                        class="px-2 py-1 rounded bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-1 focus:ring-accent/50">
+                  <option value="" {% if not m.model_identity.kind %}selected{% endif %}>Unknown</option>
+                  <option value="hf" {% if m.model_identity.kind == "hf" %}selected{% endif %}>Hugging Face</option>
+                  <option value="vendor" {% if m.model_identity.kind == "vendor" %}selected{% endif %}>Commercial</option>
+                  <option value="system" {% if m.model_identity.kind == "system" %}selected{% endif %}>RAG / system</option>
+                </select>
+                <input type="text" name="identity_id" maxlength="250" value="{{ m.model_identity.id|default:'' }}" placeholder="Qwen/Qwen3-30B-A3B or gpt-4.1" aria-label="Base model identifier"
+                       class="w-56 px-2 py-1 rounded bg-surface-overlay border border-gray-700 text-xs font-mono focus:outline-none focus:ring-1 focus:ring-accent/50">
+                <input type="url" name="identity_url" maxlength="500" value="{{ m.model_identity.url|default:'' }}" placeholder="Card URL (optional for Hugging Face)" aria-label="Model card URL"
+                       class="flex-1 min-w-[12rem] px-2 py-1 rounded bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-1 focus:ring-accent/50">
+              </fieldset>
               <button class="px-2 py-1 rounded bg-accent/20 text-accent text-xs hover:bg-accent/30" title="Save changes">Save</button>
               <button type="button" data-edit-cancel class="px-2 py-1 rounded text-gray-500 text-xs hover:text-gray-300" title="Discard changes">Cancel</button>
             </form>

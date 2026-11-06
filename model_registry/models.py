@@ -80,6 +80,9 @@ class RegisteredModel(models.Model):
     model_revision = models.CharField(max_length=250, blank=True)
     capabilities = models.JSONField(default=dict, blank=True)
     default_parameters = models.JSONField(default=dict, blank=True)
+    # What the model is, independent of how it is served: {"kind": "hf"|"vendor"|"system",
+    # "id": ..., "url": ...}. See ``model_registry.identity``. Empty = unknown.
+    model_identity = models.JSONField(default=dict, blank=True)
     enabled = models.BooleanField(default=True)
     # Who registered the model (null for seeded defaults created at bootstrap).
     created_by = models.ForeignKey(
@@ -103,6 +106,12 @@ class RegisteredModel(models.Model):
     def has_key(self) -> bool:
         """Whether the parent connection has an API key configured."""
         return self.connection.has_key
+
+    @property
+    def identity(self) -> dict | None:
+        """Template-ready model identity (kind label, id, card link), or None."""
+        from model_registry.identity import identity_view
+        return identity_view(self.model_identity)
 
     @property
     def is_decision(self) -> bool:
@@ -539,6 +548,7 @@ class Agent(models.Model):
                 "provider": self.base_model.connection.provider,
                 "base_url": self.base_model.connection.base_url,
                 "default_parameters": dict(self.base_model.default_parameters or {}),
+                "model_identity": dict(self.base_model.model_identity or {}),
             },
             "system_prompt": self.system_prompt,
             "knowledge_bases": [
