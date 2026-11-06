@@ -166,7 +166,31 @@ class OTLPIngestFilterTest(TestCase):
         self.assertEqual(resp.status_code, 200)
         row = otlp_views.get_spans_for_trace_db(self.target_id, TRACE_ID)[0]
         self.assertEqual(row["status"], "ERROR")
-        self.assertEqual(row["attributes"]["exception.message"], "Unknown order ACME-9999")
+        # Stored as the engine parses it (SimpleAudit >= 0.6): status message and
+        # the exception event, no longer copied onto the attributes.
+        self.assertEqual(row["status_message"], "ValueError")
+        self.assertEqual(row["events"][0]["name"], "exception")
+        self.assertEqual(row["events"][0]["attributes"]["exception.message"], "Unknown order ACME-9999")
+        self.assertNotIn("exception.message", row["attributes"])
+
+    def test_structural_capture_drops_exception_stacktrace(self):
+        otlp_views.clear_target_spans(self.target_id)
+        span = _span("0a" * 8, "execute_tool", attributes={"gen_ai.tool.name": "acme_get_order"})
+        span["status"] = {"code": 2, "message": "boom"}
+        span["events"] = [
+            {"name": "exception", "attributes": [
+                {"key": "exception.type", "value": {"stringValue": "KeyError"}},
+                {"key": "exception.message", "value": {"stringValue": "missing"}},
+                {"key": "exception.stacktrace", "value": {"stringValue": "Traceback /srv/secret/path.py"}},
+            ]},
+            {"name": "retry", "attributes": [{"key": "attempt", "value": {"intValue": "2"}}]},
+        ]
+        self._post(_export([span]), headers={"HTTP_AUTHORIZATION": _basic_header(
+            self.basic.credential.username, self.basic.secret)})
+        row = otlp_views.get_spans_for_trace_db(self.target_id, TRACE_ID)[0]
+        self.assertEqual(row["events"], [{"name": "exception", "time": row["events"][0]["time"],
+                                          "attributes": {"exception.type": "KeyError", "exception.message": "missing"}}])
+        self.assertNotIn("secret", json.dumps(row))
 
 
 class OTLPCheapRejectTest(TestCase):

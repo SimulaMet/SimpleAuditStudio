@@ -131,7 +131,8 @@ class OtlpSpan(models.Model):
     engine propagated on the run's requests) and ``target_id``.
 
     Spans are append-only (idempotent on ``span_id``); retention is a separate
-    sweep. ``attributes`` holds the raw OpenTelemetry GenAI attribute map.
+    sweep. ``attributes`` holds the raw OpenTelemetry GenAI attribute map;
+    ``status_message`` and ``events`` say why a span failed.
     """
 
     target_id = models.CharField(max_length=250, db_index=True)
@@ -144,6 +145,11 @@ class OtlpSpan(models.Model):
     end_time = models.FloatField(null=True, blank=True)
     status = models.CharField(max_length=20, default="OK")
     attributes = models.JSONField(default=dict, blank=True)
+    # Why a span failed (SimpleAudit >= 0.6 parses both): the OTLP status message
+    # and the span's events, e.g. the ``exception`` event with exception.type and
+    # exception.message. Filtered by capture level like the attributes.
+    status_message = models.TextField(blank=True, default="")
+    events = models.JSONField(default=list, blank=True)
     # Null once the trace is claimed (a run asked for it): kept. Set while
     # unclaimed: a short hold, pruned at this time if nobody claims the trace.
     held_until = models.DateTimeField(null=True, blank=True, db_index=True)

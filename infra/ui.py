@@ -3923,6 +3923,27 @@ _TRACE_SPAN_CONTENT_BLOCKS = (
 )
 
 
+def _span_error(span: dict) -> tuple[str, str]:
+    """(type, message) of why a span failed, or ("", "").
+
+    Read from the span's ``exception`` event and status message (stored since
+    SimpleAudit 0.6), falling back to ``exception.*`` / ``error.*`` attributes,
+    which older stored spans and some exporters carry instead.
+    """
+    attrs = span.get("attributes") if isinstance(span.get("attributes"), dict) else {}
+    kind = str(attrs.get("exception.type") or "")
+    message = str(attrs.get("exception.message") or attrs.get("error.message") or "")
+    for event in span.get("events") or []:
+        if isinstance(event, dict) and event.get("name") == "exception":
+            event_attrs = event.get("attributes") if isinstance(event.get("attributes"), dict) else {}
+            kind = kind or str(event_attrs.get("exception.type") or "")
+            message = message or str(event_attrs.get("exception.message") or "")
+            break
+    message = message or str(span.get("status_message") or "")
+    kind = kind or str(attrs.get("error.type") or "")
+    return kind, message
+
+
 def _trace_span_content_blocks(span: dict) -> list[tuple[str, str]]:
     """Human-readable (label, text) pairs for a span's content attributes."""
     attrs = span.get("attributes")
@@ -3930,6 +3951,13 @@ def _trace_span_content_blocks(span: dict) -> list[tuple[str, str]]:
         return []
     blocks: list[tuple[str, str]] = []
     for label, keys in _TRACE_SPAN_CONTENT_BLOCKS:
+        if label == "Error":
+            # "ValueError: No order found for …": what failed and why.
+            kind, message = _span_error(span)
+            if message or kind:
+                text = message if not kind or message.startswith(kind) else f"{kind}: {message}" if message else kind
+                blocks.append((label, text))
+            continue
         for key in keys:
             value = attrs.get(key)
             if value is None:
@@ -3942,11 +3970,6 @@ def _trace_span_content_blocks(span: dict) -> list[tuple[str, str]]:
                     pass
             if not isinstance(value, str):
                 value = json.dumps(value, indent=2, ensure_ascii=False, default=str)
-            if label == "Error":
-                # "ValueError: No order found for …": what failed and why.
-                kind = attrs.get("exception.type") or attrs.get("error.type")
-                if kind and key != "error.type" and not str(value).startswith(str(kind)):
-                    value = f"{kind}: {value}"
             blocks.append((label, value))
             break
     return blocks
@@ -4218,7 +4241,7 @@ def _agentic_span_view(span: dict) -> dict | None:
         "llm_role": llm_role,
         "user_input": llm_role is not None and _input_ends_with_user(attrs),
         "is_error": str(span.get("status") or "").upper() == "ERROR" or bool(attrs.get("error.type")),
-        "error_type": str(attrs.get("exception.type") or attrs.get("error.type") or ""),
+        "error_type": _span_error(span)[0],
     }
 
 

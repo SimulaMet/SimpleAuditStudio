@@ -61,6 +61,27 @@ def _keep_attribute(key: str, level: str) -> bool:
     return not (level == "inputs" and (key in _OUTPUT_KEYS or key.startswith(_OUTPUT_PREFIXES)))
 
 
+_EXCEPTION_EVENT_KEYS = ("exception.type", "exception.message")
+
+
+def _exception_events(events: Any) -> list[dict[str, Any]]:
+    """A span's ``exception`` events with only their type and message.
+
+    Stack traces and other event attributes stay out unless capture is "full".
+    """
+    kept = []
+    for event in events or []:
+        if not isinstance(event, Mapping) or event.get("name") != "exception":
+            continue
+        attrs = event.get("attributes") if isinstance(event.get("attributes"), Mapping) else {}
+        kept.append({
+            "name": "exception",
+            "time": event.get("time"),
+            "attributes": {key: attrs[key] for key in _EXCEPTION_EVENT_KEYS if key in attrs},
+        })
+    return kept
+
+
 def sanitize_span(span: Mapping[str, Any], level: str | None = None) -> dict[str, Any]:
     """Keep safe span structure and only the content allowed by ``level``."""
     selected_level = capture_level(level)
@@ -81,6 +102,13 @@ def sanitize_span(span: Mapping[str, Any], level: str | None = None) -> dict[str
     for key in ("arguments", "input", "inputs"):
         if key in safe:
             structural[key] = safe[key]
+    # Why a span failed is kept at every level, like the exception.* attributes:
+    # the status message, and exception events reduced to type and message.
+    if isinstance(safe.get("status_message"), str) and safe["status_message"]:
+        structural["status_message"] = safe["status_message"]
+    exceptions = _exception_events(safe.get("events"))
+    if exceptions:
+        structural["events"] = exceptions
     if selected_level == "full":
         for key in ("result", "output", "outputs", "events"):
             if key in safe:
