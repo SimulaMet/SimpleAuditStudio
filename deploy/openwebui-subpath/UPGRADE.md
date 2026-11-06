@@ -131,5 +131,6 @@ half-port; staying on the proven base is the fallback.
 | 2026-11-04 | v0.12.4.7 | **published ✓** | Schema-shaped GenAI spans (fork #8). `-subpath` image and wheel release `v0.12.4.7-subpath`. |
 | 2026-11-04 | v0.12.4.8 | **published ✓** | Agentic knowledge search traced as a GenAI `retrieval` span with `gen_ai.retrieval.documents` (fork #9). |
 | 2026-11-04 | v0.12.4.9 | **published ✓** | Compact GenAI content by default, each piece recorded once per trace (fork #10; `OTEL_GENAI_CONTENT_MODE=full` for standard spans). Studio pins `v0.12.4.9-subpath`. |
-| 2026-11-05 | v0.12.4.10 | **published ✓** | GenAI spans on every content, tool and model path (fork #11): retrieval spans for every content-reading built-in tool (knowledge, chat files, notes, chats, channels, memories, web) and memory recall, `execute_tool` spans in default function calling, `chat` spans for pipe models. Studio pins `v0.12.4.10-subpath`. |
+| 2026-11-05 | v0.12.4.10 | **published ✓** | GenAI spans on every content, tool and model path (fork #11): retrieval spans for every content-reading built-in tool (knowledge, chat files, notes, chats, channels, memories, web) and memory recall, `execute_tool` spans in default function calling, `chat` spans for pipe models. |
+| 2026-11-06 | v0.12.4.12 | **published ✓** | Optional site-wide script via `WEBUI_CUSTOM_JS_URL` (v0.12.4.11), and the import fix that lets the app start with it (v0.12.4.12). `-subpath` image and wheel release `v0.12.4.12-subpath`. Studio pins `v0.12.4.12-subpath`. |
 | | | | |
