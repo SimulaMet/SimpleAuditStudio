@@ -77,6 +77,17 @@
     </table>
   </div>
 </div>
+<div class="bg-surface-raised rounded-xl border border-gray-800 p-5 mb-6">
+  <h2 class="text-sm font-semibold text-gray-300">Benchmark leaderboard link</h2>
+  <p class="text-xs text-gray-500 mt-1 mb-3">Each model with a model card gets a <span class="text-violet-300">Leaderboard ↗</span> link. <code class="text-gray-400">{model}</code> is replaced with the model's leaderboard name (or its identifier). Leave empty to hide the link.</p>
+  <div class="flex flex-wrap gap-2 items-center">
+    <input id="admin-leaderboard-url" type="text" maxlength="500" value="{{ leaderboard_url_setting }}" aria-label="Benchmark leaderboard URL template"
+           placeholder='https://euroeval.com/leaderboards/norwegian?highlight="{model}"&amp;category=generative'
+           class="flex-1 min-w-[16rem] px-3 py-1.5 rounded-lg text-xs font-mono bg-surface border border-gray-700 text-gray-200 focus:outline-none focus:border-accent/50">
+    <button type="button" onclick="adminSaveLeaderboardUrl(this)" class="px-3 py-1.5 rounded-lg text-xs bg-accent/15 border border-accent/30 text-accent hover:bg-accent/25">Save</button>
+    <span id="admin-leaderboard-saved" class="hidden text-xs text-emerald-400">Saved</span>
+  </div>
+</div>
 {% endif %}
 
 <!-- ─── Workspaces ───────────────────────────────────────────────────────── -->
@@ -330,6 +341,18 @@
       await api('/api/projects/' + id + '/', 'DELETE');
       window.location.reload();
     } catch (e) { showError(e.message); btn.disabled = false; }
+  };
+  window.adminSaveLeaderboardUrl = async function(btn) {
+    const input = document.getElementById('admin-leaderboard-url');
+    const saved = document.getElementById('admin-leaderboard-saved');
+    btn.disabled = true;
+    saved.classList.add('hidden');
+    try {
+      const res = await api('/api/admin/settings/', 'PATCH', { leaderboard_url_template: input.value });
+      input.value = res.leaderboard_url_template || '';
+      saved.classList.remove('hidden');
+    } catch (e) { showError(e.message); }
+    btn.disabled = false;
   };
   window.adminToggleRegistration = async function(btn) {
     const next = btn.getAttribute('aria-checked') !== 'true';

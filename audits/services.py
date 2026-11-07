@@ -61,9 +61,13 @@ def frozen_model(run: AuditRun, role: str) -> dict:
         "base_url": snap.get("base_url", ""),
         "provider": snap.get("provider", ""),
         "connection_id": snap.get("connection_id") or (live.connection_id if live else None),
-        # Snapshot only: runs frozen before identities existed show none rather
-        # than whatever the model is mapped to today.
-        "identity": identity_view(snap.get("model_identity")),
+        # The snapshot's identity when the run recorded a real one. A missing or
+        # empty one (runs frozen before identities existed, or before the model's
+        # card was filled in) means "not known then", so the live model's is
+        # shown: identity is descriptive metadata, never execution config.
+        "identity": identity_view(
+            snap.get("model_identity") or (live.model_identity if live else None)
+        ),
         "changes": [],
     }
     if live is not None and snap:
@@ -119,11 +123,17 @@ def frozen_agent(run: AuditRun) -> dict | None:
         return None
     agent_id = snap.get("agent_id")
     detail_url = f"/agents/{agent_id}/" if str(agent_id or "").isdecimal() else ""
+    base_model = dict(snap.get("base_model") or {})
+    if not base_model.get("model_identity") and str(base_model.get("id") or "").isdecimal():
+        # Same rule as frozen_model: no recorded identity means show today's.
+        live = RegisteredModel.objects.filter(pk=base_model["id"]).only("model_identity").first()
+        if live is not None and live.model_identity:
+            base_model["model_identity"] = live.model_identity
     return {
         "id": agent_id,
         "detail_url": detail_url,
         "name": snap.get("name", "—"),
-        "base_model": snap.get("base_model", {}),
+        "base_model": base_model,
         "system_prompt": snap.get("system_prompt", ""),
         "knowledge_bases": snap.get("knowledge_bases", []),
         "tools": snap.get("tools", []),

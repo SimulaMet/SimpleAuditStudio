@@ -191,6 +191,7 @@ TEMPLATES = [
                 "infra.context_processors.write_access",
                 "infra.context_processors.nav",
                 "infra.context_processors.extensions",
+                "infra.context_processors.leaderboard",
             ],
         },
     },

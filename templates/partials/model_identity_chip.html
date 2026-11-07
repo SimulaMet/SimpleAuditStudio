@@ -1,5 +1,6 @@
-{% comment %}Model identity chip. Expects `identity` from model_registry.identity.identity_view (or None).{% endcomment %}
-{% if identity %}<span class="inline-flex items-center gap-1 mt-0.5 text-[10px] text-gray-400" title="{{ identity.kind_label }}{% if identity.id %}: {{ identity.id }}{% endif %}">
+{% comment %}Model identity chip (Connections list). Expects `identity` from model_registry.identity.identity_view (or None). The run page uses the model modal instead (partials/model_modal.html).{% endcomment %}{% load identity_tags %}
+{% if identity %}<span class="inline-flex flex-wrap items-center gap-1 mt-0.5 text-[10px] text-gray-400" title="{{ identity.kind_label }}{% if identity.id %}: {{ identity.id }}{% endif %}">
   <span class="rounded border border-gray-700 px-1 py-px {% if identity.kind == 'hf' %}text-amber-300/90{% elif identity.kind == 'vendor' %}text-sky-300/90{% else %}text-emerald-300/90{% endif %}">{{ identity.kind_label }}</span>
   {% if identity.card_url %}<a href="{{ identity.card_url }}" target="_blank" rel="noopener noreferrer" class="font-mono break-all hover:text-accent transition-colors" title="Open model card">{{ identity.id|default:"model card" }} ↗</a>{% elif identity.id %}<span class="font-mono break-all">{{ identity.id }}</span>{% endif %}
+  {% with lb=identity|leaderboard_link:leaderboard_url_template %}{% if lb %}<a href="{{ lb }}" target="_blank" rel="noopener noreferrer" class="rounded border border-gray-700 px-1 py-px text-violet-300/90 hover:text-accent hover:border-accent/50 transition-colors" title="Find {{ identity.benchmark_key }} on the benchmark leaderboard">Leaderboard ↗</a>{% endif %}{% endwith %}
 </span>{% endif %}

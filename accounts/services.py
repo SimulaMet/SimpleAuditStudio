@@ -480,6 +480,11 @@ from accounts.models import SiteSetting
 
 SITE_SETTING_DEFAULTS = {
     "registration_enabled": True,
+    # Link from each model's identity chip to a benchmark leaderboard. ``{model}``
+    # is replaced with the model's benchmark_id (or identity id). Empty = no link.
+    "leaderboard_url_template": (
+        'https://euroeval.com/leaderboards/norwegian?highlight="{model}"&category=generative'
+    ),
 }
 
 

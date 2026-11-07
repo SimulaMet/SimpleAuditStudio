@@ -184,9 +184,16 @@ def admin_site_settings(request):
     """Instance-wide settings (currently: registration toggle)."""
     _require_superuser_request(request)
     if request.method == "PATCH":
-        for key in SITE_SETTING_DEFAULTS:
-            if key in request.data:
-                set_site_setting(key, bool(request.data[key]))
+        from model_registry.identity import IdentityError, validate_leaderboard_template
+
+        if "leaderboard_url_template" in request.data:
+            try:
+                template = validate_leaderboard_template(request.data["leaderboard_url_template"])
+            except IdentityError as exc:
+                raise StableAPIError(detail=str(exc), code="invalid_leaderboard_url", http_status=400) from exc
+            set_site_setting("leaderboard_url_template", template)
+        if "registration_enabled" in request.data:
+            set_site_setting("registration_enabled", bool(request.data["registration_enabled"]))
     return Response({key: get_site_setting(key) for key in SITE_SETTING_DEFAULTS})
 
 

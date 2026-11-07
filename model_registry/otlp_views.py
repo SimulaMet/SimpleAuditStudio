@@ -125,6 +125,9 @@ def get_spans_for_trace_db(target_id: str, trace_id: str) -> list[dict]:
             "end_time": r.end_time,
             "status": r.status,
             "attributes": r.attributes,
+            # Only when present, matching the engine's normalize_span output.
+            **({"status_message": r.status_message} if r.status_message else {}),
+            **({"events": r.events} if r.events else {}),
         }
         for r in rows
     ]
@@ -272,7 +275,10 @@ def _write_rows(rows: list[OtlpSpan]) -> None:
             batch_size=500,
             update_conflicts=True,
             unique_fields=["target_id", "trace_id", "span_id"],
-            update_fields=["name", "kind", "parent_span_id", "start_time", "end_time", "status", "attributes"],
+            update_fields=[
+                "name", "kind", "parent_span_id", "start_time", "end_time", "status", "attributes",
+                "status_message", "events",
+            ],
         )
         # A claim may land between the check above and the insert: promote again.
         otlp.promote_claimed_spans(target_id, trace_ids)
@@ -307,6 +313,8 @@ def _persist_spans(target_id: str, raw_spans: list[dict], capture_level: str = "
             end_time=span.get("end_time"),
             status=(span.get("status") or "OK")[:20],
             attributes=span.get("attributes") or {},
+            status_message=str(span.get("status_message") or "")[:STATUS_MESSAGE_MAX],
+            events=span.get("events") or [],
         )
     _buffer_spans(list(rows.values()))
 
@@ -359,15 +367,16 @@ def _otlp_body_to_dict(body: bytes, content_type: str | None) -> dict:
 
 
 _STATUS_CODES = {"STATUS_CODE_UNSET": 0, "STATUS_CODE_OK": 1, "STATUS_CODE_ERROR": 2}
+# Bound on a stored span status message (exception text can be long).
+STATUS_MESSAGE_MAX = 4000
 
 
 def _normalize_span_status(payload: dict) -> None:
-    """Map OTLP status names to codes and keep an error's exception message.
+    """Map OTLP status names (``STATUS_CODE_ERROR``) to their numeric codes.
 
-    Protobuf exports arrive as ``STATUS_CODE_ERROR`` strings, which the engine's
-    parser does not recognize (it treats them as OK). The exception text lives
-    in the span's ``exception`` event, which the parser drops, so it is copied
-    onto the span's attributes first.
+    The exception text is no longer copied onto attributes: since SimpleAudit
+    0.6 the parser keeps the span's ``status_message`` and ``events`` (with the
+    ``exception`` event), and Studio stores both on ``OtlpSpan``.
     """
     for resource in payload.get("resourceSpans") or []:
         for scope in resource.get("scopeSpans") or []:
@@ -375,18 +384,8 @@ def _normalize_span_status(payload: dict) -> None:
                 status = span.get("status") or {}
                 code = status.get("code")
                 if isinstance(code, str):
-                    code = _STATUS_CODES.get(code, 0)
-                    status["code"] = code
+                    status["code"] = _STATUS_CODES.get(code, 0)
                     span["status"] = status
-                if code != 2:
-                    continue
-                attributes = span.setdefault("attributes", [])
-                for event in span.get("events") or []:
-                    if event.get("name") != "exception":
-                        continue
-                    for kv in event.get("attributes") or []:
-                        if kv.get("key") in ("exception.type", "exception.message"):
-                            attributes.append(kv)
 
 
 def _hexify_id_fields(node) -> None:
