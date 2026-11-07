@@ -175,11 +175,20 @@ def load_extensions() -> tuple[Extension, ...]:
 
 
 def user_level(user) -> int | None:
-    """The user's place on ROLE_LADDER, or None when not signed in."""
+    """The user's place on ROLE_LADDER, or None when not signed in.
+
+    Extensions are instance-wide, so ``admin`` and ``superuser`` come from the
+    instance flags ``is_staff`` and ``is_superuser``, not from a workspace:
+    any signed-in user can create a workspace and become its admin
+    (``accounts.services.create_workspace``). Workspace roles still count, up
+    to ``auditor``.
+    """
     if user is None or not user.is_authenticated:
         return None
     if user.is_superuser:
         return _LEVEL["superuser"]
+    if user.is_staff:
+        return _LEVEL["admin"]
     cached = getattr(user, "_studio_ext_level", None)   # one query per request
     if cached is not None:
         return cached
@@ -187,6 +196,7 @@ def user_level(user) -> int | None:
 
     roles = set(ProjectMembership.objects.filter(user=user).values_list("role", flat=True))
     level = max((_LEVEL[r] for r in roles if r in _LEVEL), default=_LEVEL["user"])
+    level = min(level, _LEVEL["auditor"])
     user._studio_ext_level = level
     return level
 

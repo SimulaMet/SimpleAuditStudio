@@ -85,8 +85,9 @@ class ManifestParsingTests(SimpleTestCase):
 class ExtensionPageTests(TestCase):
     def setUp(self):
         self.project = ProjectFactory()
-        self.admin = UserFactory()
-        MembershipFactory(user=self.admin, project=self.project, role="admin")
+        # Extension admin comes from is_staff; the viewer membership only gives an active workspace.
+        self.admin = UserFactory(is_staff=True)
+        MembershipFactory(user=self.admin, project=self.project, role="viewer")
         self.viewer = UserFactory()
         MembershipFactory(user=self.viewer, project=self.project, role="viewer")
 
@@ -164,11 +165,27 @@ class ExtensionPageTests(TestCase):
             self.assertEqual(anon.status_code, 302)
             self.assertIn("/login/", anon["Location"])
 
+    def test_workspace_roles_count_up_to_auditor(self):
+        ws_admin = UserFactory()
+        MembershipFactory(user=ws_admin, project=self.project, role="admin")
+        entries = MANIFEST + [{"slug": "review", "label": "Review", "embed": "/review/", "roles": ["auditor"]}]
+        with manifest(entries):
+            page = self._page(ws_admin, "/scenarios/")
+            self.assertIn('href="/x/review/"', page)
+            self.assertNotIn("/x/feedback/", page)
+            ctx = json.loads(re.search(
+                r'<script id="studio-page-context" type="application/json">(.*?)</script>', page, re.DOTALL,
+            ).group(1))
+            self.assertEqual(ctx["role"], "auditor")
+            self.assertEqual(self._client(ws_admin).get("/ext/authz?role=auditor").status_code, 200)
+            self.assertEqual(self._client(ws_admin).get("/ext/authz?role=admin").status_code, 403)
+            self.assertEqual(self._client(ws_admin).get("/x/feedback/").status_code, 404)
+
     def test_authz(self):
         with manifest():
             ok = self._client(self.admin).get("/ext/authz?role=admin")
             self.assertEqual(ok.status_code, 200)
-            self.assertEqual(ok["X-Studio-Role"], "admin")
+            self.assertEqual(ok["X-Studio-Role"], "user")   # chat.config.identity(): no workspace admin row
             self.assertEqual(ok["X-Studio-Username"], self.admin.username)
             self.assertIn("X-Studio-Email", ok)
             self.assertEqual(self._client(self.viewer).get("/ext/authz").status_code, 403)   # default role admin
