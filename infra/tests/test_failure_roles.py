@@ -229,7 +229,7 @@ class FailureUiTests(TestCase):
         )
         html = self.client.get(f"/runs/{self.run.id}/results-fragment/").content.decode()
         assert "old failure text" in html
-        assert "failure-badge" not in html and "role-filter" not in html and "Filter:" not in html
+        assert "failure-badge" not in html and "role-filter" not in html and "Filter errors:" not in html
 
     def test_detail_shows_badge_and_raw_message(self):
         row = self._fail("auditor", message="APITimeoutError: Request timed out.", kind="timeout",

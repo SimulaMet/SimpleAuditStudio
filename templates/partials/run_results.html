@@ -15,7 +15,7 @@ re-fetched from run_results_fragment while the run is live.
     <span class="font-semibold text-red-300" data-testid="failure-summary-text">{{ failure_summary.text }}</span>
     {% if failure_summary.roles %}
     <span class="text-gray-600">·</span>
-    <span class="text-gray-500">Filter:</span>
+    <span class="text-gray-500">Filter errors:</span>
     <button type="button" data-role-filter="" class="role-filter px-2 py-0.5 rounded-full bg-accent/20 text-accent" aria-pressed="true">All</button>
     {% for fr in failure_summary.roles %}
     <button type="button" data-role-filter="{{ fr.role }}" class="role-filter px-2 py-0.5 rounded-full bg-surface-overlay text-gray-400 hover:text-gray-200" aria-pressed="false">{{ fr.label }} {{ fr.count }}</button>
