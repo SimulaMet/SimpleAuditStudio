@@ -42,7 +42,8 @@ class LaunchIntoExistingTests(_ExperimentBase):
     def test_design_page_offers_existing_experiments_and_prefills_into(self):
         page = self.client.get(f"/experiments/new/?into={self.exp.id}")
         self.assertContains(page, 'name="into_experiment"')
-        self.assertContains(page, f'value="{self.exp.id}" data-public="" selected')
+        self.assertContains(page, "1 run · updated")
+        self.assertRegex(page.content.decode(), rf'value="{self.exp.id}" data-public=""[^>]*checked')
 
     def test_detail_page_links_to_new_runs(self):
         page = self.client.get(f"/experiments/{self.exp.id}/")

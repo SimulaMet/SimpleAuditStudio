@@ -104,10 +104,12 @@ def _attach_choices(user, project) -> list:
     is_admin = user.is_superuser or ProjectMembership.objects.filter(
         user=user, project=project, role=ProjectMembership.Role.ADMIN
     ).exists()
-    qs = Experiment.objects.filter(project=project).order_by("-updated_at")
+    from django.db.models import Count
+
+    qs = Experiment.objects.filter(project=project).annotate(n_runs=Count("memberships")).order_by("-updated_at")
     if not is_admin:
         qs = qs.exclude(visibility=Experiment.Visibility.PUBLIC)
-    return list(qs.only("id", "name", "visibility")[:200])
+    return list(qs.only("id", "name", "visibility", "updated_at")[:200])
 
 
 def _can_edit_membership(user, project) -> bool:
