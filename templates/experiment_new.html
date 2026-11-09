@@ -145,6 +145,25 @@
     </div>
   </div>
 
+  {% if attach_choices %}
+  <!-- Destination: a new experiment, or add the runs to an existing one -->
+  <div class="bg-surface-raised rounded-xl border border-gray-800 p-4 min-w-0" id="destination-card">
+    <label for="into-experiment" class="block text-sm font-semibold text-gray-300 mb-1">Add to experiment</label>
+    <p class="text-xs text-gray-500 mb-3">Launch into a new experiment, or add these runs to an existing one to compare them with its runs.</p>
+    <select name="into_experiment" id="into-experiment" data-into-select
+            class="w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-accent/50">
+      <option value="">New experiment</option>
+      {% for e in attach_choices %}
+      <option value="{{ e.id }}" data-public="{% if e.is_public %}1{% endif %}" {% if rep.into_experiment == e.id|stringformat:"s" %}selected{% endif %}>{{ e.name }}{% if e.is_public %} (public){% endif %}</option>
+      {% endfor %}
+    </select>
+    <label class="hidden mt-2 items-start gap-2 text-xs text-amber-300" data-into-public>
+      <input type="checkbox" name="into_confirm_public" value="1" class="mt-0.5" {% if rep.into_confirm_public == "1" %}checked{% endif %}>
+      <span>This experiment is public: the new runs, transcripts included, will be visible to anyone with its link.</span>
+    </label>
+  </div>
+  {% endif %}
+
   <!-- Name (optional): the run's, its monitor's, or the experiment's -->
   <div class="bg-surface-raised rounded-xl border border-gray-800 p-4 min-w-0">
     <label for="design-name" class="block text-sm font-semibold text-gray-300 mb-1"><span data-name-label>Run name</span> <span class="text-xs font-normal text-gray-500">(optional)</span></label>
@@ -242,6 +261,27 @@
       ? 'Left empty, it is named after what it compares. You can edit it and each run\'s name on the next step.'
       : repeating ? 'Names the monitor and its runs. Left empty, it is named after the target and scenario set.'
       : 'Left empty, the run is named after its start time.';
+
+    // Destination: joining an existing experiment keeps its name, so the
+    // experiment-name meaning of the field goes away; a public one needs consent.
+    const intoSel = form.querySelector('[data-into-select]');
+    if (intoSel) {
+      const opt = intoSel.selectedOptions[0];
+      const joining = !!intoSel.value;
+      const pub = joining && opt && opt.dataset.public === '1';
+      const box = form.querySelector('[data-into-public]');
+      box.classList.toggle('hidden', !pub);
+      box.classList.toggle('flex', pub);
+      box.querySelector('input').required = pub;
+      // Several runs joining keep the experiment's name; each run is named on review.
+      document.getElementById('design-name').closest('.bg-surface-raised').classList.toggle('hidden', joining && runs > 1);
+      if (joining) {
+        form.querySelector('[data-name-hint]').textContent = repeating
+          ? `Names the monitor and its runs, which join “${opt.textContent.trim()}”.`
+          : `The run joins “${opt.textContent.trim()}”. Left empty, it is named after its start time.`;
+        if (runs === 1 && ok) btn.textContent = !repeating ? 'Add run to experiment' : btn.textContent;
+      }
+    }
 
     // Schedule card: reveal details only when repeating.
     form.querySelectorAll('[data-repeat-only]').forEach(el => el.classList.toggle('hidden', !repeating));

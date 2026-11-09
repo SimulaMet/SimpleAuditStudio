@@ -49,6 +49,7 @@ from audits.services import (
     submit_audit_run,
 )
 from infra.chat_feature import chat_enabled
+from infra.exceptions import StableAPIError
 from infra.export_utils import csv_safe
 from infra.seo import SITE_NAME, _share_context
 from scenarios.models import (
@@ -84,6 +85,29 @@ def _public_experiment_filter(request) -> dict:
     if request.user.is_authenticated:
         return {"project": request.project}
     return {"visibility": Experiment.Visibility.PUBLIC}
+
+
+def _into_permission_error(into) -> str:
+    """Why a launch into an existing experiment was refused (role check failed)."""
+    if into is not None and into.is_public:
+        return f"Adding runs to the public experiment “{into.name}” needs the workspace admin role."
+    return "Adding runs to an experiment needs the workspace admin or auditor role."
+
+
+def _attach_choices(user, project) -> list:
+    """Experiments a New Experiment launch can join: private ones for admins/auditors, public ones for admins."""
+    from accounts.models import ProjectMembership
+    from audits.models import Experiment
+
+    if not _can_edit_membership(user, project):
+        return []
+    is_admin = user.is_superuser or ProjectMembership.objects.filter(
+        user=user, project=project, role=ProjectMembership.Role.ADMIN
+    ).exists()
+    qs = Experiment.objects.filter(project=project).order_by("-updated_at")
+    if not is_admin:
+        qs = qs.exclude(visibility=Experiment.Visibility.PUBLIC)
+    return list(qs.only("id", "name", "visibility")[:200])
 
 
 def _can_edit_membership(user, project) -> bool:
@@ -1410,6 +1434,7 @@ class NewExperimentView(ProjectMixin, TemplateView):
             "start": "baseline" if source and get.get("repeat") else "now",
             "first_run_at": "",
             "clone_from": str(source.id) if source else "",
+            "into_experiment": get.get("into", "") if is_id(get.get("into", "")) else "",
         })
         # Connections the picker offers: this workspace's own plus any shared
         # into it (public / admin-shared / explicitly shared). Each carries a
@@ -1484,6 +1509,7 @@ class NewExperimentView(ProjectMixin, TemplateView):
             repeat_choices=REPEAT_CHOICES,
             timezones=_timezone_choices(),
             source_run=source,
+            attach_choices=_attach_choices(self.request.user, p),
             # Same rule as launching a run: admin or auditor (superusers too).
             can_launch=has_write_role(self.request.user, p),
         )
@@ -1491,7 +1517,7 @@ class NewExperimentView(ProjectMixin, TemplateView):
 
     def _redesign(self, post, error=None):
         rep = {k: post.get(k, "") for k in ("repeat", "timezone", "cron_expression", "start", "first_run_at", "clone_from",
-                                            "name")}
+                                            "name", "into_experiment", "into_confirm_public")}
         rep["repeat"] = rep["repeat"] or "once"
         source = None
         if is_id(rep["clone_from"]):
@@ -1539,21 +1565,36 @@ class NewExperimentView(ProjectMixin, TemplateView):
         """
         from django.db import transaction
 
-        from audits.experiments import spec_to_run
+        from audits.experiments import (
+            prepare_into_experiment,
+            resolve_into_experiment,
+            spec_to_run,
+        )
         from audits.models import Experiment
         from audits.monitors import create_monitor
 
         p = request.project
         run_spec = spec_to_run(spec, name="")
         custom_name = request.POST.get("name", "").strip()[:250]
-        run = monitor = None
+        run = monitor = into = None
         try:
+            into = resolve_into_experiment(p, request.POST.get("into_experiment"))
             with transaction.atomic():
-                experiment = Experiment.objects.create(
-                    project=p,
-                    name=(custom_name or f"{spec['target'].display_name} · {spec['scenario_set'].label}")[:250],
-                    created_by=request.user,
-                )
+                if into is not None:
+                    prepare_into_experiment(
+                        experiment=into,
+                        user=request.user,
+                        n_new_runs=1 if (not repeat or repeat["start"] == "now") else 0,
+                        confirm_public=request.POST.get("into_confirm_public") == "1",
+                    )
+                    experiment = into
+                    experiment.save(update_fields=["updated_at"])
+                else:
+                    experiment = Experiment.objects.create(
+                        project=p,
+                        name=(custom_name or f"{spec['target'].display_name} · {spec['scenario_set'].label}")[:250],
+                        created_by=request.user,
+                    )
                 if not repeat or repeat["start"] == "now":
                     run = create_audit_run(
                         project=p,
@@ -1587,10 +1628,14 @@ class NewExperimentView(ProjectMixin, TemplateView):
                         experiment=experiment,
                         first_point=first_point,
                     )
+        except StableAPIError:
+            return self._redesign(request.POST, _into_permission_error(into))
         except Exception as e:  # noqa: BLE001 - surface any creation failure to the user
             return self._redesign(request.POST, str(e))
         if run:
             submit_audit_run(run)
+        if into is not None and run:
+            messages.success(request, f"Run added to “{experiment.name}”.")
         if monitor:
             messages.success(request, f"Monitor “{monitor.name}” created: next run {monitor.next_run_at:%Y-%m-%d %H:%M} UTC.")
         return redirect(f"/experiments/{experiment.id}/")
@@ -1645,8 +1690,15 @@ class NewExperimentView(ProjectMixin, TemplateView):
         for row in rows:
             row["cells"] = [row["values"][k] for k, _ in columns]
             row["warnings"] = [w for w in row["warnings"] if w not in shared]
+        into = None
+        into_raw = dict(design_post).get("into_experiment", "")
+        if is_id(into_raw):
+            from audits.models import Experiment
+
+            into = Experiment.objects.filter(pk=int(into_raw), project=request.project).first()
         return render(request, "experiment_review.html", {
             "experiment_name": experiment_name,
+            "into_experiment": into,
             "columns": columns,
             "fixed": fixed,
             "rows": rows,
@@ -1847,12 +1899,24 @@ class NewExperimentView(ProjectMixin, TemplateView):
             repeat = None
             errors.append(str(e))
         name = post.get("experiment_name", "")
+        into = None
+        try:
+            into = ex.resolve_into_experiment(p, design.get("into_experiment"))
+        except ex.DesignError as e:
+            errors.append(str(e))
         if not errors:
             try:
-                experiment = ex.launch_experiment(project=p, user=request.user, name=name, runs=runs, repeat=repeat)
+                experiment = ex.launch_experiment(
+                    project=p, user=request.user, name=name, runs=runs, repeat=repeat, into=into,
+                    confirm_public=design.get("into_confirm_public") == "1",
+                )
+            except StableAPIError:
+                errors.append(_into_permission_error(into))
             except Exception as e:  # noqa: BLE001 - show the reason on the review screen
                 errors.append(str(e))
             else:
+                if into is not None and not repeat:
+                    messages.success(request, f"{len(runs)} runs added to “{experiment.name}”.")
                 if repeat:
                     messages.success(request, f"Experiment launched; its {len(runs)} run setups now repeat {ex_repeat(repeat)}.")
                 return redirect(f"/experiments/{experiment.id}/")
@@ -1932,6 +1996,7 @@ class ExperimentsView(PublicReadableMixin, TemplateView):
             e.factor_labels = [FACTORS.get(f, f) for f in factors_for_runs(runs)]
         kw["experiments"] = experiments
         kw["can_manage_visibility"] = self._is_admin()
+        kw["can_edit_membership"] = _can_edit_membership(self.request.user, self.request.project)
         return super().get_context_data(**kw)
 
     def _is_admin(self) -> bool:
@@ -3823,6 +3888,8 @@ class ExperimentDeleteView(LoginRequiredMixin, View):
             return HttpResponseForbidden("Workspace admin or auditor access required.")
         except MembershipError as e:
             messages.error(request, str(e))
+            if request.POST.get("next") == "list":
+                return redirect("experiments")
             return redirect("experiment_detail", experiment_id)
         messages.success(request, f"Experiment “{name}” deleted. Its runs are kept.")
         return redirect("experiments")

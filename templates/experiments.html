@@ -18,6 +18,7 @@
           <th class="text-left px-3 py-2 font-medium">Progress</th>
           <th class="text-left px-3 py-2 font-medium">Visibility</th>
           <th class="text-left px-3 py-2 font-medium">Created</th>
+          {% if can_edit_membership %}<th class="px-3 py-2"><span class="sr-only">Actions</span></th>{% endif %}
         </tr>
       </thead>
       <tbody>
@@ -46,6 +47,19 @@
             {% endif %}
           </td>
           <td class="px-3 py-2.5 text-xs text-gray-500 whitespace-nowrap"><time data-local datetime="{{ e.created_at|date:'c' }}">{{ e.created_at|date:"M j, H:i" }} UTC</time>{% if e.created_by %} · {{ e.created_by.username }}{% endif %}</td>
+          {% if can_edit_membership %}
+          <td class="px-3 py-2.5 text-right whitespace-nowrap" onclick="event.stopPropagation()">
+            {% if not e.is_public or can_manage_visibility %}
+            <form method="post" action="{% url 'experiment_delete' e.id %}" class="inline" data-delete-experiment
+                  data-confirm="{% if e.is_public %}This experiment is PUBLIC. Delete “{{ e.name }}”? Its public page goes away, and runs not in another public experiment become private again. The runs and their results are kept.{% else %}Delete “{{ e.name }}”? The runs and their results are kept; only the grouping is removed.{% endif %}">
+              {% csrf_token %}
+              <input type="hidden" name="confirm_public" value="{% if e.is_public %}1{% endif %}">
+              <input type="hidden" name="next" value="list">
+              <button type="submit" title="Delete this experiment (runs are kept)" class="text-[11px] text-gray-500 hover:text-red-300 underline underline-offset-2">Delete</button>
+            </form>
+            {% endif %}
+          </td>
+          {% endif %}
         </tr>
         {% endfor %}
       </tbody>
