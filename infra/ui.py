@@ -48,11 +48,11 @@ from audits.services import (
     result_severity,
     submit_audit_run,
 )
-from infra.source_chips import annotate_source_chips
 from infra.chat_feature import chat_enabled
 from infra.exceptions import StableAPIError
 from infra.export_utils import csv_safe
 from infra.seo import SITE_NAME, _share_context
+from infra.source_chips import annotate_source_chips
 from scenarios.models import (
     Scenario,
     ScenarioSet,
