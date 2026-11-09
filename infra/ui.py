@@ -32,6 +32,14 @@ from audits.agentic.rules import validate_rules
 from audits.agentic.trajectory import inside_retrieval
 from audits.comparison import compare_runs
 from audits.events import ScenarioResult
+from audits.failures import (
+    ROLE_LABELS,
+    ROLES,
+    failure_label,
+    failure_where,
+    result_failure,
+    summary_text,
+)
 from audits.models import AuditRun
 from audits.services import (
     _repeated_export_entry,
@@ -3504,7 +3512,12 @@ def _result_rows(run: AuditRun, items: dict | None = None) -> list[dict]:
             severity = r.get("severity", sr.status)
             agreement = None
             sev_dist = None
+        failure = result_failure(r) if sr.status == "failed" else None
         results.append({
+            "failure": failure,
+            "failure_role": failure["role"] if failure else "",
+            "failure_label": failure_label(failure),
+            "failure_where": failure_where(failure),
             "result_id": sr.pk,
             "version_item_id": sr.version_item_id,
             "scenario_name": item.scenario.title if item else sr.version_item_id,
@@ -3522,6 +3535,25 @@ def _result_rows(run: AuditRun, items: dict | None = None) -> list[dict]:
     return results
 
 
+def _results_context(run: AuditRun, items: dict | None = None) -> dict:
+    results = _result_rows(run, items)
+    return {"results": results, "failure_summary": _failure_summary(results)}
+
+
+def _failure_summary(results: list[dict]) -> dict:
+    """Failed-scenario summary for the Results list: ``47 failed: 44 target, 3 judge``."""
+    failed = [r for r in results if r["status"] == "failed"]
+    counts: dict[str, int] = {}
+    for r in failed:
+        if r["failure_role"]:
+            counts[r["failure_role"]] = counts.get(r["failure_role"], 0) + 1
+    return {
+        "total": len(failed),
+        "text": summary_text(counts, len(failed)) if failed else "",
+        "roles": [{"role": role, "label": ROLE_LABELS[role], "count": counts[role]} for role in ROLES if counts.get(role)],
+    }
+
+
 class RunResultsFragmentView(ProjectMixin, View):
     """GET /runs/<id>/results-fragment/ — the Results list alone, for live refresh."""
 
@@ -3532,7 +3564,7 @@ class RunResultsFragmentView(ProjectMixin, View):
             AuditRun.objects.select_related("scenario_set_version"), pk=run_id, project=request.project
         )
         html = render_to_string(
-            "partials/run_results.html", {"run": run, "results": _result_rows(run)}, request=request
+            "partials/run_results.html", {"run": run, **_results_context(run)}, request=request
         )
         return HttpResponse(html)
 
@@ -3561,8 +3593,8 @@ class RunDetailView(PublicReadableMixin, DetailView):
         run = self.object
         set_id = run.scenario_set_version.scenario_set_id
         items = {str(vi.pk): vi for vi in ScenarioSetVersionItem.objects.filter(version=run.scenario_set_version).select_related("scenario")}
-        results = _result_rows(run, items)
-        ctx["results"] = results
+        ctx.update(_results_context(run, items))
+        results = ctx["results"]
         # Version item ids that already have a result row; the detail page seeds
         # its SSE dedupe set from this. Pre-serialized to a JSON array because
         # Django's template engine has no built-in `map`/`json` filters.
@@ -3876,7 +3908,7 @@ _REP_KNOWN_KEYS = {
     "conversation", "issues_found", "issues", "positive_behaviors", "recommendations", "summary",
     "severity", "rationale", "evidence", "judge_rationale", "judgment", "scenario_name",
     "scenario_description", "expected_behavior", "file_uri", "_rep_index", "_language", "error",
-    "trace_ids",
+    "trace_ids", "failure",  # failure: shown as the role badge, not a raw field
     # Consumed by the trajectory timeline + Target trace panel; must not leak
     # into the raw "other" dump (it is a large span payload with no value shown
     # verbatim).
@@ -5123,8 +5155,12 @@ def _rep_view(rep: dict, index: int) -> dict:
     # The scenario's own decision answer: the last one in the conversation, so a
     # follow-up turn's answer replaces the opening one.
     decisions = [m["decision"] for m in conversation if m["decision"]]
+    failure = result_failure(rep)
     return {
         "index": index,
+        # Set when a role other than the judge failed: the judge never ran, so
+        # the judge cards are replaced by a "not graded" note.
+        "not_graded_role": failure["role"] if failure and failure["role"] != "judge" else "",
         "decision": decisions[-1] if decisions else None,
         "severity": rep.get("severity", ""),
         "summary": rep.get("summary", ""),
@@ -5206,6 +5242,7 @@ class RunResultView(PublicReadableMixin, TemplateView):
         # Open on the first repetition that disagrees with the verdict, if any.
         initial_rep = next((r["index"] for r in reps if r["dissent"]), 1)
 
+        failure = result_failure(result_data) if sr.status != "completed" else None
         revision = item.revision if item else None
         first = raw_reps[0] if raw_reps else {}
         expected = (revision.expected_behavior if revision else None) or first.get("expected_behavior") or []
@@ -5237,7 +5274,10 @@ class RunResultView(PublicReadableMixin, TemplateView):
                 {"severity": sev, "count": n, "pct": round(n * 100 / len(reps), 1) if reps else 0}
                 for sev, n in distribution.items()
             ],
-            error=result_data.get("error", "") if sr.status != "completed" else "",
+            error=(result_data.get("error") or (failure or {}).get("message", "")) if sr.status != "completed" else "",
+            failure=failure,
+            failure_label=failure_label(failure),
+            failure_where=failure_where(failure),
             raw_json=json.dumps(result_data, indent=2, ensure_ascii=False) if result_data else "",
             public_header=True,
             judge_ref=_judge_ref_from_run(run),
