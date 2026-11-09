@@ -251,3 +251,30 @@ def test_result_is_json_serialisable():
     payload = _error_result(ERRORS["429"][0], "judge")
     attach_failures(payload, PhaseTracker(), SNAPSHOTS)
     json.dumps(payload)
+
+
+@pytest.mark.parametrize(
+    ("completed", "fixed_prompt", "role"),
+    [
+        ([], False, "auditor"),                                        # turn 0 probe
+        ([(0, "auditor")], False, "target"),                           # turn 0 answer
+        ([(0, "auditor"), (0, "target")], False, "auditor"),           # turn 1 probe
+        ([(0, "auditor"), (0, "target"), (1, "auditor")], False, "target"),
+        ([(0, "target")], True, "auditor"),                            # test_prompt: turn 0 has no auditor
+        ([(0, "target"), (1, "auditor")], True, "target"),
+        ([(0, "auditor"), (0, "target"), (1, "auditor"), (1, "target"), (2, "auditor"), (2, "target")], False, "system"),
+    ],
+)
+def test_multi_turn_role_is_phase_after_last_completed(completed, fixed_prompt, role):
+    tracker = PhaseTracker()
+    for turn, phase in completed:
+        tracker.note(0, turn, 3, phase)
+    assert tracker.failed_role(0, "conversation", probe_is_fixed=fixed_prompt) == role
+
+
+def test_multi_turn_judge_failure_after_all_turns():
+    tracker = PhaseTracker()
+    for turn in range(3):
+        tracker.note(0, turn, 3, "auditor")
+        tracker.note(0, turn, 3, "target")
+    assert tracker.failed_role(0, "judge") == "judge"
