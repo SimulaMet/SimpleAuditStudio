@@ -10,15 +10,29 @@ re-fetched from run_results_fragment while the run is live.
     <a href="{% url 'run_export' run.id %}?format=json" class="px-2.5 py-1 rounded-lg bg-surface-overlay text-gray-400 text-xs font-medium hover:text-gray-200 transition-colors">Export</a>
     {% endif %}
   </div>
+  {% if failure_summary.total %}
+  <div id="failure-summary" class="mb-3 flex flex-wrap items-center gap-2 text-xs">
+    <span class="font-semibold text-red-300" data-testid="failure-summary-text">{{ failure_summary.text }}</span>
+    {% if failure_summary.roles %}
+    <span class="text-gray-600">·</span>
+    <span class="text-gray-500">Filter:</span>
+    <button type="button" data-role-filter="" class="role-filter px-2 py-0.5 rounded-full bg-accent/20 text-accent" aria-pressed="true">All</button>
+    {% for fr in failure_summary.roles %}
+    <button type="button" data-role-filter="{{ fr.role }}" class="role-filter px-2 py-0.5 rounded-full bg-surface-overlay text-gray-400 hover:text-gray-200" aria-pressed="false">{{ fr.label }} {{ fr.count }}</button>
+    {% endfor %}
+    {% endif %}
+  </div>
+  {% endif %}
   {% if results %}
   <div class="space-y-2 max-h-96 overflow-y-auto">
     {% for r in results %}
-    <div data-agentic-status="{{ r.agentic_status }}" class="px-3 py-2.5 rounded-lg bg-surface-overlay/50 flex items-center justify-between group">
-      <a href="{% url 'run_result' run.id r.result_id %}" class="flex-1 min-w-0 group-hover:text-accent transition-colors">
+    <div data-failure-role="{{ r.failure_role }}" data-agentic-status="{{ r.agentic_status }}" class="px-3 py-2.5 rounded-lg bg-surface-overlay/50 flex flex-col gap-1.5 sm:flex-row sm:items-center sm:justify-between group">
+      <a href="{% url 'run_result' run.id r.result_id %}" class="w-full sm:w-auto flex-1 min-w-0 group-hover:text-accent transition-colors">
         <span class="text-sm text-gray-200 block truncate">{{ r.scenario_name }}</span>
         {% if r.summary %}<p class="text-xs text-gray-500 mt-1 line-clamp-2">{{ r.summary }}</p>{% endif %}
       </a>
-      <span class="ml-3 shrink-0 flex items-center gap-2">
+      <span class="sm:ml-3 sm:shrink-0 flex flex-wrap items-center sm:justify-end gap-2">
+        {% if r.failure %}{% include "partials/failure_badge.html" with failure=r.failure label=r.failure_label where=r.failure_where %}{% endif %}
         {% if r.agreement_rate is not None %}
         <span class="text-[10px] text-gray-500" title="{{ r.n_reps }} repetitions:{% for sev, n in r.severity_distribution.items %} {{ sev }} ×{{ n }}{% endfor %}">{{ r.n_reps }}× · {{ r.agreement_rate|floatformat:0 }}% agree</span>
         {% endif %}

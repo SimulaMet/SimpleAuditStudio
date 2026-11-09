@@ -407,6 +407,9 @@ def run_semantic_judge(
                 "span_ids": [],
             }
         result["rationale"] = UNCERTAIN_REASON_LLM_UNAVAILABLE
+        # The judge call itself failed (not a verdict): the worker records this
+        # as a judge failure instead of letting UNCERTAIN pass for an answer.
+        result["llm_error"] = f"{type(exc).__name__}: {exc}"
         return result
 
     dimensions = parse_semantic_judgement(raw, criteria)
