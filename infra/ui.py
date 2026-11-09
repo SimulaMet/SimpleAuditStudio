@@ -48,6 +48,7 @@ from audits.services import (
     result_severity,
     submit_audit_run,
 )
+from infra.source_chips import annotate_source_chips
 from infra.chat_feature import chat_enabled
 from infra.exceptions import StableAPIError
 from infra.export_utils import csv_safe
@@ -4265,6 +4266,23 @@ def _span_label(sid: str) -> str:
     return sid
 
 
+def _retrieval_documents(value) -> list[dict]:
+    """Display metadata (source, title, score, id) of a ``gen_ai.retrieval.documents`` value."""
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except (json.JSONDecodeError, ValueError):
+            return []
+    if not isinstance(value, list):
+        return []
+    keys = ("source", "url", "title", "name", "score", "id")
+    return [
+        {k: d[k] for k in keys if d.get(k) not in (None, "")}
+        for d in value
+        if isinstance(d, dict) and (d.get("source") or d.get("url") or d.get("title"))
+    ]
+
+
 def _document_source_names(value) -> list[str]:
     """Source names of a ``gen_ai.retrieval.documents`` value (a list, or its JSON text)."""
     if isinstance(value, str):
@@ -4334,6 +4352,7 @@ def _agentic_span_view(span: dict) -> dict | None:
         "decision_detail": decision_detail,
         "is_tool_decision": is_tool_decision,
         "kb_sources": list(dict.fromkeys(str(s) for s in kb_sources)),
+        "kb_docs": _retrieval_documents(attrs.get("gen_ai.retrieval.documents")),
         "started_at": start,
         "duration_ms": round(_trace_span_duration_ms(span), 1),
         "content_blocks": _trace_span_content_blocks(span),
@@ -4693,6 +4712,7 @@ def _merge_retrieval_into_tool(tool_row: dict, retrieval_row: dict) -> None:
     tool_row["content_blocks"] = blocks + retrieved
     tool_row["raw_json"] = f"{tool_row['raw_json']}\n\n{retrieval_row['raw_json']}"
     tool_row["kb_sources"] = list(dict.fromkeys(tool_row["kb_sources"] + retrieval_row["kb_sources"]))
+    tool_row["kb_docs"] = tool_row.get("kb_docs", []) + retrieval_row.get("kb_docs", [])
     tool_row["arguments"] = tool_row["arguments"] or retrieval_row["arguments"]
     tool_row["is_retrieval"] = True
     tool_row["icon"], tool_row["tone"] = _AGENTIC_SPAN_KIND_ICONS["RETRIEVER"]
@@ -4883,6 +4903,7 @@ def _agentic_timeline_view(rep: dict) -> dict | None:
         while parent["span_id"] not in by_id and parent["span_id"] in folded:
             parent = folded[parent["span_id"]]
         anchor_for.setdefault(span_id, parent["anchor"])
+    annotate_source_chips(rows)
     all_spans = [
         s for s in (rep.get("trace_evidence") or {}).get("all_spans") or []
         if isinstance(s, dict) and not _is_workflow_wrapper(s)
