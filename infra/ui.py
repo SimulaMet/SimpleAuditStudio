@@ -5155,8 +5155,12 @@ def _rep_view(rep: dict, index: int) -> dict:
     # The scenario's own decision answer: the last one in the conversation, so a
     # follow-up turn's answer replaces the opening one.
     decisions = [m["decision"] for m in conversation if m["decision"]]
+    failure = result_failure(rep)
     return {
         "index": index,
+        # Set when a role other than the judge failed: the judge never ran, so
+        # the judge cards are replaced by a "not graded" note.
+        "not_graded_role": failure["role"] if failure and failure["role"] != "judge" else "",
         "decision": decisions[-1] if decisions else None,
         "severity": rep.get("severity", ""),
         "summary": rep.get("summary", ""),

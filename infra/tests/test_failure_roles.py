@@ -278,3 +278,38 @@ def test_multi_turn_judge_failure_after_all_turns():
         tracker.note(0, turn, 3, "auditor")
         tracker.note(0, turn, 3, "target")
     assert tracker.failed_role(0, "judge") == "judge"
+
+
+class JudgeCardTests(FailureUiTests):
+    """Judge cards only appear when the judge is the role that failed."""
+
+    def _detail(self, row):
+        return self.client.get(f"/runs/{self.run.id}/results/{row.pk}/").content.decode()
+
+    def _failed(self, role, message="APIError: provider is unavailable"):
+        failure = build_failure(role, message)
+        return ScenarioResultFactory(
+            run_id=self.run.id, status="failed",
+            result={"severity": "ERROR", "summary": f"Scenario did not complete due to an error: {message}",
+                    "failure": failure, "judgment": {"severity": "ERROR", "error": message}},
+        )
+
+    def test_target_and_auditor_failures_show_no_judge_cards(self):
+        for role in ("target", "auditor", "system"):
+            html = self._detail(self._failed(role))
+            assert f"Not graded: the {role} failed before the judge ran." in html
+            assert "Judge grade" not in html and "Response assessment" not in html
+
+    def test_judge_failure_keeps_judge_cards(self):
+        html = self._detail(self._failed("judge"))
+        assert "Response assessment" in html and "Judge grade" in html
+        assert "Not graded" not in html
+
+    def test_old_result_keeps_judge_cards(self):
+        row = ScenarioResultFactory(
+            run_id=self.run.id, status="failed",
+            result={"severity": "ERROR", "summary": "old text", "error": "boom",
+                    "judgment": {"severity": "ERROR", "error": "boom"}},
+        )
+        html = self._detail(row)
+        assert "Response assessment" in html and "Not graded" not in html
