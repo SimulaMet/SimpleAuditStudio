@@ -145,6 +145,47 @@
     </div>
   </div>
 
+  {% if attach_choices %}
+  <!-- Destination: a new experiment, or add the runs to an existing one -->
+  <div class="bg-surface-raised rounded-xl border border-gray-800 p-4 min-w-0" id="destination-card">
+    <h3 class="text-sm font-semibold text-gray-300 mb-1">Destination</h3>
+    <p class="text-xs text-gray-500 mb-3">Start a new experiment, or add these runs to an existing one to compare them with its runs.</p>
+    {% with joining=rep.into_experiment %}
+    <div class="inline-flex p-0.5 rounded-lg bg-surface-overlay border border-gray-700 text-xs mb-3" role="radiogroup" aria-label="Destination">
+      <button type="button" data-dest="new" class="px-3 py-1.5 rounded-md font-medium {% if not joining %}bg-accent text-white{% else %}text-gray-400 hover:text-gray-200{% endif %}">New experiment</button>
+      <button type="button" data-dest="existing" class="px-3 py-1.5 rounded-md font-medium {% if joining %}bg-accent text-white{% else %}text-gray-400 hover:text-gray-200{% endif %}">Existing experiment</button>
+    </div>
+    <input type="radio" name="into_experiment" value="" class="hidden" data-into-new {% if not joining %}checked{% endif %}>
+    <div data-into-panel class="{% if not joining %}hidden{% endif %} rounded-lg border border-gray-700 overflow-hidden">
+      <div class="relative border-b border-gray-700 bg-surface-overlay">
+        <span class="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500"><svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg></span>
+        <input type="search" id="into-filter" placeholder="Search {{ attach_choices|length }} experiment{{ attach_choices|length|pluralize }}…" autocomplete="off" aria-label="Search experiments"
+               class="w-full pl-8 pr-3 py-2 bg-transparent text-sm text-gray-200 placeholder-gray-500 focus:outline-none">
+      </div>
+      <div class="max-h-60 overflow-y-auto divide-y divide-gray-800/70" data-into-list>
+        {% for e in attach_choices %}
+        <label class="flex items-center gap-3 px-3 py-2 cursor-pointer hover:bg-surface-overlay/60 has-[:checked]:bg-accent/10" data-into-row data-name="{{ e.name|lower }}">
+          <input type="radio" name="into_experiment" value="{{ e.id }}" data-public="{% if e.is_public %}1{% endif %}" data-label="{{ e.name }}"
+                 class="accent-[var(--color-accent,#6366f1)] shrink-0" {% if joining == e.id|stringformat:"s" %}checked{% endif %}>
+          <span class="min-w-0 flex-1">
+            <span class="block text-sm text-gray-200 truncate">{{ e.name }}</span>
+            <span class="block text-[11px] text-gray-500">{{ e.n_runs }} run{{ e.n_runs|pluralize }} · updated <span title="{{ e.updated_at|date:'Y-m-d H:i' }} UTC">{{ e.updated_at|timesince }} ago</span></span>
+          </span>
+          {% if e.is_public %}<span class="shrink-0 px-2 py-0.5 rounded-full text-[11px] bg-emerald-900/40 text-emerald-300 border border-emerald-800/50">Public</span>{% endif %}
+        </label>
+        {% endfor %}
+        <p class="hidden px-3 py-4 text-center text-xs text-gray-500" data-into-empty>No experiment matches.</p>
+      </div>
+    </div>
+    <p class="hidden mt-2 text-xs text-amber-300" data-into-pick>Pick an experiment above.</p>
+    <label class="hidden mt-3 items-start gap-2 text-xs text-amber-300 bg-amber-900/15 border border-amber-800/40 rounded-lg px-3 py-2" data-into-public>
+      <input type="checkbox" name="into_confirm_public" value="1" class="mt-0.5" {% if rep.into_confirm_public == "1" %}checked{% endif %}>
+      <span>This experiment is public: the new runs, transcripts included, will be visible to anyone with its link.</span>
+    </label>
+    {% endwith %}
+  </div>
+  {% endif %}
+
   <!-- Name (optional): the run's, its monitor's, or the experiment's -->
   <div class="bg-surface-raised rounded-xl border border-gray-800 p-4 min-w-0">
     <label for="design-name" class="block text-sm font-semibold text-gray-300 mb-1"><span data-name-label>Run name</span> <span class="text-xs font-normal text-gray-500">(optional)</span></label>
@@ -243,6 +284,31 @@
       : repeating ? 'Names the monitor and its runs. Left empty, it is named after the target and scenario set.'
       : 'Left empty, the run is named after its start time.';
 
+    // Destination: joining an existing experiment keeps its name, so the
+    // experiment-name meaning of the field goes away; a public one needs consent.
+    const destCard = document.getElementById('destination-card');
+    if (destCard) {
+      const existing = !destCard.querySelector('[data-into-panel]').classList.contains('hidden');
+      const opt = destCard.querySelector('input[name="into_experiment"]:checked');
+      const joining = !!(opt && opt.value);
+      const pub = joining && opt.dataset.public === '1';
+      const box = destCard.querySelector('[data-into-public]');
+      box.classList.toggle('hidden', !pub);
+      box.classList.toggle('flex', pub);
+      box.querySelector('input').required = pub;
+      destCard.querySelector('[data-into-pick]').classList.toggle('hidden', !(existing && !joining));
+      if (existing && !joining) ok = false;
+      // Several runs joining keep the experiment's name; each run is named on review.
+      document.getElementById('design-name').closest('.bg-surface-raised').classList.toggle('hidden', joining && runs > 1);
+      if (joining) {
+        form.querySelector('[data-name-hint]').textContent = repeating
+          ? `Names the monitor and its runs, which join “${opt.dataset.label}”.`
+          : `The run joins “${opt.dataset.label}”. Left empty, it is named after its start time.`;
+        if (runs === 1 && ok && !repeating) btn.textContent = 'Add run to experiment';
+        if (runs > 1 && ok) btn.textContent = `Review ${runs} runs for “${opt.dataset.label}” →`;
+      }
+    }
+
     // Schedule card: reveal details only when repeating.
     form.querySelectorAll('[data-repeat-only]').forEach(el => el.classList.toggle('hidden', !repeating));
     form.querySelectorAll('[data-cron-only]').forEach(el => {
@@ -250,6 +316,44 @@
       el.querySelector('input').required = repeating && repeatSel.value === 'cron';
     });
     btn.disabled = !canLaunch || !ok;
+  }
+
+  // Destination: New / Existing toggle, and a searchable list of experiments.
+  const destCard = document.getElementById('destination-card');
+  if (destCard) {
+    const panel = destCard.querySelector('[data-into-panel]');
+    const filter = document.getElementById('into-filter');
+    const ON = ['bg-accent', 'text-white'], OFF = ['text-gray-400', 'hover:text-gray-200'];
+    destCard.querySelectorAll('[data-dest]').forEach(b => b.addEventListener('click', () => {
+      const existing = b.dataset.dest === 'existing';
+      destCard.querySelectorAll('[data-dest]').forEach(x => {
+        const on = x === b;
+        x.classList.remove(...(on ? OFF : ON)); x.classList.add(...(on ? ON : OFF));
+      });
+      panel.classList.toggle('hidden', !existing);
+      if (!existing) destCard.querySelector('[data-into-new]').checked = true;
+      else { destCard.querySelector('[data-into-new]').checked = false; filter.focus(); }
+      update();
+    }));
+    filter.addEventListener('input', () => {
+      const q = filter.value.trim().toLowerCase();
+      let shown = 0;
+      destCard.querySelectorAll('[data-into-row]').forEach(r => {
+        const keep = !q || r.dataset.name.includes(q);
+        r.classList.toggle('hidden', !keep); r.classList.toggle('flex', keep);
+        if (keep) shown++;
+      });
+      destCard.querySelector('[data-into-empty]').classList.toggle('hidden', shown > 0);
+    });
+    // Enter picks the first match instead of submitting the design.
+    filter.addEventListener('keydown', e => {
+      if (e.key !== 'Enter') return;
+      e.preventDefault();
+      const first = destCard.querySelector('[data-into-row]:not(.hidden) input');
+      if (first) { first.checked = true; update(); }
+    });
+    const picked = destCard.querySelector('[data-into-row] input:checked');
+    if (picked) picked.closest('[data-into-row]').scrollIntoView({block: 'nearest'});
   }
 
   form.addEventListener('change', update);

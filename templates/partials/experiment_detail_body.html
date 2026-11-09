@@ -25,6 +25,7 @@
     </form>
     {% endif %}
     {% if can_edit_membership %}
+    <a href="{% url 'new_experiment' %}?into={{ experiment.id }}" title="Design new runs and launch them into this experiment" class="px-3 py-1.5 rounded-lg bg-surface-overlay text-gray-300 text-xs font-medium hover:text-white">＋ New runs</a>
     <form method="post" action="{% url 'experiment_delete' experiment.id %}" class="inline" data-delete-experiment
           data-confirm="{% if experiment.is_public %}This experiment is PUBLIC. Delete it? Its public page goes away, and runs not in another public experiment become private again. The runs and their results are kept.{% else %}Delete this experiment? The runs and their results are kept; only the grouping is removed.{% endif %}">
       {% csrf_token %}
