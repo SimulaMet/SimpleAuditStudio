@@ -374,6 +374,11 @@ _TESTING = (
     or bool(os.environ.get("PYTEST_CURRENT_TEST"))
     or env_bool("SIMPLEAUDIT_TESTING", False)
 )
+if _TESTING and "SIMPLEAUDIT_OPENWEBUI_SYNC_TTL_S" not in os.environ:
+    # Tests reuse workspace/user ids across cases, so a per-process sync
+    # throttle would hand one test another test's cached sync. Both runners
+    # (pytest and manage.py test) go through here.
+    OPENWEBUI_SYNC_TTL_S = 0.0
 if not (DEBUG or MINIMAL_CONFIG or DEMO_MODE or _TESTING):
     # TLS termination and the HTTP→HTTPS redirect are owned by the reverse
     # proxy (Cloudflare / nginx / Caddy).  Django trusts the proxy via
