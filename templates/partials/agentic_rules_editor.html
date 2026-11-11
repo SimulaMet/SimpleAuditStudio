@@ -259,6 +259,9 @@
     render();
   }
 
-  document.querySelectorAll('[data-rules-editor]').forEach(init);
+  // Re-runnable for editors injected later (lazy scenario edit forms); init()
+  // skips roots it already set up.
+  window.initRulesEditors = () => document.querySelectorAll('[data-rules-editor]').forEach(init);
+  window.initRulesEditors();
 })();
 </script>

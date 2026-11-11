@@ -218,7 +218,7 @@ class RunsExportTests(GridTestBase):
         AuditRunFactory(project=self.project, name="Drop me", status=AuditRun.Status.FAILED)
         resp = self.client.get("/runs/export.csv?status=completed")
         self.assertEqual(resp["Content-Type"], "text/csv; charset=utf-8")
-        body = resp.content.decode()
+        body = b"".join(resp.streaming_content).decode()
         self.assertTrue(body.startswith("id,name,status"))
         self.assertIn(f"{keep.id},Keep me", body)
         self.assertNotIn("Drop me", body)

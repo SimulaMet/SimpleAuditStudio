@@ -92,6 +92,14 @@ class AuditRun(models.Model):
     class Meta:
         db_table = "core_audit_run"
         ordering = ["-created_at"]
+        indexes = [
+            # Dashboard grid: one project's runs, newest first.
+            models.Index(fields=["project", "archived", "-created_at"], name="audit_run_proj_arch_created"),
+            # Sweeper / health: runs by status.
+            models.Index(fields=["status", "archived"], name="audit_run_status_arch"),
+            models.Index(fields=["monitor", "created_at"], name="audit_run_monitor_created"),
+            models.Index(fields=["started_at"], name="audit_run_started_at"),
+        ]
 
     def __str__(self) -> str:
         return f"{self.name} ({self.status})"

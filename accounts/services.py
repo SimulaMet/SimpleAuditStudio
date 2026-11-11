@@ -129,6 +129,31 @@ def grant_default_project(user) -> Project | None:
     return project
 
 
+def request_roles(request) -> dict:
+    """``{project_id: role}`` for the request's user, loaded once per request.
+
+    Middleware, context processors and write checks all need the user's
+    memberships; one query here replaces several per page.
+    """
+    cached = getattr(request, "_studio_roles", None)
+    if cached is None:
+        user = getattr(request, "user", None)
+        cached = (
+            dict(ProjectMembership.objects.filter(user=user).values_list("project_id", "role"))
+            if user is not None and user.is_authenticated else {}
+        )
+        request._studio_roles = cached
+    return cached
+
+
+def request_has_access(request, project) -> bool:
+    """``ensure_project_access`` for the request's user, from ``request_roles``."""
+    user = getattr(request, "user", None)
+    if not user or not user.is_authenticated:
+        return False
+    return project.slug == DEFAULT_PROJECT_SLUG or project.pk in request_roles(request)
+
+
 def ensure_project_access(user, project) -> bool:
     """Return True if the user may view this project's content.
 

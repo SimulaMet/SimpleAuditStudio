@@ -1,8 +1,7 @@
 """Server-rendered UI — Django CBVs + Forms + HTMX."""
-import csv
+import functools
 import hashlib
 import hmac
-import io
 import itertools
 import json
 import logging
@@ -153,14 +152,16 @@ def write_block_reason(request) -> str | None:
     Viewers are blocked (admin or auditor role required, the same rule as the
     API), and so is everyone but superusers in an archived workspace.
     """
-    from audits.monitors import has_write_role
+    from accounts.services import request_roles
+    from audits.monitors import _write_roles
 
     project = getattr(request, "project", None)
     if project is None:
         return None
     if project.archived and not request.user.is_superuser:
         return "This workspace is archived and read-only."
-    if not has_write_role(request.user, project):
+    # Same rule as ``has_write_role``, from the per-request membership cache.
+    if not request.user.is_superuser and request_roles(request).get(project.pk) not in _write_roles():
         return "Admin or auditor role required to make changes in this workspace."
     return None
 
@@ -2080,6 +2081,7 @@ def _judge_picker(project, selected: list[str]) -> list:
     return judges
 
 
+@functools.lru_cache(maxsize=1)
 def _timezone_choices() -> list[str]:
     """IANA zone names for the Repeat timezone picker (UTC first, then alphabetical)."""
     from zoneinfo import available_timezones
@@ -2284,6 +2286,24 @@ class ScenariosView(ProjectMixin, TemplateView):
                   viewing_is_latest=bool(versions) and viewing_version == versions[0],
                   prev_version=prev_version, categories=categories)
         return super().get_context_data(**kw)
+
+
+class ScenarioEditFormView(ProjectMixin, View):
+    """GET /scenarios/edit-form/<item_id>/ — one scenario's inline edit form (HTML fragment)."""
+
+    def get(self, request, item_id):
+        from django.http import Http404
+        from django.shortcuts import render
+
+        item = (
+            ScenarioSetVersionItem.objects.filter(pk=item_id, version__scenario_set__project=request.project)
+            .select_related("scenario", "revision", "version__scenario_set")
+            .first()
+        )
+        if item is None:
+            raise Http404("Scenario not found.")
+        return render(request, "partials/scenario_edit_form.html",
+                      {"item": item, "selected": item.version.scenario_set})
 
 
 def _severity_ceiling(raw: str) -> str:
@@ -3451,6 +3471,9 @@ class CompareView(ProjectMixin, TemplateView):
         kw.update(
             runs=AuditRun.objects.filter(project=p, status="completed").select_related(
                 "scenario_set_version__scenario_set"
+            ).only(
+                "id", "name", "created_at", "scenario_set_version__id",
+                "scenario_set_version__scenario_set__id", "scenario_set_version__scenario_set__name",
             ).order_by("-created_at")[:50],
             selected_ids=selected_ids,
             result=result,
@@ -3484,26 +3507,32 @@ def _result_rows(run: AuditRun, items: dict | None = None) -> list[dict]:
         }
     n_reps = int((run.generation_parameters_snapshot or {}).get("n_repetitions") or 1)
     results = []
-    for sr in ScenarioResult.objects.filter(run_id=run.id).order_by("id"):
+    # Only the small ``list_summary`` projection is read, never the transcripts.
+    rows = ScenarioResult.objects.filter(run_id=run.id).only(
+        "id", "version_item_id", "status", "list_summary"
+    ).order_by("id")
+    for sr in rows:
         item = items.get(sr.version_item_id)
-        r = sr.result or {}
-        # When n_repetitions > 1, the result dict has "reps" + "aggregated_severity"
-        summary = r.get("summary", "")
-        if n_reps > 1 and "reps" in r:
-            severity = r.get("aggregated_severity", sr.status)
+        r = sr.list_summary or {}
+        # When n_repetitions > 1, the result has "reps" + "aggregated_severity"
+        summary = r.get("summary") or ""
+        repeated = n_reps > 1 and r.get("has_reps")
+        if repeated:
+            severity = r.get("aggregated_severity") or sr.status
             # Stored as a 0-1 fraction; the list shows a percentage.
             agreement = r.get("agreement_rate")
             agreement = agreement * 100 if agreement is not None else None
-            sev_dist = r.get("severity_distribution", {})
+            sev_dist = r.get("severity_distribution") or {}
             # Repeated results have no top-level summary: show the summary of
             # the first repetition that reached the aggregated verdict.
-            reps = [rep for rep in r["reps"] if isinstance(rep, dict)]
+            reps = r.get("reps") or []
             match = next((rep for rep in reps if rep.get("severity") == severity), reps[0] if reps else {})
             summary = summary or match.get("summary", "")
         else:
-            severity = r.get("severity", sr.status)
+            severity = r.get("severity") or sr.status
             agreement = None
             sev_dist = None
+        agentic = r.get("agentic_status") or ""
         results.append({
             "result_id": sr.pk,
             "version_item_id": sr.version_item_id,
@@ -3515,9 +3544,9 @@ def _result_rows(run: AuditRun, items: dict | None = None) -> list[dict]:
             "status": sr.status,
             "agreement_rate": agreement,
             "severity_distribution": sev_dist,
-            "n_reps": n_reps if (n_reps > 1 and "reps" in r) else None,
-            "agentic_status": (r.get("agentic_evaluation") or {}).get("status", ""),
-            "agentic_tooltip": f"Agentic: {(r.get('agentic_evaluation') or {}).get('status', '').lower()}\nJudge: {severity}",
+            "n_reps": n_reps if repeated else None,
+            "agentic_status": agentic,
+            "agentic_tooltip": f"Agentic: {agentic.lower()}\nJudge: {severity}",
         })
     return results
 
@@ -5256,32 +5285,59 @@ class RunExportView(ProjectMixin, View):
         if fmt not in ("json", "csv"):
             fmt = "json"
 
-        items = {str(vi.pk): vi for vi in ScenarioSetVersionItem.objects.filter(version=run.scenario_set_version).select_related("scenario")}
-        rows = []
-        for sr in ScenarioResult.objects.filter(run_id=run.id).order_by("id"):
-            item = items.get(sr.version_item_id)
-            r = sr.result or {}
-            rows.append({
-                "id": sr.id,
-                "scenario_name": item.scenario.title if item else str(sr.version_item_id),
-                "severity": result_severity(r, sr.status),
-                # Repeated scenarios keep their summary on the reps: use the modal rep's.
-                "summary": _repeated_export_entry(r).get("summary", "") if isinstance(r.get("reps"), list) and r["reps"] else r.get("summary", ""),
-                "result": r,
-            })
+        from django.http import StreamingHttpResponse
 
+        from infra.export_utils import buffered, csv_rows, json_array_chunks
+
+        names = {
+            str(pk): title
+            for pk, title in ScenarioSetVersionItem.objects.filter(version=run.scenario_set_version)
+            .values_list("pk", "scenario__title")
+        }
+        results = ScenarioResult.objects.filter(run_id=run.id).order_by("id")
         filename = f"audit_{run.id}_results.{fmt}"
 
+        # Both formats stream: rows are read in chunks and written as they come,
+        # so a large run neither builds the whole file in memory nor makes the
+        # client wait for it before the first byte.
         if fmt == "csv":
-            buf = io.StringIO()
-            writer = csv.writer(buf)
-            writer.writerow(["id", "scenario_name", "severity", "summary"])
-            for row in rows:
-                writer.writerow([row["id"], csv_safe(row["scenario_name"]), csv_safe(row["severity"]), csv_safe(row["summary"])])
-            response = HttpResponse(buf.getvalue(), content_type="text/csv; charset=utf-8")
+            def csv_body():
+                # The CSV needs verdicts and summaries only: read the small
+                # list_summary projection, never the transcripts.
+                for sr in results.only("id", "version_item_id", "status", "list_summary").iterator(chunk_size=500):
+                    ls = sr.list_summary or {}
+                    if ls.get("has_reps"):
+                        severity = ls.get("aggregated_severity") or sr.status
+                        reps = ls.get("reps") or []
+                        modal = next((r for r in reps if r.get("severity") == ls.get("aggregated_severity")),
+                                     reps[0] if reps else {})
+                        summary = ls.get("summary") or modal.get("summary", "")
+                    else:
+                        severity = ls.get("severity") or sr.status
+                        summary = ls.get("summary", "")
+                    name = names.get(sr.version_item_id, str(sr.version_item_id))
+                    yield [sr.id, csv_safe(name), csv_safe(severity), csv_safe(summary)]
+
+            response = StreamingHttpResponse(
+                buffered(csv_rows(["id", "scenario_name", "severity", "summary"], csv_body())),
+                content_type="text/csv; charset=utf-8",
+            )
         else:
-            payload = json.dumps(rows, indent=2, ensure_ascii=False)
-            response = HttpResponse(payload, content_type="application/json; charset=utf-8")
+            def json_body():
+                for sr in results.only("id", "version_item_id", "status", "result").iterator(chunk_size=100):
+                    r = sr.result or {}
+                    yield {
+                        "id": sr.id,
+                        "scenario_name": names.get(sr.version_item_id, str(sr.version_item_id)),
+                        "severity": result_severity(r, sr.status),
+                        # Repeated scenarios keep their summary on the reps: use the modal rep's.
+                        "summary": _repeated_export_entry(r).get("summary", "") if isinstance(r.get("reps"), list) and r["reps"] else r.get("summary", ""),
+                        "result": r,
+                    }
+
+            response = StreamingHttpResponse(
+                buffered(json_array_chunks(json_body())), content_type="application/json; charset=utf-8"
+            )
 
         response["Content-Disposition"] = f'attachment; filename="{filename}"'
         return response
@@ -5475,17 +5531,27 @@ def _sync_openwebui_resources(project, user, *, prune: bool = False) -> dict | N
         logger.exception("Chat API setup failed for user %s", user)
         return None
 
-    summary: dict = {"knowledge_bases": 0, "tools": 0, "added": [], "lost": [], "removed": []}
+    summary: dict = {
+        "knowledge_bases": 0, "tools": 0, "added": [], "lost": [], "removed": [],
+        "visible": {"knowledge_base": None, "tool": None},
+    }
 
     def mirror(model, kind: str, remote: list[dict], fields_for, fetch) -> None:
         remote_ids = set()
+        wanted = [item.get("id") for item in remote if item.get("id")]
+        # One query for every linked row instead of one per remote item.
+        existing = {
+            row.external_id: row
+            for row in model.objects.filter(project=project, external_id__in=wanted).order_by("pk")
+        }
         for item in remote:
             external_id = item.get("id") or ""
             if not external_id:
                 continue
             remote_ids.add(external_id)
             fields = fields_for(item)
-            row = model.objects.filter(project=project, external_id=external_id).first()
+            row = existing.get(external_id)
+            changed = row is None
             if row is None:
                 # A seeded row that was never linked (empty id) has no identity
                 # yet; claim it so the chat-ready backfill cannot later collide.
@@ -5498,9 +5564,15 @@ def _sync_openwebui_resources(project, user, *, prune: bool = False) -> dict | N
                 summary["added"].append({"kind": kind, "name": fields["name"]})
             else:
                 for key, value in fields.items():
-                    setattr(row, key, value)
-                row.save()
+                    if getattr(row, key) != value:
+                        setattr(row, key, value)
+                        changed = True
+                if changed:
+                    row.save()
             summary[f"{kind}s"] += 1
+        # The lists came from Open WebUI as this user, so they are also the
+        # user's ACL view: callers can skip a second round of list calls.
+        summary["visible"][kind] = remote_ids
         stale = (
             model.objects.filter(project=project)
             .exclude(external_id="")
@@ -5596,6 +5668,31 @@ def _visible_openwebui_resource_ids(user):
     return knowledge_ids, tool_ids
 
 
+_openwebui_sync_cache: dict = {}
+
+
+def _throttled_openwebui_sync(project, user) -> tuple[dict, bool]:
+    """``_sync_openwebui_resources`` at most once per TTL per (workspace, user).
+
+    Returns ``(summary, fresh)``; ``fresh`` is False when the last summary was
+    reused. The cache is per web process, which is all a throttle needs.
+    """
+    import time
+
+    from django.conf import settings
+
+    ttl = float(getattr(settings, "OPENWEBUI_SYNC_TTL_S", 60) or 0)
+    key = (project.pk, user.pk)
+    now = time.monotonic()
+    hit = _openwebui_sync_cache.get(key)
+    if ttl > 0 and hit and now - hit[0] < ttl:
+        return hit[1], False
+    summary = _sync_openwebui_resources(project, user) or {}
+    if ttl > 0:
+        _openwebui_sync_cache[key] = (now, summary)
+    return summary, True
+
+
 class AgentSyncView(ProjectMixin, View):
     """POST /agents/sync/ — pull KBs and tools from OpenWebUI into local models."""
 
@@ -5606,6 +5703,9 @@ class AgentSyncView(ProjectMixin, View):
         summary = _sync_openwebui_resources(request.project, request.user, prune=True)
         if summary is None:
             return JsonResponse({"error": "Chat is not enabled."}, status=400)
+        # The next page load must reflect what the button just did.
+        _openwebui_sync_cache.pop((request.project.pk, request.user.pk), None)
+        summary = {k: v for k, v in summary.items() if k != "visible"}
         return JsonResponse({"ok": True, **summary})
 
 
@@ -5637,20 +5737,24 @@ class AgentDetailView(ProjectMixin, TemplateView):
                 "base_model", "base_model__connection"
             ).prefetch_related("knowledge_bases", "tools").first()
 
-        # Auto-sync from OpenWebUI so the picker lists are always fresh. Page
-        # loads only report lost resources; the Sync button removes them.
-        sync_summary = _sync_openwebui_resources(project, self.request.user) or {}
+        # Auto-sync from OpenWebUI so the picker lists stay fresh, at most once
+        # per OPENWEBUI_SYNC_TTL_S per user and workspace (the Sync button always
+        # runs). Page loads only report lost resources; the Sync button removes them.
+        sync_summary, fresh = _throttled_openwebui_sync(project, self.request.user)
         lost = sync_summary.get("lost", [])
         ctx["lost_kb_ids"] = {e["id"] for e in lost if e["kind"] == "knowledge_base"}
         ctx["lost_tool_ids"] = {e["id"] for e in lost if e["kind"] == "tool"}
 
         # The local rows are metadata references, not an authorization source.
         # Filter Open WebUI-backed rows using the current user's actual list
-        # visibility.  Rows without an external id are local/seeded resources
-        # and remain available to the workspace.
-        visible_kb_ids, visible_tool_ids = _visible_openwebui_resource_ids(
-            self.request.user
-        )
+        # visibility, read live on every load (a sync this request already
+        # fetched those lists as the user, so reuse them). Rows without an
+        # external id are local/seeded resources and remain available.
+        visible = sync_summary.get("visible") or {}
+        if fresh and visible.get("knowledge_base") is not None and visible.get("tool") is not None:
+            visible_kb_ids, visible_tool_ids = visible["knowledge_base"], visible["tool"]
+        else:
+            visible_kb_ids, visible_tool_ids = _visible_openwebui_resource_ids(self.request.user)
 
         ctx["agent"] = agent
         ctx["models"] = RegisteredModel.objects.filter(project=project, enabled=True).select_related("connection")

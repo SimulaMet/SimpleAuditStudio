@@ -431,9 +431,13 @@
 
   // Returning from another tab (e.g. after adding a model): refresh the pickers, keeping ticks.
   let focusTimer = null;
+  let lastPickerRefresh = Date.now();
   window.addEventListener('focus', () => {
     clearTimeout(focusTimer);
+    // The page render is heavy (every picker); skip refreshes within a minute of the last.
+    if (Date.now() - lastPickerRefresh < 60000) return;
     focusTimer = setTimeout(async () => {
+      lastPickerRefresh = Date.now();
       const target = document.getElementById('picker-sections');
       if (!target) return;
       const ticked = new Set([...target.querySelectorAll('input:checked')].map(i => i.name + '=' + i.value));

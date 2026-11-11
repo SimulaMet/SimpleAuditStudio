@@ -44,9 +44,12 @@ def authz(request):
         request.GET.get("embed") == "admin"
         or request.headers.get("X-Studio-Embed") == "admin"
     ):
-        request.session["studio_chat_embed_admin"] = (
-            time.time() + config.EMBED_ADMIN_FLAG_TTL
-        )
+        # Re-stamp only once less than half the TTL is left: every write saves
+        # the session (a DB write plus Set-Cookie) on a path hit per iframe asset.
+        now = time.time()
+        current = request.session.get("studio_chat_embed_admin")
+        if not isinstance(current, (int, float)) or current - now < config.EMBED_ADMIN_FLAG_TTL / 2:
+            request.session["studio_chat_embed_admin"] = now + config.EMBED_ADMIN_FLAG_TTL
     response = HttpResponse(status=200)
     for header, value in config.identity(user).items():
         response[header] = value

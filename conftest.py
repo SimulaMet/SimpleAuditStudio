@@ -16,6 +16,12 @@ def _synchronous_otlp_span_writes(settings):
     settings.OTLP_SPAN_FLUSH_INTERVAL_S = 0
 
 
+@pytest.fixture(autouse=True)
+def _no_openwebui_sync_throttle(settings):
+    """Every Agent page load syncs in tests (ids are reused across tests)."""
+    settings.OPENWEBUI_SYNC_TTL_S = 0
+
+
 def pytest_collection_modifyitems(items):
     """Copy Django ``@tag`` values onto pytest items as markers.
 

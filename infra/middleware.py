@@ -103,6 +103,10 @@ class TokenSessionBridgeMiddleware(MiddlewareMixin):
     ``ProjectMiddleware``) work with API token auth, not just session
     cookies. The session is only written when the user is anonymous, so
     existing session logins are never overwritten.
+
+    The token user is attached to this request only and nothing is written to
+    the session: a token client sends its token on every call, and persisting it
+    created (and cycled) a session row per request.
     """
 
     def process_request(self, request):
@@ -121,9 +125,7 @@ class TokenSessionBridgeMiddleware(MiddlewareMixin):
         if not token.user.is_active:
             return
         request.user = token.user
-        request.session["user_id"] = token.user.id
-        request.session["auth_backend"] = "django.contrib.auth.backends.ModelBackend"
-        request.session.cycle_key()
+        request._studio_token_auth = True
 
 
 class ProjectMiddleware(MiddlewareMixin):
@@ -139,21 +141,24 @@ class ProjectMiddleware(MiddlewareMixin):
         if not hasattr(request, "user") or not request.user.is_authenticated:
             return
         from accounts.models import Project
-        from accounts.services import ensure_project_access
+        from accounts.services import request_has_access
 
         project_id = request.session.get("active_project_id")
         if project_id:
             request.project = Project.objects.filter(pk=project_id).first()
             # A session can outlive the membership it was granted under (the
             # user was removed); never keep serving that workspace.
-            if request.project is not None and not ensure_project_access(request.user, request.project):
+            if request.project is not None and not request_has_access(request, request.project):
                 request.project = None
                 request.session.pop("active_project_id", None)
         if not request.project:
             membership = request.user.memberships.select_related("project").first()
             if membership:
                 request.project = membership.project
-                request.session["active_project_id"] = request.project.id
+                # Token-authenticated calls carry no session cookie: writing here
+                # would create a fresh session row on every request.
+                if not getattr(request, "_studio_token_auth", False):
+                    request.session["active_project_id"] = request.project.id
         if not request.project:
             # Backstop: a user with no membership (legacy/orphaned account)
             # still lands in the shared Default workspace rather than crashing

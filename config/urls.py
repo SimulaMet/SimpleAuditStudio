@@ -62,6 +62,7 @@ from infra.ui import (
     ScenarioCreateView,
     ScenarioDeleteView,
     ScenarioDiffView,
+    ScenarioEditFormView,
     ScenarioEditView,
     ScenarioExportView,
     ScenarioImportView,
@@ -99,6 +100,15 @@ _STATIC_ROOT = str(settings.STATIC_ROOT)
 
 
 def _serve_static(request, path):
+    response = _serve_static_file(request, path)
+    # Assets are not content-hashed, so keep the cache short; Last-Modified
+    # still lets the browser revalidate cheaply after it expires.
+    if response.status_code in (200, 304):
+        response.setdefault("Cache-Control", "public, max-age=300")
+    return response
+
+
+def _serve_static_file(request, path):
     """Serve from STATIC_ROOT, then source dirs, then finders.
 
     Order matters for resilience against stale Docker layer caches (a known
@@ -230,6 +240,7 @@ urlpatterns = [
     path("scenarios/version-delete/<int:set_id>/", ScenarioSetVersionDeleteView.as_view(), name="scenario_version_delete"),
     path("scenarios/create/", ScenarioCreateView.as_view(), name="scenario_create"),
     path("scenarios/edit/<int:scenario_id>/", ScenarioEditView.as_view(), name="scenario_edit"),
+    path("scenarios/edit-form/<int:item_id>/", ScenarioEditFormView.as_view(), name="scenario_edit_form"),
     path("scenarios/delete/<int:scenario_id>/", ScenarioDeleteView.as_view(), name="scenario_delete"),
     path("scenarios/revert/<int:set_id>/", ScenarioRevertView.as_view(), name="scenario_revert"),
     path("scenarios/diff/<int:set_id>/", ScenarioDiffView.as_view(), name="scenario_diff"),

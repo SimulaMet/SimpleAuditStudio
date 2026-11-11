@@ -23,9 +23,9 @@ from infra.db import retry_if_locked
 class AuditEvent(models.Model):
     """Append-only durable progress event for an audit run."""
 
-    run_id = models.PositiveBigIntegerField(db_index=True)
-    version_item_id = models.CharField(max_length=64, db_index=True)
-    kind = models.CharField(max_length=64, db_index=True)
+    run_id = models.PositiveBigIntegerField()
+    version_item_id = models.CharField(max_length=64)
+    kind = models.CharField(max_length=64)
     payload = models.JSONField(default=dict, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -34,10 +34,66 @@ class AuditEvent(models.Model):
         ordering = ["id"]
         indexes = [
             models.Index(fields=["run_id", "id"], name="audit_event_run_id_idx"),
+            # Per-scenario state/attempt lookups and the progress snapshot group-by.
+            models.Index(fields=["run_id", "kind", "version_item_id"], name="audit_event_run_kind_item_idx"),
         ]
 
     def __str__(self) -> str:
         return f"AuditEvent(run={self.run_id} {self.kind} vi={self.version_item_id})"
+
+
+def trial_severities(result: dict) -> list:
+    """Every judged trial in one stored result (one per repetition)."""
+    reps = result.get("reps")
+    if isinstance(reps, list):
+        return [(r or {}).get("severity") for r in reps]
+    return [result.get("severity")]
+
+
+def trial_counts(status: str, result: dict | None) -> dict[str, int]:
+    """Per-row trial tallies kept beside the (large) ``result`` JSON.
+
+    Repetitions count as separate trials. ERROR severities and non-completed
+    scenarios are excluded from ``n_judged`` and counted in ``n_errors``;
+    "ungraded" trials (a judgment without a verdict) are counted apart.
+    """
+    out = {"n_pass": 0, "n_judged": 0, "n_errors": 0, "n_ungraded": 0}
+    if status != "completed":
+        out["n_errors"] = 1
+        return out
+    for sev in trial_severities(result or {}):
+        if not sev or sev == "ERROR":
+            out["n_errors"] += 1
+        elif sev == "ungraded":
+            out["n_ungraded"] += 1
+        else:
+            out["n_judged"] += 1
+            if sev == "pass":
+                out["n_pass"] += 1
+    return out
+
+
+def result_projection(result: dict | None) -> dict:
+    """The few fields the run's Results list shows, lifted out of the big ``result``.
+
+    Transcripts dominate a stored result; the list only needs verdicts and short
+    summaries, so ``ScenarioResult.list_summary`` keeps just those.
+    """
+    r = result if isinstance(result, dict) else {}
+    reps = r.get("reps")
+    return {
+        "severity": r.get("severity"),
+        "aggregated_severity": r.get("aggregated_severity"),
+        "summary": r.get("summary", ""),
+        "agreement_rate": r.get("agreement_rate"),
+        "severity_distribution": r.get("severity_distribution"),
+        "has_reps": isinstance(reps, list),
+        "reps": (
+            [{"severity": x.get("severity"), "summary": x.get("summary", "")} for x in reps if isinstance(x, dict)]
+            if isinstance(reps, list) else []
+        ),
+        "agentic_status": (r.get("agentic_evaluation") or {}).get("status", ""),
+    }
 
 
 class ScenarioResult(models.Model):
@@ -51,7 +107,28 @@ class ScenarioResult(models.Model):
     # judgment, ...). Large raw transcripts may instead be offloaded to object
     # storage; this column holds the structured result record.
     result = models.JSONField(default=dict, blank=True)
+    # Trial tallies derived from ``status`` + ``result`` (see ``trial_counts``).
+    # They let run totals be a SUM over small columns instead of loading every
+    # transcript; ``save()`` keeps them in step with the JSON.
+    n_pass = models.PositiveIntegerField(default=0)
+    n_judged = models.PositiveIntegerField(default=0)
+    n_errors = models.PositiveIntegerField(default=0)
+    n_ungraded = models.PositiveIntegerField(default=0)
+    # Small projection of ``result`` for list pages (see ``result_projection``).
+    list_summary = models.JSONField(default=dict, blank=True)
     updated_at = models.DateTimeField(auto_now=True)
+
+    COUNT_FIELDS = ("n_pass", "n_judged", "n_errors", "n_ungraded", "list_summary")
+
+    def save(self, *args, **kwargs):
+        update_fields = kwargs.get("update_fields")
+        if update_fields is None or {"status", "result"} & set(update_fields):
+            for name, value in trial_counts(self.status, self.result).items():
+                setattr(self, name, value)
+            self.list_summary = result_projection(self.result)
+            if update_fields is not None:
+                kwargs["update_fields"] = [*update_fields, *self.COUNT_FIELDS]
+        super().save(*args, **kwargs)
 
     class Meta:
         db_table = "core_scenario_result"
@@ -60,6 +137,9 @@ class ScenarioResult(models.Model):
                 fields=["run_id", "version_item_id"],
                 name="unique_scenario_result_per_run_item",
             ),
+        ]
+        indexes = [
+            models.Index(fields=["run_id", "status"], name="scenario_result_run_status_idx"),
         ]
 
     def __str__(self) -> str:
@@ -76,6 +156,50 @@ def append_event(run_id: int | str, version_item_id: str, kind: str, payload: di
         payload=payload or {},
     )
     return event.id
+
+
+@retry_if_locked
+def append_events(run_id: int | str, version_item_id: str, items: list[tuple[str, dict | None]]) -> None:
+    """Append several events in one INSERT, keeping their order (ids ascend)."""
+    if not items:
+        return
+    AuditEvent.objects.bulk_create([
+        AuditEvent(run_id=int(run_id), version_item_id=version_item_id, kind=kind, payload=payload or {})
+        for kind, payload in items
+    ])
+
+
+# Per-turn progress events: by far the most numerous rows, and only useful
+# while a run is live (the progress view and "Latest Activity"). State and
+# terminal events are kept for good.
+PRUNABLE_EVENT_KINDS = ("scenario_turn", "scenario_rep_started")
+
+
+def prune_finished_run_events(older_than_days: int, batch_size: int = 5000) -> int:
+    """Delete per-turn events of runs that finished more than ``older_than_days`` ago.
+
+    Deletes in id batches so a large backlog never holds one long transaction.
+    Returns the number of rows deleted.
+    """
+    from datetime import timedelta
+
+    from django.utils import timezone
+
+    from audits.models import AuditRun
+
+    if older_than_days <= 0:
+        return 0
+    cutoff = timezone.now() - timedelta(days=older_than_days)
+    finished = AuditRun.objects.filter(
+        status__in=AuditRun.TERMINAL_STATUSES, finished_at__lt=cutoff
+    ).values("id")
+    qs = AuditEvent.objects.filter(run_id__in=finished, kind__in=PRUNABLE_EVENT_KINDS)
+    deleted = 0
+    while True:
+        ids = list(qs.order_by().values_list("id", flat=True)[:batch_size])
+        if not ids:
+            return deleted
+        deleted += AuditEvent.objects.filter(id__in=ids).delete()[0]
 
 
 def _event_dict(e: AuditEvent) -> dict:

@@ -8,13 +8,11 @@ saved per user through ``PreferenceView``.
 """
 from __future__ import annotations
 
-import csv
-import io
 import json
 from datetime import datetime, time, timedelta
 
 from django.db.models import Q
-from django.http import HttpResponse, JsonResponse
+from django.http import JsonResponse
 from django.utils import timezone
 from django.views import View
 
@@ -78,7 +76,11 @@ def filtered_runs(project, params):
     qs = AuditRun.objects.filter(project=project).select_related(
         "scenario_set_version__scenario_set", "target_model", "auditor_model", "judge_model",
         "judge_version__judge", "monitor", "created_by",
-    ).prefetch_related("experiments")
+    ).prefetch_related("experiments").defer(
+        # Large JSON the grid and CSV never read (run_row uses the target/auditor/
+        # judge/generation snapshots and summary_metrics only).
+        "agent_config_snapshot", "trace_config", "runtime_metadata",
+    )
     status = params.get("status", "")
     if status == "archived":
         qs = qs.filter(archived=True)
@@ -260,18 +262,32 @@ class RunsExportView(ProjectMixin, View):
     """GET /runs/export.csv — the dashboard's current filters, as CSV."""
 
     def get(self, request):
-        from audits.monitors import pass_counts
+        from django.http import StreamingHttpResponse
 
-        runs = list(filtered_runs(request.project, request.GET).order_by(*_ordering(request.GET))[:10000])
-        counts = pass_counts([r.id for r in runs])
+        from audits.monitors import pass_counts
+        from infra.export_utils import buffered, csv_rows
+
+        qs = filtered_runs(request.project, request.GET).order_by(*_ordering(request.GET))[:10000]
         cols = ["id", "name", "status", "scenario_set", "target", "auditor", "judge", "judge_model", "completed", "total",
                 "reps", "pass_rate", "max_turns", "language", "duration", "created_by", "created_at"]
-        buf = io.StringIO()
-        writer = csv.writer(buf)
-        writer.writerow(cols)
-        for run in runs:
-            row = run_row(run, counts)
-            writer.writerow([csv_safe(row[c]) if row[c] is not None else "" for c in cols])
-        response = HttpResponse(buf.getvalue(), content_type="text/csv; charset=utf-8")
+
+        def body():
+            # Up to 10,000 runs: stream them in batches (pass counts per batch)
+            # instead of holding every run row before the first byte goes out.
+            batch = []
+            for run in qs.iterator(chunk_size=500):
+                batch.append(run)
+                if len(batch) == 500:
+                    yield from _rows(batch)
+                    batch = []
+            yield from _rows(batch)
+
+        def _rows(batch):
+            counts = pass_counts([r.id for r in batch]) if batch else {}
+            for run in batch:
+                row = run_row(run, counts)
+                yield [csv_safe(row[c]) if row[c] is not None else "" for c in cols]
+
+        response = StreamingHttpResponse(buffered(csv_rows(cols, body())), content_type="text/csv; charset=utf-8")
         response["Content-Disposition"] = 'attachment; filename="runs.csv"'
         return response

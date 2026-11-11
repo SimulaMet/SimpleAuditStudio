@@ -15,7 +15,12 @@ from infra.tests.factories import judge_for
 class AuditSSEStreamTest(TestCase):
     def setUp(self):
         from accounts.models import Project, ProjectMembership, User
+        from audits import views
 
+        # Stream slots are per process; tests that never close a response must
+        # not starve the next test.
+        views._sse_open.clear()
+        self.addCleanup(views._sse_open.clear)
         self.user = User.objects.create_user(username="sse-user", password="pw12345")
         self.project = Project.objects.create(name="P", slug="p")
         ProjectMembership.objects.create(project=self.project, user=self.user, role=ProjectMembership.Role.AUDITOR)
@@ -195,3 +200,55 @@ class AuditSSEStreamTest(TestCase):
              self.assertRaises(SystemExit) as ctx:
             next(gen)
         self.assertEqual(ctx.exception.code, 1)
+
+
+class AuditSSEFinishedRunTest(AuditSSEStreamTest):
+    """A finished run whose terminal event is missing must not hold a thread for an hour."""
+
+    def test_finished_run_without_terminal_event_ends_stream(self):
+        from audits.models import AuditRun
+
+        run = self._make_run()
+        AuditRun.objects.filter(pk=run.id).update(status=AuditRun.Status.COMPLETED)
+        gen = self._get_raw_generator(run.id)
+        with mock.patch('audits.views.time.sleep'):
+            chunks = list(gen)
+        self.assertEqual(len(chunks), 1)
+        self.assertIn('event: run_completed', chunks[0])
+
+
+class AuditSSECapTest(AuditSSEStreamTest):
+    """Open streams are capped per user and per process; closing frees the slot."""
+
+    def _stream(self, run_id):
+        from django.test import RequestFactory
+
+        from audits.views import stream_audit_run_events
+
+        request = RequestFactory().get("/")
+        request.user = self.user
+        return stream_audit_run_events(request, self.project.id, run_id)
+
+    def test_per_user_cap_and_release(self):
+        from audits import views
+
+        run = self._make_run()
+        with mock.patch.object(views, "_SSE_MAX_STREAMS_PER_USER", 2), mock.patch.object(views, "_SSE_MAX_STREAMS", 10):
+            first, second = self._stream(run.id), self._stream(run.id)
+            self.assertEqual(self._stream(run.id).status_code, 429)
+            first.close()  # Django closes the response when the client goes away
+            third = self._stream(run.id)
+            self.assertEqual(third.status_code, 200)
+            second.close()
+            third.close()
+        self.assertEqual(views._sse_open, {})
+
+    def test_process_cap(self):
+        from audits import views
+
+        run = self._make_run()
+        with mock.patch.object(views, "_SSE_MAX_STREAMS", 1):
+            first = self._stream(run.id)
+            self.assertEqual(self._stream(run.id).status_code, 429)
+            first.close()
+        self.assertEqual(views._sse_open, {})

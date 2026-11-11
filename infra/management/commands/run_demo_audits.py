@@ -105,10 +105,10 @@ class StudioClient:
         return self._request("GET", "/api/agents/")
 
     def latest_run(self, project_id: int) -> dict | None:
-        runs = self._request("GET", f"/api/projects/{project_id}/audit-runs/")
-        if not runs:
-            return None
-        return max(runs, key=lambda r: r.get("created_at") or "")
+        # Newest first, paginated: the first row of the first page is the latest.
+        page = self._request("GET", f"/api/projects/{project_id}/audit-runs/?limit=1&expand=snapshots")
+        runs = page.get("results") or []
+        return runs[0] if runs else None
 
     def create_run(self, project_id: int, payload: dict) -> dict:
         return self._request("POST", f"/api/projects/{project_id}/audit-runs/create/", payload)
@@ -117,7 +117,15 @@ class StudioClient:
         return self._request("GET", f"/api/projects/{project_id}/audit-runs/{run_id}/")
 
     def run_results(self, project_id: int, run_id: int) -> list[dict]:
-        return self._request("GET", f"/api/projects/{project_id}/audit-runs/{run_id}/results/")
+        rows: list[dict] = []
+        path = f"/api/projects/{project_id}/audit-runs/{run_id}/results/?limit=500"
+        while path:
+            page = self._request("GET", path)
+            rows.extend(page.get("results") or [])
+            nxt = page.get("next")
+            # ``next`` is absolute; keep only the path + query for _request.
+            path = nxt[nxt.index("/api/"):] if nxt else None
+        return rows
 
 
 def _extract_scenario_record(result_row: dict) -> dict:

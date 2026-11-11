@@ -134,7 +134,7 @@ class APIE2ETest(APITestCase):
         # 12. Verify results endpoint
         resp = self.client.get(f"/api/projects/{self.pid}/audit-runs/{run_id}/results/")
         assert resp.status_code == 200
-        results = resp.json()
+        results = resp.json()["results"]
         self.assertEqual(len(results), 1)
         self.assertEqual(results[0]["status"], "completed")
         self.assertEqual(results[0]["result"]["severity"], "pass")

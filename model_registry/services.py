@@ -220,9 +220,29 @@ def detect_model_capabilities(conn, model_id: str, *, timeout: float = 10) -> di
 
 def fetch_remote_models(conn, *, timeout: float = 10) -> list[dict]:
     """Models the connection offers, each with a ``capabilities`` dict (see detect_model_capabilities)."""
+    listed = _fetch_remote_model_list(conn, timeout=timeout)
+
+    def probe(model: dict) -> dict:
+        try:
+            return detect_model_capabilities(conn, model["id"], timeout=timeout)
+        finally:
+            # Probe threads must not keep a database connection open.
+            from django.db import connection
+
+            connection.close()
+
+    # One probe per model: run them concurrently so a server listing dozens of
+    # models cannot hold the web thread for (models x timeout) seconds.
+    if len(listed) <= 1:
+        caps = [detect_model_capabilities(conn, m["id"], timeout=timeout) for m in listed]
+    else:
+        from concurrent.futures import ThreadPoolExecutor
+
+        with ThreadPoolExecutor(max_workers=min(8, len(listed))) as pool:
+            caps = list(pool.map(probe, listed))
     return [
-        {"id": m["id"], "description": m["description"], "capabilities": detect_model_capabilities(conn, m["id"], timeout=timeout)}
-        for m in _fetch_remote_model_list(conn, timeout=timeout)
+        {"id": m["id"], "description": m["description"], "capabilities": c}
+        for m, c in zip(listed, caps, strict=True)
     ]
 
 

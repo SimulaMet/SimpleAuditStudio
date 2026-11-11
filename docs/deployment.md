@@ -92,7 +92,9 @@ The full stack, each piece in its own container (`docker-compose.yml`):
   only the demo runs). Gunicorn is configured in `gunicorn.conf.py` with
   threaded workers; each open live audit-run event stream holds one thread, so
   `GUNICORN_WORKERS` × `GUNICORN_THREADS` (default 2 × 16) caps concurrent
-  viewers plus regular requests. Tune via those env vars.
+  viewers plus regular requests. Streams are capped per user and at half of
+  each process's threads (`SIMPLEAUDIT_SSE_MAX_STREAMS*`), so pages keep
+  working while many run pages are open. Tune via those env vars.
 - `open-webui`, `chat-proxy` — the chat assistant at `/chat/` (on by
   default, below).
 - `mock-model` — optional profile `mock`; a fake model API for testing.
@@ -172,6 +174,9 @@ override them when you deliberately need to.
 | `SIMPLEAUDIT_SECURE_COOKIES` | Session and CSRF cookies are `Secure` by default (production). Set `false` only for a plain-HTTP local replica, e.g. `http://127.0.0.1`, where the browser would otherwise drop the login cookie. |
 | `DJANGO_CSRF_TRUSTED_ORIGINS` | Extra trusted origins (full URLs). |
 | `GUNICORN_BIND`, `GUNICORN_WORKERS`, `GUNICORN_THREADS`, `GUNICORN_TIMEOUT`, `GUNICORN_GRACEFUL_TIMEOUT`, `GUNICORN_KEEPALIVE` | Gunicorn tuning (`gunicorn.conf.py`). Defaults: `0.0.0.0:8000`, 2, 16, 60, 30, 5. |
+| `SIMPLEAUDIT_SSE_MAX_STREAMS_PER_USER`, `SIMPLEAUDIT_SSE_MAX_STREAMS` | Caps on open live audit-run event streams per web process: per user (default 3) and in total (default half of `GUNICORN_THREADS`, so streams never take more than half the threads). Over a cap the stream answers `429` and the browser retries. |
+| `SIMPLEAUDIT_EVENT_RETENTION_DAYS` | Days after a run finishes before its per-turn progress events (`scenario_turn`, `scenario_rep_started`) are deleted by the worker's hourly sweep; state and terminal events are kept. Default `30`; `0` keeps them forever. `manage.py prune_audit_events [--days N]` runs it by hand. |
+| `SIMPLEAUDIT_OPENWEBUI_SYNC_TTL_S` | Seconds between the Agent page's automatic Open WebUI knowledge-base/tool syncs per user and workspace (the Sync button always runs). Default `60`; `0` syncs on every page load. |
 | `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_HOST`, `POSTGRES_PORT`, `POSTGRES_CONN_MAX_AGE` | PostgreSQL connection (`compose` mode). |
 | `SIMPLEAUDIT_LOCAL_SQLITE` **internal** | `1` = local SQLite database at the repository's `dev.sqlite3`. Set automatically by the `dev` entry point and by the test suite. |
 | `SIMPLEAUDIT_SQLITE_PATH` | Override where the local dev SQLite file lives. Default: `<repo>/dev.sqlite3`. Relative paths resolve from the repo root; absolute paths are used as-is. Ignored unless `SIMPLEAUDIT_LOCAL_SQLITE=1`. |

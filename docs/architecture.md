@@ -72,7 +72,18 @@ flowchart LR
    completed or failed, inline or by the sweeper.
 5. **Watch.** The run page streams events over SSE
    (`/api/projects/<id>/audit-runs/<id>/events/`), with a polling
-   fallback, and refreshes the results list while the run is active.
+   fallback, and refreshes the results list while the run is active. Each web
+   process caps open streams per user and in total (see `docs/deployment.md`).
+   The JSON poll returns at most 1000 events per call.
+
+The run list (`/api/projects/<id>/audit-runs/`) and run results
+(`.../audit-runs/<id>/results/`) APIs are paginated with `?limit=&offset=`
+(defaults 50 and 100) and answer `{count, next, previous, results}`; the run
+list is newest first. Run-list rows are slim (identity, progress, frozen model
+and judge names, pass rate, no config snapshots); `?expand=snapshots` returns
+the full detail shape per row. Run exports (JSON and CSV downloads, and the API
+export) are streamed. Per-turn progress events of runs finished more than
+`SIMPLEAUDIT_EVENT_RETENTION_DAYS` ago are pruned; state and terminal events stay.
 
 Monitors repeat one run setup on an interval or cron schedule. Each tick is an
 ordinary run, so the drift chart is a series of reproducible experiments.

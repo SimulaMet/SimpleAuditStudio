@@ -29,16 +29,27 @@ def gravatar_url(request):
     }
 
 
+def _request_is_admin(request) -> bool:
+    """``is_any_project_admin`` once per request (nav and admin_status both need it)."""
+    user = getattr(request, "user", None)
+    if user is None or not user.is_authenticated:
+        return False
+    if user.is_superuser:
+        return True
+    from accounts.models import ProjectMembership
+    from accounts.services import request_roles
+
+    return ProjectMembership.Role.ADMIN in request_roles(request).values()
+
+
 def admin_status(request):
     """Expose ``is_admin`` / ``is_superuser`` to templates for nav gating.
 
     Admin = superuser OR holds an ADMIN membership in any project. Computed
     once per request; anonymous users get False without hitting the DB.
     """
-    from accounts.services import is_any_project_admin
-
     user = getattr(request, "user", None)
-    return {"is_admin": is_any_project_admin(user), "is_superuser": bool(user and user.is_superuser)}
+    return {"is_admin": _request_is_admin(request), "is_superuser": bool(user and user.is_superuser)}
 
 
 def workspaces(request):
@@ -57,15 +68,11 @@ def workspaces(request):
     from django.db.models import Q
 
     from accounts.models import Project, ProjectMembership
-    from accounts.services import DEFAULT_PROJECT_SLUG
+    from accounts.services import DEFAULT_PROJECT_SLUG, request_roles
 
-    projects = Project.objects.filter(
-        Q(memberships__user=user) | Q(slug=DEFAULT_PROJECT_SLUG)
-    ).distinct()
-
-    roles = dict(
-        ProjectMembership.objects.filter(project__in=list(projects), user=user).values_list("project_id", "role")
-    )
+    roles = request_roles(request)
+    # Membership ids come from the per-request cache: no join, no DISTINCT.
+    projects = Project.objects.filter(Q(pk__in=list(roles)) | Q(slug=DEFAULT_PROJECT_SLUG))
     current_id = request.session.get("active_project_id")
 
     items = []
@@ -127,10 +134,9 @@ def nav(request):
     user = getattr(request, "user", None)
     if user is None or not user.is_authenticated:
         return {}
-    from accounts.services import is_any_project_admin
     from infra.chat_feature import chat_enabled
 
-    admin = is_any_project_admin(user)
+    admin = _request_is_admin(request)
     path = request.path
     chat_on = chat_enabled()
     # The wrapper page (model-picker bar + iframe of the embedded service at
