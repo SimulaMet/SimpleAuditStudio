@@ -75,9 +75,11 @@ class AllPagesSmokeTest(TestCase):
 
     def _ok(self, url, label):
         resp = self.client.get(url)
+        # Streamed downloads fail while iterating, after the status line: read them.
+        body = b"".join(resp.streaming_content) if resp.streaming else resp.content
         self.assertLess(
             resp.status_code, 500,
-            f"Server error ({resp.status_code}) on {label}: {url}\n{resp.content[:500]}",
+            f"Server error ({resp.status_code}) on {label}: {url}\n{body[:500]}",
         )
 
     def test_main_pages(self):

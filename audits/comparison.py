@@ -121,23 +121,30 @@ def compare_runs(project, run_ids: list[int]) -> dict:
     from scenarios.models import ScenarioSetVersionItem
 
     run_results: dict[int, dict[str, dict]] = {}
+    item_maps: dict[int, dict[str, str]] = {}   # runs often share a pinned version
     for run in runs:
         # Map version_item_id (str) -> scenario key for this run's pinned version.
         item_map: dict[str, str] = {}
         if run.scenario_set_version_id:
-            items = ScenarioSetVersionItem.objects.filter(
-                version_id=run.scenario_set_version_id
-            ).select_related("scenario")
-            for item in items:
-                item_map[str(item.id)] = item.scenario.key
+            if run.scenario_set_version_id not in item_maps:
+                item_maps[run.scenario_set_version_id] = {
+                    str(item_id): key
+                    for item_id, key in ScenarioSetVersionItem.objects.filter(
+                        version_id=run.scenario_set_version_id
+                    ).values_list("id", "scenario__key")
+                }
+            item_map = item_maps[run.scenario_set_version_id]
 
-        rows = ScenarioResult.objects.filter(run_id=str(run.id))
+        # The small list_summary projection carries every field used here.
+        rows = ScenarioResult.objects.filter(run_id=run.id).only(
+            "version_item_id", "status", "attempts", "list_summary"
+        )
         m = {}
         for row in rows:
             key = item_map.get(row.version_item_id, f"item_{row.version_item_id}")
-            r_data = row.result or {}
+            r_data = row.list_summary or {}
             # For repeated results, use aggregated severity
-            if "reps" in r_data and isinstance(r_data.get("reps"), list):
+            if r_data.get("has_reps"):
                 sev = r_data.get("aggregated_severity")
                 agree = r_data.get("agreement_rate")
                 summary = f"{sev} ({int(agree*100)}% agreement)" if agree is not None else sev

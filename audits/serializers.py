@@ -43,6 +43,73 @@ class AuditRunSerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
 
+class AuditRunListSerializer(serializers.ModelSerializer):
+    """A run as a list row: identity, progress, outcome; no config snapshots.
+
+    The detail endpoint (and ``?expand=snapshots`` on the list) carries the
+    frozen target/auditor/judge/agent/generation snapshots.
+    """
+
+    scenario_set_version_id = serializers.IntegerField(source="scenario_set_version.id", read_only=True)
+    scenario_set_version_number = serializers.IntegerField(source="scenario_set_version.version", read_only=True)
+    scenario_set_version_hash = serializers.CharField(source="scenario_set_version.content_hash", read_only=True)
+    target_model = serializers.SerializerMethodField()
+    judge_model = serializers.SerializerMethodField()
+    judge = serializers.SerializerMethodField()
+    pass_rate = serializers.SerializerMethodField()
+
+    class Meta:
+        model = AuditRun
+        fields = (
+            "id",
+            "name",
+            "status",
+            "scenario_set_version_id",
+            "scenario_set_version_number",
+            "scenario_set_version_hash",
+            "target_model",
+            "agent",
+            "judge_model",
+            "judge_version",
+            "judge",
+            "simpleaudit_version",
+            "git_commit",
+            "queued_at",
+            "started_at",
+            "finished_at",
+            "total_scenarios",
+            "completed_scenarios",
+            "successful_scenarios",
+            "failed_scenarios",
+            "retried_scenarios",
+            "pass_rate",
+            "error_code",
+            "error_message",
+            "created_at",
+        )
+        read_only_fields = fields
+
+    def get_target_model(self, run) -> str:
+        from audits.services import frozen_name
+
+        return frozen_name(run, "target")
+
+    def get_judge_model(self, run) -> str:
+        from audits.services import frozen_name
+
+        return frozen_name(run, "judge")
+
+    def get_judge(self, run) -> str:
+        from audits.services import frozen_judge
+
+        return frozen_judge(run)["label"]
+
+    def get_pass_rate(self, run) -> float | None:
+        """Passing judged trials, percent (``None`` before any trial is judged)."""
+        c = (self.context.get("pass_counts") or {}).get(run.id) or {}
+        return round(c["k"] * 100 / c["n"], 1) if c.get("n") else None
+
+
 class AuditRunCreateSerializer(serializers.Serializer):
     name = serializers.CharField(max_length=250)
     scenario_set_version_id = serializers.IntegerField()

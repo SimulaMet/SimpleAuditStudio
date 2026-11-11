@@ -14,6 +14,7 @@ import math
 from datetime import UTC, timedelta
 
 from django.db import transaction
+from django.db.models import Sum
 from django.utils import timezone
 
 from audits.events import ScenarioResult
@@ -438,14 +439,6 @@ def run_due_monitors(now=None) -> list[int]:
 
 # ─── Drift statistics ────────────────────────────────────────────────────────
 
-def _trial_severities(result: dict) -> list[str]:
-    """Every judged trial in one ScenarioResult (one per repetition)."""
-    reps = result.get("reps")
-    if isinstance(reps, list):
-        return [(r or {}).get("severity") for r in reps]
-    return [result.get("severity")]
-
-
 def pass_counts(run_ids: list[int]) -> dict[int, dict]:
     """Per run: judged trials ``n``, passing trials ``k`` and errored trials.
 
@@ -457,24 +450,16 @@ def pass_counts(run_ids: list[int]) -> dict[int, dict]:
     fail: excluded from ``n`` and counted in ``ungraded``.
     """
     out = {rid: {"k": 0, "n": 0, "errors": 0, "ungraded": 0} for rid in run_ids}
-    rows = ScenarioResult.objects.filter(run_id__in=run_ids).only("run_id", "status", "result")
+    rows = (
+        ScenarioResult.objects.filter(run_id__in=run_ids)
+        .values("run_id")
+        .annotate(
+            k=Sum("n_pass"), n=Sum("n_judged"),
+            errors=Sum("n_errors"), ungraded=Sum("n_ungraded"),
+        )
+    )
     for row in rows:
-        c = out.get(row.run_id)
-        if c is None:
-            continue
-        if row.status != "completed":
-            c["errors"] += 1
-            continue
-        for sev in _trial_severities(row.result or {}):
-            if not sev or sev == "ERROR":
-                c["errors"] += 1
-                continue
-            if sev == "ungraded":
-                c["ungraded"] += 1
-                continue
-            c["n"] += 1
-            if sev == "pass":
-                c["k"] += 1
+        out[row["run_id"]] = {key: row[key] or 0 for key in ("k", "n", "errors", "ungraded")}
     return out
 
 

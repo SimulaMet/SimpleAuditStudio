@@ -338,7 +338,7 @@ def _scenario_execute_impl(workflow_input: ScenarioInput, ctx: Context) -> dict:
     Durable, idempotent, cancellation-aware. Real model execution is a
     placeholder until the SimpleAudit engine integration lands.
     """
-    from audits.events import append_event, upsert_scenario_result
+    from audits.events import append_event, append_events, upsert_scenario_result
     from audits.models import AuditRun
 
     run_id = workflow_input.run_id
@@ -362,10 +362,7 @@ def _scenario_execute_impl(workflow_input: ScenarioInput, ctx: Context) -> dict:
     # does NOT increment), so count executions via durable events, not `attempt`.
     fail_times = int(os.environ.get("AUDIT_FAIL_TIMES", "0"))
     if fail_times > 0:
-        executions = sum(
-            1
-            for e in _iter_attempted_events(run_id, version_item_id)
-        )
+        executions = _attempt_count(run_id, version_item_id)
         if executions <= fail_times:
             raise RuntimeError(
                 f"injected failure for {version_item_id} (execution {executions}/{fail_times})"
@@ -519,10 +516,21 @@ def _scenario_execute_impl(workflow_input: ScenarioInput, ctx: Context) -> dict:
                         pass
                 if item is None:
                     continue
-                kind, payload = item
+                # Drain what else is already queued and write it in one INSERT.
+                batch, stop = [item], False
+                while len(batch) < 50:
+                    try:
+                        extra = _event_queue.get_nowait()
+                    except _queue.Empty:
+                        break
+                    if extra is _FLUSH_SENTINEL:
+                        stop = True
+                        break
+                    batch.append(extra)
+                kind = batch[-1][0]
                 for attempt in range(max_retries):
                     try:
-                        append_event(run_id, version_item_id, kind, payload)
+                        append_events(run_id, version_item_id, batch)
                         consecutive_errors = 0
                         break
                     except (OperationalError, InterfaceError) as exc:
@@ -544,6 +552,8 @@ def _scenario_execute_impl(workflow_input: ScenarioInput, ctx: Context) -> dict:
                                 connections.close_all()
                             except Exception:  # noqa: BLE001, S110 - best-effort cleanup
                                 pass
+                if stop:
+                    break
         finally:
             # This thread got its own thread-local DB connection; release it.
             connections.close_all()
@@ -906,12 +916,6 @@ def _scenario_execute_impl(workflow_input: ScenarioInput, ctx: Context) -> dict:
     return {"status": "failed" if failed else "completed", "attempt": attempt, "severity": severity}
 
 
-def _iter_attempted_events(run_id: str, version_item_id: str):
-    from audits.events import list_events
-
-    return [e for e in list_events(run_id) if e["version_item_id"] == version_item_id and e["kind"] == "scenario_attempted"]
-
-
 def _role_snapshots(run) -> dict:
     """Frozen endpoint snapshot per role, for naming the failed endpoint."""
     return {
@@ -979,6 +983,8 @@ def _sync_run_counters(run_id: str) -> None:
     duplicate executions can never double-count or lose an update.
     completed = final results; successful/failed = current row outcomes.
     """
+    from django.db.models import Count, Q
+
     from audits.events import ScenarioResult
     from audits.failures import count_by_role
     from audits.models import AuditRun
@@ -991,11 +997,17 @@ def _sync_run_counters(run_id: str) -> None:
         metrics["failures_by_role"] = by_role
     else:
         metrics.pop("failures_by_role", None)
+    # One conditional aggregate instead of three COUNT queries per scenario.
+    totals = rows.aggregate(
+        done=Count("id", filter=Q(status="completed") | Q(status="failed", attempts__gte=MAX_SCENARIO_ATTEMPTS)),
+        ok=Count("id", filter=Q(status="completed")),
+        bad=Count("id", filter=Q(status="failed")),
+    )
     AuditRun.objects.filter(pk=int(run_id)).update(
         summary_metrics=metrics,
-        completed_scenarios=_terminal_results(run_id).count(),
-        successful_scenarios=rows.filter(status="completed").count(),
-        failed_scenarios=rows.filter(status="failed").count(),
+        completed_scenarios=totals["done"],
+        successful_scenarios=totals["ok"],
+        failed_scenarios=totals["bad"],
         updated_at=timezone.now(),
     )
 
@@ -1045,14 +1057,22 @@ def _maybe_finalize(run_id: str) -> str | None:
     from audits.events import append_event
     from audits.models import AuditRun
 
+    # Called after every scenario: read two columns, not the run's JSON snapshots,
+    # until the run is actually complete.
+    try:
+        head = AuditRun.objects.filter(pk=int(run_id)).values("status", "total_scenarios").first()
+    except ValueError:
+        return None
+    if head is None:
+        return None
+    if head["status"] not in _ACTIVE_STATUSES:
+        return str(head["status"])
+    done = _terminal_results(run_id).count()
+    if not head["total_scenarios"] or done < head["total_scenarios"]:
+        return None
     try:
         run = AuditRun.objects.get(pk=int(run_id))
-    except (AuditRun.DoesNotExist, ValueError):
-        return None
-    if run.status not in _ACTIVE_STATUSES:
-        return str(run.status)
-    done = _terminal_results(run_id).count()
-    if not run.total_scenarios or done < run.total_scenarios:
+    except AuditRun.DoesNotExist:
         return None
     _refresh_run_summary_metrics(run_id)
     if _provenance_mismatch(run):
@@ -1397,6 +1417,33 @@ def _sweep_once(stale_minutes: int = RESUME_STALE_MINUTES) -> None:
             logger.warning("Sweeper: run %s skipped: %s", run.pk, exc)
 
 
+_EVENT_PRUNE_INTERVAL_S = 3600
+_last_event_prune = [0.0]
+
+
+def _event_retention_days() -> int:
+    try:
+        return int(os.environ.get("SIMPLEAUDIT_EVENT_RETENTION_DAYS", "30"))
+    except ValueError:
+        return 30
+
+
+def _maybe_prune_events(now: float | None = None) -> int:
+    """At most hourly: drop per-turn events of runs finished > retention days ago."""
+    import time
+
+    now = time.monotonic() if now is None else now
+    if _last_event_prune[0] and now - _last_event_prune[0] < _EVENT_PRUNE_INTERVAL_S:
+        return 0
+    _last_event_prune[0] = now
+    from audits.events import prune_finished_run_events
+
+    deleted = prune_finished_run_events(_event_retention_days())
+    if deleted:
+        logger.info("Event retention: deleted %d per-turn events of finished runs", deleted)
+    return deleted
+
+
 def _stuck_run_sweeper(interval: int = 60, stale_minutes: int = RESUME_STALE_MINUTES) -> None:
     """Background loop around ``_sweep_once`` and the monitor tick; never crashes."""
     import time
@@ -1417,6 +1464,10 @@ def _stuck_run_sweeper(interval: int = 60, stale_minutes: int = RESUME_STALE_MIN
             run_due_monitors()
         except Exception as exc:  # noqa: BLE001 - sweeper must never crash
             logger.warning("Monitor tick failed: %s", exc)
+        try:
+            _maybe_prune_events()
+        except Exception as exc:  # noqa: BLE001 - sweeper must never crash
+            logger.warning("Event retention pass failed: %s", exc)
 
 
 def start_worker(max_startup_retries: int = 30, startup_retry_delay: float = 2.0) -> None:

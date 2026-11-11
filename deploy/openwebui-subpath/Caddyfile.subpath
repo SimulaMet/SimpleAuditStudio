@@ -30,6 +30,10 @@
 }
 
 :{$STUDIO_PORT:8000} {
+	# Compress responses (event streams are not compressible content types, so
+	# SSE passes through untouched).
+	encode zstd gzip
+
 	# Never let a client supply its own identity.
 	request_header -X-Studio-Email
 	request_header -X-Studio-Name
@@ -133,6 +137,12 @@
 	# Everything else -> Studio (Django). The subpath fork never emits
 	# root-relative refs, so nothing from OWUI falls through here.
 	handle {
-		reverse_proxy {$STUDIO_UPSTREAM:web:8000}
+		reverse_proxy {$STUDIO_UPSTREAM:web:8000} {
+			# Fail fast when Studio is down instead of hanging; allow slow pages.
+			transport http {
+				dial_timeout 5s
+				response_header_timeout 120s
+			}
+		}
 	}
 }

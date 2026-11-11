@@ -233,6 +233,6 @@ class RepeatedRunExportSummaryTest(TestCase):
         session = self.client.session
         session["active_project_id"] = project.id
         session.save()
-        rows = json.loads(self.client.get(f"/runs/{run.id}/export/?format=json").content)
+        rows = json.loads(b"".join(self.client.get(f"/runs/{run.id}/export/?format=json").streaming_content))
         self.assertEqual(rows[0]["summary"], "Modal summary")
         self.assertEqual(rows[0]["severity"], "pass")

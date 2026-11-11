@@ -20,6 +20,7 @@ Design constraints:
 """
 from __future__ import annotations
 
+import functools
 import os
 import shutil
 import time
@@ -177,6 +178,7 @@ def _studio_version() -> str | None:
         return None
 
 
+@functools.lru_cache(maxsize=1)
 def _studio_commit() -> str | None:
     """Git commit of this checkout (HEAD), or None when not a git repo."""
     from pathlib import Path
@@ -240,34 +242,40 @@ def _model_endpoints_probe(user=None) -> dict[str, Any]:
         from accounts.models import ProjectMembership
 
         conns = conns.filter(project__memberships__user=user, project__memberships__role=ProjectMembership.Role.ADMIN)
+    # Resolve everything that touches the database or secrets here, then ping
+    # all connections concurrently: serial 2 s timeouts add up per dead endpoint.
+    targets = []
     for conn in conns:
         base = (conn.base_url or "").strip()
         if not base:
             continue
         # If no API key is configured, don't ping — report "no key"
         api_key = connection_api_key(conn)
-        if not api_key:
-            conn_status = "no_key"
-            latency = None
-            detail = "No API key configured"
-        else:
-            # Ping the connection once with auth
-            conn_status = "down"
-            latency = None
-            detail = ""
-            try:
-                import requests
-                start = _now_ms()
-                headers = {"Authorization": f"Bearer {api_key}"}
-                resp = requests.get(models_url(conn), timeout=2, headers=headers)
-                if resp.status_code == 200:
-                    conn_status = "up"
-                    latency = round(_now_ms() - start, 1)
-                else:
-                    detail = f"HTTP {resp.status_code}"
-            except Exception as exc:  # noqa: BLE001
-                detail = f"{type(exc).__name__}"
+        targets.append((conn, base, models_url(conn) if api_key else None, api_key))
 
+    def ping(target) -> tuple[str, float | None, str]:
+        _conn, _base, url, api_key = target
+        if not api_key:
+            return "no_key", None, "No API key configured"
+        try:
+            import requests
+            start = _now_ms()
+            resp = requests.get(url, timeout=2, headers={"Authorization": f"Bearer {api_key}"})
+            if resp.status_code == 200:
+                return "up", round(_now_ms() - start, 1), ""
+            return "down", None, f"HTTP {resp.status_code}"
+        except Exception as exc:  # noqa: BLE001
+            return "down", None, f"{type(exc).__name__}"
+
+    if len(targets) > 1:
+        from concurrent.futures import ThreadPoolExecutor
+
+        with ThreadPoolExecutor(max_workers=min(8, len(targets))) as pool:
+            pings = list(pool.map(ping, targets))
+    else:
+        pings = [ping(t) for t in targets]
+
+    for (conn, base, _url, _key), (conn_status, latency, detail) in zip(targets, pings, strict=True):
         models = [
             {"id": m.id, "display_name": m.display_name, "model_id": m.model_id, "status": conn_status}
             for m in conn.enabled_models
@@ -373,40 +381,28 @@ def _cpu_probe() -> dict[str, Any]:
 
 
 def _queue_throughput_probe() -> dict[str, Any]:
+    from django.db.models import Count, F, Sum
+
     from audits.models import AuditRun
 
-    qs = AuditRun.objects.all()
+    S = AuditRun.Status
+    active_statuses = [
+        S.PREPARING, S.TARGET_EXECUTION, S.AUDITING, S.JUDGING, S.AGGREGATION, S.REPORT_GENERATION,
+    ]
+    by_status = dict(AuditRun.objects.values_list("status").annotate(n=Count("id")).order_by())
     counts = {
-        "queued": qs.filter(status=AuditRun.Status.QUEUED).count(),
-        "active": qs.filter(
-            status__in=[
-                AuditRun.Status.PREPARING,
-                AuditRun.Status.TARGET_EXECUTION,
-                AuditRun.Status.AUDITING,
-                AuditRun.Status.JUDGING,
-                AuditRun.Status.AGGREGATION,
-                AuditRun.Status.REPORT_GENERATION,
-            ]
-        ).count(),
-        "completed": qs.filter(status=AuditRun.Status.COMPLETED).count(),
-        "failed": qs.filter(status=AuditRun.Status.FAILED).count(),
-        "cancelled": qs.filter(status=AuditRun.Status.CANCELLED).count(),
+        "queued": by_status.get(S.QUEUED, 0),
+        "active": sum(by_status.get(status, 0) for status in active_statuses),
+        "completed": by_status.get(S.COMPLETED, 0),
+        "failed": by_status.get(S.FAILED, 0),
+        "cancelled": by_status.get(S.CANCELLED, 0),
     }
-    # Scenarios in flight across active runs (sum of remaining work).
-    active_runs = qs.filter(
-        status__in=[
-            AuditRun.Status.PREPARING,
-            AuditRun.Status.TARGET_EXECUTION,
-            AuditRun.Status.AUDITING,
-            AuditRun.Status.JUDGING,
-            AuditRun.Status.AGGREGATION,
-            AuditRun.Status.REPORT_GENERATION,
-        ]
-    )
-    scenarios_in_flight = sum(
-        max(r.total_scenarios - r.completed_scenarios, 0) for r in active_runs
-    )
-    return {"status": "up", "runs": counts, "scenarios_in_flight": scenarios_in_flight}
+    # Scenarios in flight across active runs (sum of remaining work), summed in
+    # the database so no run rows (with their large JSON columns) are loaded.
+    in_flight = AuditRun.objects.filter(
+        status__in=active_statuses, total_scenarios__gt=F("completed_scenarios")
+    ).aggregate(n=Sum(F("total_scenarios") - F("completed_scenarios")))["n"] or 0
+    return {"status": "up", "runs": counts, "scenarios_in_flight": in_flight}
 
 
 # ─── Aggregate ───────────────────────────────────────────────────────────────

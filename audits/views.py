@@ -1,12 +1,15 @@
 import json
 import logging
+import os
+import threading
 import time
 
 from django.db import close_old_connections
-from django.http import JsonResponse, StreamingHttpResponse
+from django.http import StreamingHttpResponse
 from django.utils.text import slugify
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
+from rest_framework.pagination import LimitOffsetPagination
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
@@ -14,7 +17,11 @@ from accounts.models import Project
 from accounts.services import ensure_project_access, require_project_writable
 from audits.events import ScenarioResult, list_events
 from audits.models import AuditRun
-from audits.serializers import AuditRunCreateSerializer, AuditRunSerializer
+from audits.serializers import (
+    AuditRunCreateSerializer,
+    AuditRunListSerializer,
+    AuditRunSerializer,
+)
 from audits.services import (
     build_simpleaudit_export,
     cancel_run,
@@ -34,9 +41,93 @@ logger = logging.getLogger("simpleaudit.audit")
 # Terminal event kinds: once one of these is seen for the run, the stream can end.
 _TERMINAL_EVENT_KINDS = {"run_completed", "run_failed", "run_cancelled"}
 _SSE_POLL_INTERVAL_SECONDS = 1.0
+# While a run is quiet the poll backs off (1s -> 5s) so idle viewers cost less;
+# the first event resets it. A comment line every 15s keeps proxies from closing
+# an idle stream.
+_SSE_MAX_POLL_INTERVAL_SECONDS = 5.0
+_SSE_HEARTBEAT_SECONDS = 15.0
+
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.environ.get(name, default))
+    except (TypeError, ValueError):
+        return default
+
+
+# Each open stream holds one web thread for up to an hour. Caps are per web
+# process: one user's tabs cannot take more than a few, and streams as a whole
+# never take more than half the process's threads, so pages and /chat/authz
+# always have threads left. Over the cap the stream answers 429 and the
+# browser's EventSource retries with backoff.
+_SSE_MAX_STREAMS_PER_USER = _env_int("SIMPLEAUDIT_SSE_MAX_STREAMS_PER_USER", 3)
+_SSE_MAX_STREAMS = _env_int(
+    "SIMPLEAUDIT_SSE_MAX_STREAMS", max(1, _env_int("GUNICORN_THREADS", 16) // 2)
+)
+_sse_lock = threading.Lock()
+_sse_open: dict[int, int] = {}
+
+
+def _sse_acquire(user_id: int) -> bool:
+    with _sse_lock:
+        if sum(_sse_open.values()) >= _SSE_MAX_STREAMS:
+            return False
+        if _sse_open.get(user_id, 0) >= _SSE_MAX_STREAMS_PER_USER:
+            return False
+        _sse_open[user_id] = _sse_open.get(user_id, 0) + 1
+        return True
+
+
+def _sse_release(user_id: int) -> None:
+    with _sse_lock:
+        left = _sse_open.get(user_id, 0) - 1
+        if left > 0:
+            _sse_open[user_id] = left
+        else:
+            _sse_open.pop(user_id, None)
+
+
+class _SlotStream:
+    """Iterator around the event generator that frees the stream slot on close.
+
+    Django calls ``close()`` on the streaming content when the response ends,
+    even if the generator never started (its own ``finally`` would not run then).
+    """
+
+    def __init__(self, gen, user_id: int):
+        self._gen = gen
+        self._user_id = user_id
+        self._released = False
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        return next(self._gen)
+
+    def close(self):
+        try:
+            self._gen.close()
+        finally:
+            if not self._released:
+                self._released = True
+                _sse_release(self._user_id)
 _SSE_MAX_DURATION_SECONDS = 3600
 # Max events read per poll; a backlog drains over successive polls.
 _SSE_BATCH_SIZE = 1000
+
+
+class _RunListPagination(LimitOffsetPagination):
+    """``?limit=&offset=``; response is ``{count, next, previous, results}``."""
+
+    default_limit = 50
+    max_limit = 200
+
+
+class _ResultListPagination(LimitOffsetPagination):
+    # Each row carries a full transcript, so pages stay small.
+    default_limit = 100
+    max_limit = 500
 
 
 def _get_project_or_404(project_id) -> Project:
@@ -56,8 +147,29 @@ def _require_project_access(user, project: Project):
 def list_audit_runs(request, project_id):
     project = _get_project_or_404(project_id)
     _require_project_access(request.user, project)
-    runs = AuditRun.objects.filter(project=project).select_related("scenario_set_version")
-    return Response(AuditRunSerializer(runs, many=True).data)
+    """Runs of a project, newest first, paginated.
+
+    Rows are slim (no config snapshots); ``?expand=snapshots`` returns the full
+    detail shape for each row instead.
+    """
+    runs = AuditRun.objects.filter(project=project).order_by("-created_at", "-id")
+    paginator = _RunListPagination()
+    if request.query_params.get("expand") == "snapshots":
+        page = paginator.paginate_queryset(runs.select_related("scenario_set_version"), request)
+        return paginator.get_paginated_response(AuditRunSerializer(page, many=True).data)
+    from audits.monitors import pass_counts
+
+    page = paginator.paginate_queryset(
+        runs.select_related("scenario_set_version", "target_model", "judge_model").defer(
+            # Never shown in a list row; frozen names/judge read the target and judge snapshots.
+            "agent_config_snapshot", "auditor_config_snapshot", "generation_parameters_snapshot",
+            "trace_config", "runtime_metadata", "summary_metrics",
+        ),
+        request,
+    )
+    counts = pass_counts([r.id for r in page])
+    data = AuditRunListSerializer(page, many=True, context={"pass_counts": counts}).data
+    return paginator.get_paginated_response(data)
 
 
 @api_view(["GET"])
@@ -100,7 +212,11 @@ def export_audit_run(request, project_id, run_id):
 
     payload = build_simpleaudit_export(run)
     stem = slugify(run.name) or f"audit-run-{run.id}"
-    response = JsonResponse(payload, json_dumps_params={"indent": 2, "ensure_ascii": False})
+    from infra.export_utils import buffered, json_chunks
+
+    # The engine computes the summary over every result, so the document is
+    # built whole; it is encoded and sent incrementally instead of as one string.
+    response = StreamingHttpResponse(buffered(json_chunks(payload)), content_type="application/json")
     response["Content-Disposition"] = f'attachment; filename="{stem}.json"'
     return response
 
@@ -127,7 +243,10 @@ def list_audit_run_results(request, project_id, run_id):
         str(vi.id): vi
         for vi in run.scenario_set_version.items.select_related("scenario", "revision")
     }
-    results = ScenarioResult.objects.filter(run_id=run.id).order_by("version_item_id")
+    paginator = _ResultListPagination()
+    results = paginator.paginate_queryset(
+        ScenarioResult.objects.filter(run_id=run.id).order_by("version_item_id", "id"), request
+    )
     data = []
     for r in results:
         item = items.get(str(r.version_item_id))
@@ -143,7 +262,7 @@ def list_audit_run_results(request, project_id, run_id):
                 "updated_at": r.updated_at.isoformat() if r.updated_at else None,
             }
         )
-    return Response(data)
+    return paginator.get_paginated_response(data)
 
 
 @api_view(["POST"])
@@ -251,7 +370,9 @@ def poll_audit_run_events(request, project_id, run_id):
     # Out-of-range ids (SQLite integers are 64-bit) count as "from the start".
     after_id = int(after_id_raw) if is_id(str(after_id_raw)) else 0
 
-    return Response(list_events(run.id, after_id=after_id))
+    # Capped like the SSE batch: a client resuming from 0 on a big run pages
+    # forward with the last id it received instead of pulling the whole log.
+    return Response(list_events(run.id, after_id=after_id, limit=_SSE_BATCH_SIZE))
 
 
 def stream_audit_run_events(request, project_id, run_id):
@@ -291,23 +412,46 @@ def stream_audit_run_events(request, project_id, run_id):
     def event_stream():
         sent_after = after_id
         start = time.monotonic()
+        interval = _SSE_POLL_INTERVAL_SECONDS
+        last_write = start
+        terminal_idle = 0
         try:
             while True:
                 if time.monotonic() - start > _SSE_MAX_DURATION_SECONDS:
                     yield "event: timeout\ndata: {}\n\n"
                     break
                 events = list_events(run.id, after_id=sent_after, limit=_SSE_BATCH_SIZE)
+                if events:
+                    interval = _SSE_POLL_INTERVAL_SECONDS
                 for e in events:
+                    last_write = time.monotonic()
                     sent_after = e["id"]
                     data = json.dumps({"kind": e["kind"], "version_item_id": e["version_item_id"], "payload": e["payload"], "ts": e["created_at"]})
                     yield f"id: {e['id']}\nevent: {e['kind']}\ndata: {data}\n\n"
                     if e["kind"] in _TERMINAL_EVENT_KINDS:
                         return
+                if not events:
+                    # A run can be finished while its terminal event is missing
+                    # (pruned, or written by an older version): without this the
+                    # stream would idle for the full hour holding a thread. Two
+                    # quiet polls in a row let a just-written terminal event land first.
+                    status = AuditRun.objects.filter(pk=run.id).values_list("status", flat=True).first()
+                    terminal_idle = terminal_idle + 1 if status in AuditRun.TERMINAL_STATUSES else 0
+                    if terminal_idle >= 2:
+                        kind = f"run_{status}"
+                        data = json.dumps({"kind": kind, "version_item_id": "_run", "payload": {"synthetic": True}, "ts": None})
+                        yield f"event: {kind}\ndata: {data}\n\n"
+                        return
                 if len(events) < _SSE_BATCH_SIZE:
                     # Release (or recycle) the DB connection while idle so a
                     # long-lived stream does not pin a Postgres connection per thread.
                     close_old_connections()
-                    time.sleep(_SSE_POLL_INTERVAL_SECONDS)
+                    if time.monotonic() - last_write >= _SSE_HEARTBEAT_SECONDS:
+                        last_write = time.monotonic()
+                        yield ": keepalive\n\n"
+                    time.sleep(interval)
+                    if not events:
+                        interval = min(interval * 1.5, _SSE_MAX_POLL_INTERVAL_SECONDS)
         except (GeneratorExit, SystemExit, KeyboardInterrupt):
             # Normal stream teardown: the client disconnected (GeneratorExit is
             # raised when the response iterator is closed), or the worker process
@@ -318,7 +462,13 @@ def stream_audit_run_events(request, project_id, run_id):
             logger.debug("SSE stream for run %s ended early (client disconnect or shutdown)", run.id)
             raise
 
-    response = StreamingHttpResponse(event_stream(), content_type="text/event-stream")
+    if not _sse_acquire(request.user.pk):
+        from django.http import HttpResponse
+
+        busy = HttpResponse("Too many live streams; retrying shortly.", status=429, content_type="text/plain")
+        busy["Retry-After"] = "15"
+        return busy
+    response = StreamingHttpResponse(_SlotStream(event_stream(), request.user.pk), content_type="text/event-stream")
     response["Cache-Control"] = "no-cache"
     response["X-Accel-Buffering"] = "no"
     return response

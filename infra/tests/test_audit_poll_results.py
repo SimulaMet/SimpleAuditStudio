@@ -115,7 +115,9 @@ class ResultsViewTest(_Base):
         )
         resp = self.client.get(self._url(run.id))
         self.assertEqual(resp.status_code, 200)
-        rows = resp.json()
+        body = resp.json()
+        self.assertEqual(body["count"], 1)
+        rows = body["results"]
         self.assertEqual(len(rows), 1)
         row = rows[0]
         self.assertEqual(row["status"], "completed")
@@ -130,8 +132,55 @@ class ResultsViewTest(_Base):
         run, _ = self._make_run()
         resp = self.client.get(self._url(run.id))
         self.assertEqual(resp.status_code, 200)
-        self.assertEqual(resp.json(), [])
+        self.assertEqual(resp.json()["results"], [])
+
+    def test_results_are_paginated(self):
+        from audits.events import upsert_scenario_result
+
+        run, _ = self._make_run()
+        for i in range(3):
+            upsert_scenario_result(run.id, f"x{i}", status="completed", attempts=1, result={"severity": "pass"})
+        body = self.client.get(self._url(run.id) + "?limit=2").json()
+        self.assertEqual((body["count"], len(body["results"])), (3, 2))
+        self.assertIsNotNone(body["next"])
+        rest = self.client.get(self._url(run.id) + "?limit=2&offset=2").json()
+        self.assertEqual(len(rest["results"]), 1)
 
     def test_results_unknown_run_404(self):
         resp = self.client.get(self._url(99999))
         self.assertEqual(resp.status_code, 404)
+
+
+class RunListPaginationTest(ResultsViewTest):
+    def test_run_list_is_paginated_newest_first(self):
+        from audits.models import AuditRun
+
+        first, _ = self._make_run()
+        second = AuditRun.objects.get(pk=first.pk)
+        second.pk = None
+        second.save()
+        body = self.client.get(f"/api/projects/{self.project.id}/audit-runs/?limit=1").json()
+        self.assertEqual(body["count"], 2)
+        self.assertEqual([r["id"] for r in body["results"]], [second.id])
+
+
+class SlimRunListTest(ResultsViewTest):
+    def test_list_rows_are_slim_and_expand_restores_snapshots(self):
+        from django.db import connection
+        from django.test.utils import CaptureQueriesContext
+
+        from audits.events import upsert_scenario_result
+
+        run, _ = self._make_run()
+        upsert_scenario_result(run.id, "a", status="completed", attempts=1, result={"severity": "pass"})
+        url = f"/api/projects/{self.project.id}/audit-runs/"
+        with CaptureQueriesContext(connection) as ctx:
+            row = self.client.get(url).json()["results"][0]
+        self.assertNotIn("target_config_snapshot", row)
+        self.assertNotIn("generation_parameters_snapshot", row)
+        self.assertEqual(row["id"], run.id)
+        self.assertEqual(row["pass_rate"], 100.0)
+        self.assertTrue(row["target_model"])
+        self.assertLessEqual(len(ctx.captured_queries), 12, [q["sql"][:80] for q in ctx.captured_queries])
+        full = self.client.get(url + "?expand=snapshots").json()["results"][0]
+        self.assertIn("target_config_snapshot", full)

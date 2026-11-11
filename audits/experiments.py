@@ -647,7 +647,12 @@ def prefetch_experiment_runs():
     """Prefetch for Experiment querysets whose pages show factors and summaries."""
     from django.db.models import Prefetch
 
-    return Prefetch("runs", queryset=AuditRun.objects.select_related(*RUN_FACTOR_RELATED))
+    # Factors and summaries read the model/judge snapshots and generation
+    # parameters; the runtime and trace blobs are never shown on these pages.
+    return Prefetch(
+        "runs",
+        queryset=AuditRun.objects.select_related(*RUN_FACTOR_RELATED).defer("runtime_metadata", "trace_config"),
+    )
 
 
 class MembershipError(ValueError):

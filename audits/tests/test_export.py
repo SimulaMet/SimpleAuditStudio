@@ -334,7 +334,7 @@ class ExportEndpointTest(TestCase):
         self.assertEqual(resp.status_code, 200)
         self.assertTrue(resp["Content-Type"].startswith("application/json"))
         self.assertIn("attachment", resp["Content-Disposition"])
-        body = resp.json()
+        body = json.loads(b"".join(resp.streaming_content))
         self.assertEqual(body["summary"]["total_scenarios"], 1)
         self.assertEqual(body["summary"]["passed"], 1)
 

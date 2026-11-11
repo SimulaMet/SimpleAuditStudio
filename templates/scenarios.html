@@ -189,93 +189,9 @@
             </div>
           </div>
 
-          <!-- Inline edit form (hidden by default) -->
-          <div id="edit-scenario-{{ item.scenario.id }}" style="display:none" class="px-3 pb-3 pt-2 border-t border-gray-800 space-y-2">
-            <form method="post" action="{% url 'scenario_edit' item.scenario.id %}" class="space-y-2"
-                  onsubmit="return confirmScenarioSave({{ item.scenario.id }}, this) && syncAgenticFields(this)">
-              {% csrf_token %}
-              <input type="hidden" name="set_id" value="{{ selected.id }}">
-              <input type="hidden" name="base_revision_id" value="{{ item.revision.id }}">
-              <div class="grid grid-cols-2 gap-2">
-                <input type="text" name="title" maxlength="300" value="{{ item.scenario.title }}" required
-                       class="px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-1 focus:ring-accent/50">
-                <input type="text" name="category" maxlength="120" value="{{ item.scenario.category }}" placeholder="Category"
-                       class="px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-1 focus:ring-accent/50">
-              </div>
-              <div data-nondecision-fields>
-              <label class="text-xs text-gray-500">Description (scenario prompt)</label>
-              <textarea name="description" rows="3" id="desc-{{ item.scenario.id }}"
-                        class="w-full px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-1 focus:ring-accent/50">{{ item.revision.description }}</textarea>
-              <label class="text-xs text-gray-500">Expected behavior (one per line — judge criteria)</label>
-              <textarea name="expected_behavior" rows="2" id="eb-{{ item.scenario.id }}" placeholder="Should refuse…&#10;Should not reveal…"
-                        class="w-full px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-1 focus:ring-accent/50">{% for b in item.revision.expected_behavior %}{{ b }}
-{% endfor %}</textarea>
-              <label class="text-xs text-gray-500">Test prompt (optional)</label>
-              <textarea name="test_prompt" rows="1" placeholder="Exact first user request for replay scenarios"
-                        class="w-full px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-1 focus:ring-accent/50">{{ item.revision.test_prompt }}</textarea>
-              </div>
-              <label class="flex items-center gap-2 text-xs text-gray-500">
-                <input type="checkbox" name="agentic_scenario" value="1" {% if item.revision.metadata.agentic %}checked{% endif %}>
-                Agentic scenario
-              </label>
-              <label class="flex items-center gap-2 text-xs text-gray-500">
-                <input type="checkbox" name="decision_model_scenario" value="1" {% if item.revision.decision %}checked{% endif %}>
-                Decision model scenario
-              </label>
-              <div data-agentic-section{% if not item.revision.metadata.agentic %} style="display:none"{% endif %}>
-                {% include "partials/agentic_controls.html" with agentic=item.revision.metadata.agentic %}
-                <details class="group mt-1">
-                  <summary class="text-xs text-gray-500 cursor-pointer select-none hover:text-gray-400">Agentic metadata preview (read-only)</summary>
-                  <div class="space-y-1 mt-2 pl-3 border-l border-gray-800">
-                    <p class="text-[11px] text-gray-600">Live, read-only view of exactly what will be saved. Edit the structured fields above — this updates in real time. You can't type directly here; unknown fields are still preserved on save and export.</p>
-                    <textarea name="metadata" rows="8" spellcheck="false" readonly aria-readonly="true" class="w-full px-2 py-1.5 rounded bg-surface-overlay border border-gray-800 text-xs font-mono text-gray-400 cursor-default resize-y select-text">{{ item.revision.metadata|jsonify }}</textarea>
-                  </div>
-                </details>
-              </div>
-              <div data-nondecision-fields>
-              <details class="group">
-                <summary class="text-xs text-gray-500 cursor-pointer select-none hover:text-gray-400">Advanced options (usually leave empty)</summary>
-                <div class="space-y-2 mt-2 pl-3 border-l border-gray-800">
-                  <div>
-                    <label class="text-xs text-gray-500">Severity ceiling</label>
-                    <p class="text-[11px] text-gray-600 mb-1">Caps the max severity the judge can assign when the target fails. Use when you know a scenario's worst case (e.g. set "medium" so it never escalates to critical even if the judge thinks it should). Passed to the engine as the scenario's <code class="text-gray-400">severity</code> field. Most scenarios don't need this — leave empty to let the judge decide freely.</p>
-                    <select name="severity_ceiling" aria-label="Severity ceiling" class="w-full px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-1 focus:ring-accent/50">
-                      <option value="" {% if not item.revision.severity_ceiling %}selected{% endif %}>— No ceiling (judge decides) —</option>
-                      <option value="pass" {% if item.revision.severity_ceiling == "pass" %}selected{% endif %}>pass</option>
-                      <option value="low" {% if item.revision.severity_ceiling == "low" %}selected{% endif %}>low</option>
-                      <option value="medium" {% if item.revision.severity_ceiling == "medium" %}selected{% endif %}>medium</option>
-                      <option value="high" {% if item.revision.severity_ceiling == "high" %}selected{% endif %}>high</option>
-                      <option value="critical" {% if item.revision.severity_ceiling == "critical" %}selected{% endif %}>critical</option>
-                    </select>
-                  </div>
-                  <div>
-                    <label class="text-xs text-gray-500">Documents (RAG context)</label>
-                    <p class="text-[11px] text-gray-600 mb-1">Extra context documents injected into the auditor's prompt so the judge has reference material (e.g. a policy PDF the agent should follow). Only needed when your scenario tests compliance against a specific document. JSON array: <code class="text-gray-400">["policy.pdf", "terms.txt"]</code>. Most scenarios leave this empty.</p>
-                    <input type="text" name="documents" value="{{ item.revision.documents|jsonify_compact }}" placeholder='Usually empty. e.g. ["policy.pdf"]'
-                           class="w-full px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-1 focus:ring-accent/50">
-                  </div>
-                  <div>
-                    <label class="text-xs text-gray-500">File URI (vision input)</label>
-                    <p class="text-[11px] text-gray-600 mb-1">Path or URL of an image/screenshot the agent must analyze. Only needed for vision-based scenarios (e.g. "does the UI show a warning?"). The file is passed to the model as a multimodal input. Most scenarios leave this empty.</p>
-                    <input type="text" name="file_uri" value="{{ item.revision.file_uri|default:'' }}" placeholder="Usually empty. e.g. /data/screenshots/login.png"
-                           class="w-full px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-1 focus:ring-accent/50">
-                  </div>
-                </div>
-              </details>
-              </div>
-              <div data-decision-section{% if not item.revision.decision %} style="display:none"{% endif %}>
-                <label class="text-xs text-gray-500">Decision question</label>
-                <p class="text-[11px] text-gray-600 mb-1">The closed question this scenario answers, with its fixed options and accepted answer(s). Graded in code — no LLM judge. JSON object: <code class="text-gray-400">{"instructions": "...", "criteria": {"yes": "...", "no": "..."}, "accepted": ["yes"]}</code>.</p>
-                <textarea name="decision" rows="3" spellcheck="false" placeholder='{"instructions":"Did the court find the defendant guilty?","criteria":{"yes":"Found guilty","no":"Not found guilty"},"accepted":["no"]}'
-                          class="w-full px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs font-mono focus:outline-none focus:ring-1 focus:ring-accent/50">{{ item.revision.decision|jsonify_compact }}</textarea>
-              </div>
-              <div class="flex gap-2 items-center">
-                <button class="px-3 py-1 rounded bg-accent text-white text-xs">Save</button>
-                <button type="button" onclick="document.getElementById('edit-scenario-{{ item.scenario.id }}').style.display='none'" class="px-3 py-1 rounded bg-surface-overlay text-gray-400 text-xs">Cancel</button>
-                <span id="version-hint-{{ item.scenario.id }}" class="text-xs text-amber-400 hidden"></span>
-              </div>
-            </form>
-          </div>
+          <!-- Inline edit form: fetched on first "Edit" click (partials/scenario_edit_form.html) -->
+          <div id="edit-scenario-{{ item.scenario.id }}" style="display:none" class="px-3 pb-3 pt-2 border-t border-gray-800 space-y-2"
+               data-edit-url="{% url 'scenario_edit_form' item.pk %}"></div>
         </div>
         {% empty %}
         <p class="text-sm text-gray-500 py-2">No scenarios in this version.</p>
@@ -430,7 +346,7 @@ function _contentChanged(id) {
   });
 }
 
-document.querySelectorAll('textarea[id^="desc-"], textarea[id^="eb-"]').forEach(ta => {
+function wireVersionHint(ta) {
   ta.addEventListener('input', function() {
     const id = this.id.replace(/^(desc|eb)-/, '');
     const hint = document.getElementById('version-hint-' + id);
@@ -441,7 +357,8 @@ document.querySelectorAll('textarea[id^="desc-"], textarea[id^="eb-"]').forEach(
       hint.classList.add('hidden');
     }
   });
-});
+}
+document.querySelectorAll('textarea[id^="desc-"], textarea[id^="eb-"]').forEach(wireVersionHint);
 
 // Confirm before saving if content changed
 function confirmScenarioSave(scenarioId, form) {
@@ -581,9 +498,24 @@ function autoSizeTextarea(el) {
 function autoSizeAllTextareas(container) {
   container.querySelectorAll('textarea').forEach(autoSizeTextarea);
 }
-function openEditForm(id, ev) {
+async function openEditForm(id, ev) {
   if (ev) ev.stopPropagation(); // don't trigger view mode toggle
   const form = document.getElementById('edit-scenario-' + id);
+  // The form is fetched on first use: rendering one per scenario up front made
+  // big sets slow to load.
+  if (!form.querySelector('form') && form.dataset.editUrl) {
+    try {
+      const resp = await fetch(form.dataset.editUrl, { credentials: 'same-origin' });
+      if (!resp.ok) throw new Error('HTTP ' + resp.status);
+      form.innerHTML = await resp.text();
+    } catch (e) {
+      alert('Could not load the edit form: ' + e.message);
+      return;
+    }
+    const inner = form.querySelector('form');
+    if (inner) wireScenarioForm(inner);
+    if (window.initRulesEditors) window.initRulesEditors();
+  }
   // Close view mode if open
   const view = document.getElementById('view-scenario-' + id);
   if (view) view.style.display = 'none';
@@ -696,7 +628,12 @@ function _refreshAgenticJsonLive(form) {
 // Wire up per-form behavior for every scenario form (inline edit + add):
 // show/hide the agentic section with the checkbox, and keep the read-only
 // preview in sync as the structured controls change.
-document.querySelectorAll('form[data-write], form[action*="/scenarios/"]').forEach((form) => {
+function wireScenarioForm(form) {
+  form.querySelectorAll('textarea[id^="desc-"], textarea[id^="eb-"]').forEach(wireVersionHint);
+  wireModeToggles(form);
+}
+document.querySelectorAll('form[data-write], form[action*="/scenarios/"]').forEach((form) => wireModeToggles(form));
+function wireModeToggles(form) {
   const controls = form.querySelector('[data-agentic-controls]');
   if (controls) controls.addEventListener('input', () => _refreshAgenticJsonLive(form));
   const agenticToggle = form.querySelector('[name="agentic_scenario"]');
@@ -717,7 +654,7 @@ document.querySelectorAll('form[data-write], form[action*="/scenarios/"]').forEa
   }
   // Auto-grow textareas as the user types (description, expected behavior, etc.)
   form.querySelectorAll('textarea').forEach((ta) => ta.addEventListener('input', () => autoSizeTextarea(ta)));
-});
+}
 // Initial sizing pass: size any textareas that are already visible on page load.
 requestAnimationFrame(() => {
   document.querySelectorAll('textarea').forEach((ta) => {

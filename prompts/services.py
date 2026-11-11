@@ -66,18 +66,16 @@ def delete_version(version: SystemPromptVersion) -> None:
         raise ValueError(f"{version.label} is pinned by a run, so it is kept for reproducibility.")
     # A version is kept when a run froze its exact text (in the agent config
     # snapshot or the generation parameters), so history stays reproducible.
-    used = AuditRun.objects.filter(project=version.prompt.project).exclude(id__isnull=True)
-    for run in used.iterator(chunk_size=200):
-        snap = run.agent_config_snapshot
-        if isinstance(snap, dict) and snap.get("system_prompt") == version.content:
-            raise ValueError(
-                f"{version.label} matches a run's frozen configuration, so it is kept for reproducibility."
-            )
-        gen = run.generation_parameters_snapshot
-        if isinstance(gen, dict) and gen.get("system_prompt") == version.content:
-            raise ValueError(
-                f"{version.label} matches a run's generation parameters, so it is kept for reproducibility."
-            )
+    # Compared in the database (JSON key lookup) so no run's snapshots are loaded.
+    used = AuditRun.objects.filter(project=version.prompt.project)
+    if used.filter(agent_config_snapshot__system_prompt=version.content).exists():
+        raise ValueError(
+            f"{version.label} matches a run's frozen configuration, so it is kept for reproducibility."
+        )
+    if used.filter(generation_parameters_snapshot__system_prompt=version.content).exists():
+        raise ValueError(
+            f"{version.label} matches a run's generation parameters, so it is kept for reproducibility."
+        )
 
     if version.prompt.versions.count() == 1:
         raise ValueError(f"{version.label} is the prompt's only version: delete the prompt instead.")

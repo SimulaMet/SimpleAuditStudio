@@ -210,6 +210,13 @@ MINIMAL_CONFIG = os.environ.get("SIMPLEAUDIT_MINIMAL", "").strip() == "1"
 # DB write. 0 writes each export at once (the test suite uses 0).
 OTLP_SPAN_FLUSH_INTERVAL_S = 1.0
 
+# Seconds between the Agent page's automatic Open WebUI knowledge/tool syncs for
+# one user in one workspace (the Sync button always runs). 0 syncs on every load.
+try:
+    OPENWEBUI_SYNC_TTL_S = float(os.environ.get("SIMPLEAUDIT_OPENWEBUI_SYNC_TTL_S", "60"))
+except ValueError:
+    OPENWEBUI_SYNC_TTL_S = 60.0
+
 # SQLite is shared by the web server and worker threads: WAL lets reads run
 # during writes, IMMEDIATE takes the write lock up front (no upgrade deadlocks),
 # and the timeout waits for a busy lock instead of failing.

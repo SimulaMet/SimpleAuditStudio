@@ -135,7 +135,7 @@ class OtlpSpan(models.Model):
     ``status_message`` and ``events`` say why a span failed.
     """
 
-    target_id = models.CharField(max_length=250, db_index=True)
+    target_id = models.CharField(max_length=250)
     trace_id = models.CharField(max_length=64, db_index=True)
     span_id = models.CharField(max_length=64)
     name = models.CharField(max_length=500, default="span")
@@ -163,6 +163,10 @@ class OtlpSpan(models.Model):
             ),
         ]
         ordering = ["target_id", "start_time", "span_id"]
+        indexes = [
+            models.Index(fields=["target_id", "-received_at"], name="otlp_span_target_received"),
+            models.Index(fields=["received_at"], name="otlp_span_received"),
+        ]
 
     def __str__(self) -> str:
         return f"OtlpSpan({self.target_id}/{self.trace_id}/{self.span_id} {self.name})"
