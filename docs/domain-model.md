@@ -310,7 +310,7 @@ Fields:
 - `successful_scenarios`
 - `failed_scenarios`
 - `retried_scenarios`
-- `summary_metrics` — JSON
+- `summary_metrics` — JSON (`failures_by_role`: failed scenarios per role, e.g. `{"target": 44, "judge": 3}`)
 - `error_code`
 - `error_message`
 - experiments — many-to-many through `ExperimentRun` (a run can belong to several)
@@ -523,3 +523,18 @@ The platform must preserve existing SimpleAudit semantics:
 - result aggregation
 
 Any change to these semantics needs regression tests against existing expected outputs.
+
+
+## Scenario failure attribution
+
+A failed `ScenarioResult` stores a structured `failure` object beside the raw
+error text (top level of the result, and on each failed repetition). `role`
+(`target` | `auditor` | `judge` | `system`) is the only required field; `kind`
+(`rate_limit`, `unavailable`, `auth`, `timeout`, `bad_response`, `config`,
+`unknown`), `message`, `http_status`, `endpoint`, `model`, `retryable` and
+`attempt` are best effort and omitted when unknown. The role comes from the
+engine's `error_phase` plus the last phase the engine reported through
+`on_turn`, so it needs no target cooperation; the model is never assumed (the
+endpoint is shown when the model is unknown). A judge endpoint failure is a
+failed scenario, not an `UNCERTAIN` verdict. Results stored without `failure`
+render as before. Code: `audits/failures.py`.

@@ -681,6 +681,7 @@ function openScriptModal() {
         if (el) {
           el.outerHTML = await resp.text();
           if (window.applyAgenticFilter) window.applyAgenticFilter();
+          if (window.applyRoleFilter) window.applyRoleFilter();
         }
       } catch (e) { /* network hiccup: the next event retries */ }
     }, 800);
@@ -954,6 +955,31 @@ function openScriptModal() {
 
 <!-- Results (refreshed live, see refreshResults) -->
 {% include "partials/run_results.html" %}
+<script>
+// Failed-scenario role filter (Target / Auditor / Judge / System). Independent of
+// the agentic filter (uses inline display, not the hidden class) and re-applied after
+// the live results refresh swaps the list.
+(function() {
+  let roleFilter = '';
+  window.applyRoleFilter = function() {
+    document.querySelectorAll('#results-section [data-failure-role]').forEach(row => {
+      row.style.display = roleFilter && row.dataset.failureRole !== roleFilter ? 'none' : '';
+    });
+    document.querySelectorAll('#results-section .role-filter').forEach(btn => {
+      const on = (btn.dataset.roleFilter || '') === roleFilter;
+      btn.setAttribute('aria-pressed', String(on));
+      btn.classList.toggle('bg-accent/20', on); btn.classList.toggle('text-accent', on);
+      btn.classList.toggle('bg-surface-overlay', !on); btn.classList.toggle('text-gray-400', !on);
+    });
+  };
+  document.addEventListener('click', e => {
+    const btn = e.target.closest('#results-section .role-filter');
+    if (!btn) return;
+    roleFilter = btn.dataset.roleFilter || '';
+    window.applyRoleFilter();
+  });
+})();
+</script>
 <script>
 // Agentic bar filter: clicking a segment shows only scenarios with that verdict.
 // Lives outside the live-run block so it also works for finished runs. The live

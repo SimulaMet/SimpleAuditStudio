@@ -17,7 +17,15 @@
 </div>
 
 {% if error %}
-<div class="mb-4 text-sm text-red-300 bg-red-900/30 rounded-lg px-4 py-2 break-words">Scenario failed: {{ error }}</div>
+<div class="mb-4 text-sm text-red-300 bg-red-900/30 rounded-lg px-4 py-2 break-words">
+  {% if failure %}
+  <div class="flex flex-wrap items-center gap-2 mb-1.5" data-testid="failure-detail">
+    {% include "partials/failure_badge.html" with failure=failure label=failure_label where=failure_where %}
+    <span class="text-xs text-red-200/80">{{ failure.role|title }} failed{% if failure_where %} · {{ failure_where }}{% endif %}{% if failure.attempt %} · attempt {{ failure.attempt }}{% endif %}{% if failure.retryable is True %} · retryable{% elif failure.retryable is False %} · not retryable{% endif %}</span>
+  </div>
+  {% endif %}
+  Scenario failed: {{ error }}
+</div>
 {% endif %}
 
 <!-- What was tested -->

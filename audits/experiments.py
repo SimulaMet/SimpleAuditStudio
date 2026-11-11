@@ -478,8 +478,54 @@ def spec_to_row(spec: dict) -> str:
     return json.dumps(row)
 
 
-def launch_experiment(*, project, user, name: str, runs: list[dict], repeat: dict | None = None) -> Experiment:
-    """Create the Experiment and its frozen runs, then submit them.
+def resolve_into_experiment(project, raw) -> Experiment | None:
+    """The existing experiment a New Experiment launch should join, or None for a new one.
+
+    ``raw`` is the form's ``into_experiment`` value. Blank means "create a new
+    experiment"; anything else must name an experiment in this workspace.
+    """
+    raw = (raw or "").strip()
+    if not raw:
+        return None
+    if not raw.isdigit():
+        raise DesignError("The selected experiment is not valid.")
+    experiment = Experiment.objects.filter(pk=int(raw), project=project).first()
+    if experiment is None:
+        raise DesignError("The selected experiment no longer exists in this workspace.")
+    return experiment
+
+
+def prepare_into_experiment(*, experiment: Experiment, user, n_new_runs: int, confirm_public: bool) -> None:
+    """Check that ``n_new_runs`` may be launched into an existing experiment.
+
+    Same rules as adding runs by hand (add_runs): admin/auditor, and admin plus
+    confirmation for a public experiment, since the new runs become public.
+    Call inside the launch transaction: the experiment row is locked so
+    concurrent launches cannot exceed the run cap.
+    """
+    _require_membership_role(user, experiment, confirm_public=confirm_public)
+    Experiment.objects.select_for_update().filter(pk=experiment.pk).first()
+    if experiment.memberships.count() + n_new_runs > MAX_RUNS_PER_EXPERIMENT:
+        raise DesignError(
+            f"“{experiment.name}” would exceed {MAX_RUNS_PER_EXPERIMENT} runs; "
+            "pick fewer runs or start a new experiment."
+        )
+
+
+def launch_experiment(
+    *,
+    project,
+    user,
+    name: str,
+    runs: list[dict],
+    repeat: dict | None = None,
+    into: Experiment | None = None,
+    confirm_public: bool = False,
+) -> Experiment:
+    """Create the Experiment (or join ``into``) and its frozen runs, then submit them.
+
+    With ``into`` the runs are added to that existing experiment instead of a
+    new one (``name`` is then ignored); see prepare_into_experiment for the rules.
 
     ``runs`` items: {"name", "version", "target", "auditor", "judge_model", "judge",
     "max_turns", "language", "n_repetitions", "gen_config"}. With ``repeat``
@@ -505,9 +551,17 @@ def launch_experiment(*, project, user, name: str, runs: list[dict], repeat: dic
         # audit the agent's bare base model instead of the agent.
         raise DesignError("Repeating an agent experiment is not supported yet; launch it once instead.")
     with transaction.atomic():
-        experiment = Experiment.objects.create(
-            project=project, name=name.strip()[:250] or "Experiment", created_by=user
-        )
+        if into is not None:
+            run_now_count = len(runs) if (not repeat or repeat["start"] == "now") else 0
+            prepare_into_experiment(
+                experiment=into, user=user, n_new_runs=run_now_count, confirm_public=confirm_public
+            )
+            experiment = into
+            experiment.save(update_fields=["updated_at"])
+        else:
+            experiment = Experiment.objects.create(
+                project=project, name=name.strip()[:250] or "Experiment", created_by=user
+            )
         run_now = not repeat or repeat["start"] == "now"
         created = [
             create_audit_run(

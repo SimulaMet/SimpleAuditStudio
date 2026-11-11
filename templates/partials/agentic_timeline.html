@@ -41,13 +41,26 @@ The "Focus" button toggles a wide mode that pushes the app chrome aside.
           <span class="min-w-0 truncate text-xs text-amber-300/90 font-mono" title="Model decided to invoke: {{ s.decision_detail }}">{{ s.decision_detail }}</span>
           {% elif s.arguments %}<span class="min-w-0 truncate text-xs font-mono text-gray-400" title="{{ s.arguments }}">{{ s.arguments }}</span>
           {% elif s.tool_name %}<span class="min-w-0 truncate text-xs text-gray-500" title="{{ s.tool_name }}">· {{ s.tool_name }}</span>{% endif %}
-          {% if s.kb_sources %}
-          <span class="min-w-0 text-xs text-emerald-300/90" title="Knowledge sources observed on this retrieval step">📚 {{ s.kb_sources|join:", " }}</span>
-          {% endif %}
           <span class="ml-auto shrink-0 flex items-center gap-2 text-[11px] text-gray-500 tabular-nums">
             {% if s.duration_ms > 0 %}<span title="Duration of this step">({{ s.duration_ms }} ms)</span>{% endif %}
             {% if s.offset_ms is not None %}<span title="Time since the first captured step">{{ s.offset_ms }} ms</span>{% endif %}
           </span>
+          {% if s.kb_chips %}
+          <div class="kb-sources basis-full flex flex-wrap items-center gap-1 min-w-0" data-kb-sources title="Knowledge sources observed on this retrieval step">
+            <span class="shrink-0 text-[11px] text-emerald-300/90">📚 {{ s.kb_chips|length }} source{{ s.kb_chips|length|pluralize }}</span>
+            {% if s.kb_hosts %}<span class="shrink-0 mr-1 text-[10px] text-gray-500">· {{ s.kb_hosts|join:", " }}{% if s.kb_hosts_more %} +{{ s.kb_hosts_more }}{% endif %}</span>{% endif %}
+            {% for c in s.kb_chips %}
+            {% if c.href %}<a href="{{ c.href }}" target="_blank" rel="noopener noreferrer"{% else %}<span{% endif %}
+              class="kb-chip{% if forloop.counter > s.kb_visible %} hidden{% endif %} inline-flex min-w-0 max-w-[20rem] items-center gap-1 rounded-full border px-2 py-px text-[11px] {% if c.redacted %}border-amber-800/60 text-amber-300/80{% elif c.href %}border-emerald-800/50 bg-emerald-950/30 text-emerald-200 hover:border-emerald-500 hover:text-white{% else %}border-gray-700 text-gray-300{% endif %}{% if c.seen_in %} opacity-50{% endif %}"
+              title="{{ c.tooltip }}">
+              {% if c.ext %}<span class="shrink-0 rounded bg-gray-800 px-1 text-[9px] text-gray-400">{{ c.ext }}</span>{% endif %}
+              <span class="truncate">{{ c.label }}{% if c.sublabel %} <span class="text-gray-500">› {{ c.sublabel }}</span>{% endif %}</span>
+              {% if c.seen_in %}<span class="shrink-0 text-[9px] text-gray-500">↺</span>{% endif %}
+            {% if c.href %}</a>{% else %}</span>{% endif %}
+            {% endfor %}
+            {% if s.kb_hidden %}<button type="button" class="kb-more shrink-0 rounded-full border border-gray-700 px-2 py-px text-[11px] text-gray-400 hover:text-gray-200">+{{ s.kb_hidden }} more</button>{% endif %}
+          </div>
+          {% endif %}
         </summary>
         <div class="space-y-2 border-t border-gray-800/70 px-3 py-2.5">
           {% if s.content_blocks %}
@@ -70,6 +83,26 @@ The "Focus" button toggles a wide mode that pushes the app chrome aside.
     {% endfor %}
   </ol>
   <script>
+  // Source chips live inside a <summary>: keep link clicks from toggling the step,
+  // and let "+N more" reveal the hidden chips instead.
+  (function() {
+    if (window.__kbChipsBound) return;
+    window.__kbChipsBound = true;
+    document.addEventListener('click', function(e) {
+      var box = e.target.closest && e.target.closest('[data-kb-sources]');
+      if (!box) return;
+      var more = e.target.closest('.kb-more');
+      if (more) {
+        e.preventDefault();
+        box.querySelectorAll('.kb-chip.hidden').forEach(function(c) { c.classList.remove('hidden'); });
+        more.remove();
+      } else if (e.target.closest('a')) {
+        e.stopPropagation();
+      } else {
+        e.preventDefault();
+      }
+    }, true);
+  })();
   // Focus mode: push the app chrome aside so the timeline owns the viewport.
   (function() {
     var btn = document.querySelector('[data-tl-focus][data-rep="{{ rep.index }}"]');

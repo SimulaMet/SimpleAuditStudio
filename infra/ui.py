@@ -31,6 +31,14 @@ from audits.agentic.rules import validate_rules
 from audits.agentic.trajectory import inside_retrieval
 from audits.comparison import compare_runs
 from audits.events import ScenarioResult
+from audits.failures import (
+    ROLE_LABELS,
+    ROLES,
+    failure_label,
+    failure_where,
+    result_failure,
+    summary_text,
+)
 from audits.models import AuditRun
 from audits.services import (
     _repeated_export_entry,
@@ -40,8 +48,10 @@ from audits.services import (
     submit_audit_run,
 )
 from infra.chat_feature import chat_enabled
+from infra.exceptions import StableAPIError
 from infra.export_utils import csv_safe
 from infra.seo import SITE_NAME, _share_context
+from infra.source_chips import annotate_source_chips
 from scenarios.models import (
     Scenario,
     ScenarioSet,
@@ -75,6 +85,31 @@ def _public_experiment_filter(request) -> dict:
     if request.user.is_authenticated:
         return {"project": request.project}
     return {"visibility": Experiment.Visibility.PUBLIC}
+
+
+def _into_permission_error(into) -> str:
+    """Why a launch into an existing experiment was refused (role check failed)."""
+    if into is not None and into.is_public:
+        return f"Adding runs to the public experiment “{into.name}” needs the workspace admin role."
+    return "Adding runs to an experiment needs the workspace admin or auditor role."
+
+
+def _attach_choices(user, project) -> list:
+    """Experiments a New Experiment launch can join: private ones for admins/auditors, public ones for admins."""
+    from accounts.models import ProjectMembership
+    from audits.models import Experiment
+
+    if not _can_edit_membership(user, project):
+        return []
+    is_admin = user.is_superuser or ProjectMembership.objects.filter(
+        user=user, project=project, role=ProjectMembership.Role.ADMIN
+    ).exists()
+    from django.db.models import Count
+
+    qs = Experiment.objects.filter(project=project).annotate(n_runs=Count("memberships")).order_by("-updated_at")
+    if not is_admin:
+        qs = qs.exclude(visibility=Experiment.Visibility.PUBLIC)
+    return list(qs.only("id", "name", "visibility", "updated_at")[:200])
 
 
 def _can_edit_membership(user, project) -> bool:
@@ -1403,6 +1438,7 @@ class NewExperimentView(ProjectMixin, TemplateView):
             "start": "baseline" if source and get.get("repeat") else "now",
             "first_run_at": "",
             "clone_from": str(source.id) if source else "",
+            "into_experiment": get.get("into", "") if is_id(get.get("into", "")) else "",
         })
         # Connections the picker offers: this workspace's own plus any shared
         # into it (public / admin-shared / explicitly shared). Each carries a
@@ -1477,6 +1513,7 @@ class NewExperimentView(ProjectMixin, TemplateView):
             repeat_choices=REPEAT_CHOICES,
             timezones=_timezone_choices(),
             source_run=source,
+            attach_choices=_attach_choices(self.request.user, p),
             # Same rule as launching a run: admin or auditor (superusers too).
             can_launch=has_write_role(self.request.user, p),
         )
@@ -1484,7 +1521,7 @@ class NewExperimentView(ProjectMixin, TemplateView):
 
     def _redesign(self, post, error=None):
         rep = {k: post.get(k, "") for k in ("repeat", "timezone", "cron_expression", "start", "first_run_at", "clone_from",
-                                            "name")}
+                                            "name", "into_experiment", "into_confirm_public")}
         rep["repeat"] = rep["repeat"] or "once"
         source = None
         if is_id(rep["clone_from"]):
@@ -1532,21 +1569,36 @@ class NewExperimentView(ProjectMixin, TemplateView):
         """
         from django.db import transaction
 
-        from audits.experiments import spec_to_run
+        from audits.experiments import (
+            prepare_into_experiment,
+            resolve_into_experiment,
+            spec_to_run,
+        )
         from audits.models import Experiment
         from audits.monitors import create_monitor
 
         p = request.project
         run_spec = spec_to_run(spec, name="")
         custom_name = request.POST.get("name", "").strip()[:250]
-        run = monitor = None
+        run = monitor = into = None
         try:
+            into = resolve_into_experiment(p, request.POST.get("into_experiment"))
             with transaction.atomic():
-                experiment = Experiment.objects.create(
-                    project=p,
-                    name=(custom_name or f"{spec['target'].display_name} · {spec['scenario_set'].label}")[:250],
-                    created_by=request.user,
-                )
+                if into is not None:
+                    prepare_into_experiment(
+                        experiment=into,
+                        user=request.user,
+                        n_new_runs=1 if (not repeat or repeat["start"] == "now") else 0,
+                        confirm_public=request.POST.get("into_confirm_public") == "1",
+                    )
+                    experiment = into
+                    experiment.save(update_fields=["updated_at"])
+                else:
+                    experiment = Experiment.objects.create(
+                        project=p,
+                        name=(custom_name or f"{spec['target'].display_name} · {spec['scenario_set'].label}")[:250],
+                        created_by=request.user,
+                    )
                 if not repeat or repeat["start"] == "now":
                     run = create_audit_run(
                         project=p,
@@ -1580,10 +1632,14 @@ class NewExperimentView(ProjectMixin, TemplateView):
                         experiment=experiment,
                         first_point=first_point,
                     )
+        except StableAPIError:
+            return self._redesign(request.POST, _into_permission_error(into))
         except Exception as e:  # noqa: BLE001 - surface any creation failure to the user
             return self._redesign(request.POST, str(e))
         if run:
             submit_audit_run(run)
+        if into is not None and run:
+            messages.success(request, f"Run added to “{experiment.name}”.")
         if monitor:
             messages.success(request, f"Monitor “{monitor.name}” created: next run {monitor.next_run_at:%Y-%m-%d %H:%M} UTC.")
         return redirect(f"/experiments/{experiment.id}/")
@@ -1638,8 +1694,15 @@ class NewExperimentView(ProjectMixin, TemplateView):
         for row in rows:
             row["cells"] = [row["values"][k] for k, _ in columns]
             row["warnings"] = [w for w in row["warnings"] if w not in shared]
+        into = None
+        into_raw = dict(design_post).get("into_experiment", "")
+        if is_id(into_raw):
+            from audits.models import Experiment
+
+            into = Experiment.objects.filter(pk=int(into_raw), project=request.project).first()
         return render(request, "experiment_review.html", {
             "experiment_name": experiment_name,
+            "into_experiment": into,
             "columns": columns,
             "fixed": fixed,
             "rows": rows,
@@ -1840,12 +1903,24 @@ class NewExperimentView(ProjectMixin, TemplateView):
             repeat = None
             errors.append(str(e))
         name = post.get("experiment_name", "")
+        into = None
+        try:
+            into = ex.resolve_into_experiment(p, design.get("into_experiment"))
+        except ex.DesignError as e:
+            errors.append(str(e))
         if not errors:
             try:
-                experiment = ex.launch_experiment(project=p, user=request.user, name=name, runs=runs, repeat=repeat)
+                experiment = ex.launch_experiment(
+                    project=p, user=request.user, name=name, runs=runs, repeat=repeat, into=into,
+                    confirm_public=design.get("into_confirm_public") == "1",
+                )
+            except StableAPIError:
+                errors.append(_into_permission_error(into))
             except Exception as e:  # noqa: BLE001 - show the reason on the review screen
                 errors.append(str(e))
             else:
+                if into is not None and not repeat:
+                    messages.success(request, f"{len(runs)} runs added to “{experiment.name}”.")
                 if repeat:
                     messages.success(request, f"Experiment launched; its {len(runs)} run setups now repeat {ex_repeat(repeat)}.")
                 return redirect(f"/experiments/{experiment.id}/")
@@ -1925,6 +2000,7 @@ class ExperimentsView(PublicReadableMixin, TemplateView):
             e.factor_labels = [FACTORS.get(f, f) for f in factors_for_runs(runs)]
         kw["experiments"] = experiments
         kw["can_manage_visibility"] = self._is_admin()
+        kw["can_edit_membership"] = _can_edit_membership(self.request.user, self.request.project)
         return super().get_context_data(**kw)
 
     def _is_admin(self) -> bool:
@@ -3511,6 +3587,9 @@ def _result_rows(run: AuditRun, items: dict | None = None) -> list[dict]:
     rows = ScenarioResult.objects.filter(run_id=run.id).only(
         "id", "version_item_id", "status", "list_summary"
     ).order_by("id")
+    failed_payloads = dict(
+        ScenarioResult.objects.filter(run_id=run.id, status="failed").values_list("id", "result")
+    )
     for sr in rows:
         item = items.get(sr.version_item_id)
         r = sr.list_summary or {}
@@ -3533,7 +3612,13 @@ def _result_rows(run: AuditRun, items: dict | None = None) -> list[dict]:
             agreement = None
             sev_dist = None
         agentic = r.get("agentic_status") or ""
+        # The failure record lives in the full result: read it for failed rows only.
+        failure = result_failure(failed_payloads.get(sr.pk)) if sr.status == "failed" else None
         results.append({
+            "failure": failure,
+            "failure_role": failure["role"] if failure else "",
+            "failure_label": failure_label(failure),
+            "failure_where": failure_where(failure),
             "result_id": sr.pk,
             "version_item_id": sr.version_item_id,
             "scenario_name": item.scenario.title if item else sr.version_item_id,
@@ -3551,6 +3636,25 @@ def _result_rows(run: AuditRun, items: dict | None = None) -> list[dict]:
     return results
 
 
+def _results_context(run: AuditRun, items: dict | None = None) -> dict:
+    results = _result_rows(run, items)
+    return {"results": results, "failure_summary": _failure_summary(results)}
+
+
+def _failure_summary(results: list[dict]) -> dict:
+    """Failed-scenario summary for the Results list: ``47 failed: 44 target, 3 judge``."""
+    failed = [r for r in results if r["status"] == "failed"]
+    counts: dict[str, int] = {}
+    for r in failed:
+        if r["failure_role"]:
+            counts[r["failure_role"]] = counts.get(r["failure_role"], 0) + 1
+    return {
+        "total": len(failed),
+        "text": summary_text(counts, len(failed)) if failed else "",
+        "roles": [{"role": role, "label": ROLE_LABELS[role], "count": counts[role]} for role in ROLES if counts.get(role)],
+    }
+
+
 class RunResultsFragmentView(ProjectMixin, View):
     """GET /runs/<id>/results-fragment/ — the Results list alone, for live refresh."""
 
@@ -3561,7 +3665,7 @@ class RunResultsFragmentView(ProjectMixin, View):
             AuditRun.objects.select_related("scenario_set_version"), pk=run_id, project=request.project
         )
         html = render_to_string(
-            "partials/run_results.html", {"run": run, "results": _result_rows(run)}, request=request
+            "partials/run_results.html", {"run": run, **_results_context(run)}, request=request
         )
         return HttpResponse(html)
 
@@ -3590,8 +3694,8 @@ class RunDetailView(PublicReadableMixin, DetailView):
         run = self.object
         set_id = run.scenario_set_version.scenario_set_id
         items = {str(vi.pk): vi for vi in ScenarioSetVersionItem.objects.filter(version=run.scenario_set_version).select_related("scenario")}
-        results = _result_rows(run, items)
-        ctx["results"] = results
+        ctx.update(_results_context(run, items))
+        results = ctx["results"]
         # Version item ids that already have a result row; the detail page seeds
         # its SSE dedupe set from this. Pre-serialized to a JSON array because
         # Django's template engine has no built-in `map`/`json` filters.
@@ -3820,6 +3924,8 @@ class ExperimentDeleteView(LoginRequiredMixin, View):
             return HttpResponseForbidden("Workspace admin or auditor access required.")
         except MembershipError as e:
             messages.error(request, str(e))
+            if request.POST.get("next") == "list":
+                return redirect("experiments")
             return redirect("experiment_detail", experiment_id)
         messages.success(request, f"Experiment “{name}” deleted. Its runs are kept.")
         return redirect("experiments")
@@ -3905,7 +4011,7 @@ _REP_KNOWN_KEYS = {
     "conversation", "issues_found", "issues", "positive_behaviors", "recommendations", "summary",
     "severity", "rationale", "evidence", "judge_rationale", "judgment", "scenario_name",
     "scenario_description", "expected_behavior", "file_uri", "_rep_index", "_language", "error",
-    "trace_ids",
+    "trace_ids", "failure",  # failure: shown as the role badge, not a raw field
     # Consumed by the trajectory timeline + Target trace panel; must not leak
     # into the raw "other" dump (it is a large span payload with no value shown
     # verbatim).
@@ -4193,6 +4299,23 @@ def _span_label(sid: str) -> str:
     return sid
 
 
+def _retrieval_documents(value) -> list[dict]:
+    """Display metadata (source, title, score, id) of a ``gen_ai.retrieval.documents`` value."""
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except (json.JSONDecodeError, ValueError):
+            return []
+    if not isinstance(value, list):
+        return []
+    keys = ("source", "url", "title", "name", "score", "id")
+    return [
+        {k: d[k] for k in keys if d.get(k) not in (None, "")}
+        for d in value
+        if isinstance(d, dict) and (d.get("source") or d.get("url") or d.get("title"))
+    ]
+
+
 def _document_source_names(value) -> list[str]:
     """Source names of a ``gen_ai.retrieval.documents`` value (a list, or its JSON text)."""
     if isinstance(value, str):
@@ -4262,6 +4385,7 @@ def _agentic_span_view(span: dict) -> dict | None:
         "decision_detail": decision_detail,
         "is_tool_decision": is_tool_decision,
         "kb_sources": list(dict.fromkeys(str(s) for s in kb_sources)),
+        "kb_docs": _retrieval_documents(attrs.get("gen_ai.retrieval.documents")),
         "started_at": start,
         "duration_ms": round(_trace_span_duration_ms(span), 1),
         "content_blocks": _trace_span_content_blocks(span),
@@ -4621,6 +4745,7 @@ def _merge_retrieval_into_tool(tool_row: dict, retrieval_row: dict) -> None:
     tool_row["content_blocks"] = blocks + retrieved
     tool_row["raw_json"] = f"{tool_row['raw_json']}\n\n{retrieval_row['raw_json']}"
     tool_row["kb_sources"] = list(dict.fromkeys(tool_row["kb_sources"] + retrieval_row["kb_sources"]))
+    tool_row["kb_docs"] = tool_row.get("kb_docs", []) + retrieval_row.get("kb_docs", [])
     tool_row["arguments"] = tool_row["arguments"] or retrieval_row["arguments"]
     tool_row["is_retrieval"] = True
     tool_row["icon"], tool_row["tone"] = _AGENTIC_SPAN_KIND_ICONS["RETRIEVER"]
@@ -4811,6 +4936,7 @@ def _agentic_timeline_view(rep: dict) -> dict | None:
         while parent["span_id"] not in by_id and parent["span_id"] in folded:
             parent = folded[parent["span_id"]]
         anchor_for.setdefault(span_id, parent["anchor"])
+    annotate_source_chips(rows)
     all_spans = [
         s for s in (rep.get("trace_evidence") or {}).get("all_spans") or []
         if isinstance(s, dict) and not _is_workflow_wrapper(s)
@@ -5152,8 +5278,12 @@ def _rep_view(rep: dict, index: int) -> dict:
     # The scenario's own decision answer: the last one in the conversation, so a
     # follow-up turn's answer replaces the opening one.
     decisions = [m["decision"] for m in conversation if m["decision"]]
+    failure = result_failure(rep)
     return {
         "index": index,
+        # Set when a role other than the judge failed: the judge never ran, so
+        # the judge cards are replaced by a "not graded" note.
+        "not_graded_role": failure["role"] if failure and failure["role"] != "judge" else "",
         "decision": decisions[-1] if decisions else None,
         "severity": rep.get("severity", ""),
         "summary": rep.get("summary", ""),
@@ -5235,6 +5365,7 @@ class RunResultView(PublicReadableMixin, TemplateView):
         # Open on the first repetition that disagrees with the verdict, if any.
         initial_rep = next((r["index"] for r in reps if r["dissent"]), 1)
 
+        failure = result_failure(result_data) if sr.status != "completed" else None
         revision = item.revision if item else None
         first = raw_reps[0] if raw_reps else {}
         expected = (revision.expected_behavior if revision else None) or first.get("expected_behavior") or []
@@ -5266,7 +5397,10 @@ class RunResultView(PublicReadableMixin, TemplateView):
                 {"severity": sev, "count": n, "pct": round(n * 100 / len(reps), 1) if reps else 0}
                 for sev, n in distribution.items()
             ],
-            error=result_data.get("error", "") if sr.status != "completed" else "",
+            error=(result_data.get("error") or (failure or {}).get("message", "")) if sr.status != "completed" else "",
+            failure=failure,
+            failure_label=failure_label(failure),
+            failure_where=failure_where(failure),
             raw_json=json.dumps(result_data, indent=2, ensure_ascii=False) if result_data else "",
             public_header=True,
             judge_ref=_judge_ref_from_run(run),

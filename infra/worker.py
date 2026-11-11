@@ -566,6 +566,9 @@ def _scenario_execute_impl(workflow_input: ScenarioInput, ctx: Context) -> dict:
     # run_scenario_repeated). Engine-internal retries within a rep re-emit
     # auditor turns but stay in the same rep.
     current_rep = [0]
+    from audits.failures import PhaseTracker
+
+    phase_tracker = PhaseTracker()
     # Set when this task is cancelled (Hatchet cancel or the run's durable
     # cancel flag) so the engine stops at the next rep instead of running on
     # as an orphaned thread. Only touched from the engine's event loop.
@@ -581,6 +584,7 @@ def _scenario_execute_impl(workflow_input: ScenarioInput, ctx: Context) -> dict:
     def _on_turn(turn_index: int, max_t: int, role: str) -> None:
         """Queue a per-turn progress event (flushed live by the worker thread)."""
         _check_cancel()
+        phase_tracker.note(current_rep[0], turn_index, max_t, role)
         _event_queue.put((
             "scenario_turn",
             {
@@ -685,10 +689,17 @@ def _scenario_execute_impl(workflow_input: ScenarioInput, ctx: Context) -> dict:
             # A concurrent duplicate already succeeded; its result stands.
             return {"status": "skipped_existing"}
         final = attempt >= MAX_SCENARIO_ATTEMPTS or _is_permanent_error(str(exc))
-        append_event(run_id, version_item_id, "scenario_failed", {"error": str(exc), "final": final})
+        from audits.failures import engine_error_failure
+
+        failure = engine_error_failure(str(exc), _role_snapshots(run), attempt=attempt)
+        append_event(
+            run_id, version_item_id, "scenario_failed",
+            {"error": str(exc), "final": final, "failure": failure},
+        )
         upsert_scenario_result(
             run_id, version_item_id, status="failed",
-            attempts=MAX_SCENARIO_ATTEMPTS if final else attempt, result={"error": str(exc)},
+            attempts=MAX_SCENARIO_ATTEMPTS if final else attempt,
+            result={"error": str(exc), "failure": failure},
         )
         _sync_run_counters(run_id)
         if not final:
@@ -702,6 +713,16 @@ def _scenario_execute_impl(workflow_input: ScenarioInput, ctx: Context) -> dict:
         return {"status": "skipped_existing"}
 
     failed = severity.upper() == "ERROR"
+    from audits.failures import attach_failures
+
+    snapshots = _role_snapshots(run)
+    failure = (
+        attach_failures(
+            result_payload, phase_tracker, snapshots, attempt=attempt,
+            probe_is_fixed=bool(revision.test_prompt),
+        )
+        if failed else None
+    )
     error = result_error_text(result_payload) if failed else ""
     # A failed attempt is final on the last attempt or for errors a retry can't fix;
     # otherwise it is provisional, stored as failed with attempts < max (so not terminal).
@@ -808,6 +829,21 @@ def _scenario_execute_impl(workflow_input: ScenarioInput, ctx: Context) -> dict:
                             expectations=expected_behavior,
                             final_response=_fr,
                         )
+                        judge_error = evaluation["semantic_judgement"].get("llm_error")
+                        if judge_error:
+                            # The judge endpoint failed: a failure of the judge,
+                            # never an UNCERTAIN verdict.
+                            from audits.failures import build_failure, endpoint_of
+
+                            target["failure"] = build_failure(
+                                "judge", judge_error, attempt=attempt,
+                                **endpoint_of(run.judge_config_snapshot),
+                            )
+                            target["severity"] = "ERROR"
+                            target["judgment"] = {
+                                **(target.get("judgment") or {}), "error": judge_error,
+                                "error_phase": "judge",
+                            }
                         # Recompute verdict.
                         dimensions = evaluation["semantic_judgement"]["dimensions"]
                         enforcement_mode = (
@@ -844,6 +880,22 @@ def _scenario_execute_impl(workflow_input: ScenarioInput, ctx: Context) -> dict:
                 "status": "ERROR", "checks": [{"id": "agentic.evaluate", "category": "system",
                 "status": "ERROR", "summary": str(exc), "evidence_span_ids": [], "details": {}}]
             }
+    if not failed:
+        # Every repetition's semantic judge call failed: the scenario failed at
+        # the judge. (One rep's blip does not fail a repeated scenario.)
+        judged = [
+            t for t in (result_payload.get("reps") if isinstance(result_payload.get("reps"), list) else [result_payload])
+            if isinstance(t, dict)
+        ]
+        if judged and all(isinstance(t.get("failure"), dict) for t in judged):
+            failed = True
+            failure = judged[0]["failure"]
+            severity = "ERROR"
+            if isinstance(result_payload.get("reps"), list):
+                result_payload["failure"] = failure
+                result_payload["aggregated_severity"] = "ERROR"
+            error = failure.get("message", "")
+            final = attempt >= MAX_SCENARIO_ATTEMPTS
     upsert_scenario_result(
         run_id, version_item_id, status="failed" if failed else "completed",
         attempts=MAX_SCENARIO_ATTEMPTS if failed and final else attempt, result=result_payload,
@@ -853,6 +905,8 @@ def _scenario_execute_impl(workflow_input: ScenarioInput, ctx: Context) -> dict:
     payload = {"attempt": attempt, "severity": severity}
     if failed:
         payload.update(error=error, final=final)
+        if failure:
+            payload["failure"] = failure
     append_event(run_id, version_item_id, "scenario_failed" if failed else "scenario_completed", payload)
     if not final:
         # Without this the task "succeeds", Hatchet never retries, and the run
@@ -860,6 +914,15 @@ def _scenario_execute_impl(workflow_input: ScenarioInput, ctx: Context) -> dict:
         raise ScenarioAttemptFailed(f"attempt {attempt} failed: {error}")
     _maybe_finalize(run_id)
     return {"status": "failed" if failed else "completed", "attempt": attempt, "severity": severity}
+
+
+def _role_snapshots(run) -> dict:
+    """Frozen endpoint snapshot per role, for naming the failed endpoint."""
+    return {
+        "target": run.target_config_snapshot,
+        "auditor": run.auditor_config_snapshot,
+        "judge": run.judge_config_snapshot,
+    }
 
 
 def result_error_text(payload) -> str:
@@ -923,15 +986,25 @@ def _sync_run_counters(run_id: str) -> None:
     from django.db.models import Count, Q
 
     from audits.events import ScenarioResult
+    from audits.failures import count_by_role
     from audits.models import AuditRun
 
+    rows = ScenarioResult.objects.filter(run_id=int(run_id))
+    run = AuditRun.objects.filter(pk=int(run_id)).only("summary_metrics").first()
+    metrics = dict((run.summary_metrics if run else None) or {})
+    by_role = count_by_role(rows.filter(status="failed").values_list("result", flat=True))
+    if by_role:
+        metrics["failures_by_role"] = by_role
+    else:
+        metrics.pop("failures_by_role", None)
     # One conditional aggregate instead of three COUNT queries per scenario.
-    totals = ScenarioResult.objects.filter(run_id=int(run_id)).aggregate(
+    totals = rows.aggregate(
         done=Count("id", filter=Q(status="completed") | Q(status="failed", attempts__gte=MAX_SCENARIO_ATTEMPTS)),
         ok=Count("id", filter=Q(status="completed")),
         bad=Count("id", filter=Q(status="failed")),
     )
     AuditRun.objects.filter(pk=int(run_id)).update(
+        summary_metrics=metrics,
         completed_scenarios=totals["done"],
         successful_scenarios=totals["ok"],
         failed_scenarios=totals["bad"],
@@ -959,6 +1032,9 @@ def _refresh_run_summary_metrics(run_id: str) -> None:
     if not any(_has_agentic(r) for r in results):
         return
     metrics = compute_run_metrics(results)
+    existing = AuditRun.objects.filter(pk=int(run_id)).values_list("summary_metrics", flat=True).first() or {}
+    if isinstance(existing, dict) and existing.get("failures_by_role"):
+        metrics = {**metrics, "failures_by_role": existing["failures_by_role"]}
     AuditRun.objects.filter(pk=int(run_id)).update(summary_metrics=metrics, updated_at=timezone.now())
 
 
@@ -1011,11 +1087,21 @@ def _maybe_finalize(run_id: str) -> str | None:
         # Every scenario failed (usually a wrong URL, model id or key): the run failed.
         first = ScenarioResult.objects.filter(run_id=run.pk).order_by("id").values_list("result", flat=True).first() or {}
         error = result_error_text(first)
+        from audits.failures import count_by_role, result_failure, summary_text
+
+        by_role = count_by_role(ScenarioResult.objects.filter(run_id=run.pk).values_list("result", flat=True))
+        first_failure = result_failure(first)
+        who = f"{first_failure['role']}: " if first_failure else ""
+        breakdown = f" ({summary_text(by_role, sum(by_role.values()))})" if by_role else ""
         if AuditRun.objects.filter(pk=run.pk, status__in=_ACTIVE_STATUSES).update(
             status=AuditRun.Status.FAILED, error_code="ALL_SCENARIOS_FAILED", completed_scenarios=done,
-            error_message=f"Every scenario failed. First error: {error}"[:2000], finished_at=timezone.now(),
+            error_message=f"Every scenario failed{breakdown}. First error: {who}{error}"[:2000],
+            finished_at=timezone.now(),
         ):
-            append_event(run_id, "_run", "run_failed", {"code": "ALL_SCENARIOS_FAILED", "error": error})
+            append_event(
+                run_id, "_run", "run_failed",
+                {"code": "ALL_SCENARIOS_FAILED", "error": error, "failures_by_role": by_role},
+            )
         return "failed"
     if AuditRun.objects.filter(pk=run.pk, status__in=_ACTIVE_STATUSES).update(
         status=AuditRun.Status.COMPLETED, finished_at=timezone.now(), completed_scenarios=done,
