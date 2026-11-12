@@ -127,3 +127,22 @@ class SeedAgenticDemoTests(TestCase):
     def test_it_is_named_like_the_other_demo_runs(self):
         self._seed()
         self.assertEqual(self._run().name, "Demo: Agentic audit: Support Refund Assistant (D01-D10)")
+
+
+    def test_it_is_shown_in_a_public_experiment(self):
+        self._seed()
+        run = self._run()
+        experiment = run.experiments.get()
+        self.assertTrue(experiment.is_public)
+        self.assertEqual(experiment.name, "Agentic: auditing the Support Refund Assistant (recorded)")
+        self.client.logout()
+        self.assertEqual(self.client.get(f"/runs/{run.pk}/").status_code, 200)   # anonymous
+
+    def test_a_run_loaded_before_grouping_is_grouped_on_the_next_seed(self):
+        self._seed()
+        run = self._run()
+        run.experiments.clear()
+        self.assertIn("Grouped it into a public experiment", self._seed())
+        self.assertTrue(run.experiments.get().is_public)
+        self._seed()
+        self.assertEqual(run.experiments.count(), 1)
