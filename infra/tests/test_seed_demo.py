@@ -34,6 +34,8 @@ class DemoSeedExperimentsTests(TestCase):
             "Safety: does a hotter target change the verdicts?":
                 (["params"], ["Demo: safety baseline", "Demo: safety elevated-temp"]),
             "Health vs RAG scenarios": (["scenario_set"], ["Demo: health baseline", "Demo: rag baseline"]),
+            "Safety: graded by a decision model (Jev)":
+                ([], ["Demo: safety baseline, graded by a decision model"]),
         })
         hot = AuditRun.objects.get(name="Demo: safety elevated-temp")
         # A setting the engine reads, so cloning / re-running really is hotter.
@@ -43,15 +45,88 @@ class DemoSeedExperimentsTests(TestCase):
         self._seed()
         Experiment.objects.all().delete()
         self._seed()   # runs exist: no new runs, just the experiments
-        self.assertEqual(AuditRun.objects.filter(project=self.project).count(), 4)
-        self.assertEqual(len(self._experiments()), 2)
+        self.assertEqual(AuditRun.objects.filter(project=self.project).count(), 5)
+        self.assertEqual(len(self._experiments()), 3)
         self._seed()   # idempotent
-        self.assertEqual(len(self._experiments()), 2)
+        self.assertEqual(len(self._experiments()), 3)
 
     def test_force_replaces_demo_runs_and_their_experiments_only(self):
         self._seed()
         own = Experiment.objects.create(project=self.project, name="Mine", created_by=self.user)
         self._seed("--force")
-        self.assertEqual(AuditRun.objects.filter(project=self.project).count(), 4)
-        self.assertEqual(Experiment.objects.filter(project=self.project).count(), 3)   # 2 demo + mine
+        self.assertEqual(AuditRun.objects.filter(project=self.project).count(), 5)
+        self.assertEqual(Experiment.objects.filter(project=self.project).count(), 4)   # 3 demo + mine
         self.assertTrue(Experiment.objects.filter(pk=own.pk).exists())
+
+
+DECISION_RUN = "Demo: safety baseline, graded by a decision model"
+
+
+class DecisionDemoSeedTests(TestCase):
+    """New users see a decision model at work: Jev registered, and a demo run it graded."""
+
+    def setUp(self):
+        self.user = UserFactory(is_superuser=True)
+        self.project = ProjectFactory()
+        MembershipFactory(user=self.user, project=self.project, role="admin")
+        seed_workspace(self.project, self.user)
+        seed_default_model_connections(self.project, self.user)
+
+    def _seed(self, *args):
+        call_command("seed_demo_audits", *args, project=self.project.id, stdout=StringIO(), stderr=StringIO())
+
+    def test_jev_is_seeded_as_a_decision_model(self):
+        from model_registry.models import ModelConnection, RegisteredModel
+
+        conn = ModelConnection.objects.get(project=self.project, name="TypeSafe")
+        self.assertEqual(conn.base_url, "https://api.typesafe.ai/v1")
+        self.assertEqual(conn.secret_reference, "TYPESAFE_API_KEY")
+        jev = RegisteredModel.objects.get(connection=conn, model_id="jev-latest")
+        self.assertTrue(jev.is_decision)
+        seed_default_model_connections(self.project, self.user)   # idempotent
+        self.assertEqual(RegisteredModel.objects.filter(connection=conn).count(), 1)
+
+    def test_the_decision_demo_run_is_graded_by_jev_with_a_decision_judge(self):
+        from audits.events import ScenarioResult
+
+        self._seed()
+        run = AuditRun.objects.get(project=self.project, name=DECISION_RUN)
+        self.assertEqual(run.judge_version.base, "decision_safety")
+        self.assertEqual(run.judge_version.output, "decision")
+        self.assertEqual(run.judge_model.display_name, "Jev (TypeSafe)")
+        self.assertTrue(run.judge_config_snapshot["capabilities"]["decision"])
+        # Same recorded transcripts as the chat-judged baseline: only the grading differs.
+        self.assertEqual(run.target_model, AuditRun.objects.get(name="Demo: safety baseline").target_model)
+        results = ScenarioResult.objects.filter(run_id=run.id)
+        self.assertEqual(results.count(), 3)
+        for result in results:
+            self.assertTrue(result.result["judgment"]["judge_decision"]["model"].startswith("jev"))
+
+    def test_a_workspace_seeded_before_the_decision_demo_gets_it_once(self):
+        from accounts.models import SiteSetting
+
+        self._seed()
+        # As seeded by the previous release: no decision run, no record of given runs.
+        AuditRun.objects.filter(name=DECISION_RUN).delete()
+        SiteSetting.objects.filter(key__startswith="demo_audits_given:").delete()
+        self._seed()
+        self.assertTrue(AuditRun.objects.filter(name=DECISION_RUN).exists())
+        self.assertEqual(AuditRun.objects.filter(project=self.project).count(), 5)
+        # Deleted afterwards: it stays deleted.
+        AuditRun.objects.filter(name=DECISION_RUN).delete()
+        self._seed()
+        self.assertFalse(AuditRun.objects.filter(name=DECISION_RUN).exists())
+
+    def test_a_deleted_demo_run_is_not_seeded_again(self):
+        self._seed()
+        AuditRun.objects.filter(name="Demo: rag baseline").delete()
+        self._seed()
+        self.assertFalse(AuditRun.objects.filter(name="Demo: rag baseline").exists())
+
+    def test_the_decision_run_is_skipped_without_jev(self):
+        from model_registry.models import RegisteredModel
+
+        RegisteredModel.objects.filter(model_id="jev-latest").delete()
+        self._seed()
+        self.assertFalse(AuditRun.objects.filter(name=DECISION_RUN).exists())
+        self.assertEqual(AuditRun.objects.filter(project=self.project).count(), 4)

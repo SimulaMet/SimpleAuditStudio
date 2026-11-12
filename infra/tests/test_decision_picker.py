@@ -87,5 +87,5 @@ def test_the_target_badge_says_a_run_is_one_turn():
     """The constraint a user needs before picking it as a target."""
     html = _render([DECISION])
     assert "single turn" in html
-    # The judge/auditor roles say what actually happens there: the chat path.
-    assert "only a target run uses the decision surface" in html
+    # The judge role says it needs a decision judge (SimpleAudit >= 0.7).
+    assert "As judge model it needs a decision judge" in html

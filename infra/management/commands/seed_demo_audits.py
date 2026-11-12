@@ -21,12 +21,16 @@ Fixture structure:
 Multiple runs can share the same "pack" (scenario set), enabling meaningful
 comparison via intersection. Runs with the same "experiment" are grouped into
 one Experiment, whose factors are the inputs that differ between its runs;
-"generation" is added to a run's generation settings.
+"generation" is added to a run's generation settings. A run may name its own
+"judge" (a SimpleAudit judge key, e.g. "decision_safety") and "judge_model"
+(a display name, e.g. "Jev (TypeSafe)"); a run whose judge model is missing is
+skipped.
 
 Usage:
     python manage.py seed_demo_audits [--project 1] [--force]
 
-Idempotent: skips if demo runs already exist. Use --force to re-seed.
+Idempotent: runs that already exist (by name) are skipped, so a fixture run
+added later still reaches workspaces seeded before it. Use --force to re-seed.
 """
 from __future__ import annotations
 
@@ -110,10 +114,22 @@ class Command(BaseCommand):
                 # Demo experiments left without runs go too (never a user's own).
                 Experiment.objects.filter(pk__in=experiment_ids, runs__isnull=True).delete()
             else:
+                # A run the fixture gained after this workspace was seeded
+                # (e.g. the decision-model demo) is added once. Runs it was
+                # already given stay as they are, deleted ones included.
+                existing = list(existing)   # before adding: a lazy queryset would include them
+                given = self._given_labels(project, runs_spec, existing)
+                added = [
+                    run for spec in runs_spec
+                    if _label(spec) not in given
+                    and (run := self._create_spec_run(project, user, spec, target_ep, auditor_ep, judge_ep))
+                ]
+                self._record_given(project, given | {_label(spec) for spec in runs_spec})
                 # Seeded before demo experiments existed: group those runs now.
-                made = self._group_into_experiments(project, user, runs_spec, list(existing))
-                note = f" Grouped them into {made} experiment(s)." if made else ""
-                self.stdout.write(f"{existing.count()} demo audit(s) already exist. Use --force to re-seed.{note}")
+                made = self._group_into_experiments(project, user, runs_spec, existing + added)
+                note = f" Added {len(added)} new demo run(s)." if added else ""
+                note += f" Grouped runs into {made} experiment(s)." if made else ""
+                self.stdout.write(f"{len(existing)} demo audit(s) already exist. Use --force to re-seed.{note}")
                 return
 
         self.stdout.write(
@@ -124,15 +140,36 @@ class Command(BaseCommand):
 
         runs = []
         for run_spec in runs_spec:
-            pack = run_spec["pack"]
-            run = self._create_run(project, user, pack, run_spec.get("label", pack), run_spec["scenarios"],
-                                   target_ep, auditor_ep, judge_ep, generation=run_spec.get("generation"))
+            run = self._create_spec_run(project, user, run_spec, target_ep, auditor_ep, judge_ep)
             if run is not None:
                 runs.append(run)
         made = self._group_into_experiments(project, user, runs_spec, runs)
+        self._record_given(project, {_label(spec) for spec in runs_spec})
 
         self.stdout.write(self.style.SUCCESS(
             f"\nDone. Created {len(runs)} demo audit run(s) in {made} experiment(s)."))
+
+    @staticmethod
+    def _given_labels(project, runs_spec: list[dict], existing) -> set[str]:
+        """Labels of the fixture runs this workspace was already given.
+
+        Recorded per project since the per-run judge was added. A workspace
+        seeded before that has no record: every run it has, plus every run of
+        the fixture as it was then (none named its own judge), counts as given.
+        """
+        from accounts.services import get_site_setting
+
+        recorded = get_site_setting(_given_key(project))
+        if isinstance(recorded, list):
+            return set(recorded)
+        have = {run.name.removeprefix("Demo: ") for run in existing}
+        return have | {_label(spec) for spec in runs_spec if not spec.get("judge")}
+
+    @staticmethod
+    def _record_given(project, labels: set[str]) -> None:
+        from accounts.services import set_site_setting
+
+        set_site_setting(_given_key(project), sorted(labels))
 
     @staticmethod
     def _group_into_experiments(project, user, runs_spec: list[dict], runs: list) -> int:
@@ -161,14 +198,43 @@ class Command(BaseCommand):
         return len(groups)
 
     @staticmethod
-    def _judge(project, user):
-        """SimpleAudit's default judge (what graded the fixture)."""
-        from judges.services import default_judge_version
+    def _judge(project, user, key: str | None = None):
+        """The judge version that graded a fixture run: SimpleAudit's default
+        judge, or the workspace's judge based on ``key`` (e.g. "decision_safety")."""
+        from judges.models import JudgeVersion
+        from judges.services import default_judge_version, ensure_starter_judges
 
-        return default_judge_version(project, user)
+        if not key:
+            return default_judge_version(project, user)
+        ensure_starter_judges(project, user)
+        version = (
+            JudgeVersion.objects.filter(judge__project=project, base=key, criteria="")
+            .order_by("judge__created_at", "-version").first()
+        )
+        return version
+
+    def _create_spec_run(self, project, user, run_spec: dict, target_ep, auditor_ep, judge_ep):
+        """One fixture run, with its own judge and judge model when it names them."""
+        from model_registry.models import RegisteredModel
+
+        label = run_spec.get("label", run_spec["pack"])
+        judge_name = run_spec.get("judge_model")
+        if judge_name:
+            judge_ep = RegisteredModel.objects.filter(project=project, display_name=judge_name).first()
+            if judge_ep is None:
+                self.stderr.write(f"  No model '{judge_name}' for '{label}' — skipping.")
+                return None
+        judge_version = self._judge(project, user, run_spec.get("judge"))
+        if judge_version is None:
+            self.stderr.write(f"  No judge '{run_spec.get('judge')}' for '{label}' — skipping.")
+            return None
+        return self._create_run(project, user, run_spec["pack"], label, run_spec["scenarios"],
+                                target_ep, auditor_ep, judge_ep, generation=run_spec.get("generation"),
+                                judge_version=judge_version)
 
     def _create_run(self, project, user, pack: str, label: str, scenarios: list[dict],
-                    target_ep, auditor_ep, judge_ep, generation: dict | None = None):
+                    target_ep, auditor_ep, judge_ep, generation: dict | None = None,
+                    judge_version=None):
         """Create one completed demo run from recorded results; None when its set is missing."""
         from audits.events import append_event, upsert_scenario_result
         from audits.models import AuditRun
@@ -187,7 +253,7 @@ class Command(BaseCommand):
         from audits.services import _endpoint_snapshot as _snap
         from judges.services import judge_snapshot
 
-        judge_version = self._judge(project, user)
+        judge_version = judge_version or self._judge(project, user)
 
         provenance = resolve_engine_provenance()
         now = timezone.now()
@@ -264,6 +330,14 @@ class Command(BaseCommand):
 
         self.stdout.write(f"  ✓ #{run.id} {label}: {successful}/{successful + failed} passed")
         return run
+
+
+def _label(spec: dict) -> str:
+    return spec.get("label", spec["pack"])
+
+
+def _given_key(project) -> str:
+    return f"demo_audits_given:{project.id}"
 
 
 def _count_severities(severities: list[str]) -> dict:

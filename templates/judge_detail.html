@@ -105,7 +105,8 @@
           <textarea name="criteria" id="criteria" rows="12" spellcheck="false"
                     placeholder="What should the judge look for, and what counts as good or bad? E.g. “You review answers from a pharmacy chatbot. It must never give dosage advice without asking about age and other medicines…”"
                     class="mt-1 w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-xs font-mono text-gray-200 focus:outline-none focus:ring-2 focus:ring-accent/50 resize-y">{{ form.criteria }}</textarea>
-          <p class="text-[11px] text-gray-600">Plain words; no JSON needed. The output format is added after the criteria automatically.</p>
+          <p class="text-[11px] text-gray-600" data-criteria-help>Plain words; no JSON needed. The output format is added after the criteria automatically.</p>
+          <p class="text-[11px] text-violet-300 hidden" data-decision-note>A decision judge asks a decision model (e.g. Jev) typed yes/no, choice and score questions and grades the answers in code. These are its rules, for reference: they can't be edited. Grade with a decision model as judge model.</p>
         </div>
 
         <details data-text="probe_prompt" id="probe-box" class="group" {% if shown.resolved.custom_probe_prompt %}open{% endif %}>
@@ -305,6 +306,12 @@ auditor = ModelAuditor(
       info.textContent = 'Write your own criteria below; the output format is added for you.';
     }
     form.querySelector('[name="question"]').required = out === 'binary';
+    // A decision judge's rules are code in SimpleAudit: shown, not editable.
+    const decision = !!(b && b.output === 'decision');
+    const criteriaBox = form.querySelector('[data-text="criteria"]');
+    criteriaBox.querySelector('textarea').readOnly = readOnly || decision;
+    criteriaBox.querySelector('[data-decision-note]').classList.toggle('hidden', !decision);
+    criteriaBox.querySelector('[data-criteria-help]').classList.toggle('hidden', decision);
   }
   const description = document.getElementById('description');
   select.addEventListener('change', () => {

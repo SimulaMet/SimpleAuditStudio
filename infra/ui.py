@@ -87,8 +87,14 @@ def _public_experiment_filter(request) -> dict:
     return {"visibility": Experiment.Visibility.PUBLIC}
 
 
-def _into_permission_error(into) -> str:
-    """Why a launch into an existing experiment was refused (role check failed)."""
+def _into_permission_error(into, exc=None) -> str:
+    """Why a launch into an existing experiment was refused (role check failed).
+
+    A judge / judge-model mismatch (``audits.services.judge_pairing_error``)
+    is the one other refusal create_audit_run raises; its own message says why.
+    """
+    if getattr(exc, "code", None) == "judge_model_mismatch":
+        return str(exc.detail)
     if into is not None and into.is_public:
         return f"Adding runs to the public experiment “{into.name}” needs the workspace admin role."
     return "Adding runs to an experiment needs the workspace admin or auditor role."
@@ -1632,8 +1638,8 @@ class NewExperimentView(ProjectMixin, TemplateView):
                         experiment=experiment,
                         first_point=first_point,
                     )
-        except StableAPIError:
-            return self._redesign(request.POST, _into_permission_error(into))
+        except StableAPIError as e:
+            return self._redesign(request.POST, _into_permission_error(into, e))
         except Exception as e:  # noqa: BLE001 - surface any creation failure to the user
             return self._redesign(request.POST, str(e))
         if run:
@@ -1914,8 +1920,8 @@ class NewExperimentView(ProjectMixin, TemplateView):
                     project=p, user=request.user, name=name, runs=runs, repeat=repeat, into=into,
                     confirm_public=design.get("into_confirm_public") == "1",
                 )
-            except StableAPIError:
-                errors.append(_into_permission_error(into))
+            except StableAPIError as e:
+                errors.append(_into_permission_error(into, e))
             except Exception as e:  # noqa: BLE001 - show the reason on the review screen
                 errors.append(str(e))
             else:
@@ -5118,7 +5124,63 @@ def _agentic_overview_view(evaluation: dict) -> dict | None:
 
 
 # Judgment keys already shown as their own sections.
-_JUDGMENT_SHOWN = {"severity", "summary", "issues_found", "positive_behaviors", "recommendations", "score", "abstained"}
+_JUDGMENT_SHOWN = {
+    "severity", "summary", "issues_found", "positive_behaviors", "recommendations", "score", "abstained",
+    # A decision judge's answers get their own card (_judge_decision_view).
+    "judge_decision",
+}
+
+
+def _judge_decision_view(judgment: dict) -> dict | None:
+    """A decision judge's answers (SimpleAudit ``judgment["judge_decision"]``) for display.
+
+    One row per question the decision model answered: a yes/no question shows
+    its probability of yes, a choice its chosen option, a score its most
+    probable level. Rows the judge read as uncertain are flagged. ``None``
+    for any other judge.
+    """
+    info = judgment.get("judge_decision") if isinstance(judgment, dict) else None
+    if not isinstance(info, dict):
+        return None
+    uncertain = [str(k) for k in info.get("uncertain") or []]
+    rows = []
+    for key, answer in (info.get("answers") or {}).items():
+        if not isinstance(answer, dict):
+            continue
+        label = re.sub(r"^expectation_(\d+)$", r"Expectation \1", str(key)).replace("_", " ").capitalize()
+        kind = answer.get("type")
+        probabilities = answer.get("probabilities") if isinstance(answer.get("probabilities"), dict) else {}
+        try:
+            if kind == "noul":
+                p = float(answer.get("noul"))
+                value, percent = f"{p:.0%} yes", p * 100
+            elif kind == "choice":
+                value = str(answer.get("choice"))
+                percent = float(probabilities.get(value, answer.get("confidence") or 0)) * 100
+            elif kind == "score":
+                top = max(probabilities, key=lambda k: float(probabilities[k] or 0)) if probabilities else None
+                value = f"level {int(top) + 1}" if top is not None else f"{float(answer.get('score')):.2f}"
+                percent = float(probabilities.get(top, 0)) * 100 if top is not None else 0.0
+            else:
+                continue
+        except (TypeError, ValueError):
+            continue
+        confidence = answer.get("confidence")
+        rows.append({
+            "key": key, "label": label, "kind": kind, "value": value,
+            "percent": round(max(0.0, min(percent, 100.0)), 1),
+            "confidence": round(float(confidence) * 100) if isinstance(confidence, (int, float)) else None,
+            "uncertain": str(key) in uncertain,
+        })
+    usage = info.get("usage") if isinstance(info.get("usage"), dict) else {}
+    return {
+        "model": info.get("model") or info.get("requested_model") or "",
+        "requested_model": info.get("requested_model") or "",
+        "low_confidence": bool(info.get("low_confidence")),
+        "uncertain": uncertain,
+        "rows": rows,
+        "cost": usage.get("cost") if isinstance(usage.get("cost"), (int, float)) else None,
+    }
 
 
 def _judge_grade(judgment: dict) -> dict:
@@ -5133,6 +5195,8 @@ def _judge_grade(judgment: dict) -> dict:
     for key, value in judgment.items():
         if key in _JUDGMENT_SHOWN or key.startswith("_") or value in (None, "", [], {}):
             continue
+        if key == "expectations" and "judge_decision" in judgment:
+            continue   # already rows of the decision judge card
         label = key.replace("_", " ").capitalize()
         if isinstance(value, bool):
             fields.append((label, "yes" if value else "no"))
@@ -5285,6 +5349,7 @@ def _rep_view(rep: dict, index: int) -> dict:
         # the judge cards are replaced by a "not graded" note.
         "not_graded_role": failure["role"] if failure and failure["role"] != "judge" else "",
         "decision": decisions[-1] if decisions else None,
+        "judge_decision": _judge_decision_view(rep.get("judgment")),
         "severity": rep.get("severity", ""),
         "summary": rep.get("summary", ""),
         "grade": grade,

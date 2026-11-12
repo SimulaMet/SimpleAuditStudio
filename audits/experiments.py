@@ -416,8 +416,14 @@ def spec_warnings(spec: dict) -> list[str]:
             "Decision targets are graded by the Choice Match judge (choice_match); "
             "no judge model is called."
         )
-    elif spec["judge_model"].pk == spec["target"].pk:
-        warnings.append("Judge model is the target model: it grades itself.")
+    else:
+        from audits.services import judge_pairing_error
+
+        reason = judge_pairing_error(spec["target"], spec["judge_model"], spec["judge"])
+        if reason:
+            warnings.append(reason)
+        if spec["judge_model"].pk == spec["target"].pk:
+            warnings.append("Judge model is the target model: it grades itself.")
     for role, model in (("Target", spec["target"]), ("Auditor", spec["auditor"]), ("Judge", spec["judge_model"])):
         if not model.has_key:
             warnings.append(f"{role} model has no API key set.")
@@ -546,6 +552,14 @@ def launch_experiment(
         raise DesignError("Select at least one run to launch.")
     if len(runs) > MAX_RUNS_PER_EXPERIMENT:
         raise DesignError(f"At most {MAX_RUNS_PER_EXPERIMENT} runs per experiment.")
+    from audits.services import judge_pairing_error
+
+    # Here as well as in create_audit_run: with a later start no run is made
+    # now, and the review screen shows a DesignError's own message.
+    for r in runs:
+        reason = judge_pairing_error(None if r.get("agent") else r["target"], r["judge_model"], r["judge"])
+        if reason:
+            raise DesignError(f"{r['name']}: {reason}")
     if repeat and any(r.get("agent") for r in runs):
         # A Monitor stores only a target model, so every scheduled run would
         # audit the agent's bare base model instead of the agent.

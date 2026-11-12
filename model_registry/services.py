@@ -25,6 +25,9 @@ PROVIDER_PRESETS = [
     ("openrouter", "OpenRouter", "openrouter", "https://openrouter.ai/api/v1", "OPENROUTER_API_KEY"),
     ("together", "Together AI", "together", "https://api.together.xyz/v1", "TOGETHER_API_KEY"),
     ("groq", "Groq", "groq", "https://api.groq.com/openai/v1", "GROQ_API_KEY"),
+    # TypeSafe's decision models (Jev): typed answers on /v1/systemone, used as
+    # decision targets or with decision judges. Discover models marks them.
+    ("typesafe", "TypeSafe (Jev decision models)", "openai", "https://api.typesafe.ai/v1", "TYPESAFE_API_KEY"),
     ("ollama", "Ollama (local)", "ollama", "http://localhost:11434/v1", ""),
     ("vllm", "vLLM", "vllm", "http://localhost:8000/v1", ""),
     ("custom", "Custom (OpenAI-compatible)", "openai", "", ""),

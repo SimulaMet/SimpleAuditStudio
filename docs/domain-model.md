@@ -217,7 +217,10 @@ Rules:
   not one, with no inference spent either way. OpenRouter connections use
   the model-id prefix heuristic (`typesafe/`, `jev`) because its
   `/v1/systemone` endpoint is a paid proxy without a public model listing.
-  Models can be used as decision targets only when this flag is `true`.
+  Models can be used as decision targets, or as judge models for decision
+  judges, only when this flag is `true`. The **TypeSafe (Jev decision
+  models)** connection preset points at `https://api.typesafe.ai/v1` with
+  `TYPESAFE_API_KEY`.
 - unique `(connection_id, model_id)`
 - display name is user-facing; `model_id` is provider-specific
 - inherits auth from its connection
@@ -248,7 +251,7 @@ SimpleAudit (`simpleaudit.judges.compose`).
   checklist, …; `default` = SimpleAudit's unnamed default judge). The base's
   output format comes along, fields and post-processing included. `""` = a
   generic format with the version's own criteria.
-- `output` — `severity`, `score`, `binary` or `checklist`; with a base, the base's
+- `output` — `severity`, `score`, `binary`, `checklist` or `decision`; with a base, the base's
 - `criteria` — blank means the base's criteria; required without a base
 - `probe_prompt` — how the auditor plays the user; blank means the base's
   (SimpleAudit's default without a base)
@@ -273,6 +276,33 @@ Rules:
 - new workspaces start with one judge per SimpleAudit judge (the safety judge
   named "Safety Judge (SimpleAudit Default)"); the Judges page offers any that
   are missing
+
+#### Decision judges
+
+SimpleAudit's decision judges (`output == "decision"`: `decision_safety`,
+`decision_harm`, `decision_expectations`, `decision_abstention`,
+`decision_helpfulness`) ask a decision model typed yes/no, choice and score
+questions and grade the answers in code. Their criteria are a read-only
+description of those rules: a version can't edit them.
+
+- a decision judge needs a decision judge model (`capabilities.decision`), and
+  a decision judge model needs a decision judge. `audits.services.
+  judge_pairing_error` refuses any other pair at run creation
+  (`judge_model_mismatch`) and on New Experiment; the engine checks again for
+  frozen runs. A decision *target* is graded by Choice Match, so the pair does
+  not matter for it
+- the engine builds a `DecisionJudgeClient` from the frozen judge-model
+  snapshot (`infra.engine.decision_judge_client_for`): OpenRouter's fixed
+  System One URL, Ollama with its 64 KiB cap, any other connection at
+  `{base_url}/v1/systemone`. The key comes from the connection's secret
+  reference at execution time
+- the verdict carries `judge_decision` (served model version, every answer
+  with its probabilities, uncertain questions, usage); run detail shows it as
+  the **Decision judge answers** card, with low-confidence results flagged
+- the seed registers Jev (TypeSafe connection, `TYPESAFE_API_KEY`) as a
+  decision model, and `seed_demo_audits` adds a demo run that re-grades the
+  recorded safety baseline transcripts with the Decision Safety Judge on Jev,
+  so a new workspace shows decision-model grading without an API key
 
 ## 5. Audit run
 
