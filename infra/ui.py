@@ -2854,7 +2854,12 @@ class ScenarioExportView(ProjectMixin, View):
         sset = ScenarioSet.objects.filter(pk=set_id, project=request.project).first()
         if not sset:
             return JsonResponse({"error": "Not found"}, status=404)
-        latest = sset.versions.order_by("-version").first()
+        # ``?version=N`` exports the version being viewed; default is the latest.
+        requested = _int(request.GET.get("version"))
+        latest = (sset.versions.filter(version=requested).first() if requested
+                  else sset.versions.order_by("-version").first())
+        if requested and latest is None:
+            return JsonResponse({"error": "Version not found"}, status=404)
         def _export_scenario(it):
             d = {"key": it.scenario.key, "title": it.scenario.title,
                  "description": it.revision.description,
@@ -2872,6 +2877,8 @@ class ScenarioExportView(ProjectMixin, View):
         scenarios = [_export_scenario(it) for it in latest.items.select_related("scenario", "revision")] if latest else []
         shared = list(latest.shared_expectations or []) if latest else []
         payload = {"format_version": 2, "set_name": sset.name, "scenarios": scenarios}
+        if latest:
+            payload["set_version"] = latest.version
         # Format 3 carries expectation objects and the set's shared expectations;
         # a set that uses neither stays readable by importers that only know 2.
         if shared or any(isinstance(e, dict) for sc in scenarios for e in sc["expected_behavior"] or []):

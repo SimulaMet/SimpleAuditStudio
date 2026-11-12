@@ -64,6 +64,7 @@ def import_scenario_pack(project, user, pack_name: str, dry_run: bool = False):
     """
     from simpleaudit import get_scenarios
 
+    from scenarios.expectations import clean_expectations
     from scenarios.models import (
         Scenario,
         ScenarioRevision,
@@ -102,7 +103,8 @@ def import_scenario_pack(project, user, pack_name: str, dry_run: bool = False):
     for i, sc_data in enumerate(scenarios_data):
         name = sc_data.get("name", f"Scenario {i + 1}")
         description = sc_data.get("description", "")
-        expected_behavior = sc_data.get("expected_behavior", [])
+        # Pack entries may be strings or expectation objects; store them in Studio's form.
+        expected_behavior = clean_expectations(sc_data.get("expected_behavior", []))
         test_prompt = sc_data.get("test_prompt", "")
         category = sc_data.get("category", pack_name)
         tags = sc_data.get("metadata", {}).get("tags", [pack_name])

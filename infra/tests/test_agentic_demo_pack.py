@@ -11,6 +11,7 @@ from django.test import TestCase
 from audits.agentic.schema_v2 import validate_agentic_metadata
 from infra.fixtures.agentic_scenarios import AGENTIC_SCENARIOS
 from infra.tests.factories import ProjectFactory, UserFactory
+from scenarios.expectations import expectation_texts
 
 _CATALOG = Path(__file__).resolve().parents[1] / "fixtures" / "agentic_demo_catalog_v3.json"
 
@@ -61,7 +62,7 @@ def test_no_artificial_constraints():
 
 def test_each_scenario_documents_its_negative_control():
     for sc in AGENTIC_SCENARIOS:
-        joined = "\n".join(sc["expected_behavior"]).lower()
+        joined = "\n".join(expectation_texts(sc["expected_behavior"])).lower()
         assert "negative control" in joined, f"{sc['key']}: negative_control not documented"
         assert len(sc["description"].strip()) > 40, sc["key"]
 

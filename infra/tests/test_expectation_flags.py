@@ -214,6 +214,59 @@ class ExpectationWebTests(TestCase):
         assert stale.status_code == 302
         assert self.sset.versions.count() == 2
 
+    def test_set_export_and_import_round_trip_flags_and_shared_rules(self):
+        rows = json.dumps([{"id": "", "text": "Counts", "required": True},
+                           {"id": "", "text": "Only reported", "required": False}])
+        self.client.post("/scenarios/create/", {"name": "S", "description": "d", "set_id": self.sset.id,
+                                                "expected_behavior_rows": rows})
+        shared = json.dumps([{"id": "G1", "text": "Never a dead end", "required": False}])
+        self.client.post(f"/scenarios/shared/{self.sset.id}/", {"shared_expectations_rows": shared})
+        exported = self.client.get(f"/scenarios/{self.sset.id}/export/").json()
+        assert exported["format_version"] == 3
+        assert exported["shared_expectations"] == [{"id": "G1", "text": "Never a dead end", "required": False}]
+        assert exported["scenarios"][0]["expected_behavior"] == ["Counts", {"text": "Only reported", "required": False}]
+
+        target = ScenarioSet.objects.create(project=self.project, name="Copy")
+        resp = self.client.post(f"/scenarios/{target.id}/import/", json.dumps(exported),
+                                content_type="application/json")
+        assert resp.status_code == 302, resp.content
+        version = target.versions.order_by("-version").first()
+        assert version.shared_expectations == exported["shared_expectations"]
+        item = version.items.select_related("revision").get()
+        assert item.revision.expected_behavior == ["Counts", {"text": "Only reported", "required": False}]
+
+    def test_set_import_without_shared_rules_keeps_the_target_sets_rules(self):
+        self.client.post("/scenarios/create/", {"name": "S", "description": "d", "set_id": self.sset.id,
+                                                "expected_behavior": "a"})
+        self.client.post(f"/scenarios/shared/{self.sset.id}/", {"shared_expectations_rows": json.dumps(
+            [{"id": "G1", "text": "rule", "required": True}])})
+        payload = {"format_version": 2, "scenarios": [{"key": "new", "title": "N", "description": "d",
+                                                        "expected_behavior": ["b"]}]}
+        resp = self.client.post(f"/scenarios/{self.sset.id}/import/", json.dumps(payload),
+                                content_type="application/json")
+        assert resp.status_code == 302, resp.content
+        latest = self.sset.versions.order_by("-version").first()
+        assert latest.shared_expectations == [{"id": "G1", "text": "rule", "required": True}]
+        assert latest.scenario_count == 2
+
+    def test_export_follows_the_viewed_version(self):
+        self.client.post("/scenarios/create/", {"name": "S", "description": "d", "set_id": self.sset.id,
+                                                "expected_behavior": "a"})
+        self.client.post(f"/scenarios/shared/{self.sset.id}/", {"shared_expectations_rows": json.dumps(
+            [{"id": "G1", "text": "rule", "required": True}])})
+        old = self.client.get(f"/scenarios/{self.sset.id}/export/?version=1").json()
+        assert (old["set_version"], old["format_version"], "shared_expectations" in old) == (1, 2, False)
+        new = self.client.get(f"/scenarios/{self.sset.id}/export/").json()
+        assert (new["set_version"], new["format_version"]) == (2, 3)
+        assert self.client.get(f"/scenarios/{self.sset.id}/export/?version=9").status_code == 404
+
+    def test_set_import_rejects_bad_shared_rules(self):
+        payload = {"format_version": 3, "shared_expectations": [{"text": ""}], "scenarios": []}
+        resp = self.client.post(f"/scenarios/{self.sset.id}/import/", json.dumps(payload),
+                                content_type="application/json")
+        assert resp.status_code == 400
+        assert "Invalid shared expectations" in resp.json()["error"]
+
 
 def _checklist(*items):
     return {"severity": "low", "judgment": {"checklist": list(items)}}

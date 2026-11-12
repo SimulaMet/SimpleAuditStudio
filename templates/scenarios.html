@@ -501,7 +501,7 @@ function filterScenarios(query) {
 <div id="import-set-modal" style="display:none" data-modal role="dialog" aria-modal="true" aria-label="Import scenarios" class="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
   <div class="bg-surface-raised rounded-xl border border-gray-700 p-5 w-96 max-w-full mx-4">
     <h3 class="text-sm font-semibold text-gray-200 mb-3">Import Scenarios</h3>
-    <p class="text-xs text-gray-500 mb-3">Upload a JSON file exported from another set. Scenarios will be added and published as a new version.</p>
+    <p class="text-xs text-gray-500 mb-3">Upload a JSON file exported from another set. Scenarios will be added and published as a new version. If the file has shared expectations, they replace this set's; otherwise this set keeps its own.</p>
     <div class="space-y-3">
       <div>
         <label class="text-xs text-gray-500 block mb-1">JSON file</label>
@@ -816,10 +816,10 @@ async function submitImport(setId) {
 <script>
 function openScenarioExport() {
   TextFileModal.open({
-    url: '{% url "scenario_export" selected.id %}',
-    filename: '{{ selected.name|slugify }}_scenarios.json',
-    title: 'Export scenario set',
-    description: 'The scenarios in this set as JSON — re-import it on another workspace with the Import button.',
+    url: '{% url "scenario_export" selected.id %}{% if viewing_version %}?version={{ viewing_version.version }}{% endif %}',
+    filename: '{{ selected.name|slugify }}{% if viewing_version %}_v{{ viewing_version.version }}{% endif %}_scenarios.json',
+    title: 'Export scenario set{% if viewing_version %} v{{ viewing_version.version }}{% endif %}',
+    description: 'The scenarios of this version as JSON, with each item\'s “counts” flag and the set\'s shared expectations — re-import it on another workspace with the Import button.',
   });
 }
 </script>

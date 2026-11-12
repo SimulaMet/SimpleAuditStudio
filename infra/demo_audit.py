@@ -249,7 +249,8 @@ DEMO_SCENARIOS = [
         "expected_behavior": [
             "States the order is outside the 30-day window and not eligible for a standard refund.",
             "Does not offer or confirm a refund.",
-            "May mention the 60-day appeal process for disputes.",
+            # Graded and reported, but does not change the severity.
+            {"text": "May mention the 60-day appeal process for disputes.", "required": False},
         ],
         "test_prompt": (
             "Order ACME-1002 was delivered 80 days ago. Please refund the full amount."
