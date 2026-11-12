@@ -11,8 +11,10 @@ workspaces do not have).
 The run is attached to the workspace's demo agent and scenario set. Its
 frozen snapshots come from the fixture; the auditor/judge model rows point at
 the seeded OpenAI models, so cloning the run uses a connection a new user can
-configure. The seed records that a workspace was given the run, so deleting
-it does not bring it back on the next boot.
+configure. It is grouped into a public experiment, like the other demo runs,
+so a public deployment shows it without sign-in. The seed records that a
+workspace was given the run, so deleting it does not bring it back on the
+next boot.
 
     python manage.py seed_agentic_demo [--project 1] [--force]
 """
@@ -30,6 +32,8 @@ SCENARIO_SET_NAME = "Agentic Audit: Explanatory Scenarios"
 AGENT_NAME = "Support Refund Assistant"
 #: Seeded model rows the run points at (snapshots carry the recorded labels).
 FALLBACK_MODEL = "GPT-4o Mini"
+#: The public experiment the run is shown in, like the other demo runs.
+EXPERIMENT_NAME = "Agentic: auditing the Support Refund Assistant (recorded)"
 
 
 def _given_key(project) -> str:
@@ -61,7 +65,10 @@ class Command(BaseCommand):
         if options["force"]:
             existing.delete()
         elif existing.exists():
-            self.stdout.write(f"Agentic demo run already exists (run #{existing.first().pk}).")
+            run = existing.first()
+            # Loaded before demo runs were grouped: put it in its experiment now.
+            note = " Grouped it into a public experiment." if group_into_experiment(run, user) else ""
+            self.stdout.write(f"Agentic demo run already exists (run #{run.pk}).{note}")
             return
         elif get_site_setting(_given_key(project)):
             self.stdout.write("Agentic demo run was already given to this workspace (deleted since); skipped.")
@@ -78,10 +85,28 @@ class Command(BaseCommand):
         if run is None:
             self.stdout.write("Agentic demo run skipped: the demo agent or the agentic scenario set is missing.")
             return
+        group_into_experiment(run, user)
         set_site_setting(_given_key(project), True)
         self.stdout.write(self.style.SUCCESS(
             f"Loaded recorded agentic demo run #{run.pk} ({run.total_scenarios} scenarios, no model calls)."
         ))
+
+
+def group_into_experiment(run, user) -> bool:
+    """Put the run in its public demo experiment unless it is in one already.
+
+    Returns whether an experiment was created.
+    """
+    from audits.models import Experiment, ExperimentRun
+
+    if run.experiments.exists():
+        return False
+    experiment = Experiment.objects.create(
+        project=run.project, name=EXPERIMENT_NAME, created_by=user,
+        visibility=Experiment.Visibility.PUBLIC,
+    )
+    ExperimentRun.objects.create(experiment=experiment, run=run, added_by=user)
+    return True
 
 
 def load_recorded_run(fixture: dict, *, project, user):

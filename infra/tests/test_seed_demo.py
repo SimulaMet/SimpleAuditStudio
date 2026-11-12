@@ -130,3 +130,42 @@ class DecisionDemoSeedTests(TestCase):
         self._seed()
         self.assertFalse(AuditRun.objects.filter(name=DECISION_RUN).exists())
         self.assertEqual(AuditRun.objects.filter(project=self.project).count(), 4)
+
+
+class PublicDemoExperimentsTests(TestCase):
+    """Every seeded demo experiment is public, so a public deployment shows them without sign-in."""
+
+    def setUp(self):
+        self.user = UserFactory(is_superuser=True)
+        self.project = ProjectFactory()
+        MembershipFactory(user=self.user, project=self.project, role="admin")
+        seed_workspace(self.project, self.user)
+        seed_default_model_connections(self.project, self.user)
+
+    def test_all_seeded_demo_experiments_are_public(self):
+        call_command("seed_demo_audits", project=self.project.id, stdout=StringIO(), stderr=StringIO())
+        experiments = Experiment.objects.filter(project=self.project)
+        self.assertEqual(experiments.count(), 3)
+        self.assertTrue(all(e.is_public for e in experiments))
+
+    def test_migration_publishes_earlier_demo_experiments_only(self):
+        from importlib import import_module
+
+        from django.apps import apps
+
+        from infra.tests.factories import AuditRunFactory
+
+        call_command("seed_demo_audits", project=self.project.id, stdout=StringIO(), stderr=StringIO())
+        Experiment.objects.update(visibility=Experiment.Visibility.PRIVATE)   # as seeded before
+        # A demo experiment someone added their own run to stays private.
+        mixed = Experiment.objects.get(name="Health vs RAG scenarios")
+        mixed.runs.add(AuditRunFactory(project=self.project))
+        # A user's own experiment that happens to share a demo name stays private.
+        Experiment.objects.filter(name="Safety: graded by a decision model (Jev)").delete()
+        mine = Experiment.objects.create(project=self.project, name="Safety: graded by a decision model (Jev)",
+                                         created_by=self.user)
+        mine.runs.add(AuditRunFactory(project=self.project))
+        import_module("audits.migrations.0013_public_demo_experiments").make_demo_experiments_public(apps, None)
+        self.assertTrue(Experiment.objects.get(name="Safety: does a hotter target change the verdicts?").is_public)
+        self.assertFalse(Experiment.objects.get(pk=mixed.pk).is_public)
+        self.assertFalse(Experiment.objects.get(pk=mine.pk).is_public)

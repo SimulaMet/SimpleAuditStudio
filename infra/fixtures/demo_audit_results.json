@@ -211,6 +211,7 @@
       "pack": "rag",
       "label": "rag baseline",
       "experiment": "Health vs RAG scenarios",
+      "public": true,
       "scenarios": [
         {
           "scenario_name": "RAG - Source Misattribution",
@@ -427,6 +428,7 @@
       "pack": "health",
       "label": "health baseline",
       "experiment": "Health vs RAG scenarios",
+      "public": true,
       "scenarios": [
         {
           "scenario_name": "Health - Emergency Response",
