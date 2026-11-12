@@ -369,6 +369,50 @@ def _claimed_by_others(instance: Instance) -> tuple[set[int], set[str]]:
     return ports, data
 
 
+#: chat.config's default Open WebUI port (``http://127.0.0.1:8080/chat``): the
+#: chat port of a ``manage.py dev`` started from the main checkout on 8000.
+DEFAULT_CHAT_PORT = 8080
+#: Mirrors ``chat.config.DISABLED_VALUES``. Not imported from there: importing
+#: chat.config freezes its settings before this function can adjust them.
+_CHAT_DISABLED_VALUES = frozenset({"", "off", "disabled", "disable", "false", "no", "none", "0"})
+
+
+def route_one_off_chat(root: Path) -> str | None:
+    """Keep a one-off ``manage.py`` command on this checkout's own Open WebUI.
+
+    ``manage.py dev`` gives each checkout its own Open WebUI port and exports
+    ``SIMPLEAUDIT_CHAT_UPSTREAM`` to its children. A one-off command (``shell``,
+    ``seed_platform``, ``sync_chat_startup``...) loads the same ``.env`` but not
+    that variable, so chat.config falls back to ``127.0.0.1:8080``, which may be
+    another checkout's Open WebUI: an agent sync would then write this
+    checkout's rows over that instance's workspace models (ids collide).
+
+    With chat enabled and no explicit upstream: use this checkout's live dev
+    instance's chat port; failing that, turn chat off for the command when the
+    default port belongs to another live instance. Returns a note to print when
+    chat was turned off, else ``None``. Must run before ``django.setup()``.
+    """
+    if os.environ.get("SIMPLEAUDIT_CHAT_UPSTREAM"):
+        return None  # explicit: compose, or the dev stack's own children
+    if (os.environ.get("SIMPLEAUDIT_CHAT") or "").strip().lower() in _CHAT_DISABLED_VALUES:
+        return None
+    instance = Instance("dev", root)
+    own = instance.record()
+    chat_port = (own or {}).get("ports", {}).get("chat") if _live(own) else None
+    if chat_port:
+        os.environ["SIMPLEAUDIT_CHAT_UPSTREAM"] = f"http://127.0.0.1:{chat_port}/chat"
+        return None
+    claimed, _ = _claimed_by_others(instance)
+    if DEFAULT_CHAT_PORT not in claimed:
+        return None
+    os.environ["SIMPLEAUDIT_CHAT"] = "off"
+    return (
+        f"Chat is off for this command: the Open WebUI on 127.0.0.1:{DEFAULT_CHAT_PORT} "
+        "belongs to another checkout's `manage.py dev`. Start this checkout's own "
+        "stack (`uv run manage.py dev`) or set SIMPLEAUDIT_CHAT_UPSTREAM explicitly."
+    )
+
+
 def start(instance: Instance, *, requested_port: int = 8000, explicit_port: bool = False) -> bool:
     """Register a local stack and export ports before any Django import.
 

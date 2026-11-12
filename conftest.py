@@ -9,6 +9,18 @@ slow"`` works the same way ``manage.py test --exclude-tag slow`` does.
 
 import pytest
 
+from simpleaudit_studio import no_live_chat
+
+
+def pytest_configure(config):
+    # No test may reach a developer's live Open WebUI (an unmocked agent save
+    # used to overwrite their real workspace models). See no_live_chat.py.
+    no_live_chat.install()
+
+
+def pytest_unconfigure(config):
+    no_live_chat.uninstall()
+
 
 @pytest.fixture(autouse=True)
 def _synchronous_otlp_span_writes(settings):

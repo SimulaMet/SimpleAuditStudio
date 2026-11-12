@@ -71,6 +71,24 @@ def main() -> None:
             # OTLP tracing for OWUI spans must also be set before django.setup()
             # because chat/config.py freezes OTLP_ENABLED at import time.
             os.environ.setdefault("SIMPLEAUDIT_CHAT_OTLP", "true")
+    if command == "test":
+        # Tests never reach a live Open WebUI: chat off whatever `.env` says
+        # (chat tests switch it on themselves, with mocks) and every connect to
+        # the chat upstream refused. pytest does the same via pytest.ini and
+        # conftest.py.
+        os.environ["SIMPLEAUDIT_CHAT"] = "off"
+        from simpleaudit_studio import no_live_chat
+
+        no_live_chat.install()
+    elif command and not single_process:
+        # A one-off command must not sync into another checkout's Open WebUI.
+        from pathlib import Path
+
+        from simpleaudit_studio.lifecycle import route_one_off_chat
+
+        note = route_one_off_chat(Path(__file__).resolve().parent)
+        if note:
+            print(note, file=sys.stderr)
     # `dev` / `dev_server` are local dev commands — they imply DEBUG so the
     # production hardening block (SECURE_SSL_REDIRECT, HSTS, secure cookies)
     # stays off.

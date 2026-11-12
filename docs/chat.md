@@ -183,6 +183,24 @@ this cookie" (`SIMPLEAUDIT_CHAT_IDENTITY_TTL`, default 5s, 0 to disable). A page
 load pulls dozens of assets, and without it each one would ask Django again; a
 sign-out takes effect within that window.
 
+### Several checkouts on one machine
+
+`manage.py dev` gives each checkout its own ports (the main checkout's Open WebUI
+on `:8080`, a worktree's on `:8180`, `:8280`, ...) and exports
+`SIMPLEAUDIT_CHAT_UPSTREAM` to its own processes only. A one-off command
+(`manage.py shell`, `seed_platform`, `sync_chat_startup`, ...) reads the same
+`.env` but not that variable, so `manage.py` resolves it first: with chat on and
+no explicit `SIMPLEAUDIT_CHAT_UPSTREAM`, it uses this checkout's running dev
+stack's Open WebUI, or, when `:8080` belongs to another checkout's running stack,
+turns chat off for that command and says so. Agent ids (`studio.agent-<pk>`)
+collide between databases, so syncing into another checkout's Open WebUI would
+overwrite its workspace models.
+
+The test suite never talks to a live Open WebUI: `pytest.ini` (and `manage.py
+test`) force `SIMPLEAUDIT_CHAT=off`, chat tests enable it with mocks, and
+`simpleaudit_studio/no_live_chat.py` refuses every test connection to the chat
+upstream or to loopback `:8080`.
+
 Ollama is switched off (nothing in a Studio deployment serves it). Left on, Open
 WebUI polls it on every page load — a failing request in the browser console each
 time — and shows an empty Ollama section in its connection settings. The
