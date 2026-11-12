@@ -259,7 +259,9 @@ class PortProbeAfterStopTests(SimpleTestCase):
             raise unittest.SkipTest("Windows binds without SO_REUSEADDR")
         server = socket.socket()
         server.bind(("127.0.0.1", 0))
-        server.listen(1)
+        # Backlog > 1: _port_free's probe connection stays unaccepted in the
+        # queue, and with a backlog of 1 macOS resets the next connect under load.
+        server.listen(8)
         port = server.getsockname()[1]
         self.assertFalse(lifecycle._port_free(port))          # live listener: busy
         client = socket.create_connection(("127.0.0.1", port))
