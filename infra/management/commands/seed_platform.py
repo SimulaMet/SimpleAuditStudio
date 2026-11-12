@@ -93,6 +93,7 @@ class Command(BaseCommand):
 
         if not options["skip_demo_audits"]:
             self._seed_demo_audits(project, user)
+            self._seed_agentic_demo(project)
 
         self.stdout.write(self.style.SUCCESS("Seed complete."))
 
@@ -124,6 +125,15 @@ class Command(BaseCommand):
             call_command("seed_demo_audits", project=project.id, verbosity=0)
         except CommandError as e:
             self.stderr.write(self.style.WARNING(f"Demo audit seed skipped: {e}"))
+
+    def _seed_agentic_demo(self, project) -> None:
+        """Load the recorded agentic demo run (idempotent, never fails the seed)."""
+        from django.core.management import call_command
+
+        try:
+            call_command("seed_agentic_demo", project=project.id, verbosity=0)
+        except Exception as exc:  # noqa: BLE001 - seed must not fail on the agentic demo
+            self.stderr.write(self.style.WARNING(f"Agentic demo run skipped: {exc}"))
 
     def _seed_scenario_packs(self, project, user, packs: list[str]):
         try:

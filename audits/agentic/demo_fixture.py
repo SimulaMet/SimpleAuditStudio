@@ -14,7 +14,11 @@ from typing import Any
 
 FIXTURE_FORMAT = "simpleaudit-agentic-demo"
 FIXTURE_VERSION = 1
-_SECRET_KEY = re.compile(r"(api[_-]?key|authorization|cookie|password|secret|token)", re.IGNORECASE)
+#: A key names a secret when it contains one of these words, or "token" as a
+#: whole word segment (token, access_token, client-token), not tokenizer_model.
+_SECRET_KEY = re.compile(
+    r"(api[_-]?key|authorization|cookie|password|secret|(?:^|[_.\-])token(?:$|[_.\-]))", re.IGNORECASE
+)
 _REDACTED = "[REDACTED]"
 
 
@@ -119,15 +123,72 @@ def export_run_fixture(run: Any) -> dict[str, Any]:
     return fixture
 
 
+def _is_secret_key(key: str) -> bool:
+    """Whether a field name holds a secret. Token *counts* (``max_tokens``,
+    ``input_tokens``, ``gen_ai.usage.output_tokens``) are not secrets."""
+    if key.lower().endswith("tokens"):
+        return False
+    return bool(_SECRET_KEY.search(key))
+
+
 def sanitize_fixture(value: Any, *, key: str = "") -> Any:
     """Deep-copy JSON-like data while redacting secret-bearing fields."""
-    if _SECRET_KEY.search(key):
+    if _is_secret_key(key):
         return _REDACTED
     if isinstance(value, dict):
         return {name: sanitize_fixture(item, key=name) for name, item in value.items()}
     if isinstance(value, list):
         return [sanitize_fixture(item, key=key) for item in value]
     return value
+
+
+#: Endpoint snapshot fields that identify where a model ran.
+_ENDPOINT_FIELDS = ("id", "connection_id", "base_url", "secret_reference")
+
+
+def relabel_models(fixture: dict[str, Any], label: str, *, replacements: dict[str, str] | None = None) -> dict[str, Any]:
+    """Relabel the models a recorded run used, for a demo fixture.
+
+    A demo may be recorded on a model the people who load it do not have.
+    The auditor, judge and agent base-model snapshots become ``label`` (model
+    id ``demo-model``, no connection or URL); the target (an agent wrapper) keeps
+    its name and model id but loses its connection and URL. ``replacements``
+    then rewrites every string in the fixture (``{"old": "new"}``), for
+    identifiers that also appear in spans and results (host names, model ids).
+
+    Model *output* is left as recorded; only identifiers are changed.
+    Provenance records that the fixture was relabelled.
+    """
+    out = json.loads(json.dumps(fixture))
+    run = out.get("run") or {}
+    agent = run.get("agent_config_snapshot") if isinstance(run.get("agent_config_snapshot"), dict) else {}
+    model_snapshots = [run.get("auditor_config_snapshot"), run.get("judge_config_snapshot"), agent.get("base_model")]
+    for snapshot in model_snapshots:
+        if isinstance(snapshot, dict):
+            for name in _ENDPOINT_FIELDS:
+                snapshot.pop(name, None)
+            snapshot.update({"display_name": label, "model_id": "demo-model", "provider": "openai"})
+    target = run.get("target_config_snapshot")
+    if isinstance(target, dict):
+        for name in _ENDPOINT_FIELDS:
+            target.pop(name, None)
+
+    def rewrite(value: Any) -> Any:
+        if isinstance(value, str):
+            for old, new in (replacements or {}).items():
+                value = value.replace(old, new)
+            return value
+        if isinstance(value, dict):
+            return {rewrite(k): rewrite(v) for k, v in value.items()}
+        if isinstance(value, list):
+            return [rewrite(v) for v in value]
+        return value
+
+    out = rewrite(out)
+    provenance = out.setdefault("recorded_run", {})
+    provenance["models_relabelled"] = label
+    out.get("_meta", {}).pop("fixture_checksum", None)
+    return out
 
 
 def fixture_checksum(fixture: dict[str, Any]) -> str:

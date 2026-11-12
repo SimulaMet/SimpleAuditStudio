@@ -58,6 +58,20 @@ def _synchronous_otlp_span_writes(settings):
 
 
 @pytest.fixture(autouse=True)
+def _fresh_otlp_auth_cache():
+    """Start each test with an empty OTLP auth cache.
+
+    ``authenticate`` caches header -> credential for the process. A test's
+    credentials are rolled back without the post_delete signal that clears
+    it, so a later test in the same worker could be let in by a credential
+    that no longer exists (an unauthenticated push answered 200, not 401).
+    """
+    from model_registry.otlp_services import clear_auth_cache
+
+    clear_auth_cache()
+
+
+@pytest.fixture(autouse=True)
 def _no_openwebui_sync_throttle(settings):
     """Every Agent page load syncs in tests (ids are reused across tests)."""
     settings.OPENWEBUI_SYNC_TTL_S = 0
