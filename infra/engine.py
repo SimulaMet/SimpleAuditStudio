@@ -584,6 +584,26 @@ def auditor_kwargs(*, target: dict, auditor: dict, judge: dict, generation: dict
     if _is_decision(target):
         kwargs["judge"] = "choice_match"
         kwargs["probe_prompt"] = None
+    else:
+        # A decision judge (SimpleAudit >= 0.7, ``output == "decision"``) asks
+        # a decision model typed questions and grades in code. It runs only on
+        # a DecisionJudgeClient, and that client grades only decision judges,
+        # so the pairing is checked here as well as at run creation
+        # (``audits.services.check_judge_pairing``) for runs frozen before it.
+        decision_judge = is_decision_judge_spec(spec)
+        decision_model = _is_decision(judge)
+        if decision_judge and not decision_model:
+            raise EngineError(
+                "This run's judge is a decision judge, but its judge model is not a decision "
+                "model. Pick a decision model (e.g. Jev) as judge model."
+            )
+        if decision_model and not decision_judge:
+            raise EngineError(
+                "This run's judge model is a decision model, which answers typed questions "
+                "only. Pick a decision judge (decision_safety, decision_harm, ...) for it."
+            )
+        if decision_judge:
+            kwargs["judge_client"] = decision_judge_client_for(judge, resolve_key=resolve_key)
     # ``extra_body`` is a per-request parameter (session_id / tool_ids for
     # Open WebUI's saved-chat path), not a ModelAuditor/AsyncOpenAI
     # constructor argument. Pop it out of the merged target param dicts and
@@ -640,6 +660,44 @@ def decision_target_for(target: dict, *, resolve_key=snapshot_api_key):
     from model_registry.decision import decision_target_for_snapshot
 
     return decision_target_for_snapshot(target, api_key=resolve_key(target) or "")
+
+
+def is_decision_judge_spec(spec: dict | None) -> bool:
+    """Whether a frozen judge spec is a SimpleAudit decision judge."""
+    return (spec or {}).get("output") == "decision"
+
+
+def decision_judge_client_for(judge: dict, *, resolve_key=snapshot_api_key):
+    """The ``DecisionJudgeClient`` a decision judge model's snapshot calls for.
+
+    Built from the frozen judge-model snapshot, like ``decision_target_for``:
+    OpenRouter's fixed System One URL with the connection's key; Ollama with
+    its 64 KiB request cap; any other connection (TypeSafe, vLLM, ...) at
+    ``{base_url}/v1/systemone``. The key is resolved here, before any event
+    loop, since the repetition runner builds its auditors inside one.
+    """
+    _ensure_engine_available()
+    from simpleaudit import DecisionJudgeClient
+
+    from model_registry.decision import OPENROUTER
+
+    model_id = judge.get("model_id") or ""
+    provider = (judge.get("provider") or "").strip().lower()
+    api_key = resolve_key(judge) or None
+    if provider == OPENROUTER:
+        if not api_key:
+            raise EngineError(
+                "A decision judge model on OpenRouter needs an API key: name the environment "
+                "variable holding it in the connection's secret reference."
+            )
+        return DecisionJudgeClient.openrouter(model_id, api_key=api_key)
+    base = (judge.get("base_url") or "").strip().rstrip("/")
+    if not base:
+        raise EngineError("A decision judge model needs a base URL, e.g. https://api.typesafe.ai/v1.")
+    base = base.removesuffix("/v1")
+    if provider == "ollama":
+        return DecisionJudgeClient.ollama(model_id, base_url=base, api_key=api_key)
+    return DecisionJudgeClient.systemone(model_id, base, api_key=api_key)
 
 
 @functools.cache

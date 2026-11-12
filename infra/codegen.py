@@ -128,6 +128,36 @@ def _endpoint_block(snap: dict, *, prefix: str, indent: str = "") -> list:
     return items
 
 
+def _decision_judge_items(snap: dict, *, indent: str = "") -> list:
+    """Judge lines for a decision judge: model labels plus a ``DecisionJudgeClient``.
+
+    Mirrors ``infra.engine.decision_judge_client_for``: OpenRouter's fixed
+    System One URL, Ollama with its request cap, any other connection at
+    ``{base_url}/v1/systemone``. ``judge_model`` / ``judge_provider`` are
+    labels only once a ``judge_client`` is given.
+    """
+    provider = (snap.get("provider") or "").strip().lower()
+    model = _q(snap.get("model_id"))
+    ref = (snap.get("secret_reference") or "").strip()
+    key = f", api_key=os.environ[{_q(ref)}]" if ref else ""
+    base = (snap.get("base_url") or "").strip().rstrip("/").removesuffix("/v1")
+    if provider == "openrouter":
+        call = f"DecisionJudgeClient.openrouter({model}{key})"
+    elif provider == "ollama":
+        call = f"DecisionJudgeClient.ollama({model}, base_url={_q(base)}{key})"
+    else:
+        call = f"DecisionJudgeClient.systemone({model}, {_q(base)}{key})"
+    items = [
+        f"{indent}judge_model={model}",
+        f"{indent}judge_provider={_q(provider or 'openai')}",
+    ]
+    if not ref:
+        env = "**JUDGE_API_KEY**"
+        items.append(("#", f'{indent}# add api_key=os.environ["{env}"] to judge_client below  # export {env}'))
+    items.append(f"{indent}judge_client={call}")
+    return items
+
+
 def _scenario_dicts(version) -> list[dict]:
     """The scenario content of a set version, in set order."""
     items = (
@@ -205,6 +235,16 @@ def _render(header: str, *, version, target: dict, auditor: dict, judge_snap: di
         imports.append("from simpleaudit.judges import build_judge")
     if probe_prompt:
         judge_lines.append(f"probe_prompt={_py(probe_prompt)}")
+    # A decision judge runs on a DecisionJudgeClient built from the judge
+    # model (a decision model such as Jev), not on a chat client.
+    decision_judge = spec.get("output") == "decision"
+    if decision_judge:
+        imports.append("from simpleaudit import DecisionJudgeClient")
+
+    def judge_endpoint(indent: str) -> list:
+        if decision_judge:
+            return _decision_judge_items(judge_snap, indent=indent)
+        return _endpoint_block(judge_snap, prefix="judge", indent=indent)
 
     # --- Assemble the constructor ------------------------------------------
     # Every line is an item: a plain string renders with a trailing comma, a
@@ -234,7 +274,7 @@ def _render(header: str, *, version, target: dict, auditor: dict, judge_snap: di
         )
         items = [IND + f"models={model_entry}"]
         items += _endpoint_block(auditor, prefix="auditor", indent=IND)
-        items += _endpoint_block(judge_snap, prefix="judge", indent=IND)
+        items += judge_endpoint(IND)
         items += judge_items + extra + [IND + f"n_repetitions={n_reps}", IND + "show_progress=True"]
         imports[imports.index("from simpleaudit import ModelAuditor")] = (
             "from simpleaudit import AuditExperiment"
@@ -244,7 +284,7 @@ def _render(header: str, *, version, target: dict, auditor: dict, judge_snap: di
     else:
         items = _endpoint_block(target, prefix="target", indent=IND)
         items += _endpoint_block(auditor, prefix="auditor", indent=IND)
-        items += _endpoint_block(judge_snap, prefix="judge", indent=IND)
+        items += judge_endpoint(IND)
         items += judge_items + extra + [IND + "show_progress=True"]
         var_name, cls = "auditor", "ModelAuditor"
         run_call = f"results = auditor.run(scenarios, language={_py(language)})"

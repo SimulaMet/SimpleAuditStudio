@@ -67,7 +67,7 @@ Field names match the single-select partial so one-run posts look the same.
                 {% if m.is_decision %}
                 {# Probed on /connections/ and persisted as capabilities.decision. #}
                 <span class="align-middle text-[10px] font-medium text-violet-300 bg-violet-900/30 border border-violet-700/50 rounded px-1.5 py-0.5"
-                      title="Decision model: answers one fixed-option question with probabilities (System One). {% if role == 'target' %}A run against it is a single turn and needs a scenario with a decision block.{% else %}In this role it is called through its chat endpoint like any other model; only a target run uses the decision surface.{% endif %}">decision</span>
+                      title="Decision model: answers one fixed-option question with probabilities (System One). {% if role == 'target' %}A run against it is a single turn and needs a scenario with a decision block.{% elif role == 'judge' %}As judge model it needs a decision judge (Decision Safety Judge, …), and a decision judge needs a decision model.{% else %}In this role it is called through its chat endpoint like any other model; only target and judge runs use the decision surface.{% endif %}">decision</span>
                 {% endif %}
               </span>
               <span class="text-[11px] text-gray-500 block truncate">{{ m.model_id }}{% if not m.has_key %} · <span class="text-yellow-500">no key set</span>{% endif %}</span>
