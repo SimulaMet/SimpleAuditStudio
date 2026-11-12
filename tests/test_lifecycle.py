@@ -216,3 +216,86 @@ def test_uninstall_cannot_use_live_external_db(environment, monkeypatch):
     instance = lifecycle.Instance("dev", environment / "repo")
     with pytest.raises(SystemExit):
         lifecycle.act(instance, "uninstall", yes=True)
+
+
+class _LiveRecords:
+    """Treat every record whose pid is in ``live`` as a running instance."""
+
+    def __init__(self, *live):
+        self.live = set(live)
+
+    def __call__(self, record):
+        return bool(record) and record.get("pid") in self.live
+
+
+def _write_record(instance, pid, chat_port):
+    import json
+
+    instance.state.mkdir(parents=True, exist_ok=True)
+    instance.record_path.write_text(json.dumps({
+        "key": instance.key, "pid": pid, "created": 0, "data": str(instance.data),
+        "ports": {"public": chat_port - 80, "internal": chat_port - 79, "chat": chat_port},
+    }))
+
+
+@pytest.fixture
+def chat_env(environment, monkeypatch):
+    monkeypatch.setenv("SIMPLEAUDIT_CHAT", "embedded")
+    monkeypatch.delenv("SIMPLEAUDIT_CHAT_UPSTREAM", raising=False)
+    return environment
+
+
+def test_one_off_command_uses_own_dev_instance_chat_port(chat_env, monkeypatch):
+    root = chat_env / "worktree"
+    root.mkdir()
+    _write_record(lifecycle.Instance("dev", root), pid=11, chat_port=8180)
+    monkeypatch.setattr(lifecycle, "_live", _LiveRecords(11))
+    assert lifecycle.route_one_off_chat(root) is None
+    assert os.environ["SIMPLEAUDIT_CHAT_UPSTREAM"] == "http://127.0.0.1:8180/chat"
+    assert os.environ["SIMPLEAUDIT_CHAT"] == "embedded"
+
+
+def test_one_off_command_turns_chat_off_when_8080_belongs_to_another_checkout(chat_env, monkeypatch):
+    main, worktree = chat_env / "main", chat_env / "worktree"
+    main.mkdir()
+    worktree.mkdir()
+    _write_record(lifecycle.Instance("dev", main), pid=22, chat_port=8080)
+    _write_record(lifecycle.Instance("dev", worktree), pid=33, chat_port=8180)  # stopped
+    monkeypatch.setattr(lifecycle, "_live", _LiveRecords(22))
+    note = lifecycle.route_one_off_chat(worktree)
+    assert note and "another checkout" in note
+    assert os.environ["SIMPLEAUDIT_CHAT"] == "off"
+    assert "SIMPLEAUDIT_CHAT_UPSTREAM" not in os.environ
+
+
+def test_one_off_command_leaves_chat_alone_without_a_conflict(chat_env, monkeypatch):
+    root = chat_env / "main"
+    root.mkdir()
+    monkeypatch.setattr(lifecycle, "_live", _LiveRecords())
+    assert lifecycle.route_one_off_chat(root) is None
+    assert os.environ["SIMPLEAUDIT_CHAT"] == "embedded"
+    assert "SIMPLEAUDIT_CHAT_UPSTREAM" not in os.environ
+
+
+@pytest.mark.parametrize("env", [
+    {"SIMPLEAUDIT_CHAT_UPSTREAM": "http://open-webui:8080/chat"},  # compose / dev children
+    {"SIMPLEAUDIT_CHAT": "off"},
+])
+def test_one_off_command_respects_explicit_settings(chat_env, monkeypatch, env):
+    main, worktree = chat_env / "main", chat_env / "worktree"
+    main.mkdir()
+    worktree.mkdir()
+    _write_record(lifecycle.Instance("dev", main), pid=22, chat_port=8080)
+    monkeypatch.setattr(lifecycle, "_live", _LiveRecords(22))
+    for name, value in env.items():
+        monkeypatch.setenv(name, value)
+    before = {k: os.environ.get(k) for k in ("SIMPLEAUDIT_CHAT", "SIMPLEAUDIT_CHAT_UPSTREAM")}
+    assert lifecycle.route_one_off_chat(worktree) is None
+    assert {k: os.environ.get(k) for k in before} == before
+
+
+def test_chat_disabled_spellings_match_chat_config():
+    from chat import config as chat_config
+
+    assert lifecycle._CHAT_DISABLED_VALUES == chat_config.DISABLED_VALUES
+    assert lifecycle.DEFAULT_CHAT_PORT == 8080

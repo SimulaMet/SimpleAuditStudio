@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import unittest
+from unittest import mock
 
 from config import runtime
 from config.runtime import (
@@ -180,7 +181,18 @@ class SingleProcessRunTests(unittest.TestCase):
 
 
 class ChatPrecedenceTests(unittest.TestCase):
-    """Flag > explicit env value > mode default (chat on for single-process)."""
+    """Flag > explicit env value > mode default (chat on for single-process).
+
+    Each test starts with SIMPLEAUDIT_CHAT unset (the defaults are what is under
+    test) and the whole environment is restored afterwards, so pytest.ini's
+    SIMPLEAUDIT_CHAT=off guard survives for the tests that run after these.
+    """
+
+    def setUp(self):
+        env = mock.patch.dict(os.environ)
+        env.start()
+        self.addCleanup(env.stop)
+        os.environ.pop("SIMPLEAUDIT_CHAT", None)
 
     def test_mode_default_on_for_single_process(self):
         self.assertEqual(runtime.effective_chat_mode("dev"), "embedded")
@@ -196,10 +208,7 @@ class ChatPrecedenceTests(unittest.TestCase):
         # The flag is an explicit opt-out and wins over a .env that pins chat
         # on — otherwise --disable-chat would be a no-op on this machine.
         os.environ["SIMPLEAUDIT_CHAT"] = "embedded"
-        try:
-            self.assertEqual(runtime.effective_chat_mode("dev", disable_flag=True), "off")
-        finally:
-            os.environ.pop("SIMPLEAUDIT_CHAT", None)
+        self.assertEqual(runtime.effective_chat_mode("dev", disable_flag=True), "off")
 
     def test_disable_flag_beats_compose_default_on(self):
         # The flag wins over compose's on-default: off.
@@ -208,15 +217,9 @@ class ChatPrecedenceTests(unittest.TestCase):
     def test_explicit_env_wins_over_default_without_flag(self):
         # No flag: an explicit env value is honored, on or off.
         os.environ["SIMPLEAUDIT_CHAT"] = "docker"
-        try:
-            self.assertEqual(runtime.effective_chat_mode("dev"), "docker")
-        finally:
-            os.environ.pop("SIMPLEAUDIT_CHAT", None)
+        self.assertEqual(runtime.effective_chat_mode("dev"), "docker")
         os.environ["SIMPLEAUDIT_CHAT"] = "off"
-        try:
-            self.assertEqual(runtime.effective_chat_mode("dev"), "off")
-        finally:
-            os.environ.pop("SIMPLEAUDIT_CHAT", None)
+        self.assertEqual(runtime.effective_chat_mode("dev"), "off")
 
 
 if __name__ == "__main__":

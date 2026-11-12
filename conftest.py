@@ -7,7 +7,48 @@ unchanged by pytest-django. The environment the settings module needs is set in
 slow"`` works the same way ``manage.py test --exclude-tag slow`` does.
 """
 
+import os
+
 import pytest
+
+from simpleaudit_studio import no_live_chat
+
+
+def pytest_configure(config):
+    # No test may reach a developer's live Open WebUI (an unmocked agent save
+    # used to overwrite their real workspace models). See no_live_chat.py.
+    no_live_chat.install()
+
+
+def pytest_unconfigure(config):
+    no_live_chat.uninstall()
+
+
+#: pytest.ini's SIMPLEAUDIT_CHAT=off, as seen before any test ran.
+_CHAT_ENV = os.environ.get("SIMPLEAUDIT_CHAT")
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_runtest_teardown(item, nextitem):
+    """A test that changes SIMPLEAUDIT_CHAT must restore it (``mock.patch.dict``).
+
+    Popping it in a ``finally`` used to delete pytest.ini's ``off`` for every
+    later test in the worker. Checked after every fixture (monkeypatch
+    included) has torn down; put it back and fail the test that leaked.
+    """
+    result = yield
+    leaked = os.environ.get("SIMPLEAUDIT_CHAT")
+    if leaked == _CHAT_ENV:
+        return result
+    if _CHAT_ENV is None:
+        os.environ.pop("SIMPLEAUDIT_CHAT", None)
+    else:
+        os.environ["SIMPLEAUDIT_CHAT"] = _CHAT_ENV
+    pytest.fail(
+        f"Test left SIMPLEAUDIT_CHAT={leaked!r} (expected {_CHAT_ENV!r}); "
+        "restore it with mock.patch.dict(os.environ) or monkeypatch.",
+        pytrace=False,
+    )
 
 
 @pytest.fixture(autouse=True)

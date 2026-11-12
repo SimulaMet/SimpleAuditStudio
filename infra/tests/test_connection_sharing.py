@@ -226,6 +226,12 @@ class ConnectionsPageSharingTests(TestCase):
 class PickerSharingTests(TestCase):
     """The New Experiment picker offers shared models with a sharing label."""
 
+    @staticmethod
+    def _picker_checkbox(model_id):
+        # Only the model pickers' checkboxes (partials/model_pickers.html): a
+        # bare value="<pk>" also matches scenario sets, prompt versions, etc.
+        return rf'name="\w+_model" value="{model_id}"'
+
     def setUp(self):
         self.owner_ws = ProjectFactory(name="Owner WS")
         self.consumer_ws = ProjectFactory(name="Consumer WS")
@@ -246,7 +252,7 @@ class PickerSharingTests(TestCase):
         self.assertContains(page, "Shared GPT")
         self.assertContains(page, "shared</span>")
         # The model checkbox is present and usable.
-        self.assertContains(page, f'value="{self.model.id}"')
+        self.assertRegex(page.content.decode(), self._picker_checkbox(self.model.id))
 
     def test_private_connection_not_in_picker(self):
         private_conn = ModelConnectionFactory(
@@ -256,13 +262,13 @@ class PickerSharingTests(TestCase):
         private_model = RegisteredModelFactory(connection=private_conn, project=self.owner_ws, display_name="Secret", model_id="secret")
         page = self.client.get("/experiments/new/")
         self.assertNotContains(page, "Private Conn")
-        self.assertNotContains(page, f'value="{private_model.id}"')
+        self.assertNotRegex(page.content.decode(), self._picker_checkbox(private_model.id))
 
     def test_enabled_connection_still_in_picker(self):
         # Guards against over-filtering: a normal enabled connection is offered.
         page = self.client.get("/experiments/new/")
         self.assertContains(page, "Shared GPT")
-        self.assertContains(page, f'value="{self.model.id}"')
+        self.assertRegex(page.content.decode(), self._picker_checkbox(self.model.id))
 
     def test_disabled_connection_hidden_from_picker(self):
         # A disabled connection's models can't be picked for new runs.
@@ -270,7 +276,7 @@ class PickerSharingTests(TestCase):
         self.conn.save()
         page = self.client.get("/experiments/new/")
         self.assertNotContains(page, "Shared GPT")
-        self.assertNotContains(page, f'value="{self.model.id}"')
+        self.assertNotRegex(page.content.decode(), self._picker_checkbox(self.model.id))
 
     def test_disabled_shared_connection_hidden_from_picker(self):
         # A disabled *shared* connection is also hidden from the consumer workspace.
@@ -278,7 +284,7 @@ class PickerSharingTests(TestCase):
         self.conn.save()
         page = self.client.get("/experiments/new/")
         self.assertNotContains(page, "Shared GPT")
-        self.assertNotContains(page, f'value="{self.model.id}"')
+        self.assertNotRegex(page.content.decode(), self._picker_checkbox(self.model.id))
 
 
 class PingSharedConnectionTests(TestCase):
