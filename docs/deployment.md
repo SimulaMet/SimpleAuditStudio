@@ -215,7 +215,7 @@ override them when you deliberately need to.
 |---|---|
 | `setup_local` | migrate + bootstrap + seed (local dev, one-shot). |
 | `bootstrap_platform` | Create the admin user and default workspace (idempotent). |
-| `seed_platform` | Import scenario packs and model connections, plus demo runs (`seed_demo_audits`) and the demo "Support Refund Assistant" agent (skip with `--skip-demo-agent`). |
+| `seed_platform` | Import scenario packs and model connections (including a TypeSafe connection with the Jev decision model, keyed by `TYPESAFE_API_KEY`), plus demo runs (`seed_demo_audits`, one of them graded by the Decision Safety Judge on Jev) and the demo "Support Refund Assistant" agent (skip with `--skip-demo-agent`). |
 | `seed_agentic_scenarios` | Seed the default agentic audit scenario set (D01-D10). |
 | `seed_agentic_demo` | Preload completed synthetic results, traces, and a separate Agentic verdict rollup after the demo Agent sync; never runs an audit or calls a model. |
 | `dev` | Local dev stack (embedded, hot-reload, chat, one-time sign-in). `--disable-chat`, `--no-worker`, `--no-reload`, `--no-browser`. |

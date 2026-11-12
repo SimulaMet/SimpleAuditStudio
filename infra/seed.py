@@ -1,7 +1,8 @@
 """First-run seed logic — single source of truth.
 
-Imports SimpleAudit scenario packs, creates default model connections and
-starter judges.
+Imports SimpleAudit scenario packs, creates default model connections
+(including a TypeSafe connection with the Jev decision model) and starter
+judges.
 Used by the ``seed_platform`` management command, which runs automatically on
 web container boot (docker-compose) and in the HF Space ``start.sh``, and can
 be run manually with ``--packs`` to import additional packs.
@@ -33,6 +34,21 @@ DEFAULT_MODELS = [
             ("o3", "o3"),
             ("o3-mini", "o3-mini"),
         ],
+    ),
+]
+
+# Decision models (System One): typed answers with probabilities, used as
+# decision targets or as judge models for SimpleAudit's decision judges. The
+# capability is set here rather than probed, so seeding needs no API key; runs
+# read the key from TYPESAFE_API_KEY.
+# (connection_name, provider, base_url, secret_reference, [(display_name, model_id), ...])
+DEFAULT_DECISION_MODELS = [
+    (
+        "TypeSafe",
+        "openai",
+        "https://api.typesafe.ai/v1",
+        "TYPESAFE_API_KEY",
+        [("Jev (TypeSafe)", "jev-latest")],
     ),
 ]
 
@@ -167,6 +183,37 @@ def seed_default_model_connections(project, user) -> list[str]:
             )
             if m_created:
                 messages.append(f"  + {display_name} ({model_id})")
+    for conn_name, provider, base_url, secret_reference, models in DEFAULT_DECISION_MODELS:
+        conn, created = ModelConnection.objects.get_or_create(
+            project=project,
+            name=conn_name,
+            defaults={
+                "provider": provider,
+                "base_url": base_url,
+                "secret_reference": secret_reference,
+                "enabled": True,
+                "created_by": user,
+            },
+        )
+        messages.append(
+            f"Created model connection '{conn_name}'"
+            if created
+            else f"Model connection '{conn_name}' already exists"
+        )
+        for display_name, model_id in models:
+            _, m_created = RegisteredModel.objects.get_or_create(
+                connection=conn,
+                project=project,
+                model_id=model_id,
+                defaults={
+                    "display_name": display_name,
+                    "enabled": True,
+                    "capabilities": {"decision": True},
+                    "created_by": user,
+                },
+            )
+            if m_created:
+                messages.append(f"  + {display_name} ({model_id}, decision model)")
     return messages
 
 

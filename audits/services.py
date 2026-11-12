@@ -213,6 +213,31 @@ def frozen_inputs(
     }
 
 
+def judge_pairing_error(target_model, judge_model, judge) -> str:
+    """Why this judge and judge model cannot grade together, or "" when they can.
+
+    A decision judge (``output == "decision"``) asks a decision model typed
+    questions, and a decision model answers nothing else, so each needs the
+    other. A decision *target* is graded in code by Choice Match, which calls
+    no judge model, so the pair does not matter then.
+    """
+    if target_model is not None and target_model.is_decision:
+        return ""
+    decision_judge = getattr(judge, "output", "") == "decision"
+    if decision_judge and not judge_model.is_decision:
+        return (
+            f"{judge.judge.name} is a decision judge: its judge model must be a decision "
+            f"model (e.g. Jev), and {judge_model.display_name} is not one."
+        )
+    if judge_model.is_decision and not decision_judge:
+        return (
+            f"{judge_model.display_name} is a decision model and answers typed questions "
+            f"only: grade with a decision judge (Decision Safety Judge, …), not "
+            f"{judge.judge.name}."
+        )
+    return ""
+
+
 @transaction.atomic
 def create_audit_run(
     *,
@@ -268,6 +293,9 @@ def create_audit_run(
     for model in (target_model, auditor_model, judge_model):
         if model.project_id != project.id or not model.enabled or not model.connection.enabled:
             raise StableAPIError(detail="Model is unavailable in this project.", code="model_unavailable")
+    pairing_error = judge_pairing_error(target_model, judge_model, judge)
+    if pairing_error:
+        raise StableAPIError(detail=pairing_error, code="judge_model_mismatch")
     # Provenance is authoritative: it comes from the installed SimpleAudit
     # package metadata (version) and its PEP 610 direct_url commit (optional).
     # Callers cannot supply their own — that would let a manifest claim an engine

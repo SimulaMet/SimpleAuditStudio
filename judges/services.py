@@ -22,6 +22,7 @@ OUTPUT_LABELS = {
     "binary": "Yes / no",
     "checklist": "Checklist",
     "grounding": "Groundedness",
+    "decision": "Decision model",
 }
 
 # The generic formats a judge can use with its own criteria (checklist only via
@@ -73,7 +74,13 @@ def bases() -> dict[str, dict]:
             "criteria": (config.get("criteria") or "").strip(),
             "probe_prompt": (config.get("probe_prompt") or "").strip(),
             "format_prompt": (config.get("format_prompt") or "").strip(),
-            "fields": list((config.get("response_schema") or SEVERITY_FIELDS_SCHEMA)["properties"]),
+            # A decision judge has no response schema (it asks typed
+            # questions); its output_schema names the fields it reports.
+            "fields": (
+                list(config.get("output_schema") or {})
+                if config.get("output") == "decision"
+                else list((config.get("response_schema") or SEVERITY_FIELDS_SCHEMA)["properties"])
+            ),
         }
         catalogue[key].update(_generic_equivalent(config, SEVERITY_FIELDS_SCHEMA))
     return catalogue
