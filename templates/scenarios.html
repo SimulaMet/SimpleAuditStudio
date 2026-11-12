@@ -92,6 +92,36 @@
       </div>
       {% endif %}
 
+      <!-- Shared expectations: merged into every scenario of this version at run time -->
+      {% if viewing_version %}
+      <details class="mb-4 rounded-lg border border-gray-800 bg-surface-overlay/40" {% if viewing_version.shared_expectations %}open{% endif %}>
+        <summary class="px-3 py-2 text-xs text-gray-400 cursor-pointer select-none">
+          Shared expectations
+          <span class="text-gray-600">({{ viewing_version.shared_expectations|length }} — added to every scenario of v{{ viewing_version.version }})</span>
+        </summary>
+        <div class="px-3 pb-3 space-y-2">
+          {% if viewing_version.shared_expectations %}
+          <ul class="text-xs space-y-0.5 list-disc list-inside">
+            {% for b in viewing_version.shared_expectations|expectation_rows %}
+            <li class="text-gray-300">{% if b.id %}<span class="text-gray-500 font-mono">{{ b.id }}</span> {% endif %}{{ b.text }}{% if not b.required %} <span class="text-[10px] text-gray-500 border border-gray-700 rounded px-1" title="Graded and reported, but does not change the severity">not counted</span>{% endif %}</li>
+            {% endfor %}
+          </ul>
+          {% else %}
+          <p class="text-xs text-gray-500">None. Shared expectations are rules every scenario of this set must follow (for example, never end an answer with only “I can't find that”). They are graded with each scenario's own items and shown per rule on the run page.</p>
+          {% endif %}
+          {% if viewing_is_latest %}
+          <form method="post" data-write action="{% url 'scenario_set_shared' selected.id %}" class="space-y-2 pt-2 border-t border-gray-800"
+                data-confirm="Saving publishes a new version (v{{ versions.0.version|add:1 }}) with these shared expectations. Continue?">
+            {% csrf_token %}
+            <input type="hidden" name="base_version" value="{{ viewing_version.version }}">
+            {% include "partials/expectation_editor.html" with entries=viewing_version.shared_expectations name="shared_expectations" placeholder="A rule every scenario must follow…" %}
+            <button class="px-3 py-1 rounded text-xs bg-accent text-white hover:bg-accent-hover">Save shared expectations</button>
+          </form>
+          {% endif %}
+        </div>
+      </details>
+      {% endif %}
+
       <!-- Scenario search + category filter -->
       <div class="flex gap-2 mb-3">
         <input type="text" id="scenario-search" placeholder="Search scenarios…" oninput="filterScenarios(this.value)"
@@ -141,8 +171,8 @@
               <div>
                 <span class="text-gray-500 font-medium">Expected behavior</span>
                 <ul class="mt-0.5 space-y-0.5 list-disc list-inside">
-                  {% for b in item.revision.expected_behavior %}
-                  <li class="text-gray-300">{{ b }}</li>
+                  {% for b in item.revision.expected_behavior|expectation_rows %}
+                  <li class="text-gray-300">{{ b.text }}{% if not b.required %} <span class="text-[10px] text-gray-500 border border-gray-700 rounded px-1" title="Graded and reported, but does not change the severity">not counted</span>{% endif %}</li>
                   {% endfor %}
                 </ul>
               </div>
@@ -212,9 +242,8 @@
         <label class="text-xs text-gray-500">Description (scenario prompt)</label>
         <textarea name="description" rows="2" placeholder="What should the auditor do?"
                   class="w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-accent/50"></textarea>
-        <label class="text-xs text-gray-500">Expected behavior (one per line — judge criteria)</label>
-        <textarea name="expected_behavior" rows="2" placeholder="Should refuse harmful requests…&#10;Should maintain boundaries…"
-                  class="w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-accent/50"></textarea>
+        <label class="text-xs text-gray-500">Expected behavior (judge criteria, one item per row)</label>
+        {% include "partials/expectation_editor.html" with entries=None name="expected_behavior" placeholder="Should refuse harmful requests…" %}
         <label class="text-xs text-gray-500">Test prompt (optional — exact first user request for replay scenarios)</label>
         <textarea name="test_prompt" rows="1" placeholder="The concrete first user request, if this is a replay-style scenario. Leave empty for auditor-generated probes."
                   class="w-full px-3 py-2 rounded-lg bg-surface-overlay border border-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-accent/50"></textarea>
@@ -333,6 +362,7 @@ document.addEventListener('click', e => {
 {% endif %}
 
 {% include "partials/version_diff_js.html" %}
+{% load static %}<script src="{% static 'js/expectation-editor.js' %}"></script>
 <script>
 // Live version hint: shows "Will publish as vN" when description OR expected_behavior changes
 // Saving publishes after the latest version, whichever one is being viewed.
@@ -384,8 +414,14 @@ function confirmScenarioSave(scenarioId, form) {
 function setDiffHtml(d) {
   if (d.from_version === d.to_version) return '<p class="text-gray-400">Pick two different versions.</p>';
   let html = VersionDiff.counts({ added: d.added.length, removed: d.removed.length, changed: d.changed.length, unchanged: d.unchanged_count });
-  if (!d.added.length && !d.removed.length && !d.changed.length) {
+  if (!d.added.length && !d.removed.length && !d.changed.length && !d.shared_expectations) {
     return html + `<p class="text-green-400">✓ No differences between v${d.from_version} and v${d.to_version}.</p>`;
+  }
+  if (d.shared_expectations) {
+    html += '<h4 class="font-semibold uppercase tracking-wide mb-2 text-yellow-400">Shared expectations</h4>' +
+      '<div class="ml-2 pl-3 border-l-2 border-yellow-800 pb-2 mb-3">' +
+      VersionDiff.fields([{ label: 'Shared expectations', from: d.shared_expectations.from, to: d.shared_expectations.to }], { unchanged: false }) +
+      '</div>';
   }
   const section = (title, cls, items, body) => items.length
     ? `<h4 class="font-semibold uppercase tracking-wide mb-2 ${cls}">${title}</h4>` + items.map(body).join('') : '';
@@ -513,6 +549,7 @@ async function openEditForm(id, ev) {
       return;
     }
     const inner = form.querySelector('form');
+    if (window.initExpectationEditors) window.initExpectationEditors(form);
     if (inner) wireScenarioForm(inner);
     if (window.initRulesEditors) window.initRulesEditors();
   }

@@ -953,6 +953,8 @@ function openScriptModal() {
   {% endif %}
 {% endwith %}
 
+{% if shared_checks %}{% include "partials/run_shared_checks.html" %}{% endif %}
+
 <!-- Results (refreshed live, see refreshResults) -->
 {% include "partials/run_results.html" %}
 <script>

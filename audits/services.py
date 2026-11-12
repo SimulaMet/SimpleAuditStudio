@@ -639,3 +639,43 @@ def build_simpleaudit_export(run: AuditRun) -> dict:
         "judge_model": frozen_name(run, "judge"),
     }
     return document
+
+
+def shared_check_summary(run: AuditRun) -> list[dict]:
+    """Per shared expectation of the run's set version: how its trials were graded.
+
+    One row per rule, in the set's order: ``{"id", "text", "required", "met",
+    "violated", "not_applicable", "missing", "trials", "violated_items"}``,
+    where ``violated_items`` are the version item ids of scenarios with at
+    least one violating trial. Read from ``ScenarioResult.list_summary``, so
+    no transcript is loaded. Empty when the set has no shared expectations or
+    the judge grades no checklist.
+    """
+    from audits.events import ScenarioResult
+    from scenarios.expectations import expectation_rows
+
+    shared = expectation_rows(run.scenario_set_version.shared_expectations)
+    if not shared:
+        return []
+    order = {row["id"] or row["text"]: n for n, row in enumerate(shared)}
+    order.update({row["text"]: n for n, row in enumerate(shared)})
+    rows: dict[str, dict] = {}
+    for item_id, summary in ScenarioResult.objects.filter(run_id=run.id).values_list("version_item_id", "list_summary"):
+        for trial in (summary or {}).get("shared_checks") or []:
+            for check in trial or []:
+                key = check.get("id") or check.get("text") or ""
+                row = rows.setdefault(key, {
+                    "id": check.get("id") or "", "text": check.get("text") or "",
+                    "required": check.get("required", True), "met": 0, "violated": 0,
+                    "not_applicable": 0, "missing": 0, "trials": 0, "violated_items": [],
+                })
+                status = check.get("status")
+                row[status if status in ("met", "violated", "not_applicable") else "missing"] += 1
+                row["trials"] += 1
+                if status == "violated" and item_id not in row["violated_items"]:
+                    row["violated_items"].append(item_id)
+    out = sorted(rows.values(), key=lambda r: order.get(r["id"], order.get(r["text"], len(order))))
+    for row in out:
+        applicable = row["met"] + row["violated"]
+        row["violated_pct"] = round(100 * row["violated"] / applicable) if applicable else None
+    return out

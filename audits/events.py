@@ -73,6 +73,17 @@ def trial_counts(status: str, result: dict | None) -> dict[str, int]:
     return out
 
 
+def _shared_checks(judgment) -> list[dict]:
+    """A checklist judgment's items for the set's shared expectations, compact."""
+    checklist = judgment.get("checklist") if isinstance(judgment, dict) else None
+    return [
+        {"id": str(item.get("id") or ""), "text": item.get("expectation") or "",
+         "required": item.get("required", True) is not False, "status": item.get("status") or ""}
+        for item in checklist or []
+        if isinstance(item, dict) and item.get("source") == "shared"
+    ]
+
+
 def result_projection(result: dict | None) -> dict:
     """The few fields the run's Results list shows, lifted out of the big ``result``.
 
@@ -93,7 +104,16 @@ def result_projection(result: dict | None) -> dict:
             if isinstance(reps, list) else []
         ),
         "agentic_status": (r.get("agentic_evaluation") or {}).get("status", ""),
+        **_shared_checks_projection(r),
     }
+
+
+def _shared_checks_projection(r: dict) -> dict:
+    """``{"shared_checks": [[item, ...] per trial]}`` when the result graded shared expectations, else ``{}``."""
+    reps = r.get("reps")
+    trials = [x.get("judgment") for x in reps if isinstance(x, dict)] if isinstance(reps, list) else [r.get("judgment")]
+    checks = [_shared_checks(judgment) for judgment in trials]
+    return {"shared_checks": checks} if any(checks) else {}
 
 
 class ScenarioResult(models.Model):

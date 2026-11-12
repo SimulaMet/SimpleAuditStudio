@@ -61,6 +61,7 @@ from scenarios.models import (
 from scenarios.services import (
     create_scenario,
     publish_scenario_set_version,
+    set_shared_expectations,
     update_scenario_content,
 )
 
@@ -2406,6 +2407,19 @@ def _scenario_redirect(set_id: str | None):
     return redirect(f"/scenarios/?set={set_id}" if set_id else "/scenarios/")
 
 
+def _expected_behavior_from_post(post, name: str = "expected_behavior") -> tuple[list, str | None]:
+    """Expected behaviour from a form: the row editor's ``<name>_rows`` JSON, else one item per line.
+
+    Returns ``(entries, None)`` or ``([], message)`` for the caller to show.
+    """
+    from scenarios.expectations import parse_expectation_form
+
+    try:
+        return parse_expectation_form(post.get(f"{name}_rows"), post.get(name)), None
+    except ValueError as exc:
+        return [], f"Expected behaviour is invalid: {exc}"
+
+
 def _parse_decision_field(raw: str) -> tuple[dict | None, str | None]:
     """Parse a scenario form's ``decision`` textarea into a block or an error.
 
@@ -2432,8 +2446,12 @@ def _parse_decision_field(raw: str) -> tuple[dict | None, str | None]:
     return decision, None
 
 
-def _publish_new_version(sset, user, extra_scenario_ids=None, changed_ids=None, exclude_ids=None):
+def _publish_new_version(sset, user, extra_scenario_ids=None, changed_ids=None, exclude_ids=None,
+                         shared_expectations=None):
     """Auto-publish a new version capturing all current (non-archived) scenarios in the set.
+
+    ``shared_expectations`` replaces the set's shared rules; ``None`` keeps
+    the latest version's.
 
     Scenarios this action did not touch keep the revision the latest version
     froze (so a revert is not silently undone by an unrelated edit); the
@@ -2457,7 +2475,8 @@ def _publish_new_version(sset, user, extra_scenario_ids=None, changed_ids=None, 
     archived_ids |= set(exclude_ids or ())
     scenario_ids = [sid for sid in scenario_ids if sid not in archived_ids]
     if scenario_ids:
-        publish_scenario_set_version(scenario_set=sset, user=user, scenario_ids=scenario_ids, revisions=pins)
+        extra = {} if shared_expectations is None else {"shared_expectations": shared_expectations}
+        publish_scenario_set_version(scenario_set=sset, user=user, scenario_ids=scenario_ids, revisions=pins, **extra)
 
 
 class ScenarioSetCreateView(ProjectMixin, View):
@@ -2560,8 +2579,10 @@ class ScenarioCreateView(ProjectMixin, View):
         name = request.POST.get("name", "").strip()[:300]   # Scenario.title max_length
         category = request.POST.get("category", "").strip()[:120]
         desc = request.POST.get("description", "")
-        expected_behavior_raw = request.POST.get("expected_behavior", "").strip()
-        expected_behavior = [line.strip() for line in expected_behavior_raw.splitlines() if line.strip()] if expected_behavior_raw else []
+        expected_behavior, eb_error = _expected_behavior_from_post(request.POST)
+        if eb_error:
+            messages.error(request, eb_error)
+            return _scenario_redirect(_post_set_id(request) or None)
         test_prompt = request.POST.get("test_prompt", "").strip()
         severity_ceiling = _severity_ceiling(request.POST.get("severity_ceiling", ""))
         documents_raw = request.POST.get("documents", "").strip()
@@ -2626,8 +2647,10 @@ class ScenarioEditView(ProjectMixin, View):
             title = request.POST.get("title", "").strip()[:300]
             category = request.POST.get("category", "").strip()[:120]
             desc = request.POST.get("description", "")
-            expected_behavior_raw = request.POST.get("expected_behavior", "").strip()
-            expected_behavior = [line.strip() for line in expected_behavior_raw.splitlines() if line.strip()] if expected_behavior_raw else []
+            expected_behavior, eb_error = _expected_behavior_from_post(request.POST)
+            if eb_error:
+                messages.error(request, eb_error)
+                return _scenario_redirect(set_id or None)
             test_prompt = request.POST.get("test_prompt", "").strip()
             severity_ceiling = _severity_ceiling(request.POST.get("severity_ceiling", ""))
             documents_raw = request.POST.get("documents", "").strip()
@@ -2726,6 +2749,44 @@ class ScenarioDeleteView(ProjectMixin, View):
         return _scenario_redirect(set_id or None)
 
 
+class ScenarioSetSharedExpectationsView(ProjectMixin, View):
+    """Replace a set's shared expectations by publishing a new version.
+
+    Every scenario keeps the revision the latest version froze; only the
+    shared rules change. A set with no published version has nothing to
+    attach them to yet.
+    """
+
+    def post(self, request, set_id):
+        blocked = _require_write_access(request)
+        if blocked:
+            return blocked
+        sset = ScenarioSet.objects.filter(pk=set_id, project=request.project).first()
+        if not sset:
+            return redirect("/scenarios/")
+        shared, error = _expected_behavior_from_post(request.POST, "shared_expectations")
+        if error:
+            messages.error(request, error.replace("Expected behaviour", "Shared expectations"))
+            return redirect(f"/scenarios/?set={set_id}")
+        latest_before = sset.versions.order_by("-version").first()
+        base = request.POST.get("base_version")
+        if latest_before and base and base != str(latest_before.version):
+            messages.error(request, "This set changed since the page was opened; reload and edit again.")
+            return redirect(f"/scenarios/?set={set_id}")
+        try:
+            version = set_shared_expectations(scenario_set=sset, user=request.user, shared_expectations=shared)
+        except StableAPIError as exc:
+            messages.error(request, str(exc.detail))
+            return redirect(f"/scenarios/?set={set_id}")
+        if version is None:
+            messages.error(request, "Add a scenario first: shared expectations are saved with a published version.")
+        elif latest_before and version.pk == latest_before.pk:
+            messages.info(request, "Shared expectations unchanged (version unchanged).")
+        else:
+            messages.success(request, f"Shared expectations saved (published v{version.version}).")
+        return redirect(f"/scenarios/?set={set_id}")
+
+
 class ScenarioRevertView(ProjectMixin, View):
     """Revert a scenario set to an old version by publishing it as a new version."""
 
@@ -2762,6 +2823,7 @@ class ScenarioRevertView(ProjectMixin, View):
                     publish_scenario_set_version(
                         scenario_set=sset, user=request.user, scenario_ids=scenario_ids,
                         revisions={i.scenario_id: i.revision for i in old_items},
+                        shared_expectations=list(old_version.shared_expectations or []),
                     )
                 messages.success(request, f"Reverted to v{target_ver} (published as new version).")
             else:
@@ -2808,7 +2870,14 @@ class ScenarioExportView(ProjectMixin, View):
             return d
 
         scenarios = [_export_scenario(it) for it in latest.items.select_related("scenario", "revision")] if latest else []
-        return JsonResponse({"format_version": 2, "set_name": sset.name, "scenarios": scenarios})
+        shared = list(latest.shared_expectations or []) if latest else []
+        payload = {"format_version": 2, "set_name": sset.name, "scenarios": scenarios}
+        # Format 3 carries expectation objects and the set's shared expectations;
+        # a set that uses neither stays readable by importers that only know 2.
+        if shared or any(isinstance(e, dict) for sc in scenarios for e in sc["expected_behavior"] or []):
+            payload["format_version"] = 3
+            payload["shared_expectations"] = shared
+        return JsonResponse(payload)
 
 
 class ScenarioImportView(ProjectMixin, View):
@@ -2823,8 +2892,16 @@ class ScenarioImportView(ProjectMixin, View):
             data = json.loads(request.body)
             if not isinstance(data, dict):
                 return JsonResponse({"error": "Expected a JSON object with a 'scenarios' list."}, status=400)
-            if data.get("format_version") not in (None, 2):
-                return JsonResponse({"error": "Unsupported scenario import format_version; expected 2."}, status=400)
+            if data.get("format_version") not in (None, 2, 3):
+                return JsonResponse({"error": "Unsupported scenario import format_version; expected 2 or 3."}, status=400)
+            shared = data.get("shared_expectations")
+            if shared is not None:
+                from scenarios.expectations import clean_expectations
+
+                try:
+                    shared = clean_expectations(shared)
+                except ValueError as exc:
+                    return JsonResponse({"error": f"Invalid shared expectations: {exc}"}, status=400)
             items = data.get("scenarios", [])
             if not isinstance(items, list) or not all(isinstance(i, dict) for i in items):
                 return JsonResponse({"error": "'scenarios' must be a list of objects."}, status=400)
@@ -2848,7 +2925,7 @@ class ScenarioImportView(ProjectMixin, View):
             with transaction.atomic():
                 new_ids = self._import_items(request, validated)
                 # Auto-publish after import (include newly imported scenarios)
-                _publish_new_version(sset, request.user, extra_scenario_ids=new_ids)
+                _publish_new_version(sset, request.user, extra_scenario_ids=new_ids, shared_expectations=shared)
         except Exception as e:  # noqa: BLE001 - surface any import/publish failure to the user
             return JsonResponse({"error": str(e)}, status=400)
         return redirect(f"/scenarios/?set={set_id}")
@@ -3647,6 +3724,20 @@ def _results_context(run: AuditRun, items: dict | None = None) -> dict:
     return {"results": results, "failure_summary": _failure_summary(results)}
 
 
+def _shared_checks_view(run: AuditRun, results: list[dict]) -> list[dict]:
+    """The run's per-rule shared-expectation counts, with links to violating scenarios."""
+    from audits.services import shared_check_summary
+
+    by_item = {r["version_item_id"]: r for r in results}
+    rows = shared_check_summary(run)
+    for row in rows:
+        row["violations"] = [
+            {"result_id": by_item[item_id]["result_id"], "name": by_item[item_id]["scenario_name"]}
+            for item_id in row.pop("violated_items") if item_id in by_item
+        ]
+    return rows
+
+
 def _failure_summary(results: list[dict]) -> dict:
     """Failed-scenario summary for the Results list: ``47 failed: 44 target, 3 judge``."""
     failed = [r for r in results if r["status"] == "failed"]
@@ -3702,6 +3793,7 @@ class RunDetailView(PublicReadableMixin, DetailView):
         items = {str(vi.pk): vi for vi in ScenarioSetVersionItem.objects.filter(version=run.scenario_set_version).select_related("scenario")}
         ctx.update(_results_context(run, items))
         results = ctx["results"]
+        ctx["shared_checks"] = _shared_checks_view(run, results)
         # Version item ids that already have a result row; the detail page seeds
         # its SSE dedupe set from this. Pre-serialized to a JSON array because
         # Django's template engine has no built-in `map`/`json` filters.
@@ -5444,7 +5536,7 @@ class RunResultView(PublicReadableMixin, TemplateView):
             scenario_id=item.scenario_id if item else None,
             scenario_description=(revision.description if revision else "") or first.get("scenario_description", ""),
             expected_behavior=_as_text_list(
-                [e.get("criterion", e) if isinstance(e, dict) else e for e in expected]
+                [(e.get("criterion") or e.get("text") or e) if isinstance(e, dict) else e for e in expected]
             ),
             test_prompt=revision.test_prompt if revision else "",
             scenario_severity_ceiling=revision.severity_ceiling if revision else "",

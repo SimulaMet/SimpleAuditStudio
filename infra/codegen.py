@@ -202,6 +202,14 @@ def _render(header: str, *, version, target: dict, auditor: dict, judge_snap: di
         f"# Scenarios: \"{_doc(set_name)}\" v{set_version} ({len(scenarios)} scenarios, frozen)\n"
         f"scenarios = {_py(scenarios)}"
     )
+    shared = list(version.shared_expectations or [])
+    if shared:
+        imports.append("from simpleaudit import apply_shared_expectations")
+        body_parts.append(
+            "# Shared expectations of this set version, merged into every scenario\n"
+            f"shared_expectations = {_py(shared)}\n"
+            "scenarios = apply_shared_expectations(scenarios, shared_expectations)"
+        )
 
     # --- Judge -------------------------------------------------------------
     judge_lines = []

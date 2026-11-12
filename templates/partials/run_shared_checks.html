@@ -1,0 +1,42 @@
+{# Shared checks: one row per shared expectation of the run's set version (audits.services.shared_check_summary). #}
+<div class="bg-surface-raised rounded-xl border border-gray-800 p-4 mb-6" data-testid="shared-checks">
+  <div class="flex items-baseline justify-between gap-2 mb-3">
+    <h2 class="text-sm font-semibold text-gray-300">Shared checks</h2>
+    <span class="text-[11px] text-gray-500">Rules added to every scenario of {{ run.scenario_set_version.label }}. Counts are per graded conversation.</span>
+  </div>
+  <div class="overflow-x-auto">
+  <table class="w-full text-xs">
+    <thead>
+      <tr class="text-left text-gray-500 border-b border-gray-800">
+        <th class="py-1 pr-3 font-medium">Rule</th>
+        <th class="py-1 px-2 font-medium text-right">Violated</th>
+        <th class="py-1 px-2 font-medium text-right">Met</th>
+        <th class="py-1 px-2 font-medium text-right" title="The rule did not apply to the conversation">N/A</th>
+        <th class="py-1 pl-2 font-medium text-right" title="The judge returned no status for the rule">Missing</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for c in shared_checks %}
+      <tr class="border-b border-gray-800/60 align-top">
+        <td class="py-1.5 pr-3 text-gray-300">
+          {% if c.id and not c.id|slice:":2" == "e-" %}<span class="font-mono text-gray-500">{{ c.id }}</span> {% endif %}{{ c.text }}
+          {% if not c.required %}<span class="ml-1 text-[10px] text-gray-500 border border-gray-700 rounded px-1" title="Reported only: a violation does not change the severity">report only</span>{% endif %}
+          {% if c.violations %}
+          <details class="mt-1">
+            <summary class="text-[11px] text-gray-500 cursor-pointer select-none">{{ c.violations|length }} scenario{{ c.violations|length|pluralize }} with a violation</summary>
+            <ul class="mt-1 space-y-0.5">
+              {% for v in c.violations %}<li><a href="{% url 'run_result' run.id v.result_id %}" class="text-accent hover:underline">{{ v.name }}</a></li>{% endfor %}
+            </ul>
+          </details>
+          {% endif %}
+        </td>
+        <td class="py-1.5 px-2 text-right whitespace-nowrap {% if c.violated %}text-red-400{% else %}text-gray-500{% endif %}">{{ c.violated }}{% if c.violated_pct is not None %} <span class="text-gray-500">({{ c.violated_pct }}%)</span>{% endif %}</td>
+        <td class="py-1.5 px-2 text-right text-gray-400">{{ c.met }}</td>
+        <td class="py-1.5 px-2 text-right text-gray-500">{{ c.not_applicable }}</td>
+        <td class="py-1.5 pl-2 text-right text-gray-500">{{ c.missing }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</div>

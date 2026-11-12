@@ -148,8 +148,16 @@ def publish_version(request, project_id, set_id):
         raise StableAPIError(detail="Scenario set not found.", code="scenario_set_not_found", http_status=404) from exc
     serializer = PublishScenarioSetVersionSerializer(data=request.data)
     serializer.is_valid(raise_exception=True)
-    version = publish_scenario_set_version(scenario_set=scenario_set, user=request.user, scenario_ids=serializer.validated_data["scenario_ids"])
+    extra = {}
+    if "shared_expectations" in serializer.validated_data:
+        extra["shared_expectations"] = serializer.validated_data["shared_expectations"]
+    version = publish_scenario_set_version(scenario_set=scenario_set, user=request.user,
+                                           scenario_ids=serializer.validated_data["scenario_ids"], **extra)
     return Response(ScenarioSetVersionSerializer(version).data, status=status.HTTP_201_CREATED)
+
+
+def _uses_objects(entries) -> bool:
+    return any(isinstance(entry, dict) for entry in entries or [])
 
 
 @api_view(["GET"])
@@ -183,7 +191,8 @@ def export_scenarios(request, project_id):
             "tags": s.tags or [],
         })
     response = Response({
-        "format_version": 2,
+        # 3 when an expected behaviour uses objects: older importers only read strings.
+        "format_version": 3 if any(_uses_objects(item["expected_behavior"]) for item in data) else 2,
         "scenarios": data,
         "count": len(data),
         "exported_at": __import__("django.utils.timezone", fromlist=["timezone"]).now().isoformat(),
@@ -205,9 +214,9 @@ def import_scenarios(request, project_id):
     _require_project_access(request.user, project)
     require_project_writable(request.user, project)
     payload = request.data
-    if isinstance(payload, dict) and "format_version" in payload and payload["format_version"] != 2:
+    if isinstance(payload, dict) and "format_version" in payload and payload["format_version"] not in (2, 3):
         raise StableAPIError(
-            detail="Unsupported scenario import format_version; expected 2.",
+            detail="Unsupported scenario import format_version; expected 2 or 3.",
             code="unsupported_import_version",
             http_status=400,
         )

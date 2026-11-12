@@ -76,12 +76,23 @@ Fields:
 - `scenario_id`
 - `revision` — monotonically increasing per scenario
 - `description`
-- `expected_behavior` — JSON list
+- `expected_behavior` — JSON list of expectations (see below)
 - `test_prompt`
 - `metadata` — JSON object
 - `content_hash`
 - `created_by`
 - `created_at`
+
+Expectations (`scenarios/expectations.py`): each entry of `expected_behavior`
+is a plain string or an object `{"id", "text", "required"}`; only `text` is
+required. `required: false` marks an item that is graded and reported but
+never changes the derived severity. The flag is applied by the SimpleAudit
+engine in code; the judge model sees only the text. Entries are stored in
+their smallest form: a required item without an id stays a plain string, so
+scenarios that use no flags keep their old shape and hash. Changing a flag
+creates a new revision. Optional-by-wording (lines starting "Optionally",
+"May", "Kan nevne (ikke påkrevd)") is a legacy convention of older engines;
+the engine converts such strings when it re-grades old results.
 
 Rules:
 
@@ -133,13 +144,24 @@ Fields:
 - `version` — monotonically increasing per set
 - `scenario_count`
 - `content_hash`
+- `shared_expectations` — JSON list of expectations merged into every
+  scenario of the version at run time (entries as in
+  `ScenarioRevision.expected_behavior`)
 - `published_by`
 - `published_at`
 
 Rules:
 
 - rows are append-only
-- `content_hash` is deterministic over ordered items and revision hashes
+- `content_hash` is deterministic over ordered items and revision hashes, and
+  covers `shared_expectations` when there are any (versions without shared
+  expectations keep their old hash)
+- publishing without new shared expectations carries the latest version's over;
+  changing them publishes a new version with every scenario's frozen revision
+  (`scenarios.services.set_shared_expectations`)
+- the worker passes them to `infra/engine.py`, which merges them through the
+  engine with `source: "shared"`; an engine without expectation objects gets
+  the texts only, and every item then counts
 - audits reference this entity, never `ScenarioSet` directly
 
 ### 3.5 `ScenarioSetVersionItem`
@@ -479,7 +501,10 @@ One row per (run, scenario version item), upserted by the worker.
 Fields: `run_id`, `version_item_id`, `status`, `attempts` (the highest attempt
 seen; retries never lower it), `result` (JSON: judgment, severity, transcript
 summary; with repetitions `reps`, `aggregated_severity`, `agreement_rate`),
-`updated_at`. Unique on (`run_id`, `version_item_id`).
+`list_summary` (a small projection for list pages; with shared expectations it
+holds `shared_checks`, the per-trial status of each shared rule, which the run
+page's "Shared checks" panel sums), `updated_at`. Unique on (`run_id`,
+`version_item_id`).
 
 ### 6.2 `AuditEvent`
 

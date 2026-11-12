@@ -108,6 +108,17 @@ class CodegenScriptTests(TestCase):
         assert "results.summary()" in script
         assert 'results.save("results.json")' in script
 
+    def test_shared_expectations_are_merged_in_the_script(self):
+        run = _make_run()
+        version = run.scenario_set_version
+        assert "apply_shared_expectations" not in self._script(run)
+        version.shared_expectations = [{"id": "G1", "text": "Never a dead end", "required": False}]
+        version.save()
+        script = self._script(run)
+        assert "from simpleaudit import apply_shared_expectations" in script
+        assert "Never a dead end" in script
+        assert "scenarios = apply_shared_expectations(scenarios, shared_expectations)" in script
+
     def test_deterministic(self):
         run = _make_run()
         from infra.codegen import generate_run_script

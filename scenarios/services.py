@@ -6,6 +6,7 @@ from accounts.models import Project, ProjectMembership
 from accounts.services import ensure_project_access, require_project_writable
 from infra.exceptions import StableAPIError
 from infra.hashing import scenario_revision_hash, scenario_set_version_hash
+from scenarios.expectations import clean_expectations, expectation_display
 from scenarios.models import (
     Scenario,
     ScenarioRevision,
@@ -75,6 +76,7 @@ def update_scenario_content(*, scenario: Scenario, user, description: str, expec
                             test_prompt: str = "", severity_ceiling: str = "", documents=None, file_uri=None,
                             decision=_UNSET, metadata: dict | None = None) -> ScenarioRevision:
     require_project_role(user, scenario.project, ProjectMembership.Role.ADMIN, ProjectMembership.Role.AUDITOR)
+    expected_behavior = _clean_expected_behavior(expected_behavior)
     latest = ScenarioRevision.objects.filter(scenario=scenario).order_by("-revision").first()
     new_metadata = metadata if metadata is not None else (latest.metadata if latest else {})
     new_ceiling = severity_ceiling or ""
@@ -105,11 +107,21 @@ def update_scenario_content(*, scenario: Scenario, user, description: str, expec
                             file_uri=new_file_uri, decision=new_decision, metadata=new_metadata)
 
 
+def _clean_expected_behavior(entries) -> list:
+    """Validated expected behaviour in its stored form, or a 400 ``StableAPIError``."""
+    try:
+        return clean_expectations(entries)
+    except ValueError as exc:
+        raise StableAPIError(detail=f"Invalid expected behaviour: {exc}", code="invalid_expected_behavior",
+                             http_status=400) from exc
+
+
 def _create_revision(*, scenario: Scenario, user, description: str, expected_behavior, test_prompt: str,
                      severity_ceiling: str = "", documents=None, file_uri=None, decision=None,
                      metadata: dict) -> ScenarioRevision:
     from audits.agentic.expectations import validate_agentic_metadata
     validate_agentic_metadata(metadata)
+    expected_behavior = _clean_expected_behavior(expected_behavior)
     if decision:
         _validate_decision_block(decision)
     next_revision = ScenarioRevision.objects.filter(scenario=scenario).count() + 1
@@ -148,11 +160,16 @@ def create_scenario_set(*, project: Project, user, name: str, description: str =
 @transaction.atomic
 def publish_scenario_set_version(
     *, scenario_set: ScenarioSet, user, scenario_ids: list[int], revisions: dict[int, ScenarioRevision] | None = None,
+    shared_expectations=_UNSET,
 ) -> ScenarioSetVersion:
     """Publish an immutable ordered version from current latest revisions.
 
     ``revisions`` pins specific revisions per scenario id (a revert restores the
     old version's exact text); scenarios not in it use their latest revision.
+
+    ``shared_expectations`` are merged into every scenario of the version at
+    run time. Left out, the latest version's shared expectations carry over,
+    so editing a scenario never drops the set's shared rules.
 
     Concurrency note: two concurrent publishes may attempt the same next version.
     The unique `(scenario_set, version)` constraint rejects one; callers should
@@ -185,6 +202,12 @@ def publish_scenario_set_version(
             }
         )
 
+    if shared_expectations is _UNSET:
+        latest = ScenarioSetVersion.objects.filter(scenario_set=scenario_set).order_by("-version").first()
+        shared = list(latest.shared_expectations or []) if latest else []
+    else:
+        shared = _clean_expected_behavior(shared_expectations)
+
     next_version = ScenarioSetVersion.objects.filter(scenario_set=scenario_set).count() + 1
     hash_items = [
         {
@@ -196,13 +219,14 @@ def publish_scenario_set_version(
         }
         for item in items
     ]
-    content_hash = scenario_set_version_hash(hash_items)
+    content_hash = scenario_set_version_hash(hash_items, shared)
 
     version = ScenarioSetVersion.objects.create(
         scenario_set=scenario_set,
         version=next_version,
         scenario_count=len(items),
         content_hash=content_hash,
+        shared_expectations=shared,
         published_by=user,
     )
     for item in items:
@@ -215,6 +239,31 @@ def publish_scenario_set_version(
     return version
 
 
+@transaction.atomic
+def set_shared_expectations(*, scenario_set: ScenarioSet, user, shared_expectations) -> ScenarioSetVersion | None:
+    """Publish a new version of *scenario_set* with new shared expectations.
+
+    Every scenario keeps the revision the latest version froze. Returns the
+    latest version unchanged when the shared expectations are the same, and
+    ``None`` when the set has no published version yet (there is nothing to
+    attach the rules to).
+    """
+    require_project_role(user, scenario_set.project, ProjectMembership.Role.ADMIN, ProjectMembership.Role.AUDITOR)
+    shared = _clean_expected_behavior(shared_expectations)
+    latest = ScenarioSetVersion.objects.filter(scenario_set=scenario_set).order_by("-version").first()
+    if latest is None:
+        return None
+    if list(latest.shared_expectations or []) == shared:
+        return latest
+    items = list(latest.items.select_related("revision").order_by("position"))
+    return publish_scenario_set_version(
+        scenario_set=scenario_set, user=user,
+        scenario_ids=[item.scenario_id for item in items],
+        revisions={item.scenario_id: item.revision for item in items},
+        shared_expectations=shared,
+    )
+
+
 def _version_contents(version: ScenarioSetVersion) -> dict[str, dict]:
     """Scenario key -> what a version holds for it (title, revision, content)."""
     return {
@@ -223,7 +272,8 @@ def _version_contents(version: ScenarioSetVersion) -> dict[str, dict]:
             "title": item.scenario.title,
             "revision": item.revision.revision,
             "description": item.revision.description,
-            "expected_behavior": item.revision.expected_behavior or [],
+            # Display lines, so a flag change shows in the diff like a text change.
+            "expected_behavior": expectation_display(item.revision.expected_behavior),
             "metadata": item.revision.metadata or {},
         }
         for item in version.items.select_related("scenario", "revision")
@@ -248,7 +298,12 @@ def version_diff(old: ScenarioSetVersion, new: ScenarioSetVersion) -> dict:
             changed.append({"key": key, "title": b["title"], "from": a, "to": b})
         else:
             unchanged += 1
+    shared_before, shared_after = list(old.shared_expectations or []), list(new.shared_expectations or [])
     return {
         "from_version": old.version, "to_version": new.version,
         "added": added, "removed": removed, "changed": changed, "unchanged_count": unchanged,
+        "shared_expectations": (
+            {"from": expectation_display(shared_before), "to": expectation_display(shared_after)}
+            if shared_before != shared_after else None
+        ),
     }

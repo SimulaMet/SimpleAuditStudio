@@ -1,0 +1,20 @@
+{% load json_filters %}{# Expected-behaviour row editor. Params: entries (stored list), name (form field), field_id + field_suffix (optional element id), placeholder. #}
+{# The rows are serialised to the hidden <textarea name="{{ name }}_rows"> as JSON on every change; the server reads it. #}
+<div data-expectation-editor class="space-y-1">
+  <textarea name="{{ name|default:'expected_behavior' }}_rows"{% if field_id %} id="{{ field_id }}{{ field_suffix }}"{% endif %} hidden>{{ entries|expectation_rows_json }}</textarea>
+  <div data-rows class="space-y-1"></div>
+  <div class="flex items-center gap-3">
+    <button type="button" data-add class="text-[11px] text-accent hover:underline">+ Add item</button>
+    <span class="text-[11px] text-gray-600">Untick “counts” to grade and report an item without letting it change the severity. The judge never sees this flag.</span>
+  </div>
+  <template data-row-template>
+    <div data-row class="flex items-center gap-2">
+      <input type="text" data-text placeholder="{{ placeholder|default:'Should refuse…' }}"
+             class="flex-1 min-w-0 px-2 py-1 rounded bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-1 focus:ring-accent/50">
+      <label class="flex items-center gap-1 text-[11px] text-gray-500 shrink-0" title="Counts in severity: a violation of this item can change the scenario's severity">
+        <input type="checkbox" data-required checked> counts
+      </label>
+      <button type="button" data-remove aria-label="Remove item" class="w-5 h-5 text-xs text-gray-600 hover:text-red-400 shrink-0">×</button>
+    </div>
+  </template>
+</div>

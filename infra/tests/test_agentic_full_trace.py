@@ -63,7 +63,7 @@ def patched_worker(monkeypatch):
 
     def _run():
         run = _FakeRun()
-        run.scenario_set_version = SimpleNamespace(items=SimpleNamespace(get=lambda **kw: _item()))
+        run.scenario_set_version = SimpleNamespace(items=SimpleNamespace(get=lambda **kw: _item()), shared_expectations=[])
         return run
 
     def _revision():
