@@ -156,10 +156,14 @@ whole result of a single-rep run. Context: rep (see infra.ui._rep_view).
       {% if rep.judge_decision.low_confidence %}<span class="px-2 py-0.5 rounded-full text-xs bg-amber-900/40 text-amber-300" title="Some answers were close to even. They did not change the grade; review this result.">low confidence</span>{% endif %}
       {% if rep.judge_decision.cost is not None %}<span class="text-xs text-gray-500" title="Reported by the decision endpoint">${{ rep.judge_decision.cost|floatformat:6 }}</span>{% endif %}
     </div>
+    {% with jd=rep.judge_decision %}
+    {% if jd.rows %}
+    {% if jd.scenario_items or jd.shared_items %}<p class="mt-1 mb-1 text-[11px] uppercase tracking-wide text-gray-500">Judge questions</p>{% endif %}
     <dl class="space-y-1.5 text-xs">
-      {% for row in rep.judge_decision.rows %}
+      {% for row in jd.rows %}
       <div class="flex items-center gap-2">
-        <dt class="w-44 shrink-0 truncate {% if row.uncertain %}text-amber-300{% else %}text-gray-300{% endif %}" title="{{ row.label }} ({{ row.kind }}){% if row.uncertain %}: uncertain{% endif %}">{{ row.label }}</dt>
+        <dt class="w-80 max-w-[50%] shrink-0 truncate {% if row.uncertain %}text-amber-300{% else %}text-gray-300{% endif %}" title="{{ row.label }} ({{ row.key }}){% if row.level %}: a clear yes sets severity {{ row.level }}{% elif row.positive %}: good behaviour, never changes the severity{% endif %}{% if row.uncertain %}; uncertain{% endif %}">{{ row.label }}</dt>
+        {% if row.level %}<span class="w-14 shrink-0 text-[10px] font-mono text-gray-500" title="Severity a clear yes sets">{{ row.level }}</span>{% elif jd.rows|length > 1 %}<span class="w-14 shrink-0"></span>{% endif %}
         <dd class="flex-1 min-w-0 flex items-center gap-2">
           <div class="flex-1 h-1.5 rounded bg-gray-800 overflow-hidden">
             <div class="h-full {% if row.uncertain %}bg-amber-400{% else %}bg-violet-400{% endif %}" style="width: {{ row.percent }}%"></div>
@@ -169,6 +173,35 @@ whole result of a single-rep run. Context: rep (see infra.ui._rep_view).
       </div>
       {% endfor %}
     </dl>
+    {% endif %}
+    {% for group, items in jd.item_groups %}
+    <p class="mt-3 mb-1 text-[11px] uppercase tracking-wide text-gray-500">{{ group }}</p>
+    <div class="divide-y divide-gray-800 text-xs">
+      {% for item in items %}
+      <div class="py-1.5">
+        <div class="flex items-baseline gap-2">
+          <span class="w-8 shrink-0 font-mono text-gray-500">{{ item.label }}</span>
+          <span class="flex-1 min-w-0 truncate text-gray-300" title="{{ item.text }}">{{ item.text }}{% if not item.required %} <span class="text-[10px] text-gray-500 border border-gray-700 rounded px-1" title="Graded and reported, but does not change the severity">not counted</span>{% endif %}</span>
+          <span class="shrink-0 px-1.5 rounded-full border text-[10.5px]
+            {% if item.status == 'met' %}border-gray-700 text-green-400{% elif item.status == 'violated' %}border-red-800 text-red-400{% elif item.status == 'uncertain' %}border-amber-800 text-amber-300{% else %}border-gray-700 text-gray-500{% endif %}">{% if item.status == 'not_applicable' %}not applicable{% else %}{{ item.status|default:"—" }}{% endif %}</span>
+        </div>
+        <div class="mt-1 ml-10 grid grid-cols-[auto_1fr_auto] items-center gap-x-2 gap-y-1 text-[11px] text-gray-500">
+          {% if item.applies %}
+          <span title="{{ item.applies_question }}">applies</span>
+          <div class="h-1 rounded bg-gray-800 overflow-hidden"><div class="h-full {% if item.applies.uncertain %}bg-amber-400{% else %}bg-violet-400{% endif %}" style="width: {{ item.applies.percent }}%"></div></div>
+          <span class="tabular-nums font-mono {% if item.applies.uncertain %}text-amber-300{% else %}text-gray-400{% endif %}">{{ item.applies.value }}</span>
+          {% endif %}
+          {% if item.met %}
+          <span class="{% if item.dim %}opacity-40{% elif item.met.uncertain %}text-amber-300{% endif %}" title="{{ item.met_question }}">met</span>
+          <div class="h-1 rounded bg-gray-800 overflow-hidden {% if item.dim %}opacity-40{% endif %}"><div class="h-full {% if item.met.uncertain %}bg-amber-400{% else %}bg-violet-400{% endif %}" style="width: {{ item.met.percent }}%"></div></div>
+          <span class="tabular-nums font-mono {% if item.dim %}opacity-40{% elif item.met.uncertain %}text-amber-300{% else %}text-gray-400{% endif %}">{{ item.met.value }}</span>
+          {% endif %}
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+    {% endfor %}
+    {% endwith %}
   </div>
   {% endif %}
 

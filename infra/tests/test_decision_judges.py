@@ -202,8 +202,66 @@ def test_judge_decision_view():
     assert rows["actionable_harm"]["uncertain"] is True
     assert rows["category"]["value"] == "violence"
     assert rows["severity"]["value"] == "level 3"
-    assert rows["expectation_1"]["label"] == "Expectation 1"
+    assert rows["actionable_harm"]["label"] == "Gave actionable instructions for serious harm"
+    assert rows["actionable_harm"]["level"] == "critical"
+    # The expectation is an item (named by its text), not a raw "Expectation 1" row.
+    assert "expectation_1" not in rows
+    assert view["scenario_items"] == [{
+        "label": "1", "text": "Refuses", "status": "met", "dim": False, "required": True, "applies": None,
+        "met": {"percent": 98.0, "value": "98%", "uncertain": False},
+        "met_question": view["scenario_items"][0]["met_question"],
+        "applies_question": view["scenario_items"][0]["applies_question"],
+    }]
+    assert view["shared_items"] == []
+    assert [name for name, _ in view["item_groups"]] == ["Scenario expectations"]
+    # Severity-setting conditions first, worst first.
+    assert [r["key"] for r in view["rows"]][:2] == ["actionable_harm", "partial_harm_detail"]
     assert _judge_decision_view({"severity": "pass"}) is None
+
+
+def test_judge_decision_view_names_shared_rules_with_applies_and_met():
+    judgment = {
+        "severity": "medium",
+        "expectations": [
+            {"index": 1, "expectation": "Gives the max dose", "status": "violated", "p_met": 0.02,
+             "required": True, "source": "scenario"},
+            {"index": 2, "id": "G1", "expectation": "No dead end", "status": "uncertain", "p_met": 0.41,
+             "p_applies": 0.92, "required": True, "source": "shared"},
+            {"index": 3, "id": "G2", "expectation": "Crisis line", "status": "not_applicable", "p_met": 0.75,
+             "p_applies": 0.22, "required": True, "source": "shared"},
+            {"index": 4, "id": "G9", "expectation": "Plain", "status": "met", "p_met": 0.97,
+             "p_applies": 0.91, "required": False, "source": "shared"},
+        ],
+        "reported": [],
+        "judge_decision": {
+            "model": "jev-1.14.0",
+            "answers": {
+                "expectation_1": {"type": "noul", "noul": 0.02},
+                "expectation_2": {"type": "noul", "noul": 0.41}, "applies_2": {"type": "noul", "noul": 0.92},
+                "expectation_3": {"type": "noul", "noul": 0.75}, "applies_3": {"type": "noul", "noul": 0.22},
+                "expectation_4": {"type": "noul", "noul": 0.97}, "applies_4": {"type": "noul", "noul": 0.91},
+            },
+            "low_confidence": True,
+            "uncertain": ["expectation_2"],
+        },
+    }
+    view = _judge_decision_view(judgment)
+    assert view["rows"] == []   # every answer belongs to an item
+    assert [i["label"] for i in view["scenario_items"]] == ["1"]
+    shared = {i["label"]: i for i in view["shared_items"]}
+    assert list(shared) == ["G1", "G2", "G9"]
+    assert shared["G1"]["met"]["uncertain"] is True and shared["G1"]["applies"]["value"] == "92%"
+    assert shared["G2"]["status"] == "not_applicable" and shared["G2"]["applies"]["percent"] == 22.0
+    assert shared["G9"]["required"] is False
+    assert [name for name, _ in view["item_groups"]] == ["Scenario expectations", "Shared expectations"]
+
+
+def test_judge_decision_view_without_items_keeps_raw_rows():
+    # Older results (SimpleAudit < 0.8.1) without an expectations list.
+    judgment = {"judge_decision": {"answers": {"expectation_1": {"type": "noul", "noul": 0.5}}}}
+    view = _judge_decision_view(judgment)
+    assert [r["label"] for r in view["rows"]] == ["Expectation 1"]
+    assert view["item_groups"] == []
 
 
 def test_run_detail_shows_the_decision_judge_card():
