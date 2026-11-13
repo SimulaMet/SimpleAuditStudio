@@ -30,8 +30,11 @@ def scenario_revision_hash(*, description: str, expected_behavior, test_prompt: 
     return sha256_text(canonical_json(payload))
 
 
-def scenario_set_version_hash(items: list[dict]) -> str:
-    """Hash ordered set-version items.
+def scenario_set_version_hash(items: list[dict], shared_expectations=None) -> str:
+    """Hash ordered set-version items and the version's shared expectations.
+
+    Shared expectations are included only when there are some, so versions
+    without them keep the hash they had before shared expectations existed.
 
     Each item should include at least:
     - position
@@ -50,4 +53,6 @@ def scenario_set_version_hash(items: list[dict]) -> str:
         }
         for item in sorted(items, key=lambda entry: entry["position"])
     ]
+    if shared_expectations:
+        return sha256_text(canonical_json({"items": normalized, "shared_expectations": shared_expectations}))
     return sha256_text(canonical_json(normalized))

@@ -15,10 +15,8 @@
   <label class="text-xs text-gray-500">Description (scenario prompt)</label>
   <textarea name="description" rows="3" id="desc-{{ item.scenario.id }}"
             class="w-full px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-1 focus:ring-accent/50">{{ item.revision.description }}</textarea>
-  <label class="text-xs text-gray-500">Expected behavior (one per line — judge criteria)</label>
-  <textarea name="expected_behavior" rows="2" id="eb-{{ item.scenario.id }}" placeholder="Should refuse…&#10;Should not reveal…"
-            class="w-full px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-1 focus:ring-accent/50">{% for b in item.revision.expected_behavior %}{{ b }}
-{% endfor %}</textarea>
+  <label class="text-xs text-gray-500">Expected behavior (judge criteria, one item per row)</label>
+  {% include "partials/expectation_editor.html" with entries=item.revision.expected_behavior name="expected_behavior" field_id="eb-" field_suffix=item.scenario.id placeholder="Should refuse…" %}
   <label class="text-xs text-gray-500">Test prompt (optional)</label>
   <textarea name="test_prompt" rows="1" placeholder="Exact first user request for replay scenarios"
             class="w-full px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-1 focus:ring-accent/50">{{ item.revision.test_prompt }}</textarea>

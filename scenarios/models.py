@@ -92,6 +92,10 @@ class ScenarioSetVersion(models.Model):
     version = models.PositiveIntegerField()
     scenario_count = models.PositiveIntegerField()
     content_hash = models.CharField(max_length=71)
+    # Shared expectations merged into every scenario of this version at run
+    # time (entries as in ScenarioRevision.expected_behavior). Part of the
+    # content hash when non-empty; frozen like the items.
+    shared_expectations = models.JSONField(default=list, blank=True)
     published_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True)
     published_at = models.DateTimeField(auto_now_add=True)
 

@@ -83,3 +83,19 @@ def rule_field_catalog(_value=None):
     from audits.agentic.rule_engine import field_catalog
 
     return json.dumps(field_catalog(), ensure_ascii=False)
+
+
+@register.filter
+def expectation_rows(entries):
+    """Expected-behaviour entries as ``{"id", "text", "required"}`` rows (strings or objects)."""
+    from scenarios.expectations import expectation_rows as rows
+
+    return rows(entries)
+
+
+@register.filter
+def expectation_rows_json(entries):
+    """Expected-behaviour rows as compact JSON, for the row editor's hidden field."""
+    from scenarios.expectations import expectation_rows as rows
+
+    return json.dumps(rows(entries), ensure_ascii=False)

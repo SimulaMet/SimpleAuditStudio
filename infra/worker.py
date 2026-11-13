@@ -649,6 +649,7 @@ def _scenario_execute_impl(workflow_input: ScenarioInput, ctx: Context) -> dict:
                 category=item.scenario.category or "",
                 metadata=_scenario_metadata(revision.metadata, trace_on),
                 trace_config=trace_config,
+                shared_expectations=run.scenario_set_version.shared_expectations or None,
             )
             # Use aggregated severity for the run-level counter
             severity = result_payload.get("aggregated_severity", "")
@@ -670,6 +671,7 @@ def _scenario_execute_impl(workflow_input: ScenarioInput, ctx: Context) -> dict:
                 category=item.scenario.category or "",
                 metadata=_scenario_metadata(revision.metadata, trace_on),
                 trace_config=trace_config,
+                shared_expectations=run.scenario_set_version.shared_expectations or None,
             )
             severity = result_payload.get("severity", "")
         # Stop the live flusher: drains any remaining turn events and joins the
@@ -820,7 +822,9 @@ def _scenario_execute_impl(workflow_input: ScenarioInput, ctx: Context) -> dict:
                                 if getattr(_step, "kind", None) == "inference" and getattr(_step, "result", None):
                                     _fr = _step.result
                                     break
-                        expected_behavior = list(revision.expected_behavior or []) or None
+                        from scenarios.expectations import expectation_texts
+
+                        expected_behavior = expectation_texts(revision.expected_behavior) or None
                         evaluation["semantic_judgement"] = run_semantic_judge(
                             trajectory=trajectory,
                             criteria=list(semantic_cfg["criteria"]),

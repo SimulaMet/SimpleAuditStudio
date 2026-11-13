@@ -1,5 +1,6 @@
 from rest_framework import serializers
 
+from scenarios.expectations import clean_expectations
 from scenarios.models import Scenario, ScenarioRevision, ScenarioSet, ScenarioSetVersion
 
 SEVERITY_CHOICES = ["pass", "low", "medium", "high", "critical"]
@@ -17,6 +18,22 @@ def _validate_document(value):
     if not isinstance(value, (str, dict)):
         raise serializers.ValidationError("Each document must be a string or an object.")
     return value
+
+
+class ExpectationListField(serializers.ListField):
+    """Expected behaviour: plain strings or ``{"id", "text", "required"}`` objects.
+
+    Returns the entries in their stored form (see ``scenarios.expectations``).
+    """
+
+    child = serializers.JSONField()
+
+    def to_internal_value(self, data):
+        entries = super().to_internal_value(data)
+        try:
+            return clean_expectations(entries)
+        except ValueError as exc:
+            raise serializers.ValidationError(str(exc)) from exc
 
 
 class ScenarioRevisionSerializer(serializers.ModelSerializer):
@@ -47,7 +64,7 @@ class ScenarioCreateSerializer(serializers.Serializer):
     key = serializers.CharField(required=False, allow_blank=True, default="", max_length=200)
     title = serializers.CharField(max_length=300)
     description = serializers.CharField(allow_blank=False)
-    expected_behavior = serializers.ListField(child=serializers.CharField(), allow_empty=False)
+    expected_behavior = ExpectationListField(allow_empty=False)
     test_prompt = serializers.CharField(required=False, allow_blank=True, default="")
     severity_ceiling = serializers.CharField(required=False, allow_blank=True, default="", validators=[_validate_severity_ceiling])
     documents = serializers.ListField(child=serializers.JSONField(validators=[_validate_document]), required=False, default=list)
@@ -80,12 +97,12 @@ class ScenarioImportItemSerializer(ScenarioCreateSerializer):
     import endpoint's long-standing leniency (blank description, no behaviours)."""
 
     description = serializers.CharField(required=False, allow_blank=True, default="")
-    expected_behavior = serializers.ListField(child=serializers.CharField(), required=False, default=list)
+    expected_behavior = ExpectationListField(required=False, default=list)
 
 
 class ScenarioUpdateSerializer(serializers.Serializer):
     description = serializers.CharField(allow_blank=False)
-    expected_behavior = serializers.ListField(child=serializers.CharField(), allow_empty=False)
+    expected_behavior = ExpectationListField(allow_empty=False)
     test_prompt = serializers.CharField(required=False, allow_blank=True, default="")
     severity_ceiling = serializers.CharField(required=False, allow_blank=True, default="", validators=[_validate_severity_ceiling])
     documents = serializers.ListField(child=serializers.JSONField(validators=[_validate_document]), required=False, default=list)
@@ -125,6 +142,8 @@ class ScenarioSetCreateSerializer(serializers.Serializer):
 
 class PublishScenarioSetVersionSerializer(serializers.Serializer):
     scenario_ids = serializers.ListField(child=serializers.IntegerField(min_value=1, max_value=2**63 - 1), allow_empty=False)
+    # Left out, the latest version's shared expectations carry over.
+    shared_expectations = ExpectationListField(required=False)
 
 
 class ScenarioSetVersionItemSerializer(serializers.Serializer):
@@ -142,5 +161,5 @@ class ScenarioSetVersionSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = ScenarioSetVersion
-        fields = ("id", "version", "scenario_count", "content_hash", "published_at", "items")
+        fields = ("id", "version", "scenario_count", "content_hash", "shared_expectations", "published_at", "items")
         read_only_fields = fields

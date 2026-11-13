@@ -19,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import contextvars
 import functools
+import logging
 import os
 from contextlib import nullcontext
 from typing import Any
@@ -776,11 +777,40 @@ def build_model_auditor(*, target: dict, auditor: dict, judge: dict, generation:
     return instance, language
 
 
+def engine_expectations(expected_behavior: list | None, shared_expectations: list | None = None) -> list | None:
+    """A scenario's expected behaviour with the set's shared expectations merged in.
+
+    Entries are plain strings or ``{"id", "text", "required"}`` objects. With an
+    engine that understands expectation objects (``simpleaudit.expectations``),
+    shared rules are merged with ``source="shared"`` and the ``required`` flags
+    reach the checklist grading in code; the judge model sees the texts only.
+
+    An older engine only takes strings: every entry is passed as its text, so
+    a non-required item or shared rule is graded as required. Nothing breaks,
+    but the flags have no effect until the engine is upgraded.
+    """
+    own = list(expected_behavior or [])
+    shared = list(shared_expectations or [])
+    if not own and not shared:
+        return None
+    try:
+        from simpleaudit.expectations import merge_shared
+    except ImportError:
+        merged = own + shared
+        if all(isinstance(entry, str) for entry in merged):
+            return merged
+        logging.getLogger(__name__).warning("Installed SimpleAudit engine has no expectation objects; required flags are ignored.")
+        return [entry if isinstance(entry, str) else str(entry.get("text") or "") for entry in merged]
+    if not shared and all(isinstance(entry, str) for entry in own):
+        return own   # plain strings: the engine's own path, results keep their old shape
+    return merge_shared(own, shared)
+
+
 def scenario_dict(
     *,
     name: str,
     description: str,
-    expected_behavior: list[str] | None = None,
+    expected_behavior: list | None = None,
     test_prompt: str | None = None,
     severity_ceiling: str = "",
     documents: list | None = None,
@@ -1006,7 +1036,7 @@ def run_scenario(
     *,
     name: str,
     description: str,
-    expected_behavior: list[str] | None,
+    expected_behavior: list | None,
     test_prompt: str | None,
     target: dict,
     auditor: dict,
@@ -1020,6 +1050,7 @@ def run_scenario(
     category: str = "",
     metadata: dict | None = None,
     trace_config: dict | None = None,
+    shared_expectations: list | None = None,
 ) -> dict[str, Any]:
     """Execute one scenario through the real engine and return a serializable result.
 
@@ -1046,7 +1077,8 @@ def run_scenario(
         target=target, auditor=auditor, judge=judge, generation=generation,
     )
     scenario = scenario_dict(
-        name=name, description=description, expected_behavior=expected_behavior, test_prompt=test_prompt,
+        name=name, description=description,
+        expected_behavior=engine_expectations(expected_behavior, shared_expectations), test_prompt=test_prompt,
         severity_ceiling=severity_ceiling, documents=documents, file_uri=file_uri, decision=decision,
         category=category, metadata=metadata,
     )
@@ -1254,7 +1286,7 @@ def run_scenario_repeated(
     *,
     name: str,
     description: str,
-    expected_behavior: list[str] | None,
+    expected_behavior: list | None,
     test_prompt: str | None,
     target: dict,
     auditor: dict,
@@ -1272,6 +1304,7 @@ def run_scenario_repeated(
     category: str = "",
     metadata: dict | None = None,
     trace_config: dict | None = None,
+    shared_expectations: list | None = None,
 ) -> dict[str, Any]:
     """Execute one scenario N times using AuditExperiment.run_scenario_reps().
 
@@ -1337,7 +1370,8 @@ def run_scenario_repeated(
     kwargs, language = auditor_kwargs(target=target, auditor=auditor, judge=judge, generation=generation)
     max_turns = kwargs["max_turns"]
     scenario = scenario_dict(
-        name=name, description=description, expected_behavior=expected_behavior, test_prompt=test_prompt,
+        name=name, description=description,
+        expected_behavior=engine_expectations(expected_behavior, shared_expectations), test_prompt=test_prompt,
         severity_ceiling=severity_ceiling, documents=documents, file_uri=file_uri, decision=decision,
         category=category, metadata=metadata,
     )
