@@ -109,13 +109,21 @@
           {% else %}
           <p class="text-xs text-gray-500">None. Shared expectations are rules every scenario of this set must follow (for example, never end an answer with only “I can't find that”). They are graded with each scenario's own items and shown per rule on the run page.</p>
           {% endif %}
-          {% if viewing_is_latest %}
-          <form method="post" data-write action="{% url 'scenario_set_shared' selected.id %}" class="space-y-2 pt-2 border-t border-gray-800"
-                data-confirm="Saving publishes a new version (v{{ versions.0.version|add:1 }}) with these shared expectations. Continue?">
+          {% if viewing_is_latest %}{# editing an older version's rules would republish its old text #}
+          <button type="button" data-write id="shared-edit-open" onclick="toggleSharedEditor(true)"
+                  class="inline-flex items-center gap-1 text-xs text-gray-500 hover:text-accent">
+            {% include "partials/icon.html" with name="pencil" cls="w-3.5 h-3.5" %}
+            {% if viewing_version.shared_expectations %}Edit shared expectations{% else %}Add shared expectations{% endif %}
+          </button>
+          <form method="post" data-write id="shared-edit-form" hidden action="{% url 'scenario_set_shared' selected.id %}" class="space-y-2 pt-2 border-t border-gray-800">
             {% csrf_token %}
             <input type="hidden" name="base_version" value="{{ viewing_version.version }}">
             {% include "partials/expectation_editor.html" with entries=viewing_version.shared_expectations name="shared_expectations" placeholder="A rule every scenario must follow…" %}
-            <button class="px-3 py-1 rounded text-xs bg-accent text-white hover:bg-accent-hover">Save shared expectations</button>
+            <div class="flex gap-2">
+              <button class="px-3 py-1 rounded text-xs bg-accent text-white hover:bg-accent-hover">Save shared expectations</button>
+              <button type="button" onclick="toggleSharedEditor(false)" class="px-3 py-1 rounded text-xs text-gray-400 hover:text-gray-200">Cancel</button>
+              <span class="self-center text-[11px] text-gray-500">Saving publishes v{{ versions.0.version|add:1 }}; every scenario keeps its revision.</span>
+            </div>
           </form>
           {% endif %}
         </div>
@@ -364,6 +372,27 @@ document.addEventListener('click', e => {
 {% include "partials/version_diff_js.html" %}
 {% load static %}<script src="{% static 'js/expectation-editor.js' %}"></script>
 <script>
+// Shared expectations: read view by default; the row editor opens on "Edit".
+// Cancel drops unsaved changes by rebuilding the editor from the saved rows.
+function toggleSharedEditor(open) {
+  const form = document.getElementById('shared-edit-form');
+  const button = document.getElementById('shared-edit-open');
+  if (!form || !button) return;
+  if (!open) {
+    const editor = form.querySelector('[data-expectation-editor]');
+    const field = editor.querySelector('textarea[hidden]');
+    field.value = field.defaultValue;
+    editor.querySelector('[data-rows]').replaceChildren();
+    const add = editor.querySelector('[data-add]');
+    add.replaceWith(add.cloneNode(true));  // drop the old click handler before re-init
+    delete editor.dataset.ready;
+    window.initExpectationEditors(form);
+  }
+  form.hidden = !open;
+  button.hidden = open;
+  if (open) form.querySelector('[data-text]')?.focus();
+}
+
 // Live version hint: shows "Will publish as vN" when description OR expected_behavior changes
 // Saving publishes after the latest version, whichever one is being viewed.
 const CURRENT_VERSION = {{ versions.0.version|default:0 }};
