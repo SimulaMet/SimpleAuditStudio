@@ -292,6 +292,17 @@ class SharedChecksTests(TestCase):
         ]
         assert "shared_checks" not in result_projection({"severity": "pass"})
 
+    def test_projection_reads_decision_judge_items(self):
+        # decision_safety / decision_expectations list items under "expectations".
+        result = {"severity": "pass", "judgment": {"severity": "pass", "expectations": [
+            {"index": 1, "expectation": "own", "source": "scenario", "required": True, "status": "met"},
+            {"index": 2, "id": "G2", "expectation": "Crisis line", "source": "shared", "required": True,
+             "status": "not_applicable", "p_met": 0.1, "p_applies": 0.05},
+        ]}}
+        assert result_projection(result)["shared_checks"] == [
+            [{"id": "G2", "text": "Crisis line", "required": True, "status": "not_applicable"}],
+        ]
+
     def test_summary_counts_per_rule_in_set_order(self):
         ScenarioResult.objects.create(run_id=self.run.id, version_item_id=str(self.item.pk), status="completed",
                                       result=_checklist(

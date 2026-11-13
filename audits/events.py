@@ -74,8 +74,14 @@ def trial_counts(status: str, result: dict | None) -> dict[str, int]:
 
 
 def _shared_checks(judgment) -> list[dict]:
-    """A checklist judgment's items for the set's shared expectations, compact."""
-    checklist = judgment.get("checklist") if isinstance(judgment, dict) else None
+    """A judgment's items for the set's shared expectations, compact.
+
+    A checklist judge lists items under ``checklist``; a decision judge that
+    checks expectations (decision_safety, decision_expectations; SimpleAudit
+    >= 0.8.1) under ``expectations``. A decision item can also be
+    ``uncertain``, which the run panel counts as missing.
+    """
+    checklist = (judgment.get("checklist") or judgment.get("expectations")) if isinstance(judgment, dict) else None
     return [
         {"id": str(item.get("id") or ""), "text": item.get("expectation") or "",
          "required": item.get("required", True) is not False, "status": item.get("status") or ""}
