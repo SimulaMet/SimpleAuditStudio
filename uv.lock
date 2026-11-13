@@ -2410,7 +2410,7 @@ wheels = [
 
 [[package]]
 name = "simpleaudit"
-version = "0.8.0"
+version = "0.8.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "any-llm-sdk" },
@@ -2418,14 +2418,14 @@ dependencies = [
     { name = "httpx" },
     { name = "tqdm" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/f5/95/c9de85f616a9f4e1c009b481e5c491d1addeb46fa2c338afc27925f258e4/simpleaudit-0.8.0.tar.gz", hash = "sha256:22921e760506ccfd2ea2bee22a038031662544c3e877d9c0cb8a82df38290dc8", size = 1230204, upload-time = "2026-11-12T23:58:08.402Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/ea/c7/4898c3288f8b7a7f635462c6f3aafd8bf697d8aa85b3d0f91621c46f693b/simpleaudit-0.8.1.tar.gz", hash = "sha256:c17191018d558a7ed215fc56b158511fa6e38f10806f27819ff777829c93f147", size = 1232789, upload-time = "2026-11-13T09:56:18.104Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/16/c6/e0212aeb2980f0f5fe156f995e7c8542ac9567f46be34b64a36e0782c60c/simpleaudit-0.8.0-py3-none-any.whl", hash = "sha256:2e53bcd6a00d8e1c715227d795aa1319fa356bf8d55c686384f66c10cd137cc2", size = 951154, upload-time = "2026-11-12T23:58:06.64Z" },
+    { url = "https://files.pythonhosted.org/packages/38/e8/d43017552628303e0d099a40b6879efb022003de97f275da93f8e6ebd95d/simpleaudit-0.8.1-py3-none-any.whl", hash = "sha256:25f6abaee1a3225dc431c670d26a02c8a696e90c2ed63d7ffe793a072bd2bab1", size = 952307, upload-time = "2026-11-13T09:56:16.068Z" },
 ]
 
 [[package]]
 name = "simpleaudit-studio"
-version = "0.7.0"
+version = "0.7.1"
 source = { virtual = "." }
 dependencies = [
     { name = "caddyserver" },
@@ -2491,7 +2491,7 @@ requires-dist = [
     { name = "requests", specifier = "==2.32.5" },
     { name = "ruff", marker = "extra == 'dev'" },
     { name = "sentry-sdk", extras = ["django"], specifier = ">=2.0" },
-    { name = "simpleaudit", specifier = ">=0.8.0,<0.9.0" },
+    { name = "simpleaudit", specifier = ">=0.8.1,<0.9.0" },
     { name = "watchfiles", specifier = ">=1.1.0" },
     { name = "workos", specifier = "==10.4.0" },
 ]
