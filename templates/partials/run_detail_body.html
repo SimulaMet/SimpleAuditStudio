@@ -49,6 +49,9 @@
       {% include "partials/icon.html" with name="refresh-cw" cls="w-4 h-4" %}<span class="hidden sm:inline">Monitor for drift</span>
     </a>
     {% endif %}
+    <a href="{% url 'run_calibration' run.id %}" title="How this run's judge, and other judges tried on the same transcripts, agree with human labels" aria-label="Judge calibration" class="inline-flex items-center gap-1.5 h-8 px-2.5 rounded-lg bg-surface-overlay text-gray-400 text-xs font-medium hover:text-accent transition-colors">
+      {% include "partials/icon.html" with name="scale" cls="w-4 h-4" %}<span class="hidden sm:inline">Calibration</span>
+    </a>
     {% if rejudge %}
     <details class="relative" data-popover>
       <summary title="Grade this run's transcripts again with another judge, without running the target again" aria-label="Rejudge" class="list-none cursor-pointer inline-flex items-center gap-1.5 h-8 px-2.5 rounded-lg bg-surface-overlay text-gray-400 text-xs font-medium hover:text-accent transition-colors">

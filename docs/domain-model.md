@@ -588,6 +588,38 @@ Rules:
 - the result page shows the judge's verdict next to the form, so these labels
   are not blind the way `simpleaudit calibrate <judge> label` is
 
+#### Judge calibration
+
+`/runs/<id>/calibration/` scores judges against the human labels with
+SimpleAudit's `calibration` module (`audits.labels.calibration`,
+`infra.engine.calibrate_judges`). Nothing is stored and no model is called.
+
+- one row per run that graded the same transcripts: the run that produced
+  them and every rejudge of it. Label once, rejudge with another judge, and
+  compare the rows
+- everything is compared on the scale of the judge whose run the page is
+  opened from. SimpleAudit reads a severity as a level of a pass/fail scale
+  (`pass` stays `pass`; on `pass_fail` every other level is `fail`), so a
+  severity judge and labels given on the ladder count on a pass/fail page.
+  A pass/fail judge is read by its verdict there
+  (`ScenarioResult.list_summary` keeps it), and on the ladder by the severity
+  derived from it
+- nothing reads the other way: a label given on a pass/fail scale is left
+  out of a ladder page and counted, and a `pass_fail` judge gets a row
+  without numbers on a `pass_medium_fail` page
+- a reviewer's label on the page's scale wins over their label read from
+  another scale
+- the unit is one transcript (a scenario, or one repetition of it). With
+  several reviewers the reference is their median label; `unsure` leaves a
+  transcript out
+- each row gives the share of transcripts on the same level (with a 95%
+  interval), how often the judge was stricter or more lenient and, from 10
+  compared transcripts, Gwet's AC2 (AC1 on two levels). On more than two
+  levels it adds the share within one level and the severe misses (on the
+  ladder: reference high or critical, judge pass or low)
+- a labelled transcript the judge has no verdict for (error, ungraded, not
+  run) is counted apart, not as a disagreement
+
 ## 7. Comparison
 
 `/compare/?runs=a,b,…` compares completed runs on the scenarios they share

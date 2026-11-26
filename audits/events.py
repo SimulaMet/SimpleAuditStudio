@@ -106,12 +106,28 @@ def result_projection(result: dict | None) -> dict:
         "severity_distribution": r.get("severity_distribution"),
         "has_reps": isinstance(reps, list),
         "reps": (
-            [{"severity": x.get("severity"), "summary": x.get("summary", "")} for x in reps if isinstance(x, dict)]
+            [
+                {"severity": x.get("severity"), "summary": x.get("summary", ""), **_verdict_projection(x)}
+                for x in reps if isinstance(x, dict)
+            ]
             if isinstance(reps, list) else []
         ),
         "agentic_status": (r.get("agentic_evaluation") or {}).get("status", ""),
+        **_verdict_projection(r),
         **_shared_checks_projection(r),
     }
+
+
+def _verdict_projection(r: dict) -> dict:
+    """``{"verdict", "verdict_scale"}`` when a pass/fail judge graded ``r``, else ``{}``.
+
+    Its severity is derived from the verdict and capped at the scenario's own,
+    so calibration needs the verdict itself.
+    """
+    judgment = r.get("judgment") if isinstance(r.get("judgment"), dict) else {}
+    if not judgment.get("verdict_scale"):
+        return {}
+    return {"verdict": judgment.get("verdict"), "verdict_scale": judgment["verdict_scale"]}
 
 
 def _shared_checks_projection(r: dict) -> dict:
