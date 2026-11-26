@@ -109,6 +109,7 @@ data directory (`~/.simpleaudit-studio/embedded-pg`, override with
 | `/experiments/`, `/experiments/<id>/` | Experiments and their pass-rate pivot |
 | `/monitors/`, `/monitors/<id>/` | Monitors and drift charts |
 | `/runs/<id>/`, `/runs/<id>/results/<rid>/` | Run detail (live) and per-scenario result |
+| `/runs/<id>/calibration/` | Judges tried on the run's transcripts, scored against its human labels |
 | `/compare/?runs=a,b` | Side-by-side comparison of completed runs |
 | `/scenarios/`, `/connections/` | Scenario library; connections (servers + API keys) and the models registered on them |
 | `/judges/`, `/judges/<id>/` | Judges: start from a SimpleAudit judge or write own criteria, edit (new version), clone, version history, live prompt preview (`/judges/preview/`) |

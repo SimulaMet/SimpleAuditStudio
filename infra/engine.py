@@ -1782,6 +1782,73 @@ def label_scale(name: str, criteria: str = "") -> dict[str, Any]:
         "levels": list(scale.levels),
         "rubric": scale.rubric(criteria or None) if scale.definitions else None,
     }
+def calibrate_judges(
+    verdicts: dict[Any, dict[str, dict[str, Any]]],
+    raters: list[list[tuple[str, str, str]]],
+    scale: str = "severity",
+) -> dict[str, Any]:
+    """How judges that graded the same items agree with human labels on
+    ``scale`` (``simpleaudit.calibration``). Calls no model.
+
+    ``verdicts`` maps a key per judge to ``{item: what the judge stored}``:
+    ``severity``, and for a pass/fail judge its ``verdict`` and
+    ``verdict_scale``. Every entry of ``raters`` is one reviewer's labels as
+    ``(item, label, scale the label is on)``.
+
+    SimpleAudit reads labels and verdicts onto ``scale`` where it can: a
+    ladder severity as a pass/fail level, never the other way. A label given
+    on ``scale`` wins over one read from another scale, ``unsure`` leaves the
+    item out, and an item where none of a reviewer's labels can be read counts
+    in ``unreadable``. With several reviewers the reference is their median
+    on ``scale``.
+
+    Returns ``judges`` (``{key: Agreement.to_dict()}``, ``None`` for a judge
+    whose verdicts ``scale`` cannot read), the report's ``reference`` block
+    (``None`` when no label can be read), ``unreadable``, and the scale's
+    ``levels``, ``severe`` and ``missed`` levels.
+    """
+    _ensure_engine_available()
+    from simpleaudit.calibration import UNSURE, calibrate, get_scale
+    from simpleaudit.results import AuditResult, AuditResults
+
+    on = get_scale(scale)
+    out: dict[str, Any] = {
+        "judges": {}, "reference": None, "unreadable": 0,
+        "levels": list(on.levels), "severe": list(on.severe), "missed": list(on.missed),
+    }
+    reference = []
+    for labels in raters:
+        ratings: dict[str, str] = {}
+        for item, label, label_scale in sorted(labels, key=lambda entry: entry[2] == on.name):
+            try:
+                ratings[item] = label if label == UNSURE else on.read(label, label_scale)
+            except ValueError:
+                continue
+        out["unreadable"] += len({item for item, _, _ in labels} - set(ratings))
+        if ratings:
+            reference.append(ratings)
+    if not reference:
+        return out
+    for key, stored in verdicts.items():
+        subject = AuditResults([
+            AuditResult(
+                scenario_name=item, scenario_description="", conversation=[],
+                severity=trial.get("severity") or "ERROR",
+                issues_found=[], positive_behaviors=[], summary="", recommendations=[],
+                judgment={k: trial[k] for k in ("verdict", "verdict_scale") if trial.get(k)},
+            )
+            for item, trial in stored.items()
+        ])
+        try:
+            report = calibrate(subject, reference, scale=on).to_dict()
+        except ValueError:   # verdicts on a scale this one cannot read
+            out["judges"][key] = None
+            continue
+        (out["judges"][key],) = report["judges"].values()
+        out["reference"] = report["reference"]
+    return out
+
+
 
 
 def audit_result_fields() -> set[str]:

@@ -5740,6 +5740,85 @@ class RunResultView(PublicReadableMixin, TemplateView):
         return super().get_context_data(**kw)
 
 
+def _rate_view(rate: dict) -> dict:
+    """An agreement rate ({k, n, value, interval}) with whole percentages for display."""
+    if not rate["n"]:
+        return {"k": 0, "n": 0}
+    low, high = rate["interval"]
+    return {"k": rate["k"], "n": rate["n"], "pct": round(rate["value"] * 100),
+            "low": round(low * 100), "high": round(high * 100)}
+
+
+def _agreement_view(row: dict) -> dict:
+    """One judge's agreement for the calibration table; ``{}`` when its
+    verdicts are on a scale the page's scale cannot read."""
+    if "coverage" not in row:
+        return {}
+    coverage = row["coverage"]
+    return {
+        "compared": coverage["compared"],
+        "not_graded": coverage["error"] + coverage["ungraded"] + coverage["unjudged"],
+        "indicative_only": row["indicative_only"],
+        "exact": _rate_view(row["exact"]),
+        "within_one": _rate_view(row["within_one"]),
+        "severe_misses": _rate_view(row["severe_misses"]),
+        "stricter": row["bias"]["stricter"],
+        "lenient": row["bias"]["lenient"],
+        "ac2": None if row["ac2"]["value"] is None else round(row["ac2"]["value"], 2),
+        "disagreements": row["disagreements"],
+    }
+
+
+class RunCalibrationView(ProjectMixin, TemplateView):
+    """GET /runs/<id>/calibration/ — how the judges tried on this run's transcripts
+    agree with the human labels on them (audits.labels.calibration)."""
+
+    template_name = "run_calibration.html"
+
+    def get_context_data(self, **kw):
+        from audits.labels import calibration
+        from audits.services import frozen_judge
+
+        run = get_object_or_404(AuditRun, pk=self.kwargs["run_id"], project=self.request.project)
+        report = calibration(run)
+        kw.update(run=run, report=report)
+        if report is None:
+            return super().get_context_data(**kw)
+        rows = [
+            {
+                "run": row["run"],
+                "judge": frozen_judge(row["run"]),
+                "current": row["run"].id == run.id,
+                "other_scale": row["scale"] != report["scale"],
+                **_agreement_view(row),
+            }
+            for row in report["rows"]
+        ]
+        # Where this run's judge and the reviewers differ, with a link to each transcript.
+        current = next((row for row in rows if row["current"]), None)
+        result_ids = dict(ScenarioResult.objects.filter(run_id=run.id).values_list("version_item_id", "id"))
+        titles = {
+            str(pk): title
+            for pk, title in ScenarioSetVersionItem.objects.filter(version=run.scenario_set_version)
+            .values_list("pk", "scenario__title")
+        }
+        disagreements = []
+        for entry in (current or {}).get("disagreements", []):
+            item_id, _, rep = entry["scenario"].partition("#")
+            disagreements.append({
+                "name": titles.get(item_id, f"Scenario {item_id}"), "rep": rep, "result_id": result_ids.get(item_id),
+                "human": entry["reference"], "judge": entry["judge"],
+            })
+        reference = report["reference"] or {"raters": [], "n_items": 0, "n_split": 0}
+        kw.update(
+            rows=rows, disagreements=disagreements, reviewers=len(reference["raters"]),
+            labelled=reference["n_items"], split=reference["n_split"],
+            # SimpleAudit leaves these two out of a two-level report: they add nothing there.
+            ordinal=len(report["levels"]) > 2,
+        )
+        return super().get_context_data(**kw)
+
+
 class RunResultLabelView(ProjectMixin, View):
     """POST verdict (+ comment, rep): the signed-in reviewer's own label for one
     transcript. A blank verdict removes it. Rules in audits.labels.set_label."""

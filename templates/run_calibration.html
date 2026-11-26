@@ -1,0 +1,88 @@
+{% extends "base.html" %}
+{% block title %}Calibration — {{ run.name }} (Run #{{ run.id }}) — SimpleAudit{% endblock %}
+{% block content %}
+<div class="mb-4">
+  <a href="{% url 'run_detail' run.id %}" class="text-xs text-gray-500 hover:text-accent">← Back to {{ run.name }} (Run #{{ run.id }})</a>
+</div>
+<h1 class="text-lg font-semibold text-gray-100 mb-1">Judge calibration</h1>
+<p class="text-sm text-gray-500 mb-6 max-w-3xl">How each judge's verdicts agree with the human labels on the same transcripts. Label transcripts on their result pages, then rejudge the run to try another judge against the same labels.</p>
+
+{% if not report %}
+<div class="bg-surface-raised rounded-xl border border-gray-800 p-8 text-center">
+  <p class="text-sm text-gray-500">No transcript of this run has a human label yet. Open a result and add one.</p>
+</div>
+{% elif not labelled %}
+<div class="bg-surface-raised rounded-xl border border-gray-800 p-8 text-center">
+  <p class="text-sm text-gray-500">The labels on these transcripts were given on another scale and cannot be read on the {{ report.scale }} scale ({{ report.levels|join:", " }}) of this run's judge. Open a result of this run and label it, or open the calibration of the run the labels were given in.</p>
+</div>
+{% else %}
+<div class="bg-surface-raised rounded-xl border border-gray-800 p-4 mb-6">
+  <p class="text-xs text-gray-500 mb-3">
+    Compared on the {{ report.scale }} scale ({{ report.levels|join:", " }}), the scale of this run's judge.
+    {{ labelled }} labelled transcript{{ labelled|pluralize }} from {{ reviewers }} reviewer{{ reviewers|pluralize }}.
+    {% if reviewers > 1 %}Where reviewers differ the reference is their median label ({{ split }} transcript{{ split|pluralize }}).{% endif %}
+    {% if report.unreadable %}{{ report.unreadable }} label{{ report.unreadable|pluralize }} given on another scale cannot be read on this one and {{ report.unreadable|pluralize:"is,are" }} left out.{% endif %}
+    Ranges are 95% intervals. Labels are given on result pages, where the judge's verdict is in view.
+  </p>
+  <div class="overflow-x-auto">
+    <table class="w-full text-sm" data-testid="calibration-table">
+      <thead>
+        <tr class="text-left text-xs text-gray-500 border-b border-gray-800">
+          <th class="py-2 pr-4 font-medium">Judge</th>
+          <th class="py-2 pr-4 font-medium">Judge model</th>
+          <th class="py-2 pr-4 font-medium">Run</th>
+          <th class="py-2 pr-4 font-medium" title="Labelled transcripts the judge gave a verdict on">Compared</th>
+          <th class="py-2 pr-4 font-medium" title="Judge and reference gave the same level">Same level</th>
+          {% if ordinal %}<th class="py-2 pr-4 font-medium" title="Judge within one level of the reference">Within one level</th>{% endif %}
+          <th class="py-2 pr-4 font-medium" title="Transcripts where the judge was stricter / more lenient than the reference">Stricter / more lenient</th>
+          {% if ordinal %}<th class="py-2 pr-4 font-medium" title="Reference says {{ report.severe|join:' or ' }}, judge says {{ report.missed|join:' or ' }}">Severe misses</th>{% endif %}
+          <th class="py-2 font-medium" title="Gwet's {% if ordinal %}AC2{% else %}AC1{% endif %}: agreement corrected for chance (1 is perfect). Shown from 10 compared transcripts">{% if ordinal %}AC2{% else %}AC1{% endif %}</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in rows %}
+        <tr class="border-b border-gray-800/60 {% if row.current %}bg-accent/5{% endif %}">
+          <td class="py-2 pr-4 text-gray-200">{{ row.judge.label }}{% if row.other_scale %} <a href="{% url 'run_calibration' row.run.id %}" class="text-gray-500 hover:text-accent" title="Graded on another scale: open this run's calibration to compare on it">†</a>{% endif %}</td>
+          <td class="py-2 pr-4 text-gray-400">{{ row.judge.model }}</td>
+          <td class="py-2 pr-4"><a href="{% url 'run_detail' row.run.id %}" class="text-gray-400 hover:text-accent">#{{ row.run.id }}</a>{% if row.current %} <span class="text-xs text-accent">this run</span>{% endif %}</td>
+          {% if "compared" in row %}
+          <td class="py-2 pr-4 text-gray-300">{{ row.compared }}{% if row.not_graded %} <span class="text-xs text-gray-600" title="Labelled transcripts without a judge verdict (error, ungraded or not run)">+{{ row.not_graded }} without verdict</span>{% endif %}</td>
+          <td class="py-2 pr-4 text-gray-300">{% if row.exact.n %}{{ row.exact.k }}/{{ row.exact.n }} <span class="text-xs text-gray-500">{{ row.exact.pct }}% ({{ row.exact.low }}–{{ row.exact.high }})</span>{% else %}—{% endif %}</td>
+          {% if ordinal %}<td class="py-2 pr-4 text-gray-300">{% if row.within_one.n %}{{ row.within_one.k }}/{{ row.within_one.n }} <span class="text-xs text-gray-500">{{ row.within_one.pct }}%</span>{% else %}—{% endif %}</td>{% endif %}
+          <td class="py-2 pr-4 text-gray-300">{{ row.stricter }} / {{ row.lenient }}</td>
+          {% if ordinal %}<td class="py-2 pr-4 {% if row.severe_misses.k %}text-red-300{% else %}text-gray-300{% endif %}">{% if row.severe_misses.n %}{{ row.severe_misses.k }}/{{ row.severe_misses.n }}{% else %}—{% endif %}</td>{% endif %}
+          <td class="py-2 text-gray-300">{% if row.ac2 is not None %}{{ row.ac2 }}{% else %}<span class="text-xs text-gray-600" title="Fewer than 10 compared transcripts: indicative only">—</span>{% endif %}</td>
+          {% else %}
+          <td class="py-2 text-xs text-gray-600" colspan="6">Its verdicts cannot be read on this scale.</td>
+          {% endif %}
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% for row in rows %}{% if row.other_scale %}{% ifchanged row.other_scale %}
+  <p class="mt-3 text-xs text-gray-500">† Graded on another scale. {% if report.scale == "severity" %}A pass/fail judge is scored here by the severity derived from its verdict, which on a fail is the scenario's own severity.{% else %}A severity is read as a level of this scale, as SimpleAudit's calibration does.{% endif %} The mark opens that run's calibration, which compares on its scale.</p>
+  {% endifchanged %}{% endif %}{% endfor %}
+  {% for row in rows %}{% if row.current and row.indicative_only %}
+  <p class="mt-3 text-xs text-amber-300 bg-amber-900/20 rounded px-3 py-1.5">Fewer than 10 labelled transcripts were compared for this run: read these numbers as indicative only.</p>
+  {% endif %}{% endfor %}
+</div>
+
+<div class="bg-surface-raised rounded-xl border border-gray-800 p-4">
+  <h2 class="text-sm font-semibold text-gray-300 mb-3">Where this run's judge and the reviewers differ</h2>
+  {% if disagreements %}
+  <ul class="space-y-1.5 text-sm" data-testid="calibration-disagreements">
+    {% for d in disagreements %}
+    <li class="flex flex-wrap items-center gap-2">
+      {% if d.result_id %}<a href="{% url 'run_result' run.id d.result_id %}#rep-{{ d.rep }}" class="text-gray-200 hover:text-accent">{{ d.name }}</a>{% else %}<span class="text-gray-200">{{ d.name }}</span>{% endif %}
+      <span class="text-xs text-gray-500">human</span>{% include "partials/severity_badge.html" with sev=d.human %}
+      <span class="text-xs text-gray-500">judge</span>{% include "partials/severity_badge.html" with sev=d.judge %}
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <p class="text-sm text-gray-500">None: the judge gave every compared transcript the reviewers' level.</p>
+  {% endif %}
+</div>
+{% endif %}
+{% endblock %}
