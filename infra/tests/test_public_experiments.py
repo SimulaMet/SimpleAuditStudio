@@ -101,6 +101,11 @@ class PublicExperimentsTest(TestCase):
         resp = self.anon.get(f"/runs/{self.public_run.id}/results/{self.result.id}/")
         self.assertEqual(resp.status_code, 200)
 
+    def test_anon_can_page_between_results_of_a_public_run(self):
+        second = ScenarioResultFactory(run_id=self.public_run.id)
+        resp = self.anon.get(f"/runs/{self.public_run.id}/results/{self.result.id}/")
+        self.assertContains(resp, f'href="/runs/{self.public_run.id}/results/{second.id}/" rel="next"')
+
     def test_anon_cannot_view_result_of_private_run(self):
         priv_result = ScenarioResultFactory(run_id=self.private_run.id)
         resp = self.anon.get(f"/runs/{self.private_run.id}/results/{priv_result.id}/")

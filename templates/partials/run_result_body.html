@@ -1,7 +1,14 @@
 
 {% load json_filters %}
-<div class="mb-4 no-print">
+<div class="mb-4 no-print flex flex-wrap items-center justify-between gap-x-4 gap-y-1">
   <a href="{% url 'run_detail' run.id %}" class="text-xs text-gray-500 hover:text-accent">← Back to {{ run.name }} (Run #{{ run.id }})</a>
+  {% if result_count > 1 %}
+  <nav class="flex items-center gap-3 text-xs text-gray-500" aria-label="Results of this run" data-testid="result-paging">
+    {% if prev_result_id %}<a href="{% url 'run_result' run.id prev_result_id %}" rel="prev" class="hover:text-accent">← Previous</a>{% else %}<span class="text-gray-700">← Previous</span>{% endif %}
+    <span>{{ result_position }} of {{ result_count }}</span>
+    {% if next_result_id %}<a href="{% url 'run_result' run.id next_result_id %}" rel="next" class="hover:text-accent">Next →</a>{% else %}<span class="text-gray-700">Next →</span>{% endif %}
+  </nav>
+  {% endif %}
 </div>
 
 <!-- Header -->
