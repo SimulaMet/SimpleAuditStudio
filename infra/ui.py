@@ -63,6 +63,8 @@ from scenarios.models import (
 from scenarios.services import (
     SCENARIO_NOTE_KEYS,
     create_scenario,
+    discard_drafts,
+    pending_drafts,
     publish_scenario_set_version,
     set_shared_expectations,
     update_scenario_content,
@@ -2369,8 +2371,11 @@ class ScenariosView(ProjectMixin, TemplateView):
         prev_version = (viewing_version.version - 1) if viewing_version and viewing_version.version > 1 else None
         # Collect unique categories for filter dropdown
         categories = sorted({i.scenario.category for i in items if i.scenario.category}) if items else []
+        viewing_is_latest = bool(versions) and viewing_version == versions[0]
+        # Edits saved without publishing ("Save draft") wait on the latest version.
+        draft_ids = set(pending_drafts(selected)) if viewing_is_latest else set()
         kw.update(sets=sets, selected=selected, items=items, versions=versions, viewing_version=viewing_version,
-                  viewing_is_latest=bool(versions) and viewing_version == versions[0],
+                  viewing_is_latest=viewing_is_latest, draft_ids=draft_ids,
                   prev_version=prev_version, categories=categories)
         return super().get_context_data(**kw)
 
@@ -2389,8 +2394,17 @@ class ScenarioEditFormView(ProjectMixin, View):
         )
         if item is None:
             raise Http404("Scenario not found.")
+        sset = item.version.scenario_set
+        # A scenario with an unpublished draft opens on the draft (it becomes the
+        # form's base revision), so a second edit continues it. Only on the
+        # latest version: an older version's form must keep failing the stale check.
+        draft = None
+        if item.version_id == sset.versions.order_by("-version").values_list("pk", flat=True).first():
+            draft = pending_drafts(sset).get(item.scenario_id)
+        if draft is not None:
+            item.revision = draft
         return render(request, "partials/scenario_edit_form.html",
-                      {"item": item, "selected": item.version.scenario_set})
+                      {"item": item, "selected": sset, "draft": draft})
 
 
 def _severity_ceiling(raw: str) -> str:
@@ -2689,18 +2703,21 @@ class ScenarioEditView(ProjectMixin, View):
             set_latest = sset.versions.order_by("-version").first() if sset else None
             pinned_item = set_latest.items.select_related("revision").filter(scenario=scenario).first() if set_latest else None
             pinned_rev = pinned_item.revision if pinned_item else latest_rev_before
+            # The form opens on the scenario's unpublished draft when it has one
+            # ("Save draft"), else on the revision the set runs.
+            opened_rev = (pending_drafts(sset).get(scenario.id) if sset else None) or pinned_rev
             # The form carries the revision it was opened on: a form from an older
             # version, or opened before someone else's edit, would republish
             # stale text over the current one.
             base_rev = request.POST.get("base_revision_id")
-            if base_rev and pinned_rev is not None and base_rev != str(pinned_rev.pk):
+            if base_rev and opened_rev is not None and base_rev != str(opened_rev.pk):
                 messages.error(request, "This scenario changed since the form was opened; reload and edit again.")
                 return _scenario_redirect(set_id or None)
             # The raw metadata box is a read-only preview; the structured controls
             # are the single source of truth. Unknown top-level fields survive an
             # edit because they are carried over from the previous revision rather
             # than re-read from the (now non-editable) textarea.
-            prior_metadata = dict(pinned_rev.metadata or {}) if pinned_rev else {}
+            prior_metadata = dict(opened_rev.metadata or {}) if opened_rev else {}
             if not request.POST.get("agentic_scenario"):
                 # The toggle disables agentic expectations, but must not erase
                 # unrelated metadata authored by older clients or imports.
@@ -2720,7 +2737,14 @@ class ScenarioEditView(ProjectMixin, View):
                 decision=decision, metadata=metadata,
             )
             content_changed = pinned_rev is None or rev.pk != pinned_rev.pk
-            if content_changed:
+            if request.POST.get("publish") == "0":
+                # "Save draft": the revision waits, and the set's drafts are
+                # published together as one version (ScenarioDraftsView).
+                if pinned_rev is None or rev.content_hash != pinned_rev.content_hash:
+                    messages.success(request, f"Scenario '{scenario.title}' saved as a draft (not published).")
+                else:
+                    messages.info(request, f"Scenario '{scenario.title}' saved (no content change, nothing to publish).")
+            elif content_changed:
                 if sset:
                     _publish_new_version(sset, request.user, changed_ids=[scenario.id])
                 messages.success(request, f"Scenario '{scenario.title}' updated (new version published).")
@@ -2791,6 +2815,42 @@ class ScenarioBulkDeleteView(ProjectMixin, View):
             messages.success(request, f"{n} scenario{'s' if n != 1 else ''} deleted{published}.")
         else:
             messages.error(request, "Select at least one scenario of this set to delete.")
+        return redirect(f"/scenarios/?set={set_id}")
+
+
+class ScenarioDraftsView(ProjectMixin, View):
+    """POST: publish a set's pending drafts as one new version, or with
+    action=discard delete them (scenarios.services.pending_drafts)."""
+
+    def post(self, request, set_id):
+        blocked = _require_write_access(request)
+        if blocked:
+            return blocked
+        sset = ScenarioSet.objects.filter(pk=set_id, project=request.project).first()
+        if not sset:
+            return redirect("/scenarios/")
+        latest = sset.versions.order_by("-version").first()
+        base = request.POST.get("base_version")
+        if latest and base and base != str(latest.version):
+            messages.error(request, "This set changed since the page was opened; reload and try again.")
+            return redirect(f"/scenarios/?set={set_id}")
+        try:
+            if request.POST.get("action") == "discard":
+                n = discard_drafts(scenario_set=sset, user=request.user)
+                messages.success(request, f"{n} draft{'s' if n != 1 else ''} discarded.")
+            elif drafts := pending_drafts(sset):
+                _publish_new_version(sset, request.user, changed_ids=list(drafts))
+                n, published = len(drafts), sset.versions.order_by("-version").first()
+                if published.pk == latest.pk:   # a publish drops deleted scenarios; none were left
+                    messages.info(request, "Nothing was published: every scenario of this set is deleted.")
+                else:
+                    messages.success(
+                        request, f"{n} edited scenario{'s' if n != 1 else ''} published as v{published.version}."
+                    )
+            else:
+                messages.info(request, "No drafts to publish.")
+        except StableAPIError as exc:
+            messages.error(request, str(exc.detail))
         return redirect(f"/scenarios/?set={set_id}")
 
 

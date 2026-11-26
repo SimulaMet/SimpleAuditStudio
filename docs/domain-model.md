@@ -174,6 +174,24 @@ Rules:
   the texts only, and every item then counts
 - audits reference this entity, never `ScenarioSet` directly
 
+Drafts: on the Scenarios page "Save" publishes a version with the edit, and
+"Save draft" only adds the scenario revision. The set's drafts are then
+published together as one version, or discarded.
+
+- a scenario of the latest version has a draft when its newest revision
+  differs in content from the one the version holds and no version of any set
+  holds it (`scenarios.services.pending_drafts`). Nothing is stored for this
+- a revision does not record which set it was saved from: a draft of a
+  scenario shared between sets shows in each of them, and is no draft
+  anywhere once one of them publishes it. An edit another set published is
+  not a draft here; this set keeps the revision it runs
+- every other publish (another scenario's edit, a delete, an import, shared
+  expectations, a revert) keeps the revisions the latest version holds, so
+  drafts stay pending
+- discarding deletes the scenario's revisions above the newest one any
+  version holds (`discard_drafts`): they were never published, so no run used
+  them. For a shared scenario this drops the draft in each set
+
 ### 3.5 `ScenarioSetVersionItem`
 
 Ordered membership of a scenario revision in a set version.
