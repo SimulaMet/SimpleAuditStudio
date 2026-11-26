@@ -391,8 +391,21 @@ def _scenario_execute_impl(workflow_input: ScenarioInput, ctx: Context) -> dict:
         _maybe_finalize(run_id)
         return {"status": "failed", "reason": "attempts_exhausted"}
 
+    # A rejudge run grades its source run's stored transcripts with its own
+    # judge (audits.services.create_rejudge_run): no target or auditor call.
+    rejudged_from = (_run_row.runtime_metadata or {}).get("rejudged_from") or {}
+    if rejudged_from:
+        from audits.events import get_result
+
+        source_result = get_result(rejudged_from.get("run_id") or 0, version_item_id)
+        if source_result is None:
+            # The run covers the scenarios its source has a result for; this
+            # one never ran there, so there is nothing to grade or to record.
+            return {"status": "skipped_no_source"}
+
     append_event(run_id, version_item_id, "scenario_attempted", {"attempt": attempt})
-    append_event(run_id, "_run", "run_stage", {"stage": "target_execution"})
+    stage = "judging" if rejudged_from else "target_execution"
+    append_event(run_id, "_run", "run_stage", {"stage": stage})
 
     if _is_cancelled(run_id):
         append_event(run_id, version_item_id, "scenario_skipped_cancelled", {})
@@ -417,11 +430,12 @@ def _scenario_execute_impl(workflow_input: ScenarioInput, ctx: Context) -> dict:
     # so the Status card and run lists stop showing "Queued" mid-run.
     AuditRun.objects.filter(
         pk=run.pk, status__in=[AuditRun.Status.QUEUED, AuditRun.Status.PREPARING]
-    ).update(status=AuditRun.Status.TARGET_EXECUTION)
+    ).update(status=AuditRun.Status.JUDGING if rejudged_from else AuditRun.Status.TARGET_EXECUTION)
 
     from infra.engine import (
         EngineError,
         augment_agent_generation,
+        rejudge_result,
         run_scenario_repeated,
     )
     from infra.engine import run_scenario as engine_run_scenario
@@ -470,8 +484,11 @@ def _scenario_execute_impl(workflow_input: ScenarioInput, ctx: Context) -> dict:
         "_run",
         "run_stage",
         {
-            "stage": "target_execution",
-            "detail": f"Turn 1/{max_turns} — Auditor generating probe",
+            "stage": stage,
+            "detail": (
+                "Judging the stored transcript" if rejudged_from
+                else f"Turn 1/{max_turns} — Auditor generating probe"
+            ),
         },
     )
 
@@ -627,7 +644,21 @@ def _scenario_execute_impl(workflow_input: ScenarioInput, ctx: Context) -> dict:
         _flusher.join(timeout=30)
 
     try:
-        if n_reps > 1:
+        if rejudged_from:
+            from audits.services import result_severity
+
+            result_payload = rejudge_result(
+                source_result["result"],
+                name=item.scenario.key,
+                description=revision.description,
+                target=run.target_config_snapshot,
+                auditor=run.auditor_config_snapshot,
+                judge=run.judge_config_snapshot,
+                generation=run.generation_parameters_snapshot,
+                severity_ceiling=revision.severity_ceiling or "",
+            )
+            severity = result_severity(result_payload)
+        elif n_reps > 1:
             result_payload = run_scenario_repeated(
                 name=item.scenario.key,
                 description=revision.description,
@@ -729,6 +760,10 @@ def _scenario_execute_impl(workflow_input: ScenarioInput, ctx: Context) -> dict:
     # A failed attempt is final on the last attempt or for errors a retry can't fix;
     # otherwise it is provisional, stored as failed with attempts < max (so not terminal).
     final = not failed or attempt >= MAX_SCENARIO_ATTEMPTS or _is_permanent_error(error)
+    if rejudged_from and (failure or {}).get("retryable") is False:
+        # e.g. a transcript the source run never completed: grading it again
+        # cannot change it.
+        final = True
     # Agentic post-hoc: the engine's evidence resolver already ran
     # deterministic checks and passed them to the judge (unified verdict).
     # Here we only fill in the deferred semantic dimensions (needs LLM) and

@@ -14,6 +14,11 @@
       {% include "partials/icon.html" with name="layers" cls="w-4 h-4 shrink-0" %}<span class="truncate">{% if run_experiments|length > 1 %}{{ exp.name }}{% else %}Experiment{% endif %}</span>
     </a>
     {% endfor %}
+    {% if rejudged_from %}
+    <a {% if user.is_authenticated %}href="{% url 'run_detail' rejudged_from.run_id %}"{% endif %} title="Rejudged from “{{ rejudged_from.name }}”: the same transcripts, graded again by this run's judge" class="inline-flex items-center gap-1.5 h-8 px-2.5 rounded-lg bg-surface-overlay text-gray-300 text-xs font-medium hover:text-accent transition-colors">
+      {% include "partials/icon.html" with name="scale" cls="w-4 h-4 shrink-0" %}<span>Rejudged from #{{ rejudged_from.run_id }}</span>
+    </a>
+    {% endif %}
     {% if can_edit_membership and add_to_experiments %}
     <details class="relative" data-add-to-experiment data-popover>
       <summary title="Add this run to an existing experiment" aria-label="Add to experiment" class="list-none cursor-pointer inline-flex items-center gap-1.5 h-8 px-2.5 rounded-lg bg-surface-overlay text-gray-400 text-xs font-medium hover:text-accent transition-colors">
@@ -43,6 +48,30 @@
     <a href="{% url 'new_experiment' %}?clone_from={{ run.id }}&repeat=168#schedule-card" title="Repeat this exact run on a schedule to track drift" aria-label="Monitor for drift" class="inline-flex items-center gap-1.5 h-8 px-2.5 rounded-lg bg-surface-overlay text-gray-400 text-xs font-medium hover:text-accent transition-colors">
       {% include "partials/icon.html" with name="refresh-cw" cls="w-4 h-4" %}<span class="hidden sm:inline">Monitor for drift</span>
     </a>
+    {% endif %}
+    {% if rejudge %}
+    <details class="relative" data-popover>
+      <summary title="Grade this run's transcripts again with another judge, without running the target again" aria-label="Rejudge" class="list-none cursor-pointer inline-flex items-center gap-1.5 h-8 px-2.5 rounded-lg bg-surface-overlay text-gray-400 text-xs font-medium hover:text-accent transition-colors">
+        {% include "partials/icon.html" with name="scale" cls="w-4 h-4" %}<span class="hidden sm:inline">Rejudge</span>
+      </summary>
+      <form method="post" action="{% url 'run_rejudge' run.id %}" class="absolute right-0 z-20 mt-1 w-72 p-3 rounded-lg bg-surface-raised border border-gray-800 shadow-lg space-y-2">
+        {% csrf_token %}
+        <p class="text-[11px] text-gray-500">Creates a new run that grades these transcripts again. The target and auditor are not called.</p>
+        <label class="block text-[11px] text-gray-500" for="rejudge-judge-{{ run.id }}">Judge</label>
+        <select id="rejudge-judge-{{ run.id }}" name="judge" class="w-full bg-surface-overlay border border-gray-700 rounded-lg px-2 py-1.5 text-xs text-gray-200">
+          {% for version in rejudge.judges %}
+          <option value="{{ version.id }}"{% if version.id == run.judge_version_id %} selected{% endif %}>{{ version.label }}</option>
+          {% endfor %}
+        </select>
+        <label class="block text-[11px] text-gray-500" for="rejudge-model-{{ run.id }}">Judge model</label>
+        <select id="rejudge-model-{{ run.id }}" name="judge_model" class="w-full bg-surface-overlay border border-gray-700 rounded-lg px-2 py-1.5 text-xs text-gray-200">
+          {% for model in rejudge.models %}
+          <option value="{{ model.id }}"{% if model.id == run.judge_model_id %} selected{% endif %}>{{ model.display_name }}</option>
+          {% endfor %}
+        </select>
+        <button type="submit" class="w-full px-3 py-1.5 rounded-lg bg-accent text-white text-xs font-medium hover:bg-accent-hover">Rejudge</button>
+      </form>
+    </details>
     {% endif %}
     <a href="{% url 'new_experiment' %}?clone_from={{ run.id }}" title="Clone this run" aria-label="Clone this run" class="inline-flex items-center justify-center w-8 h-8 rounded-lg bg-surface-overlay text-gray-400 hover:text-accent transition-colors">
       <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>

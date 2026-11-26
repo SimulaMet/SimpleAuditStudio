@@ -1635,6 +1635,136 @@ def run_scenario_repeated(
     }
 
 
+class _JudgeParamsClient:
+    """A judge client that sends the run's frozen judge params with every call.
+
+    ``simpleaudit.rejudge`` passes no request params of its own, so without this
+    a rejudge would drop the temperature / max_tokens a live run sends its
+    judge. The engine's own keys (model, messages, response_format) win, as
+    they do in a live run.
+    """
+
+    def __init__(self, client: Any, params: dict[str, Any] | None) -> None:
+        self._client = client
+        self._params = dict(params or {})
+
+    async def acompletion(self, **kwargs: Any):
+        return await self._client.acompletion(**{**self._params, **kwargs})
+
+
+def rejudge_result(
+    stored: dict | None,
+    *,
+    name: str,
+    description: str,
+    target: dict,
+    auditor: dict,
+    judge: dict,
+    generation: dict | None = None,
+    severity_ceiling: str = "",
+) -> dict[str, Any]:
+    """Grade a stored scenario result again with another judge, keeping its transcript.
+
+    ``stored`` is a source run's payload for one scenario, in either shape
+    ``run_scenario`` / ``run_scenario_repeated`` return; the result has the
+    same shape. Delegates to ``simpleaudit.rejudge``: no target or auditor
+    call is made, and judge fields, judge tokens and the severity come from
+    ``judge``, the frozen judge snapshot of the run doing the rejudge.
+
+    The engine does not grade a result without a complete transcript (none
+    stored, or cut short by a target/auditor failure): it stays ``ERROR``, and
+    here keeps the ``failure`` the source run recorded for it, marked not
+    retryable since grading it again cannot change it.
+
+    ``name`` / ``description`` identify the scenario when ``stored`` carries no
+    result body. ``target`` and ``auditor`` are only read for the mapping a
+    live run uses (``auditor_kwargs``); a missing key of theirs does not matter.
+    """
+    _ensure_engine_available()
+    try:
+        from simpleaudit.model_auditor import ModelAuditor
+        from simpleaudit.reframing import rejudge_async
+        from simpleaudit.repeated_results import aggregate_severities
+        from simpleaudit.results import AuditResult, AuditResults
+    except Exception as exc:
+        raise EngineError(f"Failed to import SimpleAudit rejudge: {exc}") from exc
+
+    from audits.failures import build_failure
+    from infra.trace_target import run_with_client_cleanup
+
+    _validate_secrets(("judge", judge))
+    kwargs, language = auditor_kwargs(
+        target=target, auditor=auditor, judge=judge, generation=generation, resolve_key=snapshot_api_key,
+    )
+
+    stored = stored if isinstance(stored, dict) else {}
+    reps = [r for r in stored["reps"] if isinstance(r, dict)] if isinstance(stored.get("reps"), list) else []
+    entries = reps or [stored]
+    fields = audit_result_fields()
+    # A failed scenario stores no result body: it goes in as an empty
+    # transcript, which the engine keeps as ERROR instead of grading.
+    blank = {
+        "scenario_name": name, "scenario_description": description, "conversation": [], "severity": "ERROR",
+        "issues_found": [], "positive_behaviors": [], "summary": "", "recommendations": [],
+    }
+    source = AuditResults(
+        [AuditResult(**{**blank, **{k: v for k, v in entry.items() if k in fields}}) for entry in entries]
+    )
+
+    try:
+        client = _JudgeParamsClient(
+            ModelAuditor._create_anyllm_client(
+                api_key=kwargs["judge_api_key"], base_url=kwargs["judge_base_url"],
+                provider=kwargs["judge_provider"], client_kwargs=kwargs["judge_kwargs"],
+            ),
+            kwargs["judge_params"],
+        )
+        rejudged = asyncio.run(
+            run_with_client_cleanup(
+                lambda: rejudge_async(
+                    source, client, kwargs["judge_model"], judge=kwargs["judge"],
+                    max_retries=kwargs["max_retries"], retry_backoff=kwargs["retry_backoff"],
+                    scenario_severities=(
+                        {result.scenario_name: severity_ceiling for result in source.results}
+                        if severity_ceiling else None
+                    ),
+                ),
+                [client],
+            )
+        )
+    except Exception as exc:
+        raise EngineError(f"Rejudge crashed: {type(exc).__name__}: {exc}") from exc
+
+    payloads = []
+    for index, (entry, result) in enumerate(zip(entries, rejudged.results, strict=True)):
+        payload = result.to_dict()
+        judgment = payload.get("judgment") or {}
+        if str(payload.get("severity", "")).upper() == "ERROR" and judgment.get("error_phase") != "judge":
+            # Not a failure of this run's judge call (the worker attributes
+            # those): the judge answered without a usable verdict, or the
+            # engine would not grade the transcript.
+            failure = build_failure("system", payload.get("summary") or "")
+            if not entry.get("conversation") or judgment.get("error"):
+                kept = entry.get("failure")
+                failure = {**(kept if isinstance(kept, dict) else failure), "retryable": False}
+            payload["failure"] = failure
+        payload["_rep_index"] = entry.get("_rep_index", index)
+        payloads.append(payload)
+
+    if not reps:
+        payloads[0].pop("_rep_index")
+        return {**payloads[0], "_language": language}
+    agg = aggregate_severities([payload.get("severity", "") for payload in payloads])
+    return {
+        "reps": payloads,
+        "aggregated_severity": agg["most_common_severity"],
+        "agreement_rate": round(agg["agreement_rate"], 4),
+        "severity_distribution": agg["severity_distribution"],
+        "n_repetitions": len(payloads),
+        "_language": language,
+    }
+
+
 def audit_result_fields() -> set[str]:
     """The field names of the engine's ``AuditResult`` dataclass.
 

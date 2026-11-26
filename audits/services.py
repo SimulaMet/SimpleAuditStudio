@@ -408,6 +408,101 @@ def create_audit_run(
     return run
 
 
+def rejudge_block_reason(run: AuditRun) -> str:
+    """Why ``run`` cannot be rejudged, or "" when it can.
+
+    A rejudge grades the run's stored transcripts again (``simpleaudit.rejudge``),
+    so the run must be finished and graded from its transcripts alone.
+    """
+    from audits.events import ScenarioResult
+    from model_registry.decision import is_decision_snapshot
+
+    if run.is_active:
+        return "This run is still in progress. Rejudge it once it has finished."
+    if not ScenarioResult.objects.filter(run_id=run.id).exists():
+        return "This run has no results to rejudge."
+    if is_decision_snapshot(run.target_config_snapshot):
+        return (
+            "A decision target is graded in code against the scenario, not from a "
+            "transcript, so there is nothing to rejudge."
+        )
+    if run.trace_config:
+        return (
+            "This run was traced, so its judge also read the target's trace, which a "
+            "rejudge cannot show the new judge. Clone the run to grade it with another judge."
+        )
+    return ""
+
+
+@transaction.atomic
+def create_rejudge_run(
+    *, source: AuditRun, user, judge, judge_model: RegisteredModel, name: str = "",
+) -> AuditRun:
+    """Create a queued run that grades ``source``'s transcripts again with another judge.
+
+    The new run keeps the source's scenario set version and its target, auditor,
+    agent and generation snapshots (they describe how the transcripts were
+    made) and freezes its own judge. ``runtime_metadata["rejudged_from"]`` names
+    the source: the worker grades the source's stored results and calls neither
+    target nor auditor. The run covers the scenarios the source has a result
+    for. Enqueue it with ``submit_audit_run`` like any other run.
+    """
+    from audits.events import ScenarioResult
+    from judges.services import grades_stored_transcripts, judge_snapshot
+
+    project = source.project
+    # Rejudging spends the workspace's API keys, like launching: viewers may not.
+    require_project_role(user, project, ProjectMembership.Role.ADMIN, ProjectMembership.Role.AUDITOR)
+    reason = rejudge_block_reason(source)
+    if reason:
+        raise StableAPIError(detail=reason, code="run_not_rejudgeable")
+    if judge.judge.project_id != project.id:
+        raise StableAPIError(detail="Judge belongs to another project.", code="cross_project_input")
+    if judge_model.project_id != project.id or not judge_model.enabled or not judge_model.connection.enabled:
+        raise StableAPIError(detail="Model is unavailable in this project.", code="model_unavailable")
+    if judge_model.is_decision or not grades_stored_transcripts(judge.content()):
+        raise StableAPIError(
+            detail="Decision judges, decision judge models and Choice Match cannot rejudge stored "
+                   "transcripts. Run the scenarios again to grade them with one.",
+            code="judge_model_mismatch",
+        )
+    provenance = resolve_engine_provenance()
+    if not provenance.version:
+        raise StableAPIError(
+            detail="SimpleAudit engine is not installed; cannot create an audit run without engine provenance.",
+            code="simpleaudit_provenance_required",
+        )
+
+    return AuditRun.objects.create(
+        project=project,
+        name=(name.strip() or f"{source.name} · rejudged with {judge.judge.name}")[:250],
+        status=AuditRun.Status.QUEUED,
+        scenario_set_version=source.scenario_set_version,
+        target_model=source.target_model,
+        agent=source.agent,
+        auditor_model=source.auditor_model,
+        judge_version=judge,
+        judge_model=judge_model,
+        system_prompt_version=source.system_prompt_version,
+        target_config_snapshot=source.target_config_snapshot,
+        auditor_config_snapshot=source.auditor_config_snapshot,
+        judge_config_snapshot={**_endpoint_snapshot(judge_model), "judge": judge_snapshot(judge)},
+        generation_parameters_snapshot=source.generation_parameters_snapshot,
+        agent_config_snapshot=source.agent_config_snapshot,
+        # The engine that grades, as for any run; the source run records the
+        # engine that produced the transcripts.
+        simpleaudit_version=provenance.version,
+        git_commit=provenance.commit or "",
+        runtime_metadata={
+            "created_by_username": user.username,
+            "rejudged_from": {"run_id": source.id, "name": source.name},
+        },
+        queued_at=timezone.now(),
+        total_scenarios=ScenarioResult.objects.filter(run_id=source.id).count(),
+        created_by=user,
+    )
+
+
 def submit_audit_run(run: AuditRun) -> str | None:
     """Enqueue durable work for a frozen AuditRun into Hatchet.
 
