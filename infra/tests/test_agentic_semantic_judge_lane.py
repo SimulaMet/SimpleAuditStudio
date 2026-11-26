@@ -34,6 +34,7 @@ class _FakeRun:
     auditor_config_snapshot = {}
     generation_parameters_snapshot = {"n_repetitions": 1}
     trace_config = {"mode": "studio"}
+    runtime_metadata = {}
 
     class Status:
         QUEUED = "queued"

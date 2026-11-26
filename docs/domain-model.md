@@ -396,6 +396,32 @@ Rules:
 - worker must verify loaded SimpleAudit version/commit against the run manifest and fail with stable error `SIMPLEAUDIT_VERSION_MISMATCH` on mismatch
 - `workflow_run_id` links to execution system but is not authoritative domain state
 
+#### Rejudge
+
+Rejudge (the run page, `POST /runs/<id>/rejudge/`) grades a finished run's
+stored transcripts again with another judge or judge model, through
+SimpleAudit's `rejudge`. The source run never changes: the result is a new
+`AuditRun` (`audits.services.create_rejudge_run`).
+
+- the new run keeps the source's scenario set version and its target, auditor,
+  agent and generation snapshots, and freezes its own judge;
+  `runtime_metadata.rejudged_from` (`{run_id, name}`) names the source
+- the worker reads each transcript from the source run's `ScenarioResult` and
+  calls only the judge (`infra.engine.rejudge_result`), with the request
+  parameters a live run would send it. Target and auditor tokens are the
+  source's; judge tokens are the new run's
+- the new run has a result for exactly the scenarios the source has one for
+  (`total_scenarios` counts them); a scenario the source never ran is skipped
+- a source result without a complete transcript (the scenario failed before or
+  during the conversation) is not graded: it stays failed, with the source's
+  `failure` marked not retryable
+- repeated scenarios are graded per repetition and aggregated again
+- not offered for active runs, decision targets (graded in code against the
+  scenario), traced runs (their judge also read the trace, which a rejudge
+  cannot show the new judge), or with decision judges, decision judge models
+  and Choice Match (SimpleAudit cannot rejudge with them)
+- scenario judge notes are not stored on results, so a rejudge does not apply them
+
 ### 5.2 `Experiment`
 
 A named set of runs compared together, usually launched from one design on New

@@ -219,6 +219,23 @@ def library_judge(spec: dict):
     )
 
 
+def grades_stored_transcripts(spec: dict) -> bool:
+    """Whether the judge of ``spec`` can grade a stored transcript on its own (a rejudge).
+
+    SimpleAudit's ``rejudge`` refuses two kinds: a decision judge, and a judge
+    that grades in code against the scenario's decision block (Choice Match),
+    which stored results do not carry.
+    """
+    from simpleaudit.judges import DEFAULT_JUDGE, get_judge
+
+    try:
+        judge = library_judge(spec)
+        config = get_judge(DEFAULT_JUDGE if judge is None else judge)
+    except ValueError:   # base removed upstream, or a spec SimpleAudit rejects
+        return False
+    return config.get("output") != "decision" and config.get("grade") is None
+
+
 def resolve(spec: dict) -> dict:
     """The full texts ``spec`` grades with: criteria, format prompt, the whole
     judge prompt and the probe prompt, plus labels for display."""

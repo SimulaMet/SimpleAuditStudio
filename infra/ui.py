@@ -43,7 +43,9 @@ from audits.models import AuditRun
 from audits.services import (
     _repeated_export_entry,
     create_audit_run,
+    create_rejudge_run,
     frozen_name,
+    rejudge_block_reason,
     result_severity,
     submit_audit_run,
 )
@@ -3826,6 +3828,11 @@ class RunDetailView(PublicReadableMixin, DetailView):
         from audits.monitors import has_write_role
 
         ctx["can_schedule"] = has_write_role(self.request.user, self.request.project)
+        # Rejudge: the run this one regraded (its transcripts' source), and for
+        # admins/auditors what this run itself can be rejudged with.
+        ctx["rejudged_from"] = (run.runtime_metadata or {}).get("rejudged_from")
+        if ctx["can_schedule"] and not rejudge_block_reason(run):
+            ctx["rejudge"] = _rejudge_choices(run)
         # Experiments this run belongs to (only public ones for anonymous
         # visitors) and, for admins/auditors, the ones it could be added to.
         from audits.models import Experiment
@@ -3904,6 +3911,66 @@ class RunArchiveView(ProjectMixin, View):
             run.archived = not run.archived
             run.save(update_fields=["archived"])
         return redirect(request.META.get("HTTP_REFERER") or f"/runs/{run_id}/")
+
+
+def _rejudge_choices(run: AuditRun) -> dict:
+    """What a run can be rejudged with: each judge's latest version and the judge models.
+
+    Judges that cannot grade a stored transcript (decision judges, Choice
+    Match) and decision models are left out; agents are targets only.
+    """
+    from judges.models import JudgeVersion
+    from judges.services import grades_stored_transcripts
+    from model_registry.models import RegisteredModel
+
+    latest: dict[int, JudgeVersion] = {}
+    for version in (
+        JudgeVersion.objects.filter(judge__project=run.project).select_related("judge").order_by("judge__name", "-version")
+    ):
+        latest.setdefault(version.judge_id, version)
+    models = RegisteredModel.objects.filter(
+        project=run.project, enabled=True, connection__enabled=True
+    ).select_related("connection").order_by("display_name")
+    return {
+        "judges": [v for v in latest.values() if grades_stored_transcripts(v.content())],
+        "models": [m for m in models if not m.is_decision and not m.model_id.startswith("studio.agent-")],
+    }
+
+
+class RunRejudgeView(ProjectMixin, View):
+    """POST judge (a judge version id) + judge_model: grade this run's stored
+    transcripts again, as a new run. Rules in audits.services.create_rejudge_run."""
+
+    def post(self, request, run_id):
+        from judges.models import JudgeVersion
+        from model_registry.models import RegisteredModel
+
+        blocked = _require_write_access(request)
+        if blocked:
+            return blocked
+        source = get_object_or_404(AuditRun, pk=run_id, project=request.project)
+        judge_id, model_id = request.POST.get("judge", ""), request.POST.get("judge_model", "")
+        judge = (
+            JudgeVersion.objects.filter(pk=int(judge_id), judge__project=request.project).select_related("judge").first()
+            if is_id(judge_id) else None
+        )
+        judge_model = (
+            RegisteredModel.objects.filter(pk=int(model_id), project=request.project).select_related("connection").first()
+            if is_id(model_id) else None
+        )
+        if judge is None or judge_model is None:
+            messages.error(request, "Pick a judge and a judge model to rejudge with.")
+            return redirect("run_detail", run_id)
+        try:
+            run = create_rejudge_run(source=source, user=request.user, judge=judge, judge_model=judge_model)
+        except StableAPIError as exc:
+            messages.error(request, str(exc.detail))
+            return redirect("run_detail", run_id)
+        # Best effort, as for any launch: a run that cannot be submitted now
+        # stays queued and the sweeper submits it.
+        submit_audit_run(run)
+        messages.success(request, f"Rejudging “{source.name}” with {judge.judge.name}.")
+        return redirect("run_detail", run.id)
 
 
 class ExperimentRenameView(ProjectMixin, View):
