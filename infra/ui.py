@@ -5646,6 +5646,10 @@ class RunResultView(PublicReadableMixin, TemplateView):
         # by run_id only, so it inherits the run's access decision.
         run = get_object_or_404(_public_run_queryset(self.request), pk=run_id)
         sr = get_object_or_404(ScenarioResult, pk=result_id, run_id=run_id)
+        # Previous / next result of this run, in the order the run page lists
+        # them (``_result_rows``). Ids only: no transcript is loaded.
+        result_ids = list(ScenarioResult.objects.filter(run_id=run_id).order_by("id").values_list("id", flat=True))
+        position = result_ids.index(sr.pk)
 
         item = (
             ScenarioSetVersionItem.objects.filter(pk=sr.version_item_id)
@@ -5683,6 +5687,10 @@ class RunResultView(PublicReadableMixin, TemplateView):
         kw.update(
             run=run,
             sr=sr,
+            result_position=position + 1,
+            result_count=len(result_ids),
+            prev_result_id=result_ids[position - 1] if position else None,
+            next_result_id=result_ids[position + 1] if position + 1 < len(result_ids) else None,
             scenario_name=scenario_name,
             scenario_set_id=scenario_set_id,
             scenario_id=item.scenario_id if item else None,

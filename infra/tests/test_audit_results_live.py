@@ -148,3 +148,59 @@ class ScenarioResultPageTests(_ResultPagesBase):
         # appears in the Raw JSON dump, which is expected).
         self.assertNotContains(resp, 'data-img-uri="http://example.com/doc.pdf"')
         self.assertEqual(resp.context["reps"][0]["images"], [])
+
+
+class ScenarioResultPagingTests(_ResultPagesBase):
+    """The result page links to the previous and the next result of the same run."""
+
+    def setUp(self):
+        super().setUp()
+        self.first = ScenarioResultFactory(run_id=self.run.id)
+        # Another run's result, created in between: it must never be a neighbour.
+        self.foreign = ScenarioResultFactory(run_id=AuditRunFactory(project=self.project).id)
+        self.middle = ScenarioResultFactory(run_id=self.run.id)
+        self.last = ScenarioResultFactory(run_id=self.run.id)
+
+    def _url(self, result):
+        return f"/runs/{self.run.id}/results/{result.pk}/"
+
+    def test_first_result_links_only_to_the_next(self):
+        resp = self.client.get(self._url(self.first))
+        self.assertContains(resp, f'href="{self._url(self.middle)}" rel="next"')
+        self.assertNotContains(resp, 'rel="prev"')
+        self.assertEqual((resp.context["result_position"], resp.context["result_count"]), (1, 3))
+
+    def test_middle_result_links_both_ways(self):
+        resp = self.client.get(self._url(self.middle))
+        self.assertContains(resp, f'href="{self._url(self.first)}" rel="prev"')
+        self.assertContains(resp, f'href="{self._url(self.last)}" rel="next"')
+        self.assertContains(resp, "2 of 3")
+
+    def test_last_result_links_only_to_the_previous(self):
+        resp = self.client.get(self._url(self.last))
+        self.assertContains(resp, f'href="{self._url(self.middle)}" rel="prev"')
+        self.assertNotContains(resp, 'rel="next"')
+        self.assertEqual((resp.context["result_position"], resp.context["result_count"]), (3, 3))
+
+    def test_paging_follows_the_run_page_order(self):
+        from infra.ui import _result_rows
+
+        listed = [row["result_id"] for row in _result_rows(self.run)]
+        walked, result_id = [], listed[0]
+        while result_id:
+            walked.append(result_id)
+            result_id = self.client.get(f"/runs/{self.run.id}/results/{result_id}/").context["next_result_id"]
+        self.assertEqual(walked, listed)
+        self.assertEqual(walked, [self.first.pk, self.middle.pk, self.last.pk])
+
+    def test_result_of_another_run_is_never_linked(self):
+        for result in (self.first, self.middle, self.last):
+            resp = self.client.get(self._url(result))
+            self.assertNotIn(self.foreign.pk, (resp.context["prev_result_id"], resp.context["next_result_id"]))
+            self.assertNotContains(resp, f"/results/{self.foreign.pk}/")
+
+    def test_run_with_one_result_shows_no_paging(self):
+        run = AuditRunFactory(project=self.project)
+        only = ScenarioResultFactory(run_id=run.id)
+        resp = self.client.get(f"/runs/{run.id}/results/{only.pk}/")
+        self.assertNotContains(resp, 'data-testid="result-paging"')
