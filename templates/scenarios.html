@@ -68,7 +68,7 @@
                 class="px-2 py-1 rounded bg-surface-overlay border border-gray-700 text-xs text-gray-300">
           {% for v in versions %}
           <option value="{{ v.version }}" {% if viewing_version and viewing_version.version == v.version %}selected{% endif %}>
-            v{{ v.version }} — {{ v.scenario_count }} scenarios — {{ v.published_at|date:"M j, H:i" }}
+            v{{ v.version }} — {{ v.scenario_count }} scenarios — {{ v.published_at|date:"M j, H:i" }}{% if v.published_by %} — {{ v.published_by.username }}{% endif %}
           </option>
           {% endfor %}
         </select>
@@ -152,6 +152,7 @@
               <span class="block text-sm text-gray-200 truncate">{{ item.scenario.title }}</span>
               {% if item.scenario.category %}<span class="ml-2 text-xs text-gray-500">{{ item.scenario.category }}</span>{% endif %}
               <span class="ml-2 text-xs text-gray-600" title="Revision {{ item.revision.revision }} of this scenario: each edit to its description or expected behaviour adds a revision">rev {{ item.revision.revision }}</span>
+              <span class="ml-2 text-xs text-gray-600" title="When revision {{ item.revision.revision }} was written{% if item.revision.created_by %}, and by whom{% endif %}"><time data-local datetime="{{ item.revision.created_at|date:'c' }}">{{ item.revision.created_at|date:"M j, H:i" }} UTC</time>{% if item.revision.created_by %} · {{ item.revision.created_by.username }}{% endif %}</span>
               {% if item.scenario.archived_at %}<span class="ml-2 text-xs text-amber-400" title="This scenario was deleted, but this version still contains it and runs of this version execute it. Edit another scenario (publishing a new version) to drop it.">deleted · still in this version</span>{% endif %}
             </div>
             <div class="flex gap-1 shrink-0">
