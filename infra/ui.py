@@ -61,10 +61,12 @@ from scenarios.models import (
     ScenarioSetVersionItem,
 )
 from scenarios.services import (
+    SCENARIO_NOTE_KEYS,
     create_scenario,
     publish_scenario_set_version,
     set_shared_expectations,
     update_scenario_content,
+    with_scenario_notes,
 )
 
 logger = logging.getLogger(__name__)
@@ -2607,6 +2609,7 @@ class ScenarioCreateView(ProjectMixin, View):
             except (ValueError, json.JSONDecodeError) as exc:
                 messages.error(request, f"Structured agentic controls are invalid: {exc}")
                 return _scenario_redirect(_post_set_id(request) or None)
+        metadata = with_scenario_notes(metadata, request.POST)
         file_uri_raw = request.POST.get("file_uri", "").strip()
         file_uri = file_uri_raw or None
         decision, decision_error = _parse_decision_field(request.POST.get("decision", ""))
@@ -2709,6 +2712,7 @@ class ScenarioEditView(ProjectMixin, View):
                 except (ValueError, json.JSONDecodeError) as exc:
                     messages.error(request, f"Structured agentic controls are invalid: {exc}")
                     return _scenario_redirect(set_id or None)
+            metadata = with_scenario_notes(metadata, request.POST)
             rev = update_scenario_content(
                 scenario=scenario, user=request.user, description=desc,
                 expected_behavior=expected_behavior, test_prompt=test_prompt,
@@ -5703,6 +5707,11 @@ class RunResultView(PublicReadableMixin, TemplateView):
             scenario_documents=revision.documents if revision else [],
             scenario_file_uri=revision.file_uri if revision else None,
             scenario_agentic=(revision.metadata or {}).get("agentic") if revision else None,
+            # Reviewer notes (rationale, clinical assessment): for workspace
+            # members, not part of what a public experiment publishes.
+            scenario_notes={
+                key: (revision.metadata or {}).get(key) for key in SCENARIO_NOTE_KEYS
+            } if revision and self.request.user.is_authenticated else {},
             severity=severity,
             is_repeated=is_repeated,
             reps=reps,

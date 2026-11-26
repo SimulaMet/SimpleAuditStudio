@@ -94,6 +94,16 @@ creates a new revision. Optional-by-wording (lines starting "Optionally",
 "May", "Kan nevne (ikke påkrevd)") is a legacy convention of older engines;
 the engine converts such strings when it re-grades old results.
 
+Scenario notes: `metadata.rationale` (why the scenario exists and why the
+expected behaviour is right) and `metadata.clinical_assessment` (a reviewer's
+clinical comment) are free text for people, set from the scenario form
+(`scenarios.services.with_scenario_notes`, 4000 characters each; a blank note
+has no key). No prompt carries them: of a scenario's metadata the engine
+renders only `judge_notes`. Like all metadata they belong to the revision, so
+changing one creates a new revision, and they travel with export and import.
+The Scenarios page shows them, and the result page shows them to workspace
+members (not on public experiment pages).
+
 Rules:
 
 - rows are append-only

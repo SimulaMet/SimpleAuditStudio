@@ -36,7 +36,7 @@
 {% endif %}
 
 <!-- What was tested -->
-{% if scenario_description or expected_behavior or test_prompt %}
+{% if scenario_description or expected_behavior or test_prompt or scenario_notes.rationale or scenario_notes.clinical_assessment %}
 <details open class="bg-surface-raised rounded-xl border border-gray-800 p-4 mb-4 group">
   <summary class="text-sm font-semibold text-gray-300 cursor-pointer select-none flex items-center gap-2">
     <span class="text-gray-500 group-open:rotate-90 transition-transform">▸</span> Scenario
@@ -54,6 +54,18 @@
     <div>
       <p class="text-xs text-gray-500 uppercase tracking-wide mb-1">Test prompt</p>
       <p class="text-gray-300 whitespace-pre-wrap">{{ test_prompt }}</p>
+    </div>
+    {% endif %}
+    {% if scenario_notes.rationale %}
+    <div>
+      <p class="text-xs text-gray-500 uppercase tracking-wide mb-1">Rationale</p>
+      <p class="text-gray-300 whitespace-pre-wrap">{{ scenario_notes.rationale }}</p>
+    </div>
+    {% endif %}
+    {% if scenario_notes.clinical_assessment %}
+    <div>
+      <p class="text-xs text-gray-500 uppercase tracking-wide mb-1">Clinical assessment</p>
+      <p class="text-gray-300 whitespace-pre-wrap">{{ scenario_notes.clinical_assessment }}</p>
     </div>
     {% endif %}
     <details class="group">

@@ -1,4 +1,6 @@
 """Services for scenario creation, revisioning, and immutable set publishing."""
+from collections.abc import Mapping
+
 from django.db import transaction
 from django.utils.text import slugify
 
@@ -18,6 +20,30 @@ from scenarios.models import (
 #: Sentinel distinguishing "leave the decision block unchanged" from an explicit
 #: ``decision=None`` (clear it) in :func:`update_scenario_content`.
 _UNSET = object()
+
+#: Free-text notes kept in a revision's metadata for the people who write and
+#: review scenarios and results. Nothing reads them at run time: the engine
+#: renders only ``metadata.judge_notes`` into a prompt.
+SCENARIO_NOTE_KEYS = ("rationale", "clinical_assessment")
+SCENARIO_NOTE_MAX = 4000
+
+
+def with_scenario_notes(metadata: dict | None, values: Mapping) -> dict:
+    """``metadata`` with the scenario notes a form posted in ``values``.
+
+    A blank note removes its key; a form that does not carry a note's field
+    leaves that note as it is. Every other key is kept.
+    """
+    result = dict(metadata or {})
+    for key in SCENARIO_NOTE_KEYS:
+        if key not in values:
+            continue
+        text = str(values.get(key) or "").strip()[:SCENARIO_NOTE_MAX]
+        if text:
+            result[key] = text
+        else:
+            result.pop(key, None)
+    return result
 
 
 def _validate_decision_block(decision: dict) -> None:

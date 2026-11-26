@@ -1,0 +1,17 @@
+{# A scenario form's reviewer notes, saved in the revision's metadata (scenarios.services.with_scenario_notes). #}
+<details class="group"{% if metadata.rationale or metadata.clinical_assessment %} open{% endif %}>
+  <summary class="text-xs text-gray-500 cursor-pointer select-none hover:text-gray-400">Notes (rationale, clinical assessment)</summary>
+  <div class="space-y-2 mt-2 pl-3 border-l border-gray-800">
+    <p class="text-[11px] text-gray-600">For the people who write and review this scenario and its results. The target, auditor and judge never see these notes. They are saved with the scenario, so changing one publishes a new version.</p>
+    <div>
+      <label class="text-xs text-gray-500">Rationale</label>
+      <textarea name="rationale" rows="2" maxlength="4000" placeholder="Why this scenario exists and why the expected behaviour is right"
+                class="w-full px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-1 focus:ring-accent/50">{{ metadata.rationale|default:'' }}</textarea>
+    </div>
+    <div>
+      <label class="text-xs text-gray-500">Clinical assessment</label>
+      <textarea name="clinical_assessment" rows="2" maxlength="4000" placeholder="A reviewer's clinical comment on this scenario"
+                class="w-full px-2 py-1.5 rounded bg-surface-overlay border border-gray-700 text-xs focus:outline-none focus:ring-1 focus:ring-accent/50">{{ metadata.clinical_assessment|default:'' }}</textarea>
+    </div>
+  </div>
+</details>
