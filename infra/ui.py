@@ -2353,7 +2353,7 @@ class ScenariosView(ProjectMixin, TemplateView):
         if is_id(set_param):
             selected = ScenarioSet.objects.filter(pk=int(set_param), project=p).first()
             if selected:
-                versions = list(selected.versions.order_by("-version"))
+                versions = list(selected.versions.select_related("published_by").order_by("-version"))
                 # Check if a specific version is being viewed
                 ver_param = self.request.GET.get("version")
                 if ver_param and is_id(ver_param):
@@ -2363,7 +2363,7 @@ class ScenariosView(ProjectMixin, TemplateView):
                 if viewing_version:
                     # Show everything the version contains (runs execute all of it);
                     # deleted scenarios carry a badge rather than being hidden.
-                    items = list(viewing_version.items.select_related("scenario", "revision"))
+                    items = list(viewing_version.items.select_related("scenario", "revision__created_by"))
         prev_version = (viewing_version.version - 1) if viewing_version and viewing_version.version > 1 else None
         # Collect unique categories for filter dropdown
         categories = sorted({i.scenario.category for i in items if i.scenario.category}) if items else []

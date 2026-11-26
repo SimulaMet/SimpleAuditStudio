@@ -203,3 +203,98 @@ class ScenarioSetDiffTests(TestCase):
         self.assertContains(page, "rev 2")
         self.assertContains(page, "Changes from v1")
         self.assertNotContains(page, "2v<")
+
+
+class ScenarioAuthorTests(TestCase):
+    """The Scenarios page names who published each version and who wrote each revision."""
+
+    def setUp(self):
+        from scenarios.services import (
+            create_scenario,
+            create_scenario_set,
+            publish_scenario_set_version,
+        )
+
+        self.alice = User.objects.create_user(username="alice", password="pass12345")
+        self.carol = User.objects.create_user(username="carol", password="pass12345")
+        self.project = Project.objects.create(name="Authors", slug="authors")
+        for user in (self.alice, self.carol):
+            ProjectMembership.objects.create(project=self.project, user=user, role=ProjectMembership.Role.AUDITOR)
+        self.first, self.second = (
+            create_scenario(project=self.project, user=self.alice, key=key, title=key.title(),
+                            description="Original text.", expected_behavior=["Refuse"])
+            for key in ("first", "second")
+        )
+        self.sset = create_scenario_set(project=self.project, user=self.alice, name="Set")
+        publish_scenario_set_version(
+            scenario_set=self.sset, user=self.alice, scenario_ids=[self.first.id, self.second.id])
+        self.client.force_login(self.alice)
+
+    def _page(self) -> str:
+        return self.client.get(f"/scenarios/?set={self.sset.id}").content.decode()
+
+    @staticmethod
+    def _row(page: str, scenario) -> str:
+        """One scenario's collapsed row: title, revision, when it was written and by whom."""
+        return page.split(f'id="scenario-{scenario.id}"')[1].split(f'id="preview-{scenario.id}"')[0]
+
+    def test_page_names_the_publisher_and_each_revision_author(self):
+        page = self._page()
+        self.assertRegex(page, r"v1 — 2 scenarios — [^<]*? — alice\s*</option>")
+        for scenario in (self.first, self.second):
+            row = self._row(page, scenario)
+            self.assertIn("rev 1", row)
+            self.assertIn("<time data-local", row)
+            self.assertIn("· alice", row)
+
+    def test_edit_by_another_user_shows_on_that_scenario_only(self):
+        self.client.force_login(self.carol)
+        self.client.post(f"/scenarios/edit/{self.second.id}/", {
+            "set_id": self.sset.id, "title": "Second", "description": "Changed text.",
+            "expected_behavior": "Refuse",
+        })
+
+        page = self._page()
+        self.assertRegex(page, r"v2 — 2 scenarios — [^<]*? — carol\s*</option>")
+        self.assertRegex(page, r"v1 — 2 scenarios — [^<]*? — alice\s*</option>")
+        edited, untouched = self._row(page, self.second), self._row(page, self.first)
+        self.assertIn("rev 2", edited)
+        self.assertIn("· carol", edited)
+        self.assertNotIn("alice", edited)
+        self.assertIn("· alice", untouched)
+        self.assertNotIn("carol", untouched)
+
+    def test_content_without_an_author_renders(self):
+        """Seeded content and deleted accounts leave no user: the date still shows."""
+        ScenarioRevision.objects.filter(scenario__project=self.project).update(created_by=None)
+        ScenarioSetVersion.objects.filter(scenario_set=self.sset).update(published_by=None)
+
+        page = self._page()
+        self.assertRegex(page, r"v1 — 2 scenarios — [^<—]*</option>")
+        row = self._row(page, self.first)
+        self.assertIn("<time data-local", row)
+        self.assertNotIn("·", row)
+        self.assertNotIn("alice", row)
+
+    def test_authors_add_no_query_per_scenario_or_version(self):
+        from django.db import connection
+        from django.test.utils import CaptureQueriesContext
+
+        from scenarios.services import create_scenario, publish_scenario_set_version
+
+        self._page()   # the first request also picks the active workspace
+        with CaptureQueriesContext(connection) as before:
+            self._page()
+        extra = [
+            create_scenario(project=self.project, user=self.carol, key=f"extra-{n}", title=f"Extra {n}",
+                            description="More.", expected_behavior=["Refuse"])
+            for n in range(3)
+        ]
+        publish_scenario_set_version(
+            scenario_set=self.sset, user=self.carol,
+            scenario_ids=[self.first.id, self.second.id, *(s.id for s in extra)])
+        with CaptureQueriesContext(connection) as after:
+            page = self._page()
+
+        self.assertIn("· carol", self._row(page, extra[0]))
+        self.assertEqual(len(after), len(before))
