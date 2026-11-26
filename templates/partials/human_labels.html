@@ -1,0 +1,39 @@
+{% comment %}Reviewers' own labels for one transcript. Context: rep (with human_labels, my_label), run, sr, can_label, label_scale, label_choices.{% endcomment %}
+{% if user.is_authenticated %}
+<div class="bg-surface-raised rounded-xl border border-gray-800 p-4 mt-4 no-print" data-testid="human-labels">
+  <h2 class="text-sm font-semibold text-gray-300">Human label</h2>
+  <p class="text-xs text-gray-500 mt-0.5 mb-3">A reviewer's own verdict on this transcript, separate from the judge's. Labels are what a judge is checked against.</p>
+  {% for label in rep.human_labels %}
+  <div class="flex flex-wrap items-center gap-2 mb-2 text-sm">
+    {% if label.verdict == "unsure" %}<span class="inline-flex px-2 py-0.5 rounded-full text-xs font-semibold bg-gray-800 text-gray-300">unsure</span>{% else %}{% include "partials/severity_badge.html" with sev=label.verdict %}{% endif %}
+    <span class="text-xs text-gray-500">{{ label.created_by.username|default:"deleted user" }} · <time data-local datetime="{{ label.updated_at|date:'c' }}">{{ label.updated_at|date:"M j, H:i" }} UTC</time>{% if label.scale != label_scale.name %} · on the {{ label.scale }} scale{% endif %}</span>
+    {% if label.comment %}<p class="basis-full text-gray-300 whitespace-pre-wrap">{{ label.comment }}</p>{% endif %}
+  </div>
+  {% empty %}
+  {% if not can_label %}<p class="text-xs text-gray-600">No human label yet.</p>{% endif %}
+  {% endfor %}
+  {% if can_label %}
+  <form method="post" action="{% url 'run_result_label' run.id sr.id %}" class="mt-3 space-y-2">
+    {% csrf_token %}
+    <input type="hidden" name="rep" value="{{ rep.index }}">
+    {% if label_scale.rubric %}
+    <details class="text-xs text-gray-400">
+      <summary class="cursor-pointer text-gray-500">Rules for this label</summary>
+      <p class="mt-2 whitespace-pre-wrap">{{ label_scale.rubric }}</p>
+    </details>
+    {% endif %}
+    <div class="flex flex-wrap items-center gap-2">
+      <label class="text-xs text-gray-500" for="label-verdict-{{ rep.index }}">Your label</label>
+      <select id="label-verdict-{{ rep.index }}" name="verdict" class="bg-surface-overlay border border-gray-700 rounded-lg px-2 py-1.5 text-xs text-gray-200">
+        <option value="">No label</option>
+        {% for value in label_choices %}
+        <option value="{{ value }}"{% if rep.my_label.verdict == value %} selected{% endif %}>{{ value|capfirst }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <textarea name="comment" rows="2" maxlength="5000" aria-label="Comment" placeholder="Comment, for example a clinical assessment" class="w-full bg-surface-overlay border border-gray-700 rounded-lg px-2 py-1.5 text-xs text-gray-200">{{ rep.my_label.comment }}</textarea>
+    <button type="submit" class="px-3 py-1.5 rounded-lg bg-accent text-white text-xs font-medium hover:bg-accent-hover">Save label</button>
+  </form>
+  {% endif %}
+</div>
+{% endif %}

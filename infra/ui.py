@@ -5674,6 +5674,29 @@ class RunResultView(PublicReadableMixin, TemplateView):
         # Open on the first repetition that disagrees with the verdict, if any.
         initial_rep = next((r["index"] for r in reps if r["dissent"]), 1)
 
+        if self.request.user.is_authenticated:
+            # Reviewers' own labels, per repetition: internal, so not on public pages.
+            from audits.labels import UNSURE, labels_by_rep, run_scale
+            from audits.monitors import has_write_role
+
+            # Labels are given on the scale of this run's judge; ones given
+            # under a judge on another scale are listed with that scale.
+            scale, by_rep = run_scale(run), labels_by_rep(sr)
+            for rep in reps:
+                rep["human_labels"] = by_rep.get(rep["index"], [])
+                rep["my_label"] = next(
+                    (
+                        label for label in rep["human_labels"]
+                        if label.created_by_id == self.request.user.id and label.scale == scale["name"]
+                    ),
+                    None,
+                )
+            kw.update(
+                can_label=has_write_role(self.request.user, run.project),
+                label_scale=scale,
+                label_choices=[*scale["levels"], UNSURE],
+            )
+
         failure = result_failure(result_data) if sr.status != "completed" else None
         revision = item.revision if item else None
         first = raw_reps[0] if raw_reps else {}
@@ -5715,6 +5738,29 @@ class RunResultView(PublicReadableMixin, TemplateView):
             judge_ref=_judge_ref_from_run(run),
         )
         return super().get_context_data(**kw)
+
+
+class RunResultLabelView(ProjectMixin, View):
+    """POST verdict (+ comment, rep): the signed-in reviewer's own label for one
+    transcript. A blank verdict removes it. Rules in audits.labels.set_label."""
+
+    def post(self, request, run_id, result_id):
+        from audits.labels import set_label
+
+        blocked = _require_write_access(request)
+        if blocked:
+            return blocked
+        run = get_object_or_404(AuditRun, pk=run_id, project=request.project)
+        result = get_object_or_404(ScenarioResult, pk=result_id, run_id=run.id)
+        rep = _int(request.POST.get("rep"), 1)
+        try:
+            set_label(
+                result=result, rep=rep, user=request.user,
+                verdict=request.POST.get("verdict", "").strip(), comment=request.POST.get("comment", ""),
+            )
+        except StableAPIError as exc:
+            messages.error(request, str(exc.detail))
+        return redirect(f"{reverse('run_result', args=[run_id, result_id])}#rep-{rep}")
 
 
 # ─── Export Views ────────────────────────────────────────────────────────────

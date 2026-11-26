@@ -131,6 +131,7 @@
 {% for rep in reps %}
 <section id="rep-{{ rep.index }}" role="tabpanel" data-rep-panel="{{ rep.index }}" class="rep-panel {% if rep.index != initial_rep %}hidden{% endif %}">
   {% include "partials/result_rep_panel.html" %}
+  {% include "partials/human_labels.html" %}
 </section>
 {% endfor %}
 <script>
@@ -156,7 +157,7 @@
 })();
 </script>
 {% elif reps %}
-{% with rep=reps.0 %}{% include "partials/result_rep_panel.html" %}{% endwith %}
+{% with rep=reps.0 %}{% include "partials/result_rep_panel.html" %}{% include "partials/human_labels.html" %}{% endwith %}
 {% endif %}
 
 {% if raw_json %}
