@@ -39,6 +39,7 @@
       </div>
     </details>
   </div>
+  {% include "partials/scenario_notes_fields.html" with metadata=item.revision.metadata %}
   <div data-nondecision-fields>
   <details class="group">
     <summary class="text-xs text-gray-500 cursor-pointer select-none hover:text-gray-400">Advanced options (usually leave empty)</summary>

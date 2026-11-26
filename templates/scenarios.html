@@ -191,6 +191,18 @@
                 <p class="text-gray-300 mt-0.5 whitespace-pre-wrap">{{ item.revision.test_prompt }}</p>
               </div>
               {% endif %}
+              {% if item.revision.metadata.rationale %}
+              <div>
+                <span class="text-gray-500 font-medium">Rationale</span>
+                <p class="text-gray-300 mt-0.5 whitespace-pre-wrap">{{ item.revision.metadata.rationale }}</p>
+              </div>
+              {% endif %}
+              {% if item.revision.metadata.clinical_assessment %}
+              <div>
+                <span class="text-gray-500 font-medium">Clinical assessment</span>
+                <p class="text-gray-300 mt-0.5 whitespace-pre-wrap">{{ item.revision.metadata.clinical_assessment }}</p>
+              </div>
+              {% endif %}
               <details class="group">
                 <summary class="text-gray-500 font-medium cursor-pointer select-none hover:text-gray-400">Advanced options</summary>
                 <div class="mt-1 space-y-1 pl-3 border-l border-gray-800">
@@ -274,6 +286,7 @@
             </div>
           </details>
         </div>
+        {% include "partials/scenario_notes_fields.html" with metadata=None %}
         <div data-nondecision-fields>
         <details class="group">
           <summary class="text-xs text-gray-500 cursor-pointer select-none hover:text-gray-400">Advanced options (usually leave empty)</summary>
