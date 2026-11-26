@@ -143,11 +143,21 @@
         </select>
       </div>
 
+      {% if viewing_is_latest and items %}
+      <!-- Bulk delete: the ticked scenarios leave the set in one new version -->
+      <form id="bulk-delete-form" method="post" data-write action="{% url 'scenario_bulk_delete' selected.id %}" data-confirm="Delete the selected scenarios from this set?" class="flex items-center gap-3 mb-2 px-3 text-xs text-gray-500">
+        {% csrf_token %}
+        <label class="inline-flex items-center gap-2 cursor-pointer"><input type="checkbox" onchange="selectShownScenarios(this.checked)"> Select all</label>
+        <button onclick="return confirmBulkDelete(this.form)" title="Delete the ticked scenarios from this set in one new version" class="px-2 py-1 rounded bg-red-900/30 text-red-400 hover:bg-red-900/50">Delete selected</button>
+      </form>
+      {% endif %}
+
       <!-- Scenario list -->
       <div id="scenario-list" class="space-y-2 mb-4">
         {% for item in items %}
         <div id="scenario-{{ item.scenario.id }}" class="rounded-lg border border-gray-800 bg-surface-overlay/50 overflow-hidden">
           <div class="flex items-center justify-between px-3 py-2 cursor-pointer select-none hover:bg-surface-overlay/80 transition-colors" role="button" tabindex="0" aria-label="Toggle details for {{ item.scenario.title|escape }}" onclick="toggleViewMode({{ item.scenario.id }})">
+            {% if viewing_is_latest %}<input type="checkbox" data-write form="bulk-delete-form" name="scenario_ids" value="{{ item.scenario.id }}" aria-label="Select {{ item.scenario.title }}" class="mr-3 shrink-0" onclick="event.stopPropagation()">{% endif %}
             <div class="min-w-0 flex-1">
               <span class="block text-sm text-gray-200 truncate">{{ item.scenario.title }}</span>
               {% if item.scenario.category %}<span class="ml-2 text-xs text-gray-500">{{ item.scenario.category }}</span>{% endif %}
@@ -522,6 +532,21 @@ function filterScenarios(query) {
     const matchesCat = !cat || (catEl && catEl.textContent.trim() === cat);
     card.style.display = (matchesText && matchesCat) ? '' : 'none';
   });
+}
+
+// Bulk delete. "Select all" ticks the scenarios the search and category filter
+// show; the confirmation names how many are ticked, hidden ones included.
+function selectShownScenarios(checked) {
+  document.querySelectorAll('#scenario-list > div[id^="scenario-"]').forEach(card => {
+    const box = card.querySelector('input[name="scenario_ids"]');
+    if (box && card.style.display !== 'none') box.checked = checked;
+  });
+}
+function confirmBulkDelete(form) {
+  const n = document.querySelectorAll('input[name="scenario_ids"]:checked').length;
+  if (!n) { alert('Select at least one scenario.'); return false; }
+  form.dataset.confirm = `Delete ${n} scenario${n === 1 ? '' : 's'} from this set?`;
+  return true;
 }
 </script>
 

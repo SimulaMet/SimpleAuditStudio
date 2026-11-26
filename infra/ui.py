@@ -2723,6 +2723,29 @@ class ScenarioEditView(ProjectMixin, View):
         return _scenario_redirect(set_id or None)
 
 
+def _delete_scenarios(request, sset, scenarios: list) -> None:
+    """Delete ``scenarios`` from ``sset`` by publishing one new version without them.
+
+    Never a hard delete: historical versions keep them. A scenario is archived
+    only when no other set's current version still uses it, as one shared by
+    import must not vanish from the other sets' next versions.
+    """
+    with transaction.atomic():
+        if sset:
+            # Remove them from this set only.
+            _publish_new_version(sset, request.user, exclude_ids=[s.id for s in scenarios])
+        others = ScenarioSet.objects.filter(project=request.project).exclude(pk=getattr(sset, "pk", None))
+        current = [v.pk for v in (other.versions.order_by("-version").first() for other in others) if v is not None]
+        still_used = set(
+            ScenarioSetVersionItem.objects.filter(version_id__in=current, scenario__in=scenarios)
+            .values_list("scenario_id", flat=True)
+        )
+        for scenario in scenarios:
+            if scenario.id not in still_used:
+                scenario.archived_at = timezone.now()
+                scenario.save()
+
+
 class ScenarioDeleteView(ProjectMixin, View):
     def post(self, request, scenario_id):
         blocked = _require_write_access(request)
@@ -2732,21 +2755,37 @@ class ScenarioDeleteView(ProjectMixin, View):
         scenario = Scenario.objects.filter(pk=scenario_id, project=request.project).first()
         if scenario:
             sset = ScenarioSet.objects.filter(pk=set_id, project=request.project).first() if set_id else None
-            if sset:
-                # Remove it from this set only.
-                _publish_new_version(sset, request.user, exclude_ids=[scenario.id])
-            # Archive (never hard-delete: historical versions keep it) only when
-            # no other set's current version still uses it: a scenario shared
-            # by import must not vanish from the other sets' next versions.
-            still_used = any(
-                (latest := other.versions.order_by("-version").first()) is not None
-                and latest.items.filter(scenario=scenario).exists()
-                for other in ScenarioSet.objects.filter(project=request.project).exclude(pk=getattr(sset, "pk", None))
-            )
-            if not still_used:
-                scenario.archived_at = timezone.now()
-                scenario.save()
+            _delete_scenarios(request, sset, [scenario])
         return _scenario_redirect(set_id or None)
+
+
+class ScenarioBulkDeleteView(ProjectMixin, View):
+    """POST scenario_ids (repeated): delete them from the set in one new version.
+
+    Ids that are not in the set's current version are ignored.
+    """
+
+    def post(self, request, set_id):
+        blocked = _require_write_access(request)
+        if blocked:
+            return blocked
+        sset = ScenarioSet.objects.filter(pk=set_id, project=request.project).first()
+        if not sset:
+            return redirect("/scenarios/")
+        latest = sset.versions.order_by("-version").first()
+        in_set = set(latest.items.values_list("scenario_id", flat=True)) if latest else set()
+        picked = {int(v) for v in request.POST.getlist("scenario_ids") if is_id(v)} & in_set
+        scenarios = list(Scenario.objects.filter(pk__in=picked, project=request.project))
+        if scenarios:
+            _delete_scenarios(request, sset, scenarios)
+            n = len(scenarios)
+            # Deleting every scenario publishes nothing (a version cannot be empty).
+            now_latest = sset.versions.order_by("-version").first()
+            published = f" (published v{now_latest.version})" if now_latest.pk != latest.pk else ""
+            messages.success(request, f"{n} scenario{'s' if n != 1 else ''} deleted{published}.")
+        else:
+            messages.error(request, "Select at least one scenario of this set to delete.")
+        return redirect(f"/scenarios/?set={set_id}")
 
 
 class ScenarioSetSharedExpectationsView(ProjectMixin, View):
