@@ -2,6 +2,7 @@
 from collections.abc import Mapping
 
 from django.db import transaction
+from django.db.models import Max
 from django.utils.text import slugify
 
 from accounts.models import Project, ProjectMembership
@@ -288,6 +289,58 @@ def set_shared_expectations(*, scenario_set: ScenarioSet, user, shared_expectati
         revisions={item.scenario_id: item.revision for item in items},
         shared_expectations=shared,
     )
+
+
+def pending_drafts(scenario_set: ScenarioSet) -> dict[int, ScenarioRevision]:
+    """A set's unpublished edits: scenario id -> the scenario's newest revision.
+
+    A scenario of the set's latest version has a draft when its newest revision
+    differs in content from the revision that version holds and no version of
+    any set holds it. The second rule tells a draft from a published revision
+    this set does not run: one it reverted away from, or an edit another set
+    published for a scenario the two share.
+
+    A revision does not record which set it was saved from, so a draft of a
+    shared scenario shows in each set that uses it, and stops being a draft
+    everywhere once any of them publishes it.
+    """
+    latest = ScenarioSetVersion.objects.filter(scenario_set=scenario_set).order_by("-version").first()
+    if latest is None:
+        return {}
+    held = dict(latest.items.values_list("scenario_id", "revision__content_hash"))
+    newest = {
+        scenario_id: (pk, content_hash)
+        for scenario_id, pk, content_hash in ScenarioRevision.objects.filter(scenario_id__in=held)
+        .order_by("scenario_id", "revision").values_list("scenario_id", "pk", "content_hash")
+    }
+    changed = {pk for scenario_id, (pk, content_hash) in newest.items() if content_hash != held[scenario_id]}
+    if not changed:
+        return {}
+    published = set(
+        ScenarioSetVersionItem.objects.filter(revision_id__in=changed).values_list("revision_id", flat=True)
+    )
+    return {revision.scenario_id: revision for revision in ScenarioRevision.objects.filter(pk__in=changed - published)}
+
+
+@transaction.atomic
+def discard_drafts(*, scenario_set: ScenarioSet, user) -> int:
+    """Delete a set's pending drafts; returns how many scenarios lost one.
+
+    Deletes a scenario's revisions above the newest one any set version holds:
+    they were never published, so no run used them, and removing them from the
+    top keeps the revision numbers (a count) in step. For a scenario shared
+    between sets this drops the draft in each of them.
+    """
+    require_project_role(user, scenario_set.project, ProjectMembership.Role.ADMIN, ProjectMembership.Role.AUDITOR)
+    published = (
+        ScenarioSetVersionItem.objects.filter(scenario_id__in=list(pending_drafts(scenario_set)))
+        .values("scenario_id").annotate(newest=Max("revision__revision")).values_list("scenario_id", "newest")
+    )
+    discarded = 0
+    for scenario_id, newest in published:
+        deleted, _ = ScenarioRevision.objects.filter(scenario_id=scenario_id, revision__gt=newest).delete()
+        discarded += bool(deleted)
+    return discarded
 
 
 def _version_contents(version: ScenarioSetVersion) -> dict[str, dict]:

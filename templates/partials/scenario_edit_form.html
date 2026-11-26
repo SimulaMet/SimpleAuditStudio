@@ -1,7 +1,7 @@
 {# One scenario's inline edit form, loaded on demand by /scenarios/edit-form/<item>/ #}
 {% load json_filters %}
 <form method="post" action="{% url 'scenario_edit' item.scenario.id %}" class="space-y-2"
-      onsubmit="return confirmScenarioSave({{ item.scenario.id }}, this) && syncAgenticFields(this)">
+      onsubmit="return confirmScenarioSave({{ item.scenario.id }}, this, event) && syncAgenticFields(this)">
   {% csrf_token %}
   <input type="hidden" name="set_id" value="{{ selected.id }}">
   <input type="hidden" name="base_revision_id" value="{{ item.revision.id }}">
@@ -79,7 +79,9 @@
   </div>
   <div class="flex gap-2 items-center">
     <button class="px-3 py-1 rounded bg-accent text-white text-xs">Save</button>
+    <button name="publish" value="0" title="Save this edit without publishing a version. The set's drafts are then published together as one version." class="px-3 py-1 rounded bg-surface-overlay text-gray-300 text-xs">Save draft</button>
     <button type="button" onclick="document.getElementById('edit-scenario-{{ item.scenario.id }}').style.display='none'" class="px-3 py-1 rounded bg-surface-overlay text-gray-400 text-xs">Cancel</button>
+    {% if draft %}<span class="text-xs text-amber-400" title="Save publishes it as a new version; Save draft keeps it waiting">Unpublished draft</span>{% endif %}
     <span id="version-hint-{{ item.scenario.id }}" class="text-xs text-amber-400 hidden"></span>
   </div>
 </form>

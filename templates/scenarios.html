@@ -143,6 +143,24 @@
         </select>
       </div>
 
+      {% if draft_ids %}
+      <!-- Drafts: edits saved without publishing, published together as one version -->
+      <div class="flex flex-wrap items-center gap-2 mb-3 px-3 py-2 rounded-lg border border-amber-700/40 bg-amber-900/10 text-xs text-amber-300" data-testid="scenario-drafts">
+        <span class="mr-auto">{{ draft_ids|length }} scenario{{ draft_ids|length|pluralize }} with unpublished edits. Runs keep using v{{ viewing_version.version }} until they are published.</span>
+        <form method="post" data-write action="{% url 'scenario_drafts' selected.id %}">
+          {% csrf_token %}
+          <input type="hidden" name="base_version" value="{{ viewing_version.version }}">
+          <button class="px-2 py-1 rounded bg-accent text-white hover:bg-accent-hover">Publish as v{{ viewing_version.version|add:1 }}</button>
+        </form>
+        <form method="post" data-write action="{% url 'scenario_drafts' selected.id %}" data-confirm="Discard the unpublished edits of this set? Published versions are not changed.">
+          {% csrf_token %}
+          <input type="hidden" name="base_version" value="{{ viewing_version.version }}">
+          <input type="hidden" name="action" value="discard">
+          <button class="px-2 py-1 rounded bg-surface-overlay text-gray-400 hover:text-gray-200">Discard drafts</button>
+        </form>
+      </div>
+      {% endif %}
+
       {% if viewing_is_latest and items %}
       <!-- Bulk delete: the ticked scenarios leave the set in one new version -->
       <form id="bulk-delete-form" method="post" data-write action="{% url 'scenario_bulk_delete' selected.id %}" data-confirm="Delete the selected scenarios from this set?" class="flex items-center gap-3 mb-2 px-3 text-xs text-gray-500">
@@ -163,6 +181,7 @@
               {% if item.scenario.category %}<span class="ml-2 text-xs text-gray-500">{{ item.scenario.category }}</span>{% endif %}
               <span class="ml-2 text-xs text-gray-600" title="Revision {{ item.revision.revision }} of this scenario: each edit to its description or expected behaviour adds a revision">rev {{ item.revision.revision }}</span>
               <span class="ml-2 text-xs text-gray-600" title="When revision {{ item.revision.revision }} was written{% if item.revision.created_by %}, and by whom{% endif %}"><time data-local datetime="{{ item.revision.created_at|date:'c' }}">{{ item.revision.created_at|date:"M j, H:i" }} UTC</time>{% if item.revision.created_by %} · {{ item.revision.created_by.username }}{% endif %}</span>
+              {% if item.scenario.id in draft_ids %}<span class="ml-2 text-xs text-amber-400" title="This scenario has an edit saved as a draft. The text shown here is the published one; open Edit to see the draft.">draft, not published</span>{% endif %}
               {% if item.scenario.archived_at %}<span class="ml-2 text-xs text-amber-400" title="This scenario was deleted, but this version still contains it and runs of this version execute it. Edit another scenario (publishing a new version) to drop it.">deleted · still in this version</span>{% endif %}
             </div>
             <div class="flex gap-1 shrink-0">
@@ -444,7 +463,7 @@ function wireVersionHint(ta) {
 document.querySelectorAll('textarea[id^="desc-"], textarea[id^="eb-"]').forEach(wireVersionHint);
 
 // Confirm before saving if content changed
-function confirmScenarioSave(scenarioId, form) {
+function confirmScenarioSave(scenarioId, form, ev) {
   // Block save if any JSON field is invalid
   const jsonFields = form.querySelectorAll('textarea[name]');
   for (const ta of jsonFields) {
@@ -455,6 +474,8 @@ function confirmScenarioSave(scenarioId, form) {
       return false;
     }
   }
+  // "Save draft" publishes nothing, so there is no new version to confirm.
+  if (ev && ev.submitter && ev.submitter.name === 'publish') return true;
   if (_contentChanged(scenarioId)) {
     return confirm('Content changed — this will save as a NEW VERSION (v' + (CURRENT_VERSION + 1) + ').\n\nContinue?');
   }
@@ -569,7 +590,7 @@ function confirmBulkDelete(form) {
 <div id="import-set-modal" style="display:none" data-modal role="dialog" aria-modal="true" aria-label="Import scenarios" class="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
   <div class="bg-surface-raised rounded-xl border border-gray-700 p-5 w-96 max-w-full mx-4">
     <h3 class="text-sm font-semibold text-gray-200 mb-3">Import Scenarios</h3>
-    <p class="text-xs text-gray-500 mb-3">Upload a JSON file exported from another set. Scenarios will be added and published as a new version. If the file has shared expectations, they replace this set's; otherwise this set keeps its own.</p>
+    <p class="text-xs text-gray-500 mb-3">Upload a JSON file exported from a set. A scenario whose key already exists in this workspace gets the file's content; the others are added. Everything in the file is published together as one new version. If the file has shared expectations, they replace this set's; otherwise this set keeps its own.</p>
     <div class="space-y-3">
       <div>
         <label class="text-xs text-gray-500 block mb-1">JSON file</label>
