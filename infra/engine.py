@@ -1765,6 +1765,25 @@ def rejudge_result(
     }
 
 
+def label_scale(name: str, criteria: str = "") -> dict[str, Any]:
+    """A scale reviewers label on (``simpleaudit.calibration.SCALES``).
+
+    ``levels`` are its answers, best first. ``rubric`` is what a rater on a
+    pass/fail scale is shown: ``criteria`` (the judge's), then what each level
+    means, as the judge is told. It is ``None`` on the severity ladder, where
+    SimpleAudit shows a rater no rules. Unknown names raise ``ValueError``.
+    """
+    _ensure_engine_available()
+    from simpleaudit.calibration import get_scale
+
+    scale = get_scale(name)
+    return {
+        "name": scale.name,
+        "levels": list(scale.levels),
+        "rubric": scale.rubric(criteria or None) if scale.definitions else None,
+    }
+
+
 def audit_result_fields() -> set[str]:
     """The field names of the engine's ``AuditResult`` dataclass.
 

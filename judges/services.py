@@ -21,6 +21,7 @@ OUTPUT_LABELS = {
     "score": "Score 1–10",
     "binary": "Yes / no",
     "checklist": "Checklist",
+    "verdict": "Verdict",
     "grounding": "Groundedness",
     "decision": "Decision model",
 }
@@ -70,6 +71,7 @@ def bases() -> dict[str, dict]:
             "name": config.get("name") or key.replace("_", " ").title(),
             "description": " ".join((config.get("description") or "").split()),
             "output": config.get("output") or "severity",
+            "verdict_scale": config.get("verdict_scale") or "",
             "source_url": (config.get("source") or {}).get("url", ""),
             "criteria": (config.get("criteria") or "").strip(),
             "probe_prompt": (config.get("probe_prompt") or "").strip(),
@@ -124,6 +126,13 @@ def base(key: str) -> dict:
         "key": key, "name": key, "description": "", "output": "severity", "source_url": "",
         "criteria": "", "probe_prompt": "", "format_prompt": "", "fields": [],
     }
+
+
+def label_scale(spec: dict) -> str:
+    """The scale people label on to check a judge with ``spec``: the short
+    scale of a pass/fail judge (SimpleAudit's ``verdict_scale``; edited
+    criteria keep the base's), else the severity ladder."""
+    return base(spec.get("base") or "").get("verdict_scale") or "severity"
 
 
 def base_choices(current: str | None = None) -> list[dict]:

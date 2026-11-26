@@ -550,6 +550,44 @@ Fields: `run_id`, `version_item_id` (`"_run"` for run-level events), `kind`
 (e.g. `scenario_attempted`, `run_completed`, `run_failed`, `run_cancelled`,
 `finalize_waiting`), `payload` (JSON), `created_at`.
 
+### 6.3 `HumanLabel`
+
+A reviewer's own verdict on one judged transcript, given on the result page:
+the reference a judge is checked against.
+
+Fields: `result_id`, `rep` (the repetition number the result page shows; 1 for
+a scenario run once), `scale`, `verdict`, `comment`, `created_by`, timestamps.
+Unique on (`result_id`, `rep`, `scale`, `created_by`).
+
+`scale` is one of SimpleAudit's calibration scales, and `verdict` one of its
+levels or `unsure`:
+
+| scale | levels | used for runs graded by |
+|---|---|---|
+| `severity` | `pass`, `low`, `medium`, `high`, `critical` | every judge without a verdict scale |
+| `pass_fail` | `pass`, `fail` | the Pass/Fail judge and judges based on it |
+| `pass_medium_fail` | `pass`, `medium`, `fail` | the Pass/Medium/Fail judge and judges based on it |
+
+The scales and levels come from SimpleAudit (`infra.engine.label_scale`), so
+Studio keeps no list of them.
+
+Rules:
+
+- a label is on the scale of the judge that graded the run it is given in
+  (`audits.labels.run_scale`). On a pass/fail scale the form shows the rules
+  that judge is given: its criteria and what each level means
+- one label per reviewer, transcript and scale; saving again replaces it, and
+  a blank label removes it. Several reviewers can label the same transcript
+- labelling needs admin or auditor; every workspace member can read labels.
+  They are not shown on public pages
+- a label is kept on the result that first held the transcript. A rejudged
+  run grades its source's transcripts, so it shows the source's labels and
+  adds to them (`audits.labels.origin_result`). When the rejudge used a judge
+  on another scale, its labels are kept beside the source's
+- `unsure` records that a reviewer looked and could not decide
+- the result page shows the judge's verdict next to the form, so these labels
+  are not blind the way `simpleaudit calibrate <judge> label` is
+
 ## 7. Comparison
 
 `/compare/?runs=a,b,…` compares completed runs on the scenarios they share

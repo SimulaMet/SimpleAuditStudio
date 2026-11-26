@@ -258,3 +258,42 @@ class ExperimentRun(models.Model):
 
     def __str__(self) -> str:
         return f"{self.experiment_id}:{self.run_id}"
+
+
+class HumanLabel(models.Model):
+    """A reviewer's own verdict on one judged transcript.
+
+    This is the reference a judge is calibrated against. ``scale`` names the
+    scale the verdict is on, one of SimpleAudit's calibration scales: the
+    severity ladder, or the short scale of a pass/fail judge. ``verdict`` is
+    a level of that scale, or ``unsure`` (the reviewer looked and could not
+    decide: kept, but left out of agreement). The scales and their levels are
+    SimpleAudit's (``infra.engine.label_scale``), so neither field lists
+    choices.
+
+    A label is kept on the result that first held the transcript: a rejudged
+    run shares its source's labels (``audits.labels.origin_result``), so one
+    round of labelling serves every judge tried on those transcripts.
+    """
+
+    result = models.ForeignKey("audits.ScenarioResult", on_delete=models.CASCADE, related_name="human_labels")
+    # Repetition number as the result page shows it (1 for a scenario run once).
+    rep = models.PositiveSmallIntegerField(default=1)
+    scale = models.CharField(max_length=32)
+    verdict = models.CharField(max_length=16)
+    comment = models.TextField(blank=True)
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "core_human_label"
+        ordering = ["created_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["result", "rep", "scale", "created_by"], name="unique_human_label_per_reviewer",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"HumanLabel(result={self.result_id} rep={self.rep} {self.scale}={self.verdict})"
