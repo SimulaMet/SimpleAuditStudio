@@ -327,10 +327,13 @@ class RejudgeUiTests(RejudgeTestCase):
         self.assertIn("New judge", html)
         self.assertNotIn("Code graded v1", html)   # Choice Match cannot grade a stored transcript
 
-    def test_run_page_hides_rejudge_when_the_run_cannot_be_rejudged(self):
+    def test_run_page_says_why_a_run_cannot_be_rejudged(self):
         self.source.trace_config = {"mode": "studio"}
         self.source.save(update_fields=["trace_config"])
-        self.assertNotIn(self.url, self.client.get(f"/runs/{self.source.id}/").content.decode())
+        html = self.client.get(f"/runs/{self.source.id}/").content.decode()
+        self.assertNotIn(self.url, html)
+        self.assertIn("This run was traced", html)
+        self.assertIn("Rejudge is not available for this run", html)
 
     def test_post_creates_and_submits_the_run_then_opens_it(self):
         with mock.patch("infra.ui.submit_audit_run") as submit:
