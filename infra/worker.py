@@ -457,7 +457,8 @@ def _scenario_execute_impl(workflow_input: ScenarioInput, ctx: Context) -> dict:
     # The trace checkbox: a non-empty trace config means "trace on" (even when the
     # target exports no spans); an empty one means "trace off".
     trace_on = bool(run.trace_config)
-    trace_config = enrich_trace_config(run.trace_config or None, run.target_config_snapshot)
+    # A rejudge acquires no trace: its judge reads the ones its source stored.
+    trace_config = None if rejudged_from else enrich_trace_config(run.trace_config or None, run.target_config_snapshot)
     # A scenario may raise its trace content capture (agentic.trace.content_capture);
     # it must reach the engine call below, which sanitizes spans at that level.
     _agentic_meta = (revision.metadata or {}).get("agentic")
@@ -656,6 +657,7 @@ def _scenario_execute_impl(workflow_input: ScenarioInput, ctx: Context) -> dict:
                 judge=run.judge_config_snapshot,
                 generation=run.generation_parameters_snapshot,
                 severity_ceiling=revision.severity_ceiling or "",
+                metadata=_scenario_metadata(revision.metadata, trace_on),
             )
             severity = result_severity(result_payload)
         elif n_reps > 1:

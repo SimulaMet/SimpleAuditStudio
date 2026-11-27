@@ -444,10 +444,14 @@ SimpleAudit's `rejudge`. The source run never changes: the result is a new
   during the conversation) is not graded: it stays failed, with the source's
   `failure` marked not retryable
 - repeated scenarios are graded per repetition and aggregated again
+- a traced run's judge also read the target's trace, and so does the new
+  judge: it is shown the spans stored with each result and, for an agentic
+  scenario, the deterministic checks. The new run keeps the source's
+  `trace_config`, each result keeps a copy of the trace it was graded with,
+  and the semantic criteria are judged again by the new judge
 - not offered for active runs, decision targets (graded in code against the
-  scenario), traced runs (their judge also read the trace, which a rejudge
-  cannot show the new judge), or with decision judges, decision judge models
-  and Choice Match (SimpleAudit cannot rejudge with them)
+  scenario), or with decision judges, decision judge models and Choice Match
+  (SimpleAudit cannot rejudge with them)
 - for a run that cannot be rejudged, the run page shows the control greyed
   out with the reason (`audits.services.rejudge_block_reason`)
 - scenario judge notes are not stored on results, so a rejudge does not apply them
