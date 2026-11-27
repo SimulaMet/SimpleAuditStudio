@@ -60,10 +60,13 @@ asset-only extensions.
 ### Roles
 
 Roles form a ladder: `user` < `viewer` < `auditor` < `admin` < `superuser`.
-A user's level is the highest role they hold in **any** workspace; any signed-in
-user is at least `user`, and a Django superuser is `superuser`. An entry is
-shown to users at or above the lowest role it lists. Entries are instance-wide:
-there are no per-workspace manifests.
+Entries are instance-wide, so the two top levels come from the instance, not
+from a workspace: a Django superuser is `superuser`, and a staff user
+(`is_staff`) is `admin`. Any signed-in user can create a workspace and become
+its admin, so workspace roles count only up to `auditor`: a user's level is the
+highest role they hold in any workspace, capped at `auditor`, and any signed-in
+user is at least `user`. An entry is shown to users at or above the lowest role
+it lists. There are no per-workspace manifests.
 
 Filtering happens on the server. An entry a user may not see is absent from
 the HTML, its assets are not loaded for that user, and its embed page returns
