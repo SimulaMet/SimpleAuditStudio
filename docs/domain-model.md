@@ -448,6 +448,8 @@ SimpleAudit's `rejudge`. The source run never changes: the result is a new
   scenario), traced runs (their judge also read the trace, which a rejudge
   cannot show the new judge), or with decision judges, decision judge models
   and Choice Match (SimpleAudit cannot rejudge with them)
+- for a run that cannot be rejudged, the run page shows the control greyed
+  out with the reason (`audits.services.rejudge_block_reason`)
 - scenario judge notes are not stored on results, so a rejudge does not apply them
 
 ### 5.2 `Experiment`

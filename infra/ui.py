@@ -3934,8 +3934,11 @@ class RunDetailView(PublicReadableMixin, DetailView):
         # Rejudge: the run this one regraded (its transcripts' source), and for
         # admins/auditors what this run itself can be rejudged with.
         ctx["rejudged_from"] = (run.runtime_metadata or {}).get("rejudged_from")
-        if ctx["can_schedule"] and not rejudge_block_reason(run):
-            ctx["rejudge"] = _rejudge_choices(run)
+        if ctx["can_schedule"]:
+            # A run that cannot be rejudged says why where the control would be.
+            ctx["rejudge_blocked"] = rejudge_block_reason(run)
+            if not ctx["rejudge_blocked"]:
+                ctx["rejudge"] = _rejudge_choices(run)
         # Experiments this run belongs to (only public ones for anonymous
         # visitors) and, for admins/auditors, the ones it could be added to.
         from audits.models import Experiment
