@@ -1652,6 +1652,46 @@ class _JudgeParamsClient:
         return await self._client.acompletion(**{**self._params, **kwargs})
 
 
+def _stored_evidence(entry: dict, *, repeated: bool, metadata: dict | None, judge: dict) -> Any:
+    """What a traced run's judge was shown beside ``entry``'s transcript, from the stored trace.
+
+    Follows the evidence resolvers of ``run_scenario`` and
+    ``run_scenario_repeated``: the selected spans as a judge reads them and,
+    for an agentic scenario, the deterministic checks and the judging
+    guidance. A repeated run shows its judge the trace for an agentic scenario
+    only. None when the result holds no trace (an untraced run).
+    """
+    agentic = (metadata or {}).get("agentic")
+    evidence = entry.get("trace_evidence") if isinstance(entry.get("trace_evidence"), dict) else {}
+    judgment = entry.get("judgment") if isinstance(entry.get("judgment"), dict) else {}
+    # A result stored before ``trace_evidence`` existed holds the selected spans only.
+    selected = evidence.get("selected_spans") or judgment.get("evidence_spans") or []
+    spans = None
+    if selected and (agentic or not repeated):
+        from audits.agentic.compact import judge_view
+
+        spans = judge_view(selected, pool=evidence.get("all_spans") or [], conversation=entry.get("conversation"))
+    evaluation = entry.get("agentic_evaluation")
+    if not isinstance(agentic, dict) or not isinstance(evaluation, dict):
+        return spans
+    semantic = agentic.get("semantic_judge") or {}
+    if semantic.get("enabled") and semantic.get("criteria"):
+        # The semantic verdicts are the source judge's own. The new judge is
+        # shown the evaluation as it stood before them, and the worker has the
+        # judge of the run doing the rejudge give its own.
+        from audits.agentic.verdict_policy import before_semantic_judgement
+
+        evaluation = before_semantic_judgement(evaluation)
+    return {
+        "selected_spans": spans,
+        "agentic_evaluation": evaluation,
+        "agentic_guidance": (
+            ((((judge or {}).get("judge") or {}).get("spec") or {}).get("options") or {}).get("agentic_guidance")
+            or agentic.get("judge_guidance") or None
+        ),
+    }
+
+
 def rejudge_result(
     stored: dict | None,
     *,
@@ -1662,6 +1702,7 @@ def rejudge_result(
     judge: dict,
     generation: dict | None = None,
     severity_ceiling: str = "",
+    metadata: dict | None = None,
 ) -> dict[str, Any]:
     """Grade a stored scenario result again with another judge, keeping its transcript.
 
@@ -1675,6 +1716,10 @@ def rejudge_result(
     stored, or cut short by a target/auditor failure): it stays ``ERROR``, and
     here keeps the ``failure`` the source run recorded for it, marked not
     retryable since grading it again cannot change it.
+
+    A traced source result is graded with its trace, as its own judge was
+    (``_stored_evidence``; ``metadata`` is the scenario's, for its agentic
+    settings), and the result keeps that trace beside the new verdict.
 
     ``name`` / ``description`` identify the scenario when ``stored`` carries no
     result body. ``target`` and ``auditor`` are only read for the mapping a
@@ -1710,6 +1755,7 @@ def rejudge_result(
     source = AuditResults(
         [AuditResult(**{**blank, **{k: v for k, v in entry.items() if k in fields}}) for entry in entries]
     )
+    evidence = [_stored_evidence(entry, repeated=bool(reps), metadata=metadata, judge=judge) for entry in entries]
 
     try:
         client = _JudgeParamsClient(
@@ -1728,6 +1774,7 @@ def rejudge_result(
                         {result.scenario_name: severity_ceiling for result in source.results}
                         if severity_ceiling else None
                     ),
+                    evidence=evidence,
                 ),
                 [client],
             )
@@ -1748,6 +1795,16 @@ def rejudge_result(
                 kept = entry.get("failure")
                 failure = {**(kept if isinstance(kept, dict) else failure), "retryable": False}
             payload["failure"] = failure
+        # The trace the judge read stays with its verdict, in the shape a live
+        # traced run stores it.
+        for key in ("trace_evidence", "trace_ids"):
+            if key in entry:
+                payload[key] = entry[key]
+        if isinstance(entry.get("judgment"), dict) and "evidence_spans" in entry["judgment"]:
+            payload["judgment"] = {**judgment, "evidence_spans": entry["judgment"]["evidence_spans"]}
+            _attach_final_response(payload)
+        if isinstance(evidence[index], dict):
+            payload["agentic_evaluation"] = evidence[index]["agentic_evaluation"]
         payload["_rep_index"] = entry.get("_rep_index", index)
         payloads.append(payload)
 

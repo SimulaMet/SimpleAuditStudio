@@ -32,3 +32,32 @@ def compute_overall_verdict(evaluation_results: dict) -> dict:
     if evaluation_results.get("has_inconclusive"):
         return {"status": "INCONCLUSIVE", "reason": "Required check inconclusive"}
     return {"status": "PASS", "reason": "All checks passed"}
+
+
+def before_semantic_judgement(evaluation: dict) -> dict:
+    """A stored evaluation as it stood before a judge gave its semantic verdicts.
+
+    The deterministic checks keep their results, the semantic judgement is
+    deferred again, and the verdict is the one the checks alone give. While a
+    semantic judgement is owed that is never PASS (``orchestrate_agentic_audit``).
+    """
+    checks = [c for c in evaluation.get("checks") or [] if isinstance(c, dict)]
+    verdict = compute_overall_verdict({
+        "error": evaluation.get("status") == "ERROR",
+        "missing_trace": (evaluation.get("trace_completeness") or {}).get("complete") is False,
+        "deterministic_fail": any(c.get("status") == "FAIL" for c in checks),
+        "has_inconclusive": any(c.get("status") == "INCONCLUSIVE" for c in checks),
+    })
+    if verdict["status"] == "PASS":
+        verdict = {"status": "INCONCLUSIVE", "reason": "Semantic observation insufficient"}
+    return {
+        **evaluation,
+        "status": verdict["status"],
+        "reason": verdict["reason"],
+        "verdict": verdict,
+        "semantic_judgement": {
+            "status": "DEFERRED",
+            "rationale": "Semantic dimensions evaluated post-hoc by worker.",
+            "dimensions": {},
+        },
+    }

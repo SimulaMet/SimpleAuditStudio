@@ -412,7 +412,8 @@ def rejudge_block_reason(run: AuditRun) -> str:
     """Why ``run`` cannot be rejudged, or "" when it can.
 
     A rejudge grades the run's stored transcripts again (``simpleaudit.rejudge``),
-    so the run must be finished and graded from its transcripts alone.
+    so the run must be finished and graded from what it stored: its
+    transcripts and, for a traced run, their traces.
     """
     from audits.events import ScenarioResult
     from model_registry.decision import is_decision_snapshot
@@ -426,11 +427,6 @@ def rejudge_block_reason(run: AuditRun) -> str:
             "A decision target is graded in code against the scenario, not from a "
             "transcript, so there is nothing to rejudge."
         )
-    if run.trace_config:
-        return (
-            "This run was traced, so its judge also read the target's trace, which a "
-            "rejudge cannot show the new judge. Clone the run to grade it with another judge."
-        )
     return ""
 
 
@@ -441,8 +437,8 @@ def create_rejudge_run(
     """Create a queued run that grades ``source``'s transcripts again with another judge.
 
     The new run keeps the source's scenario set version and its target, auditor,
-    agent and generation snapshots (they describe how the transcripts were
-    made) and freezes its own judge. ``runtime_metadata["rejudged_from"]`` names
+    agent, generation and trace settings (they describe how the transcripts
+    were made) and freezes its own judge. ``runtime_metadata["rejudged_from"]`` names
     the source: the worker grades the source's stored results and calls neither
     target nor auditor. The run covers the scenarios the source has a result
     for. Enqueue it with ``submit_audit_run`` like any other run.
@@ -489,6 +485,8 @@ def create_rejudge_run(
         judge_config_snapshot={**_endpoint_snapshot(judge_model), "judge": judge_snapshot(judge)},
         generation_parameters_snapshot=source.generation_parameters_snapshot,
         agent_config_snapshot=source.agent_config_snapshot,
+        # Traced like its source: its judge reads the traces the source stored.
+        trace_config=source.trace_config,
         # The engine that grades, as for any run; the source run records the
         # engine that produced the transcripts.
         simpleaudit_version=provenance.version,

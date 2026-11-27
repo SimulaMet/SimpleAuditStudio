@@ -35,6 +35,24 @@ def _stored(severity="pass", **extra) -> dict:
     }
 
 
+SPAN = {
+    "span_id": "s1", "trace_id": "t1", "name": "execute_tool lookup_order", "kind": "TOOL",
+    "start_time": 1.0, "end_time": 1.2,
+    "attributes": {
+        "gen_ai.operation.name": "execute_tool", "gen_ai.tool.name": "lookup_order",
+        "gen_ai.tool.call.result": "order 4417 shipped on 3 May",
+    },
+}
+TRACE = {"trace_ids": ["t1"], "all_spans": [SPAN], "selected_spans": [SPAN]}
+
+
+def _traced(severity="pass", **extra) -> dict:
+    """A traced run's stored result: the transcript and the trace, as ``run_scenario`` keeps them."""
+    result = _stored(severity, trace_ids=["t1"], trace_evidence=TRACE, **extra)
+    result["judgment"]["evidence_spans"] = [SPAN]
+    return result
+
+
 class FakeJudge:
     """Stands in for the judge's model client: records its calls and returns one verdict."""
 
@@ -139,6 +157,7 @@ class RejudgeRunTests(RejudgeTestCase):
         self.assertEqual((call["model"], call["temperature"], call["max_tokens"]), ("nj-model", 0, 512))
         self.assertEqual(call["messages"][0]["content"], run.judge_config_snapshot["judge"]["judge_prompt"])
         self.assertIn("Take two.", call["messages"][-1]["content"])
+        self.assertNotIn("OBSERVED INTERNAL TRACES", call["messages"][-1]["content"])
 
         run.refresh_from_db()
         self.assertEqual(run.status, AuditRun.Status.COMPLETED)
@@ -253,6 +272,120 @@ class RejudgeRunTests(RejudgeTestCase):
         self.assertNotIn("failure", result)
 
 
+class RejudgeTracedRunTests(RejudgeTestCase):
+    """A traced run's judge also read the target's trace; so does the judge of a rejudge."""
+
+    def setUp(self):
+        super().setUp()
+        self.source.trace_config = {"mode": "studio", "target_id": "agent_1"}
+        self.source.save(update_fields=["trace_config"])
+
+    def test_new_run_is_traced_like_its_source(self):
+        self.assertEqual(rejudge_block_reason(self.source), "")
+        self.assertEqual(self._rejudge().trace_config, {"mode": "studio", "target_id": "agent_1"})
+
+    def test_result_is_graded_with_its_trace_and_keeps_it(self):
+        self._source_result(_traced())
+        run = self._rejudge()
+        judge = FakeJudge(severity="high")
+
+        # No trace is acquired, so nothing is said about the target's OTLP credential.
+        with judge.installed(), self.assertNoLogs("simpleaudit.tracing", level="WARNING"):
+            self._execute(run)
+
+        prompt = judge.calls[0]["messages"][-1]["content"]
+        self.assertIn("OBSERVED INTERNAL TRACES", prompt)
+        self.assertIn("order 4417 shipped on 3 May", prompt)
+        result = get_result(run.id, str(self.item.id))["result"]
+        self.assertEqual((result["severity"], result["summary"]), ("high", "new verdict"))
+        self.assertEqual((result["trace_evidence"], result["trace_ids"]), (TRACE, ["t1"]))
+        self.assertEqual(result["judgment"]["evidence_spans"], [SPAN])
+        self.assertEqual(result["judgment"]["final_response"], "Take two.")
+
+    def test_rejudged_run_can_be_rejudged_with_the_trace_again(self):
+        self._source_result(_traced())
+        first = self._rejudge()
+        with FakeJudge().installed():
+            self._execute(first)
+        first.refresh_from_db()
+        judge = FakeJudge(severity="low")
+
+        second = create_rejudge_run(source=first, user=self.user, judge=self.judge, judge_model=self.judge_model)
+        with judge.installed():
+            self._execute(second)
+
+        self.assertIn("order 4417 shipped on 3 May", judge.calls[0]["messages"][-1]["content"])
+        result = get_result(second.id, str(self.item.id))["result"]
+        self.assertEqual((result["severity"], result["trace_evidence"]), ("low", TRACE))
+
+    def test_repetitions_get_the_trace_for_an_agentic_scenario_only(self):
+        # As in a live run: run_scenario_repeated has no evidence resolver otherwise.
+        self._source_result({
+            "reps": [_traced(_rep_index=0), _traced(_rep_index=1)],
+            "aggregated_severity": "pass", "agreement_rate": 1.0, "severity_distribution": {"pass": 2},
+            "n_repetitions": 2,
+        })
+        judge = FakeJudge()
+
+        with judge.installed():
+            self._execute(self._rejudge())
+        ScenarioRevision.objects.filter(pk=self.item.revision_id).update(metadata={"agentic": {"schema_version": 2}})
+        with judge.installed():
+            run = self._rejudge()
+            self._execute(run)
+
+        traced = ["OBSERVED INTERNAL TRACES" in call["messages"][-1]["content"] for call in judge.calls]
+        self.assertEqual(traced, [False, False, True, True])
+        reps = get_result(run.id, str(self.item.id))["result"]["reps"]
+        self.assertEqual([rep["trace_evidence"] for rep in reps], [TRACE, TRACE])
+
+    def test_agentic_checks_are_shown_and_the_new_judge_gives_its_own_semantic_verdict(self):
+        ScenarioRevision.objects.filter(pk=self.item.revision_id).update(metadata={"agentic": {
+            "schema_version": 2, "judge_guidance": "A wrong tool call fails the scenario.",
+            "semantic_judge": {"enabled": True, "criteria": ["grounding"]},
+        }})
+        # The source's checks passed and its judge failed the semantic criterion.
+        self._source_result(_traced(agentic_evaluation={
+            "status": "FAIL", "reason": "Semantic check failed",
+            "verdict": {"status": "FAIL", "reason": "Semantic check failed"},
+            "checks": [{"id": "rule.0.check", "category": "rule", "status": "PASS", "summary": "1 matching tool unit(s)"}],
+            "trace_completeness": {"complete": True, "span_count": 1},
+            "semantic_judgement": {"status": "FAIL", "dimensions": {
+                "grounding": {"status": "FAIL", "rationale": "source judge: invented a date", "span_ids": ["s1"]},
+            }},
+        }))
+        run = self._rejudge()
+        judge, semantic_prompts = FakeJudge(severity="pass"), []
+
+        def semantic_judge(prompt: str) -> str:
+            semantic_prompts.append(prompt)
+            return json.dumps({"dimensions": {
+                "grounding": {"status": "PASS", "rationale": "new judge: matches the tool result", "span_ids": ["s1"]},
+            }})
+
+        with judge.installed(), mock.patch.object(worker, "_build_semantic_judge_llm", return_value=semantic_judge):
+            self._execute(run)
+
+        # The judge reads the checks as they stood before the source judge's
+        # semantic verdict, with the scenario's guidance.
+        prompt = judge.calls[0]["messages"][-1]["content"]
+        self.assertIn("order 4417 shipped on 3 May", prompt)
+        self.assertIn("rule.0.check: PASS", prompt)
+        self.assertIn("Agentic pre-assessment: INCONCLUSIVE", prompt)
+        self.assertIn("INSTRUCTION: A wrong tool call fails the scenario.", prompt)
+        self.assertNotIn("source judge", prompt)
+        self.assertNotIn("Semantic check failed", prompt)
+
+        evaluation = get_result(run.id, str(self.item.id))["result"]["agentic_evaluation"]
+        self.assertEqual(len(semantic_prompts), 1)
+        self.assertEqual(evaluation["semantic_judgement"]["dimensions"]["grounding"]["status"], "PASS")
+        self.assertEqual(evaluation["status"], "PASS")
+        self.assertEqual([check["id"] for check in evaluation["checks"]], ["rule.0.check"])
+        # The source keeps its own judge's verdict.
+        source = get_result(self.source.id, str(self.item.id))["result"]["agentic_evaluation"]
+        self.assertEqual(source["semantic_judgement"]["dimensions"]["grounding"]["status"], "FAIL")
+
+
 class RejudgeRulesTests(RejudgeTestCase):
     def test_run_without_results_cannot_be_rejudged(self):
         ScenarioResult.objects.filter(run_id=self.source.id).delete()
@@ -269,12 +402,6 @@ class RejudgeRulesTests(RejudgeTestCase):
         self.source.status = AuditRun.Status.JUDGING
         self.source.save(update_fields=["status"])
         self.assertIn("still in progress", rejudge_block_reason(self.source))
-        self._refused("run_not_rejudgeable")
-
-    def test_traced_run_cannot_be_rejudged(self):
-        self.source.trace_config = {"mode": "studio"}
-        self.source.save(update_fields=["trace_config"])
-        self.assertIn("traced", rejudge_block_reason(self.source))
         self._refused("run_not_rejudgeable")
 
     def test_decision_target_cannot_be_rejudged(self):
@@ -328,11 +455,11 @@ class RejudgeUiTests(RejudgeTestCase):
         self.assertNotIn("Code graded v1", html)   # Choice Match cannot grade a stored transcript
 
     def test_run_page_says_why_a_run_cannot_be_rejudged(self):
-        self.source.trace_config = {"mode": "studio"}
-        self.source.save(update_fields=["trace_config"])
+        self.source.status = AuditRun.Status.JUDGING
+        self.source.save(update_fields=["status"])
         html = self.client.get(f"/runs/{self.source.id}/").content.decode()
         self.assertNotIn(self.url, html)
-        self.assertIn("This run was traced", html)
+        self.assertIn("This run is still in progress", html)
         self.assertIn("Rejudge is not available for this run", html)
 
     def test_post_creates_and_submits_the_run_then_opens_it(self):
